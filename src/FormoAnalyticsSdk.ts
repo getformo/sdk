@@ -1,7 +1,11 @@
+import { IDENTITY_KEY, SDK_VERSION, SESSION_STORAGE_ID_KEY } from './constants';
+import { Socket } from 'socket.io-client';
+import { SdkConfig } from './types';
+import { createClientSocket, generateID, postRequest } from './utils';
+
 export class FormoAnalyticsSdk {
-  private _apiKey: string;
   private config: any;
-  private sessionIdKey: string = 'session-id';
+  private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private timezoneToCountry: Record<string, string> = {
     'Asia/Barnaul': 'RU',
     'Africa/Nouakchott': 'MR',
@@ -9,16 +13,96 @@ export class FormoAnalyticsSdk {
     // Add the other timezones here
   };
 
-  private constructor(apiKey: string, config: any) {
-    this._apiKey = apiKey;
+  private constructor(
+    public readonly apiKey: string,
+    config: any,
+    public readonly identityId: string,
+    private socket: Socket
+  ) {
     this.config = config;
+    this.trackPageHit();
+    this.addPageTrackingListeners();
+
+    this._registerSocketListeners(socket);
+
+    socket.once('error', (error) => {
+      if (['InternalServerError', 'BadRequestError'].includes(error.name)) {
+        window.localStorage.removeItem(IDENTITY_KEY);
+        FormoAnalyticsSdk._getIdentitityId(this.config, this.apiKey).then(
+          (identityId) => {
+            this.socket = createClientSocket(this.config.url, {
+              apiKey: this.apiKey,
+              identityId,
+              sdkVersion: SDK_VERSION,
+              screenHeight: screen.height,
+              screenWidth: screen.width,
+              viewportHeight: window.innerHeight,
+              viewportWidth: window.innerWidth,
+              url: window.location.href,
+              sessionStorageId: FormoAnalyticsSdk._getSessionId(identityId),
+            });
+            this._registerSocketListeners(this.socket);
+          }
+        );
+      }
+    });
   }
 
   static async init(apiKey: string, config: any): Promise<FormoAnalyticsSdk> {
-    const instance = new FormoAnalyticsSdk(apiKey, config);
-    instance.trackPageHit();
-    instance.addPageTrackingListeners();
+    const identityId = await FormoAnalyticsSdk._getIdentitityId(
+      config,
+      apiKey
+    );
+    const sessionId = FormoAnalyticsSdk._getSessionId(identityId);
+
+    const websocket = createClientSocket(config.url, {
+      apiKey,
+      identityId,
+      sdkVersion: SDK_VERSION,
+      screenHeight: screen.height,
+      screenWidth: screen.width,
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+      url: window.location.href,
+      sessionStorageId: sessionId,
+    });
+
+    const instance = new FormoAnalyticsSdk(
+      apiKey,
+      identityId,
+      config,
+      websocket
+    );
+
     return instance;
+  }
+
+  private _registerSocketListeners(socket: Socket) {
+    socket.on('error', (error) => {
+      console.error('error event received from socket', error);
+    });
+  }
+
+  private static async _getIdentitityId(sdkConfig: SdkConfig, apiKey: string) {
+    const identityId =
+      (sdkConfig?.cacheIdentity && window.localStorage.getItem(IDENTITY_KEY)) ||
+      (await postRequest(sdkConfig.url, apiKey, '/identify'));
+    sdkConfig?.cacheIdentity &&
+      window.localStorage.setItem(IDENTITY_KEY, identityId);
+    return identityId;
+  }
+
+  private static _getSessionId(identityId: string) {
+    const existingSessionId = window.sessionStorage.getItem(
+      SESSION_STORAGE_ID_KEY
+    );
+    if (existingSessionId) {
+      return existingSessionId;
+    }
+
+    const newSessionId = generateID(identityId);
+    window.sessionStorage.setItem(SESSION_STORAGE_ID_KEY, newSessionId);
+    return newSessionId;
   }
 
   // Function to set the session cookie
@@ -93,7 +177,8 @@ export class FormoAnalyticsSdk {
 
   // Function to track page hits
   private trackPageHit() {
-    if (window.__nightmare || window.navigator.webdriver || window.Cypress) return;
+    if (window.__nightmare || window.navigator.webdriver || window.Cypress)
+      return;
 
     let location: string | undefined;
     let language: string;
