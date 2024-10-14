@@ -1,0 +1,92 @@
+{
+  "name": "@formo/analytics-sdk",
+  "version": "1.2.3",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getformo/sdk.git"
+  },
+  "main": "dist/cjs/src/index.js",
+  "types": "dist/esm/src/index.d.ts",
+  "module": "dist/esm/src/index.js",
+  "unpkg": "dist/index.umd.min.js",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/src/index.js",
+      "require": "./dist/cjs/src/index.js"
+    }
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@restless/sanitizers": "^0.2.5",
+    "socket.io": "^4.5.4",
+    "socket.io-client": "^4.5.4"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.x",
+    "@babel/plugin-syntax-flow": "^7.14.5",
+    "@babel/plugin-transform-react-jsx": "^7.14.9",
+    "@commitlint/cli": "^17.3.0",
+    "@commitlint/config-conventional": "^17.3.0",
+    "@semantic-release/github": "^8.0.7",
+    "@testing-library/react": "^13.4.0",
+    "@types/chai": "^4.3.1",
+    "@types/jsdom": "^20.0.1",
+    "@types/mocha": "^9.1.1",
+    "@types/node": "^18.11.9",
+    "@types/react": "^18.0.25",
+    "@types/sinon": "^10.0.12",
+    "@types/sinon-chai": "^3.2.9",
+    "@typescript-eslint/eslint-plugin": "^5.30.4",
+    "@typescript-eslint/parser": "^5.30.4",
+    "chai": "^4.3.6",
+    "commitizen": "^4.2.5",
+    "cz-conventional-changelog": "3.3.0",
+    "eslint": "^8.19.0",
+    "eslint-config-react-app": "^7.0.1",
+    "global-jsdom": "^8.6.0",
+    "husky": "^8.0.0",
+    "jsdom": "^21.1.0",
+    "mocha": "^10.0.0",
+    "nodemon": "^2.0.20",
+    "nyc": "^15.1.0",
+    "prettier": "^2.6.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.0.0",
+    "semantic-release": "^19.0.5",
+    "semantic-release-export-data": "^1.0.1",
+    "sinon": "^14.0.0",
+    "sinon-chai": "^3.7.0",
+    "ts-loader": "^9.3.1",
+    "ts-node": "^10.8.2",
+    "typescript": "~4.8.0",
+    "webpack": "^5.74.0",
+    "webpack-cli": "^4.10.0"
+  },
+  "scripts": {
+    "prebuild": "yarn clean",
+    "publish": "npm version && npm publish",
+    "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production",
+    "build-cjs": "yarn tsc --build",
+    "build-esm": "yarn tsc -m es6 --outdir dist/esm",
+    "clean": "rm -rf dist",
+    "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
+    "test": "nyc mocha",
+    "test-watch": "nodemon --config test.nodemon.json",
+    "prepare": "husky install",
+    "commit": "git add . && cz",
+    "copy-build-example": "rm -rf example/cra-script-tag/public/analytics-sdk && cp -R dist example/cra-script-tag/public/analytics-sdk"
+  },
+  "peerDependencies": {
+    "@types/react": ">=16.14.34",
+    "react": ">=16.14.0"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  }
+}
