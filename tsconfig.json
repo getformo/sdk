@@ -19,11 +19,11 @@
     "composite": true,
     "incremental": true,
     "sourceMap": true,
-    "isolatedModules": true,
+    "isolatedModules": true
   },
   "ts-node": {
     "files": true
   },
   "include": ["src", "test"],
-  "exclude": ["example"],
+  "exclude": ["example"]
 }

@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useState, useRef } from 'react';
-import { FormoAnalyticsSdk } from './FormoAnalyticsSdk';
+import { FormoAnalytics } from './FormoAnalytics';
 import { FormoAnalyticsProviderProps } from './types';
 
 export const FormoAnalyticsContext = createContext<
-  FormoAnalyticsSdk | undefined
+  FormoAnalytics | undefined
 >(undefined);
 
 export const FormoAnalyticsProvider = ({
@@ -12,7 +12,7 @@ export const FormoAnalyticsProvider = ({
   disabled,
   children,
 }: FormoAnalyticsProviderProps) => {
-  const [sdk, setSdk] = useState<FormoAnalyticsSdk | undefined>();
+  const [sdk, setSdk] = useState<FormoAnalytics | undefined>();
   const initializedStartedRef = useRef(false);
 
   useEffect(() => {
@@ -24,7 +24,7 @@ export const FormoAnalyticsProvider = ({
     if (initializedStartedRef.current) return;
     initializedStartedRef.current = true;
 
-    FormoAnalyticsSdk.init(apiKey, {
+    FormoAnalytics.init(apiKey, {
       ...config,
       trackPageViews: true,
       trackClicks: true,

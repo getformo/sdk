@@ -1,6 +1,6 @@
 import { SESSION_STORAGE_ID_KEY, USER_ID_KEY } from './constants';
 
-export class FormoAnalyticsSdk {
+export class FormoAnalytics {
   private config: any;
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private userIdKey: string = USER_ID_KEY;
@@ -18,8 +18,8 @@ export class FormoAnalyticsSdk {
     this.identifyUser({ apiKey: this.apiKey });
   }
 
-  static async init(apiKey: string, config: any): Promise<FormoAnalyticsSdk> {
-    const instance = new FormoAnalyticsSdk(apiKey, config);
+  static async init(apiKey: string, config: any): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey, config);
 
     return instance;
   }
@@ -210,10 +210,5 @@ export class FormoAnalyticsSdk {
   // Example method to track custom events
   track(eventName: string, eventData: any) {
     this.trackEvent(eventName, eventData);
-  }
-
-  // Example method to identify a user
-  identify(userId: string, userData: any) {
-    this.trackEvent('identify_user', { userId, ...userData });
   }
 }

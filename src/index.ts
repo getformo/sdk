@@ -1,3 +1,3 @@
 export * from './FormoAnalyticsProvider';
-export * from './FormoAnalyticsSdk';
+export * from './FormoAnalytics';
 export * from './types';
