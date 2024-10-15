@@ -9,7 +9,11 @@
 Add the following to your `index.html`:
 
 ```html
-<script defer src="https://unpkg.com/@formo/sdk@1.1.7/dist/index.js"></script>
+<script
+  defer
+  src="https://unpkg.com/@formo/sdk@1.1.7/dist/index.js"
+  data-token="YOUR_API_KEY_HERE"
+></script>
 ```
 
 ## Option 2 - using npm package
