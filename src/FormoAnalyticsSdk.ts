@@ -1,11 +1,9 @@
-import { IDENTITY_KEY, SDK_VERSION, SESSION_STORAGE_ID_KEY } from './constants';
-import { Socket } from 'socket.io-client';
-import { SdkConfig } from './types';
-import { createClientSocket, generateID, postRequest } from './utils';
+import { SESSION_STORAGE_ID_KEY, USER_ID_KEY } from './constants';
 
 export class FormoAnalyticsSdk {
   private config: any;
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
+  private userIdKey: string = USER_ID_KEY;
   private timezoneToCountry: Record<string, string> = {
     'Asia/Barnaul': 'RU',
     'Africa/Nouakchott': 'MR',
@@ -13,102 +11,66 @@ export class FormoAnalyticsSdk {
     // Add the other timezones here
   };
 
-  private constructor(
-    public readonly apiKey: string,
-    config: any,
-    public readonly identityId: string,
-    private socket: Socket
-  ) {
+  private constructor(public readonly apiKey: string, config: any) {
     this.config = config;
     this.trackPageHit();
     this.addPageTrackingListeners();
-
-    this._registerSocketListeners(socket);
-
-    socket.once('error', (error) => {
-      if (['InternalServerError', 'BadRequestError'].includes(error.name)) {
-        window.localStorage.removeItem(IDENTITY_KEY);
-        FormoAnalyticsSdk._getIdentitityId(this.config, this.apiKey).then(
-          (identityId) => {
-            this.socket = createClientSocket(this.config.url, {
-              apiKey: this.apiKey,
-              identityId,
-              sdkVersion: SDK_VERSION,
-              screenHeight: screen.height,
-              screenWidth: screen.width,
-              viewportHeight: window.innerHeight,
-              viewportWidth: window.innerWidth,
-              url: window.location.href,
-              sessionStorageId: FormoAnalyticsSdk._getSessionId(identityId),
-            });
-            this._registerSocketListeners(this.socket);
-          }
-        );
-      }
-    });
+    this.identifyUser({ apiKey: this.apiKey });
   }
 
   static async init(apiKey: string, config: any): Promise<FormoAnalyticsSdk> {
-    const identityId = await FormoAnalyticsSdk._getIdentitityId(
-      config,
-      apiKey
-    );
-    const sessionId = FormoAnalyticsSdk._getSessionId(identityId);
-
-    const websocket = createClientSocket(config.url, {
-      apiKey,
-      identityId,
-      sdkVersion: SDK_VERSION,
-      screenHeight: screen.height,
-      screenWidth: screen.width,
-      viewportHeight: window.innerHeight,
-      viewportWidth: window.innerWidth,
-      url: window.location.href,
-      sessionStorageId: sessionId,
-    });
-
-    const instance = new FormoAnalyticsSdk(
-      apiKey,
-      identityId,
-      config,
-      websocket
-    );
+    const instance = new FormoAnalyticsSdk(apiKey, config);
 
     return instance;
   }
 
-  private _registerSocketListeners(socket: Socket) {
-    socket.on('error', (error) => {
-      console.error('error event received from socket', error);
+  private identifyUser(userData: any) {
+    const userId = this.getUserId();
+    this.trackEvent('identify_user', { userId, ...userData });
+    this.setSessionUserId();
+  }
+
+  private getUserId(): string {
+    let userId = this.getCookieValue(this.userIdKey);
+    if (!userId) {
+      userId = this.generateUserId(); // Generate a new user ID if not found
+    }
+    return userId;
+  }
+
+  private setSessionUserId(domain?: string) {
+    const userId = this.getUserId();
+    let cookieValue = `${this.userIdKey}=${userId}; Max-Age=1800; path=/; secure`;
+    if (domain) {
+      cookieValue += `; domain=${domain}`;
+    }
+    document.cookie = cookieValue;
+  }
+
+  private generateUserId(): string {
+    return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => {
+      const numC = parseInt(c, 10);
+      return (
+        numC ^
+        (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (numC / 4)))
+      ).toString(16);
     });
   }
 
-  private static async _getIdentitityId(sdkConfig: SdkConfig, apiKey: string) {
-    const identityId =
-      (sdkConfig?.cacheIdentity && window.localStorage.getItem(IDENTITY_KEY)) ||
-      (await postRequest(sdkConfig.url, apiKey, '/identify'));
-    sdkConfig?.cacheIdentity &&
-      window.localStorage.setItem(IDENTITY_KEY, identityId);
-    return identityId;
-  }
+  private getSessionId() {
+    const existingSessionId = this.getCookieValue(this.sessionIdKey);
 
-  private static _getSessionId(identityId: string) {
-    const existingSessionId = window.sessionStorage.getItem(
-      SESSION_STORAGE_ID_KEY
-    );
     if (existingSessionId) {
       return existingSessionId;
     }
 
-    const newSessionId = generateID(identityId);
-    window.sessionStorage.setItem(SESSION_STORAGE_ID_KEY, newSessionId);
+    const newSessionId = this.generateSessionId();
     return newSessionId;
   }
 
   // Function to set the session cookie
   private setSessionCookie(domain?: string) {
-    const sessionId =
-      this.getCookieValue(this.sessionIdKey) || this.generateSessionId();
+    const sessionId = this.getSessionId();
     let cookieValue = `${this.sessionIdKey}=${sessionId}; Max-Age=1800; path=/; secure`;
     if (domain) {
       cookieValue += `; domain=${domain}`;
@@ -146,7 +108,7 @@ export class FormoAnalyticsSdk {
       timestamp: new Date().toISOString(),
       action: action,
       version: '1',
-      session_id: this.getCookieValue(this.sessionIdKey),
+      session_id: this.getSessionId(),
       payload: this.maskSensitiveData(payload),
     };
 
@@ -246,12 +208,12 @@ export class FormoAnalyticsSdk {
   }
 
   // Example method to track custom events
-  trackCustomEvent(eventName: string, eventData: any) {
+  track(eventName: string, eventData: any) {
     this.trackEvent(eventName, eventData);
   }
 
   // Example method to identify a user
-  identifyUser(userId: string, userData: any) {
+  identify(userId: string, userData: any) {
     this.trackEvent('identify_user', { userId, ...userData });
   }
 }

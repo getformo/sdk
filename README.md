@@ -9,19 +9,19 @@
 1. Install the npm package:
 
 ```
-yarn add @formo/analytics-sdk
+yarn add @formo/sdk
 ```
 
 or
 
 ```
-npm install @formo/analytics-sdk --save
+npm install @formo/sdk --save
 ```
 
 2. Initialize the SDK and keep an instance of it ready to reference in other parts of your app. To do this, add the following code on your app’s load:
 
 ```jsx
-import { FormoAnalyticsSdk } from '@formo/analytics-sdk'
+import { FormoAnalyticsSdk } from '@formo/sdk'
 
 const sdk = await FormoAnalyticsSdk.init(API_KEY, {
     //TODO: Add more details
