@@ -69,10 +69,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   // Function to send tracking data
-  private async trackEvent(action: string, payload: any) {
+  private async trackEvent(action: string, payload: any, retries: number = 3) {
     this.setSessionCookie(this.config.domain);
     const apiUrl = this.buildApiUrl();
-
+  
     const requestData = {
       timestamp: new Date().toISOString(),
       action: action,
@@ -80,11 +80,44 @@ export class FormoAnalytics implements IFormoAnalytics {
       session_id: this.getSessionId(),
       payload: this.maskSensitiveData(payload),
     };
-
+  
     const xhr = new XMLHttpRequest();
     xhr.open('POST', apiUrl, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
+  
+    // Handle a successful response
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        console.log('Event sent successfully:', action);
+      } else {
+        console.error('Event sending failed with status:', xhr.status);
+        this.handleFailedEvent(action, payload, retries);
+      }
+    };
+  
+    // Handle network or transmission errors
+    xhr.onerror = () => {
+      console.error('Network error occurred while sending event:', action);
+      this.handleFailedEvent(action, payload, retries);
+    };
+  
+    // Send the request
     xhr.send(JSON.stringify(requestData));
+  }
+  
+  // Handle failed event transmission and retry
+  private handleFailedEvent(action: string, payload: any, retries: number) {
+    if (retries > 0) {
+      const retryDelay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
+      console.log(`Retrying event "${action}" in ${retryDelay / 1000} seconds...`);
+  
+      setTimeout(() => {
+        this.trackEvent(action, payload, retries - 1); // Retry sending event
+      }, retryDelay);
+    } else {
+      console.error(`Event "${action}" failed after multiple retries.`);
+      // You can also choose to store the failed event for future attempts
+    }
   }
 
   // Function to mask sensitive data in the payload
