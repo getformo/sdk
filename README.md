@@ -14,7 +14,7 @@ Add the following to your `index.html`:
   const config = {};
   script.src = 'https://unpkg.com/@formo/analytics';
   script.onload = function () {
-    FormoAnalytics.init(apiKey).then((sdkInstance) => setSdk(sdkInstance));
+    FormoAnalytics.init(apiKey).then((sdkInstance) => window.formo = sdkInstance);
   };
   document.head.appendChild(script);
 </script>

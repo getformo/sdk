@@ -20,6 +20,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.config = {
       token: this.apiKey,
     };
+    this.trackPageHit();
   }
   static async init(
     apiKey: string,
@@ -131,21 +132,68 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   // Function to mask sensitive data in the payload
-  private maskSensitiveData(data: string): string {
-    const sensitiveFields = [
-      'username',
-      'user',
-      'user_id',
-      'password',
-      'email',
-      'phone',
-    ];
-    sensitiveFields.forEach((field) => {
-      data = data?.replace(
-        new RegExp(`("${field}"):(".+?"|\\d+)`, 'mgi'),
-        `$1:"********"`
-      );
-    });
+  private maskSensitiveData(
+    data: string | undefined | null
+  ): Record<string, any> | null {
+    // Check if data is null or undefined
+    if (data === null || data === undefined) {
+      console.warn('Data is null or undefined, returning null');
+      return null;
+    }
+
+    // Check if data is a string; if so, parse it to an object
+    if (typeof data === 'string') {
+      let parsedData: Record<string, any>;
+      try {
+        parsedData = JSON.parse(data);
+      } catch (error) {
+        console.error('Failed to parse JSON:', error);
+        return null; // Return null if parsing fails
+      }
+
+      const sensitiveFields = [
+        'username',
+        'user',
+        'user_id',
+        'password',
+        'email',
+        'phone',
+      ];
+
+      // Create a new object to store masked data
+      const maskedData = { ...parsedData };
+
+      // Mask sensitive fields
+      sensitiveFields.forEach((field) => {
+        if (field in maskedData) {
+          maskedData[field] = '********'; // Replace value with masked string
+        }
+      });
+
+      return maskedData; // Return the new object with masked fields
+    } else if (typeof data === 'object') {
+      // If data is already an object, handle masking directly
+      const sensitiveFields = [
+        'username',
+        'user',
+        'user_id',
+        'password',
+        'email',
+        'phone',
+      ];
+
+      const maskedData = { ...(data as Record<string, any>) };
+
+      // Mask sensitive fields
+      sensitiveFields.forEach((field) => {
+        if (field in maskedData) {
+          maskedData[field] = '********'; // Replace value with masked string
+        }
+      });
+
+      return maskedData; // Return the new object with masked fields
+    }
+
     return data;
   }
 
