@@ -77,7 +77,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   // Function to send tracking data
   private async trackEvent(action: string, payload: any) {
-    const retries = 3;
+    const maxRetries = 3;
+    let attempt = 0;
+
     this.setSessionCookie(this.config.domain);
     const apiUrl = this.buildApiUrl();
 
@@ -92,47 +94,39 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     console.log('Request data:', JSON.stringify(requestData));
 
-    try {
-      const response = await axios.post(apiUrl, JSON.stringify(requestData), {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+    const sendRequest = async (): Promise<void> => {
+      try {
+        const response = await axios.post(apiUrl, JSON.stringify(requestData), {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
 
-      if (response.status >= 200 && response.status < 300) {
-        console.log('Event sent successfully:', action);
-      } else {
-        console.error('Event sending failed with status:', response.status);
-        this.handleFailedEvent(action, payload, retries);
-      }
-    } catch (error) {
-      console.error(
-        'Network or server error occurred while sending event:',
-        error
-      );
-      this.handleFailedEvent(action, payload, retries);
-    }
-  }
-
-  // Handle failed event transmission and retry
-  private handleFailedEvent(action: string, payload: any, maxRetries: number) {
-    let attempt = 0;
-  
-    const retry = () => {
-      if (attempt < maxRetries) {
-        const retryDelay = Math.pow(2, attempt) * 1000; // Exponential backoff
-        console.log(`Retrying event "${action}" in ${retryDelay / 1000} seconds...`);
-  
-        setTimeout(() => {
-          attempt++;
-          this.trackEvent(action, payload);
-        }, retryDelay);
-      } else {
-        console.error(`Event "${action}" failed after ${maxRetries} retries.`);
+        if (response.status >= 200 && response.status < 300) {
+          console.log('Event sent successfully:', action);
+        } else {
+          throw new Error(`Failed with status: ${response.status}`);
+        }
+      } catch (error) {
+        attempt++;
+        if (attempt <= maxRetries) {
+          const retryDelay = Math.pow(2, attempt) * 1000;
+          console.error(
+            `Attempt ${attempt}: Retrying event "${action}" in ${
+              retryDelay / 1000
+            } seconds...`
+          );
+          setTimeout(sendRequest, retryDelay);
+        } else {
+          console.error(
+            `Event "${action}" failed after ${maxRetries} attempts. Error: ${error}`
+          );
+        }
       }
     };
-  
-    retry();
+
+    // Start the initial request
+    await sendRequest();
   }
 
   // Function to mask sensitive data in the payload
