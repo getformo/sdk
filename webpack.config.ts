@@ -9,8 +9,8 @@ module.exports = {
     path: path.resolve(__dirname, 'dist'),
     filename: 'index.umd.min.js',
     libraryTarget: 'umd',
-    library: 'ArcxAnalyticsSdk',
-    libraryExport: 'ArcxAnalyticsSdk',
+    library: 'FormoAnalytics',
+    libraryExport: 'FormoAnalytics',
     umdNamedDefine: true,
   },
   resolve: {

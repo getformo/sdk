@@ -8,7 +8,6 @@ export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
 
 export const FormoAnalyticsProvider = ({
   apiKey: initialApiKey,
-  config,
   disabled,
   children,
 }: FormoAnalyticsProviderProps) => {
@@ -34,13 +33,8 @@ export const FormoAnalyticsProvider = ({
     if (initializedStartedRef.current) return;
     initializedStartedRef.current = true;
 
-    FormoAnalytics.init(apiKey, {
-      ...config,
-      trackPageViews: true,
-      trackClicks: true,
-      trackUserSessions: true,
-    }).then((sdkInstance) => setSdk(sdkInstance));
-  }, [apiKey, disabled, config]);
+    FormoAnalytics.init(apiKey).then((sdkInstance) => setSdk(sdkInstance));
+  }, [apiKey, disabled]);
 
   return (
     <FormoAnalyticsContext.Provider value={sdk}>

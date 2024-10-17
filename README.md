@@ -11,7 +11,7 @@ Add the following to your `index.html`:
 ```html
 <script
   defer
-  src="https://unpkg.com/@formo/sdk@1.1.7/dist/index.js"
+  src="https://unpkg.com/@formo/analytics@1.2.0/dist/index.js"
   data-token="YOUR_API_KEY_HERE"
 ></script>
 ```
@@ -23,21 +23,21 @@ Add the following to your `index.html`:
 1. Install the npm package:
 
 ```
-yarn add @formo/sdk
+yarn add @formo/analytics
 ```
 
 or
 
 ```
-npm install @formo/sdk --save
+npm install @formo/analytics --save
 ```
 
 2. Initialize the SDK and keep an instance of it ready to reference in other parts of your app. To do this, add the following code on your app’s load:
 
 ```jsx
-import { FormoAnalyticsSdk } from '@formo/sdk';
+import { FormoAnalytics } from '@formo/analytics';
 
-const sdk = await FormoAnalyticsSdk.init(API_KEY, {
+const sdk = await FormoAnalytics.init(API_KEY, {
   //TODO: Add more details
 });
 ```

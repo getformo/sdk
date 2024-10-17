@@ -1,60 +1,29 @@
-import { SESSION_STORAGE_ID_KEY, USER_ID_KEY } from './constants';
+import { COUNTRY_LIST, SESSION_STORAGE_ID_KEY } from './constants';
 
-export class FormoAnalytics {
+interface IFormoAnalytics {
+  init(apiKey: string): Promise<FormoAnalytics>;
+  identify(userData: any): void;
+  page(): void;
+  track(eventName: string, eventData: any): void;
+}
+export class FormoAnalytics implements IFormoAnalytics {
   private config: any;
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
-  private userIdKey: string = USER_ID_KEY;
-  private timezoneToCountry: Record<string, string> = {
-    'Asia/Barnaul': 'RU',
-    'Africa/Nouakchott': 'MR',
-    'Asia/Calcutta': 'IN',
-    // Add the other timezones here
-  };
+  private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
-  private constructor(public readonly apiKey: string, config: any) {
-    this.config = config;
+  private constructor(public readonly apiKey: string) {
     this.trackPageHit();
     this.addPageTrackingListeners();
-    this.identifyUser({ apiKey: this.apiKey });
   }
 
-  static async init(apiKey: string, config: any): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey, config);
+  static async init(apiKey: string): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey);
 
     return instance;
   }
 
   private identifyUser(userData: any) {
-    const userId = this.getUserId();
-    this.trackEvent('identify_user', { userId, ...userData });
-    this.setSessionUserId();
-  }
-
-  private getUserId(): string {
-    let userId = this.getCookieValue(this.userIdKey);
-    if (!userId) {
-      userId = this.generateUserId(); // Generate a new user ID if not found
-    }
-    return userId;
-  }
-
-  private setSessionUserId(domain?: string) {
-    const userId = this.getUserId();
-    let cookieValue = `${this.userIdKey}=${userId}; Max-Age=1800; path=/; secure`;
-    if (domain) {
-      cookieValue += `; domain=${domain}`;
-    }
-    document.cookie = cookieValue;
-  }
-
-  private generateUserId(): string {
-    return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => {
-      const numC = parseInt(c, 10);
-      return (
-        numC ^
-        (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (numC / 4)))
-      ).toString(16);
-    });
+    this.trackEvent('identify_user', userData);
   }
 
   private getSessionId() {
@@ -207,7 +176,20 @@ export class FormoAnalytics {
     }
   }
 
-  // Example method to track custom events
+  init(apiKey: string): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey);
+
+    return Promise.resolve(instance);
+  }
+
+  identify(userData: any) {
+    this.identifyUser(userData);
+  }
+
+  page() {
+    this.trackPageHit();
+  }
+
   track(eventName: string, eventData: any) {
     this.trackEvent(eventName, eventData);
   }
