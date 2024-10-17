@@ -51,4 +51,5 @@ const sdk = await FormoAnalytics.init(API_KEY);
 To run a local version of the script:
 
 1. Run `yarn build-cjs && yarn build-esm && yarn webpack --mode=production` or `npm run build` at the root level to build the script.
-2. Run `yarn publish` or `npm run publish` to publish new versions of the package.
+2. To authorize device, login into npmjs using `npm login` or `npm adduser`
+3. Run `yarn publish` or `npm run publish` to publish new versions of the package.
