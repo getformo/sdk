@@ -10,11 +10,11 @@ Add the following to your `index.html`:
 <script>
   const script = document.createElement('script');
   const apiKey = 'YOUR_API_KEY';
-  // Add any configuration parameters you'd like here
-  const config = {};
+  const projectId = 'YOUR_PROJECT_ID';
+
   script.src = 'https://unpkg.com/@formo/analytics';
   script.onload = function () {
-    FormoAnalytics.init(apiKey).then((sdkInstance) => window.formo = sdkInstance);
+    FormoAnalytics.init(apiKey, projectId).then((sdkInstance) => window.formo = sdkInstance);
   };
   document.head.appendChild(script);
 </script>
