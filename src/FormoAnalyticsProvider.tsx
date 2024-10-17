@@ -7,24 +7,15 @@ export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
 );
 
 export const FormoAnalyticsProvider = ({
-  apiKey: initialApiKey,
+  apiKey,
   disabled,
   children,
 }: FormoAnalyticsProviderProps) => {
-  const [apiKey, setApiKey] = useState<string | undefined>(initialApiKey);
-
   const [sdk, setSdk] = useState<FormoAnalytics | undefined>();
   const initializedStartedRef = useRef(false);
 
   useEffect(() => {
-    const scriptTag = document.querySelector('script[data-apikey]');
-
-    if (scriptTag) {
-      const providedApiKey = scriptTag.getAttribute('data-apikey') || '';
-      setApiKey(providedApiKey);
-    }
-
-    if (!(initialApiKey && apiKey)) {
+    if (!apiKey) {
       throw new Error('FormoAnalyticsProvider: No API key provided');
     }
 
@@ -47,7 +38,9 @@ export const useFormoAnalytics = () => {
   const context = useContext(FormoAnalyticsContext);
 
   if (!context) {
-    throw new Error('useFormoAnalytics must be used within a FormoAnalyticsProvider');
+    throw new Error(
+      'useFormoAnalytics must be used within a FormoAnalyticsProvider'
+    );
   }
 
   return context;

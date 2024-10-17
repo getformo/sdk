@@ -9,11 +9,17 @@
 Add the following to your `index.html`:
 
 ```html
-<script
-  defer
-  src="https://unpkg.com/@formo/analytics@1.2.0/dist/index.js"
-  data-token="YOUR_API_KEY_HERE"
-></script>
+<script>
+  const script = document.createElement('script');
+  const apiKey = 'YOUR_API_KEY';
+  // Add any configuration parameters you'd like here
+  const config = {};
+  script.src = 'https://unpkg.com/@formo/analytics';
+  script.onload = function () {
+    FormoAnalytics.init(apiKey).then((sdkInstance) => setSdk(sdkInstance));
+  };
+  document.head.appendChild(script);
+</script>
 ```
 
 ## Option 2 - using npm package
