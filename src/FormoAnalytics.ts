@@ -115,20 +115,24 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   // Handle failed event transmission and retry
-  private handleFailedEvent(action: string, payload: any, retries: number) {
-    if (retries > 0) {
-      const retryDelay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
-      console.log(
-        `Retrying event "${action}" in ${retryDelay / 1000} seconds...`
-      );
-
-      setTimeout(() => {
-        this.trackEvent(action, payload); // Retry sending event
-      }, retryDelay);
-    } else {
-      console.error(`Event "${action}" failed after multiple retries.`);
-      // You can also choose to store the failed event for future attempts
-    }
+  private handleFailedEvent(action: string, payload: any, maxRetries: number) {
+    let attempt = 0;
+  
+    const retry = () => {
+      if (attempt < maxRetries) {
+        const retryDelay = Math.pow(2, attempt) * 1000; // Exponential backoff
+        console.log(`Retrying event "${action}" in ${retryDelay / 1000} seconds...`);
+  
+        setTimeout(() => {
+          attempt++;
+          this.trackEvent(action, payload);
+        }, retryDelay);
+      } else {
+        console.error(`Event "${action}" failed after ${maxRetries} retries.`);
+      }
+    };
+  
+    retry();
   }
 
   // Function to mask sensitive data in the payload
