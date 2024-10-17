@@ -1,7 +1,9 @@
+import axios from 'axios';
 import { COUNTRY_LIST, SESSION_STORAGE_ID_KEY } from './constants';
+import { isNotEmpty } from './utils';
 
 interface IFormoAnalytics {
-  init(apiKey: string): Promise<FormoAnalytics>;
+  init(apiKey: string, projectId: string): Promise<FormoAnalytics>;
   identify(userData: any): void;
   page(): void;
   track(eventName: string, eventData: any): void;
@@ -11,13 +13,23 @@ export class FormoAnalytics implements IFormoAnalytics {
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
-  private constructor(public readonly apiKey: string) {
-    this.trackPageHit();
-    this.addPageTrackingListeners();
+  private constructor(
+    public readonly apiKey: string,
+    public projectId: string
+  ) {
+    this.config = {
+      token: this.apiKey,
+    };
   }
-
-  static async init(apiKey: string): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey);
+  static async init(
+    apiKey: string,
+    projectId: string
+  ): Promise<FormoAnalytics> {
+    const config = {
+      token: apiKey,
+    };
+    const instance = new FormoAnalytics(apiKey, projectId);
+    instance.config = config;
 
     return instance;
   }
@@ -72,45 +84,48 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async trackEvent(action: string, payload: any, retries: number = 3) {
     this.setSessionCookie(this.config.domain);
     const apiUrl = this.buildApiUrl();
-  
+
     const requestData = {
       timestamp: new Date().toISOString(),
       action: action,
       version: '1',
       session_id: this.getSessionId(),
-      payload: this.maskSensitiveData(payload),
+      payload: isNotEmpty(payload) ? this.maskSensitiveData(payload) : payload,
+      project_id: this.projectId,
     };
-  
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', apiUrl, true);
-    xhr.setRequestHeader('Content-Type', 'application/json');
-  
-    // Handle a successful response
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
+
+    console.log('Request data:', JSON.stringify(requestData));
+
+    try {
+      const response = await axios.post(apiUrl, JSON.stringify(requestData), {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.status >= 200 && response.status < 300) {
         console.log('Event sent successfully:', action);
       } else {
-        console.error('Event sending failed with status:', xhr.status);
+        console.error('Event sending failed with status:', response.status);
         this.handleFailedEvent(action, payload, retries);
       }
-    };
-  
-    // Handle network or transmission errors
-    xhr.onerror = () => {
-      console.error('Network error occurred while sending event:', action);
+    } catch (error) {
+      console.error(
+        'Network or server error occurred while sending event:',
+        error
+      );
       this.handleFailedEvent(action, payload, retries);
-    };
-  
-    // Send the request
-    xhr.send(JSON.stringify(requestData));
+    }
   }
-  
+
   // Handle failed event transmission and retry
   private handleFailedEvent(action: string, payload: any, retries: number) {
     if (retries > 0) {
       const retryDelay = Math.pow(2, 3 - retries) * 1000; // Exponential backoff
-      console.log(`Retrying event "${action}" in ${retryDelay / 1000} seconds...`);
-  
+      console.log(
+        `Retrying event "${action}" in ${retryDelay / 1000} seconds...`
+      );
+
       setTimeout(() => {
         this.trackEvent(action, payload, retries - 1); // Retry sending event
       }, retryDelay);
@@ -131,7 +146,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       'phone',
     ];
     sensitiveFields.forEach((field) => {
-      data = data.replace(
+      data = data?.replace(
         new RegExp(`("${field}"):(".+?"|\\d+)`, 'mgi'),
         `$1:"********"`
       );
@@ -166,51 +181,30 @@ export class FormoAnalytics implements IFormoAnalytics {
         pathname: window.location.pathname,
         href: window.location.href,
       });
+      console.log('page_hit');
     }, 300);
   }
 
   // Function to build the API URL
   private buildApiUrl(): string {
     const { host, proxy, token, dataSource = 'analytics_events' } = this.config;
-    if (proxy) {
-      return `${proxy}/api/tracking`;
+    if (token) {
+      if (proxy) {
+        return `${proxy}/api/tracking`;
+      }
+      if (host) {
+        return `${host.replace(
+          /\/+$/,
+          ''
+        )}/v0/events?name=${dataSource}&token=${token}`;
+      }
+      return `https://api.eu-central-1.aws.tinybird.co/v0/events?name=${dataSource}&token=${token}`;
     }
-    if (host) {
-      return `${host.replace(
-        /\/+$/,
-        ''
-      )}/v0/events?name=${dataSource}&token=${token}`;
-    }
-    return `https://api.tinybird.co/v0/events?name=${dataSource}&token=${token}`;
+    return 'Error: No token provided';
   }
 
-  // Add event listeners for tracking page views
-  private addPageTrackingListeners() {
-    window.addEventListener('hashchange', this.trackPageHit.bind(this));
-
-    const history = window.history;
-    if (history.pushState) {
-      const originalPushState = history.pushState;
-      history.pushState = (...args) => {
-        originalPushState.apply(history, args);
-        this.trackPageHit();
-      };
-      window.addEventListener('popstate', this.trackPageHit.bind(this));
-    }
-
-    if ((document.visibilityState as unknown) === 'prerender') {
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          this.trackPageHit();
-        }
-      });
-    } else {
-      this.trackPageHit();
-    }
-  }
-
-  init(apiKey: string): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey);
+  init(apiKey: string, projectId: string): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey, projectId);
 
     return Promise.resolve(instance);
   }

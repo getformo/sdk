@@ -1,4 +1,10 @@
-import { createContext, useContext, useEffect, useState, useRef } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+} from 'react';
 import { FormoAnalytics } from './FormoAnalytics';
 import { FormoAnalyticsProviderProps } from './types';
 
@@ -8,6 +14,7 @@ export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
 
 export const FormoAnalyticsProvider = ({
   apiKey,
+  projectId,
   disabled,
   children,
 }: FormoAnalyticsProviderProps) => {
@@ -24,7 +31,7 @@ export const FormoAnalyticsProvider = ({
     if (initializedStartedRef.current) return;
     initializedStartedRef.current = true;
 
-    FormoAnalytics.init(apiKey).then((sdkInstance) => setSdk(sdkInstance));
+    FormoAnalytics.init(apiKey, projectId).then((sdkInstance) => setSdk(sdkInstance));
   }, [apiKey, disabled]);
 
   return (
