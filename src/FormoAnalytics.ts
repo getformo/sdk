@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { COUNTRY_LIST, SESSION_STORAGE_ID_KEY } from './constants';
+import { COUNTRY_LIST, EVENTS_API, SESSION_STORAGE_ID_KEY } from './constants';
 import { isNotEmpty } from './utils';
 
 interface IFormoAnalytics {
@@ -61,13 +61,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   // Function to generate a new session ID
   private generateSessionId(): string {
-    return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => {
-      const numC = parseInt(c, 10);
-      return (
-        numC ^
-        (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (numC / 4)))
-      ).toString(16);
-    });
+    return crypto.randomUUID();
   }
 
   // Function to get a cookie value by name
@@ -81,7 +75,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   // Function to send tracking data
-  private async trackEvent(action: string, payload: any, retries: number = 3) {
+  private async trackEvent(action: string, payload: any) {
+    const retries = 3;
     this.setSessionCookie(this.config.domain);
     const apiUrl = this.buildApiUrl();
 
@@ -127,7 +122,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
       setTimeout(() => {
-        this.trackEvent(action, payload, retries - 1); // Retry sending event
+        this.trackEvent(action, payload); // Retry sending event
       }, retryDelay);
     } else {
       console.error(`Event "${action}" failed after multiple retries.`);
@@ -181,7 +176,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         pathname: window.location.pathname,
         href: window.location.href,
       });
-      console.log('page_hit');
     }, 300);
   }
 
@@ -198,7 +192,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           ''
         )}/v0/events?name=${dataSource}&token=${token}`;
       }
-      return `https://api.eu-central-1.aws.tinybird.co/v0/events?name=${dataSource}&token=${token}`;
+      return `${EVENTS_API}?name=${dataSource}&token=${token}`;
     }
     return 'Error: No token provided';
   }

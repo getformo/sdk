@@ -60,7 +60,7 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
 }) => {
   // Initialize the FormoAnalytics SDK inside useEffect
   useEffect(() => {
-    const initializeFormoAnalytics = async () => {
+    const initialize = async () => {
       try {
         await FormoAnalytics.init(apiKey, projectId);
         console.log('FormoAnalytics SDK initialized');
@@ -69,7 +69,7 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
       }
     };
 
-    initializeFormoAnalytics();
+    initialize();
   }, [apiKey]);
 
   return (
@@ -112,21 +112,21 @@ import { useFormoAnalytics } from '@formo/analytics';
 import React, { useEffect } from 'react';
 
 const YourComponent = () => {
-  const formoAnalytics = useFormoAnalytics();
+  const analytics = useFormoAnalytics();
 
   useEffect(() => {
-    const initializeFormoAnalytics = async () => {
+    const initialize = async () => {
       try {
         console.log('Tracking page hit...');
-        formoAnalytics.page(); // Track the page view
-        formoAnalytics.track('custom_event', { key: 'value' }); // Track a custom event
+        analytics.page(); // Track the page view
+        analytics.track('custom_event', { key: 'value' }); // Track a custom event
       } catch (error) {
         console.error('Failed to track page hit', error);
       }
     };
 
-    initializeFormoAnalytics();
-  }, [formoAnalytics]);
+    initialize();
+  }, [analytics]);
 
   return <div>Your Component Content</div>;
 };
