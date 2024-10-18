@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "outDir": "dist/cjs",
+    "allowJs": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "module": "commonjs",
+    "target": "es5",
+    "lib": ["es2015", "dom"],
+    "moduleResolution": "node",
+    "declaration": true,
+    "noImplicitThis": true,
+    "noImplicitAny": true,
+    "noUnusedParameters": true,
+    "declarationMap": true,
+    "composite": true,
+    "incremental": true,
+    "sourceMap": true,
+    "isolatedModules": true
+  },
+  "ts-node": {
+    "files": true
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,54 @@
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+} from 'react';
+import { FormoAnalytics } from './FormoAnalytics';
+import { FormoAnalyticsProviderProps } from './types';
+
+export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
+  undefined
+);
+
+export const FormoAnalyticsProvider = ({
+  apiKey,
+  projectId,
+  disabled,
+  children,
+}: FormoAnalyticsProviderProps) => {
+  const [sdk, setSdk] = useState<FormoAnalytics | undefined>();
+  const initializedStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (!apiKey) {
+      throw new Error('FormoAnalyticsProvider: No API key provided');
+    }
+
+    if (disabled) return;
+
+    if (initializedStartedRef.current) return;
+    initializedStartedRef.current = true;
+
+    FormoAnalytics.init(apiKey, projectId).then((sdkInstance) => setSdk(sdkInstance));
+  }, [apiKey, disabled]);
+
+  return (
+    <FormoAnalyticsContext.Provider value={sdk}>
+      {children}
+    </FormoAnalyticsContext.Provider>
+  );
+};
+
+export const useFormoAnalytics = () => {
+  const context = useContext(FormoAnalyticsContext);
+
+  if (!context) {
+    throw new Error(
+      'useFormoAnalytics must be used within a FormoAnalyticsProvider'
+    );
+  }
+
+  return context;
+};
