@@ -36,7 +36,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private identifyUser(userData: any) {
-    this.trackEvent('identify_user', userData);
+    this.trackEvent('identify', userData);
   }
 
   private getSessionId() {
@@ -84,12 +84,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     const apiUrl = this.buildApiUrl();
 
     const requestData = {
+      project_id: this.projectId,
+      address: '', // TODO: get cached / session wallet address
+      session_id: this.getSessionId(),
       timestamp: new Date().toISOString(),
       action: action,
       version: '1',
-      session_id: this.getSessionId(),
       payload: isNotEmpty(payload) ? this.maskSensitiveData(payload) : payload,
-      project_id: this.projectId,
     };
 
     console.log('Request data:', JSON.stringify(requestData));
