@@ -215,6 +215,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     setTimeout(() => {
+      const url = new URL(window.location.href);
+      const params = new URLSearchParams(url.search);
       this.trackEvent('page_hit', {
         'user-agent': window.navigator.userAgent,
         locale: language,
@@ -222,6 +224,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         referrer: document.referrer,
         pathname: window.location.pathname,
         href: window.location.href,
+        utm_source: params.get('utm_source'),
+        utm_medium: params.get('utm_medium'),
+        utm_campaign: params.get('utm_campaign'),
+        ref: params.get('ref'),
       });
     }, 300);
   }

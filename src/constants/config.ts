@@ -128,6 +128,7 @@ export const COUNTRY_LIST = {
   'Africa/El_Aaiun': 'EH',
   'America/Creston': 'CA',
   'Asia/Qostanay': 'KZ',
+  'Asia/Saigon': 'VN',
   'Asia/Ho_Chi_Minh': 'VN',
   'Europe/Samara': 'RU',
   'Europe/Rome': 'IT',
