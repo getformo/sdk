@@ -26,7 +26,9 @@ Add the following to your `index.html`:
 
 ---
 
-1. Install the npm package:
+### 1. Install the npm package:
+
+Install @formo/analytics via yarn or npm:
 
 ```
 yarn add @formo/analytics
@@ -38,7 +40,7 @@ or
 npm install @formo/analytics --save
 ```
 
-2. Set up the `FormoAnalyticsProvider` in your application:
+### 2. Set up the `FormoAnalyticsProvider` in your application:
 
 ```jsx
 // AnalyticsProvider.tsx
@@ -77,10 +79,11 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
     initialize();
   }, [apiKey, projectId]);
 
+  // To prevent app crashes, render a loading state during initialization
   if (!isInitialized) {
     return (
       <FormoAnalyticsProvider apiKey={apiKey} projectId={projectId}>
-        {null}
+        Loading Content
       </FormoAnalyticsProvider>
     );
   }
@@ -95,9 +98,9 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
 export default AnalyticsProvider;
 ```
 
-1. Integrating the Provider in Your Root Layout
-   
-Wrap your application with the `AnalyticsProvider` that just created in your main layout file:
+### 3. Integrating the Provider in Your Root Layout
+
+Wrap your application with the newly created `AnalyticsProvider` in your main layout file:
 
 ```jsx
 import { AnalyticsProvider } from './AnalyticsProvider';
@@ -119,8 +122,9 @@ export default function RootLayout({
 }
 ```
 
-1. Using the SDK
-   Once the SDK is initialized, you can use its methods to track events and user interactions. Here’s how to do that:
+### 4. Using the SDK
+   
+Once the SDK is initialized, you can use its methods to track events and user interactions. Here’s how to do that:
 
 ```jsx
 import { useFormoAnalytics } from '@formo/analytics';
