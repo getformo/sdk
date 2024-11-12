@@ -109,6 +109,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       } catch (error) {
         attempt++;
+        H.consumeError(
+          error as Error,
+          `Request data: ${JSON.stringify(requestData)}`
+        );
 
         if (attempt <= maxRetries) {
           const retryDelay = Math.pow(2, attempt) * 1000;
