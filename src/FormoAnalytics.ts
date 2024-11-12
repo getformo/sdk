@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { COUNTRY_LIST, EVENTS_API, SESSION_STORAGE_ID_KEY } from './constants';
 import { isNotEmpty } from './utils';
+import { H } from 'highlight.run';
 
 interface IFormoAnalytics {
   init(apiKey: string, projectId: string): Promise<FormoAnalytics>;
@@ -93,8 +94,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       payload: isNotEmpty(payload) ? this.maskSensitiveData(payload) : payload,
     };
 
-    console.log('Request data:', JSON.stringify(requestData));
-
     const sendRequest = async (): Promise<void> => {
       try {
         const response = await axios.post(apiUrl, JSON.stringify(requestData), {
@@ -110,6 +109,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       } catch (error) {
         attempt++;
+        H.consumeError(
+          error as Error,
+          `Request data: ${JSON.stringify(requestData)}`
+        );
+
         if (attempt <= maxRetries) {
           const retryDelay = Math.pow(2, attempt) * 1000;
           console.error(
@@ -126,7 +130,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     };
 
-    // Start the initial request
     await sendRequest();
   }
 
