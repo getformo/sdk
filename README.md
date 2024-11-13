@@ -14,7 +14,9 @@ Add the following to your `index.html`:
 
   script.src = 'https://unpkg.com/@formo/analytics';
   script.onload = function () {
-    FormoAnalytics.init(apiKey, projectId).then((sdkInstance) => window.formo = sdkInstance);
+    FormoAnalytics.init(apiKey, projectId).then(
+      (sdkInstance) => (window.formo = sdkInstance)
+    );
   };
   document.head.appendChild(script);
 </script>
@@ -24,7 +26,9 @@ Add the following to your `index.html`:
 
 ---
 
-1. Install the npm package:
+### 1. Install the npm package:
+
+Install @formo/analytics via yarn or npm:
 
 ```
 yarn add @formo/analytics
@@ -36,10 +40,10 @@ or
 npm install @formo/analytics --save
 ```
 
-2. Set up the `FormoAnalyticsProvider` in your application:
+### 2. Set up the `FormoAnalyticsProvider` in your application:
 
 ```jsx
-// FormoAnalyticsProvider.tsx
+// AnalyticsProvider.tsx
 
 'use client';
 
@@ -47,9 +51,9 @@ import { FormoAnalytics, FormoAnalyticsProvider } from '@formo/analytics';
 import React, { FC, useEffect } from 'react';
 
 type FormoAnalyticsProviderProps = {
-  apiKey: string;
-  projectId: string;
-  children: React.ReactNode;
+  apiKey: string,
+  projectId: string,
+  children: React.ReactNode,
 };
 
 // The provider component
@@ -59,18 +63,30 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
   children,
 }) => {
   // Initialize the FormoAnalytics SDK inside useEffect
+  const [isInitialized, setIsInitialized] = useState(false);
+
   useEffect(() => {
     const initialize = async () => {
       try {
         await FormoAnalytics.init(apiKey, projectId);
         console.log('FormoAnalytics SDK initialized');
+        setIsInitialized(true);
       } catch (error) {
         console.error('Failed to initialize FormoAnalytics SDK', error);
       }
     };
 
     initialize();
-  }, [apiKey]);
+  }, [apiKey, projectId]);
+
+  // To prevent app crashes, render a loading state during initialization
+  if (!isInitialized) {
+    return (
+      <FormoAnalyticsProvider apiKey={apiKey} projectId={projectId}>
+        Loading Content
+      </FormoAnalyticsProvider>
+    );
+  }
 
   return (
     <FormoAnalyticsProvider apiKey={apiKey} projectId={projectId}>
@@ -82,29 +98,32 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
 export default AnalyticsProvider;
 ```
 
-1. Integrating the Provider in Your Layout
-Wrap your application with the `AnalyticsProvider` in your main layout file:
+### 3. Integrating the Provider in Your Root Layout
+
+Wrap your application with the newly created `AnalyticsProvider` in your main layout file:
 
 ```jsx
-import { FormoAnalyticsProvider } from './FormoAnalyticsProvider';
+import { AnalyticsProvider } from './AnalyticsProvider';
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode,
+}) {
   return (
-      <html lang="en">
-        <body>
-          <FormoAnalyticsProvider
-            apiKey="YOUR_API_KEY"
-            projectId="formo"
-          >
-            Your Page Content
-          </FormoAnalyticsProvider>
-        </body>
-      </html>
+    <html lang='en'>
+      <body>
+        <AnalyticsProvider apiKey='YOUR_API_KEY' projectId='YOUR_PROJECT_ID'>
+          Your Page Content
+        </AnalyticsProvider>
+      </body>
+    </html>
   );
 }
 ```
 
-3. Using the SDK
+### 4. Using the SDK
+   
 Once the SDK is initialized, you can use its methods to track events and user interactions. Here’s how to do that:
 
 ```jsx
@@ -115,7 +134,7 @@ const YourComponent = () => {
   const analytics = useFormoAnalytics();
 
   useEffect(() => {
-    const initialize = async () => {
+    const track = async () => {
       try {
         console.log('Tracking page hit...');
         analytics.page(); // Track the page view
@@ -125,7 +144,7 @@ const YourComponent = () => {
       }
     };
 
-    initialize();
+    track();
   }, [analytics]);
 
   return <div>Your Component Content</div>;
