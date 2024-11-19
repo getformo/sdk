@@ -109,7 +109,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       } catch (error) {
         attempt++;
-        
+
         if (attempt <= maxRetries) {
           const retryDelay = Math.pow(2, attempt) * 1000;
           console.error(
