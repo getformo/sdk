@@ -265,7 +265,7 @@ export const COUNTRY_LIST = {
   'Asia/Kolkata': 'IN',
   'Asia/Krasnoyarsk': 'RU',
   'Asia/Kuala_Lumpur': 'MY',
-  'Asia/Kuching': 'MY',
+  'Asia/Kuchin': 'MY',
   'Asia/Kuwait': 'KW',
   'Asia/Macao': 'MO',
   'Asia/Macau': 'MO',

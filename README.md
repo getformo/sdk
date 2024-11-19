@@ -14,9 +14,16 @@ Add the following to your `index.html`:
 
   script.src = 'https://unpkg.com/@formo/analytics';
   script.onload = function () {
-    FormoAnalytics.init(apiKey, projectId).then(
-      (sdkInstance) => (window.formo = sdkInstance)
-    );
+    FormoAnalytics.init(apiKey, projectId)
+      .then((sdkInstance) => {
+        window.formo = sdkInstance;
+
+        // Call the public `page` method to track a page hit
+        window.formo.page();
+      })
+      .catch((error) => {
+        console.error('Error initializing FormoAnalytics:', error);
+      });
   };
   document.head.appendChild(script);
 </script>
@@ -123,7 +130,7 @@ export default function RootLayout({
 ```
 
 ### 4. Using the SDK
-   
+
 Once the SDK is initialized, you can use its methods to track events and user interactions. Here’s how to do that:
 
 ```jsx
