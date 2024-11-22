@@ -10,10 +10,40 @@ import { H } from 'highlight.run';
 import { ChainID, EIP1193Provider, RequestArguments } from './types';
 
 interface IFormoAnalytics {
+  /**
+   * Initializes the FormoAnalytics instance with the provided API key and project ID.
+   */
   init(apiKey: string, projectId: string): Promise<FormoAnalytics>;
-  identify(userData: any): void;
+
+  /**
+   * Identifies the user with the provided user data.
+   */
+  identify(userData: Record<string, any>): void;
+
+  /**
+   * Tracks page visit events.
+   */
   page(): void;
-  track(eventName: string, eventData: any): void;
+
+  /**
+   * Tracks a specific event with a name and associated data.
+   */
+  track(eventName: string, eventData: Record<string, any>): void;
+
+  /**
+   * Connects to a wallet with the specified chain ID and address.
+   */
+  connect(params: { chainId: ChainID; address: string }): Promise<void>;
+
+  /**
+   * Disconnects the current wallet and clears the session information.
+   */
+  disconnect(attributes?: { account?: string; chainId?: ChainID }): void;
+  
+  /**
+   * Switches the blockchain chain context and optionally logs additional attributes.
+   */
+  chain(attributes: { chainId: ChainID; account?: string }): void;
 }
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
@@ -366,7 +396,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async onAccountsChanged(accounts: string[]) {
     if (accounts.length > 0) {
-      this.handleAccountConnected(accounts[0]);
+      const newAccount = accounts[0];
+      if (newAccount !== this.currentConnectedAccount) {
+        this.handleAccountConnected(newAccount);
+      }
     } else {
       this.handleAccountDisconnected();
     }
@@ -455,7 +488,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentChainId = await this.getCurrentChainId();
 
-    return this.connect({ chainId: this.currentChainId, address: account });
+    this.connect({ chainId: this.currentChainId, address: account });
   }
 
   private async getCurrentWallet() {
@@ -467,7 +500,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       const accounts = await this.provider.request<string[]>({
         method: 'eth_accounts',
       });
-
       if (accounts && accounts.length > 0 && accounts[0]) {
         this.handleAccountConnected(accounts[0]);
         return accounts && accounts.length > 0 && accounts[0];
@@ -498,18 +530,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     return 'Error: No token provided';
   }
 
-  connect({ chainId, address }: { chainId: ChainID; address: string }): void {
+  connect({ chainId, address }: { chainId: ChainID; address: string }) {
     if (!chainId) {
-      throw new Error('FormoAnalytics::wallet: chainId cannot be empty');
+      throw new Error('FormoAnalytics::connect: chainId cannot be empty');
     }
     if (!address) {
-      throw new Error('FormoAnalytics::wallet: account cannot be empty');
+      throw new Error('FormoAnalytics::connect: account cannot be empty');
     }
 
     this.currentChainId = chainId.toString();
     this.currentConnectedAccount = address;
 
-    this.trackEvent(Event.CONNECT, {
+    return this.trackEvent(Event.CONNECT, {
       chainId,
       address,
     });
@@ -542,7 +574,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (!account && !this.currentConnectedAccount) {
       throw new Error(
-        'FormoAnalytics::chain: account was empty and no previous account has been recorded. You can either pass an account or call wallet() first'
+        'FormoAnalytics::chain: account was empty and no previous account has been recorded. You can either pass an account or call connect() first'
       );
     }
 
