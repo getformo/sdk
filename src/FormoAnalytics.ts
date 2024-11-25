@@ -330,7 +330,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const disconnectAttributes = {
-      account: this.currentConnectedAccount,
+      address: this.currentConnectedAccount,
       chainId: this.currentChainId,
     };
     this.currentChainId = undefined;
