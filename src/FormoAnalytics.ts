@@ -39,7 +39,7 @@ interface IFormoAnalytics {
    * Disconnects the current wallet and clears the session information.
    */
   disconnect(attributes?: { account?: string; chainId?: ChainID }): void;
-  
+
   /**
    * Switches the blockchain chain context and optionally logs additional attributes.
    */
@@ -92,7 +92,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private identifyUser(userData: any) {
-    this.trackEvent('identify', userData);
+    this.trackEvent(Event.IDENTIFY, userData);
   }
 
   private getSessionId() {
@@ -276,7 +276,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     setTimeout(() => {
       const url = new URL(window.location.href);
       const params = new URLSearchParams(url.search);
-      this.trackEvent('page_hit', {
+      this.trackEvent(Event.PAGE, {
         'user-agent': window.navigator.userAgent,
         locale: language,
         location: location,
@@ -325,7 +325,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.getCurrentWallet();
     this.registerAccountsChangedListener();
     this.registerChainChangedListener();
-    this.trackSigning();
   }
 
   private registerChainChangedListener() {
@@ -415,49 +414,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     const handleAccountDisconnected = this.handleAccountDisconnected.bind(this);
     this._provider?.on('disconnect', handleAccountDisconnected);
     this._registeredProviderListeners['disconnect'] = handleAccountDisconnected;
-  }
-
-  private trackSigning() {
-    if (!this.provider) {
-      console.error(
-        'error',
-        'FormoAnalytics::_trackSigning: provider not found'
-      );
-      return false;
-    }
-
-    if (
-      Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable ===
-      false
-    ) {
-      console.error(
-        'warning',
-        'FormoAnalytics::_trackSigning: provider.request is not writable'
-      );
-      return false;
-    }
-
-    // Deliberately not using this._original request to not interfere with the transaction tracking's
-    // request modification
-    const request = this.provider.request.bind(this.provider);
-    this.provider.request = async ({ method, params }: RequestArguments) => {
-      if (Array.isArray(params)) {
-        if (['signTypedData_v4', 'eth_sign'].includes(method)) {
-          this.trackEvent(Event.SIGNING_TRIGGERED, {
-            account: params[0],
-            message: params[1],
-          });
-        }
-        if (method === 'personal_sign') {
-          this.trackEvent(Event.SIGNING_TRIGGERED, {
-            message: params[0],
-            account: params[1],
-          });
-        }
-      }
-      return request({ method, params });
-    };
-    return true;
   }
 
   private async getCurrentChainId(): Promise<string> {

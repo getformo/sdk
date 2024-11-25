@@ -1,2 +1,2 @@
 export * from './base';
-export * from './web3'
+export * from './wallet'

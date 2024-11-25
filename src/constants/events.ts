@@ -1,9 +1,7 @@
 export enum Event {
-  PAGE = 'page',
+  IDENTIFY = 'identify',
+  PAGE = 'page_hit',
   CONNECT = 'connect',
   DISCONNECT = 'disconnect',
   CHAIN_CHANGED = 'chain_changed',
-  SIGNING_TRIGGERED = 'signing_triggered',
-  CLICK = 'click',
-  CUSTOM = 'custom',
 }
