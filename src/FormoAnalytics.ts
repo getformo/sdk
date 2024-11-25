@@ -346,7 +346,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     this.currentChainId = undefined;
     this.currentConnectedAccount = undefined;
-    this.removeWalletAddress();
+    this.clearWalletAddress();
 
     return this.trackEvent(Event.DISCONNECT, disconnectAttributes);
   }
@@ -364,12 +364,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       try {
         const res: string[] | null | undefined = await this.provider.request({
-          method: 'eth_requestAccounts',
+          method: 'eth_accounts',
         });
         if (!res || res.length === 0) {
           console.error(
             'error',
-            'FormoAnalytics::onChainChanged: unable to get account. eth_requestAccounts returned empty'
+            'FormoAnalytics::onChainChanged: unable to get account. eth_accounts returned empty'
           );
           return;
         }
@@ -381,7 +381,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           // 4001: The request is rejected by the user , see https://docs.metamask.io/wallet/reference/provider-api/#errors
           console.error(
             'error',
-            `FormoAnalytics::onChainChanged: unable to get account. eth_requestAccounts threw an error`,
+            `FormoAnalytics::onChainChanged: unable to get account. eth_accounts threw an error`,
             err
           );
           return;
@@ -482,15 +482,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     sessionStorage.setItem(this.sessionKey, address);
-    console.log(`Wallet address ${address} stored in session.`);
   }
 
   /**
-   * Removes the wallet address from session storage when disconnected.
+   * Clears the wallet address from session storage when disconnected.
    */
-  private removeWalletAddress(): void {
+  private clearWalletAddress(): void {
     sessionStorage.removeItem(this.sessionKey);
-    console.log('Wallet address removed from session.');
   }
 
   // Function to build the API URL
