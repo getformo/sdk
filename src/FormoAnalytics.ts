@@ -47,7 +47,6 @@ interface IFormoAnalytics {
 }
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _originalRequest?: EIP1193Provider['request'];
   private _registeredProviderListeners: Record<
     string,
     (...args: unknown[]) => void
@@ -309,19 +308,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
         delete this._registeredProviderListeners[eventName];
       }
-
-      // Restore original request
-      if (
-        this._originalRequest &&
-        Object.getOwnPropertyDescriptor(this._provider, 'request')?.writable !==
-          false
-      ) {
-        this._provider.request = this._originalRequest;
-      }
     }
 
     this._provider = provider;
-    this._originalRequest = provider?.request;
 
     this.getCurrentWallet();
     this.registerAccountsChangedListener();
@@ -455,20 +444,24 @@ export class FormoAnalytics implements IFormoAnalytics {
       console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
       return;
     }
-    try {
-      const accounts = await this.provider.request<string[]>({
-        method: 'eth_accounts',
-      });
-      if (accounts && accounts.length > 0 && accounts[0]) {
-        this.handleAccountConnected(accounts[0]);
-        return accounts && accounts.length > 0 && accounts[0];
-      }
+    const sessionData = sessionStorage.getItem(this.sessionKey);
 
-      return '';
-    } catch (error) {
-      console.error('Failed to fetch connected address:', error);
+    if (!sessionData) {
+      return null;
+    }
+
+    const parsedData = JSON.parse(sessionData);
+    const sessionExpiry = 30 * 60 * 1000; // 30 minutes
+    const currentTime = Date.now();
+
+    if (currentTime - parsedData.timestamp > sessionExpiry) {
+      console.warn('Session expired. Ignoring wallet address.');
+      sessionStorage.removeItem(this.sessionKey); // Clear expired session data
       return '';
     }
+
+    this.handleAccountConnected(parsedData.address);
+    return parsedData.address || '';
   }
 
   /**
@@ -481,7 +474,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    sessionStorage.setItem(this.sessionKey, address);
+    const sessionData = {
+      address,
+      timestamp: Date.now(),
+    };
+
+    sessionStorage.setItem(this.sessionKey, JSON.stringify(sessionData));
   }
 
   /**
