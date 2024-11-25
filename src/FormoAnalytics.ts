@@ -26,19 +26,19 @@ interface IFormoAnalytics {
   page(): void;
 
   /**
-   * Tracks a specific event with a name and associated data.
-   */
-  track(eventName: string, eventData: Record<string, any>): void;
-
-  /**
    * Connects to a wallet with the specified chain ID and address.
    */
-  connect(params: { chainId: ChainID; address: string }): Promise<void>;
+  connect(params: { account: string; chainId: ChainID }): Promise<void>;
 
   /**
    * Disconnects the current wallet and clears the session information.
    */
   disconnect(attributes?: { account?: string; chainId?: ChainID }): void;
+
+  /**
+   * Tracks a specific event with a name and associated data.
+   */
+  track(eventName: string, eventData: Record<string, any>): void;
 
   /**
    * Switches the blockchain chain context and optionally logs additional attributes.
@@ -446,7 +446,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentChainId = await this.getCurrentChainId();
 
-    this.connect({ chainId: this.currentChainId, address: account });
+    this.connect({ account, chainId: this.currentChainId });
     this.storeWalletAddress(account);
   }
 
@@ -511,20 +511,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     return 'Error: No token provided';
   }
 
-  connect({ chainId, address }: { chainId: ChainID; address: string }) {
+  connect({ account, chainId }: { account: string; chainId: ChainID }) {
     if (!chainId) {
       throw new Error('FormoAnalytics::connect: chainId cannot be empty');
     }
-    if (!address) {
+    if (!account) {
       throw new Error('FormoAnalytics::connect: account cannot be empty');
     }
 
     this.currentChainId = chainId.toString();
-    this.currentConnectedAccount = address;
+    this.currentConnectedAccount = account;
 
     return this.trackEvent(Event.CONNECT, {
       chainId,
-      address,
+      address: account,
     });
   }
 
