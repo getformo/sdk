@@ -53,6 +53,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     (...args: unknown[]) => void
   > = {};
 
+  private sessionKey = 'walletAddress';
   private config: any;
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
@@ -345,6 +346,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     this.currentChainId = undefined;
     this.currentConnectedAccount = undefined;
+    this.removeWalletAddress();
 
     return this.trackEvent(Event.DISCONNECT, disconnectAttributes);
   }
@@ -445,6 +447,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = await this.getCurrentChainId();
 
     this.connect({ chainId: this.currentChainId, address: account });
+    this.storeWalletAddress(account);
   }
 
   private async getCurrentWallet() {
@@ -466,6 +469,28 @@ export class FormoAnalytics implements IFormoAnalytics {
       console.error('Failed to fetch connected address:', error);
       return '';
     }
+  }
+
+  /**
+   * Stores the wallet address in session storage when connected.
+   * @param address - The wallet address to store.
+   */
+  private storeWalletAddress(address: string): void {
+    if (!address) {
+      console.error('No wallet address provided to store.');
+      return;
+    }
+
+    sessionStorage.setItem(this.sessionKey, address);
+    console.log(`Wallet address ${address} stored in session.`);
+  }
+
+  /**
+   * Removes the wallet address from session storage when disconnected.
+   */
+  private removeWalletAddress(): void {
+    sessionStorage.removeItem(this.sessionKey);
+    console.log('Wallet address removed from session.');
   }
 
   // Function to build the API URL
