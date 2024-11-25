@@ -1,18 +1,64 @@
 import axios from 'axios';
-import { COUNTRY_LIST, EVENTS_API, SESSION_STORAGE_ID_KEY } from './constants';
+import {
+  COUNTRY_LIST,
+  EVENTS_API,
+  SESSION_STORAGE_ID_KEY,
+  Event,
+} from './constants';
 import { isNotEmpty } from './utils';
 import { H } from 'highlight.run';
+import { ChainID, EIP1193Provider, RequestArguments } from './types';
 
 interface IFormoAnalytics {
+  /**
+   * Initializes the FormoAnalytics instance with the provided API key and project ID.
+   */
   init(apiKey: string, projectId: string): Promise<FormoAnalytics>;
-  identify(userData: any): void;
+
+  /**
+   * Identifies the user with the provided user data.
+   */
+  identify(userData: Record<string, any>): void;
+
+  /**
+   * Tracks page visit events.
+   */
   page(): void;
-  track(eventName: string, eventData: any): void;
+
+  /**
+   * Connects to a wallet with the specified chain ID and address.
+   */
+  connect(params: { account: string; chainId: ChainID }): Promise<void>;
+
+  /**
+   * Disconnects the current wallet and clears the session information.
+   */
+  disconnect(attributes?: { account?: string; chainId?: ChainID }): void;
+
+  /**
+   * Tracks a specific event with a name and associated data.
+   */
+  track(eventName: string, eventData: Record<string, any>): void;
+
+  /**
+   * Switches the blockchain chain context and optionally logs additional attributes.
+   */
+  chain(attributes: { chainId: ChainID; account?: string }): void;
 }
 export class FormoAnalytics implements IFormoAnalytics {
+  private _provider?: EIP1193Provider;
+  private _registeredProviderListeners: Record<
+    string,
+    (...args: unknown[]) => void
+  > = {};
+
+  private sessionKey = 'walletAddress';
   private config: any;
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
+
+  currentChainId?: string | null;
+  currentConnectedAccount?: string;
 
   private constructor(
     public readonly apiKey: string,
@@ -21,6 +67,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.config = {
       token: this.apiKey,
     };
+
+    const provider = window?.ethereum || window.web3?.currentProvider;
+    if (provider) {
+      this.trackProvider(provider);
+    }
   }
 
   static async init(
@@ -36,8 +87,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     return instance;
   }
 
+  get provider(): EIP1193Provider | undefined {
+    return this._provider;
+  }
+
   private identifyUser(userData: any) {
-    this.trackEvent('identify', userData);
+    this.trackEvent(Event.IDENTIFY, userData);
   }
 
   private getSessionId() {
@@ -83,10 +138,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.setSessionCookie(this.config.domain);
     const apiUrl = this.buildApiUrl();
+    const address = await this.getCurrentWallet();
 
     const requestData = {
       project_id: this.projectId,
-      address: '', // TODO: get cached / session wallet address
+      address: address,
       session_id: this.getSessionId(),
       timestamp: new Date().toISOString(),
       action: action,
@@ -220,7 +276,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     setTimeout(() => {
       const url = new URL(window.location.href);
       const params = new URLSearchParams(url.search);
-      this.trackEvent('page_hit', {
+      this.trackEvent(Event.PAGE, {
         'user-agent': window.navigator.userAgent,
         locale: language,
         location: location,
@@ -233,6 +289,204 @@ export class FormoAnalytics implements IFormoAnalytics {
         ref: params.get('ref'),
       });
     }, 300);
+  }
+
+  private trackProvider(provider: EIP1193Provider) {
+    if (provider === this._provider) {
+      return;
+    }
+
+    this.currentChainId = undefined;
+    this.currentConnectedAccount = undefined;
+
+    if (this._provider) {
+      const eventNames = Object.keys(this._registeredProviderListeners);
+      for (const eventName of eventNames) {
+        this._provider.removeListener(
+          eventName,
+          this._registeredProviderListeners[eventName]
+        );
+        delete this._registeredProviderListeners[eventName];
+      }
+    }
+
+    this._provider = provider;
+
+    this.getCurrentWallet();
+    this.registerAccountsChangedListener();
+    this.registerChainChangedListener();
+  }
+
+  private registerChainChangedListener() {
+    const listener = (...args: unknown[]) =>
+      this.onChainChanged(args[0] as string);
+    this.provider?.on('chainChanged', listener);
+    this._registeredProviderListeners['chainChanged'] = listener;
+  }
+
+  private handleAccountDisconnected() {
+    if (!this.currentConnectedAccount) {
+      return;
+    }
+
+    const disconnectAttributes = {
+      address: this.currentConnectedAccount,
+      chainId: this.currentChainId,
+    };
+    this.currentChainId = undefined;
+    this.currentConnectedAccount = undefined;
+    this.clearWalletAddress();
+
+    return this.trackEvent(Event.DISCONNECT, disconnectAttributes);
+  }
+
+  private async onChainChanged(chainIdHex: string) {
+    this.currentChainId = parseInt(chainIdHex).toString();
+    if (!this.currentConnectedAccount) {
+      if (!this.provider) {
+        console.error(
+          'error',
+          'FormoAnalytics::onChainChanged: provider not found. CHAIN_CHANGED not reported'
+        );
+        return;
+      }
+
+      try {
+        const res: string[] | null | undefined = await this.provider.request({
+          method: 'eth_accounts',
+        });
+        if (!res || res.length === 0) {
+          console.error(
+            'error',
+            'FormoAnalytics::onChainChanged: unable to get account. eth_accounts returned empty'
+          );
+          return;
+        }
+
+        this.currentConnectedAccount = res[0];
+      } catch (err) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((err as any).code !== 4001) {
+          // 4001: The request is rejected by the user , see https://docs.metamask.io/wallet/reference/provider-api/#errors
+          console.error(
+            'error',
+            `FormoAnalytics::onChainChanged: unable to get account. eth_accounts threw an error`,
+            err
+          );
+          return;
+        }
+      }
+    }
+
+    return this.chain({
+      chainId: this.currentChainId,
+      account: this.currentConnectedAccount,
+    });
+  }
+
+  private async onAccountsChanged(accounts: string[]) {
+    if (accounts.length > 0) {
+      const newAccount = accounts[0];
+      if (newAccount !== this.currentConnectedAccount) {
+        this.handleAccountConnected(newAccount);
+      }
+    } else {
+      this.handleAccountDisconnected();
+    }
+  }
+
+  private registerAccountsChangedListener() {
+    const listener = (...args: unknown[]) =>
+      this.onAccountsChanged(args[0] as string[]);
+
+    this._provider?.on('accountsChanged', listener);
+    this._registeredProviderListeners['accountsChanged'] = listener;
+
+    const handleAccountDisconnected = this.handleAccountDisconnected.bind(this);
+    this._provider?.on('disconnect', handleAccountDisconnected);
+    this._registeredProviderListeners['disconnect'] = handleAccountDisconnected;
+  }
+
+  private async getCurrentChainId(): Promise<string> {
+    if (!this.provider) {
+      console.error('FormoAnalytics::getCurrentChainId: provider not set');
+    }
+
+    const chainIdHex = await this.provider?.request<string>({
+      method: 'eth_chainId',
+    });
+    // Because we're connected, the chainId cannot be null
+    if (!chainIdHex) {
+      console.error(
+        `FormoAnalytics::getCurrentChainId: chainIdHex is: ${chainIdHex}`
+      );
+    }
+
+    return parseInt(chainIdHex as string, 16).toString();
+  }
+
+  private async handleAccountConnected(account: string) {
+    if (account === this.currentConnectedAccount) {
+      // We have already reported this account
+      return;
+    } else {
+      this.currentConnectedAccount = account;
+    }
+
+    this.currentChainId = await this.getCurrentChainId();
+
+    this.connect({ account, chainId: this.currentChainId });
+    this.storeWalletAddress(account);
+  }
+
+  private async getCurrentWallet() {
+    if (!this.provider) {
+      console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
+      return;
+    }
+    const sessionData = sessionStorage.getItem(this.sessionKey);
+
+    if (!sessionData) {
+      return null;
+    }
+
+    const parsedData = JSON.parse(sessionData);
+    const sessionExpiry = 30 * 60 * 1000; // 30 minutes
+    const currentTime = Date.now();
+
+    if (currentTime - parsedData.timestamp > sessionExpiry) {
+      console.warn('Session expired. Ignoring wallet address.');
+      sessionStorage.removeItem(this.sessionKey); // Clear expired session data
+      return '';
+    }
+
+    this.handleAccountConnected(parsedData.address);
+    return parsedData.address || '';
+  }
+
+  /**
+   * Stores the wallet address in session storage when connected.
+   * @param address - The wallet address to store.
+   */
+  private storeWalletAddress(address: string): void {
+    if (!address) {
+      console.error('No wallet address provided to store.');
+      return;
+    }
+
+    const sessionData = {
+      address,
+      timestamp: Date.now(),
+    };
+
+    sessionStorage.setItem(this.sessionKey, JSON.stringify(sessionData));
+  }
+
+  /**
+   * Clears the wallet address from session storage when disconnected.
+   */
+  private clearWalletAddress(): void {
+    sessionStorage.removeItem(this.sessionKey);
   }
 
   // Function to build the API URL
@@ -251,6 +505,68 @@ export class FormoAnalytics implements IFormoAnalytics {
       return `${EVENTS_API}?name=${dataSource}&token=${token}`;
     }
     return 'Error: No token provided';
+  }
+
+  connect({ account, chainId }: { account: string; chainId: ChainID }) {
+    if (!chainId) {
+      throw new Error('FormoAnalytics::connect: chainId cannot be empty');
+    }
+    if (!account) {
+      throw new Error('FormoAnalytics::connect: account cannot be empty');
+    }
+
+    this.currentChainId = chainId.toString();
+    this.currentConnectedAccount = account;
+
+    return this.trackEvent(Event.CONNECT, {
+      chainId,
+      address: account,
+    });
+  }
+
+  disconnect(attributes?: { account?: string; chainId?: ChainID }) {
+    const account = attributes?.account || this.currentConnectedAccount;
+    if (!account) {
+      // We have most likely already reported this disconnection with the automatic
+      // `disconnect` detection
+      return;
+    }
+
+    const chainId = attributes?.chainId || this.currentChainId;
+    const eventAttributes = {
+      account,
+      ...(chainId && { chainId }),
+    };
+
+    this.currentChainId = undefined;
+    this.currentConnectedAccount = undefined;
+
+    return this.trackEvent(Event.DISCONNECT, eventAttributes);
+  }
+
+  chain({ chainId, account }: { chainId: ChainID; account?: string }) {
+    if (!chainId || Number(chainId) === 0) {
+      throw new Error('FormoAnalytics::chain: chainId cannot be empty or 0');
+    }
+
+    if (!account && !this.currentConnectedAccount) {
+      throw new Error(
+        'FormoAnalytics::chain: account was empty and no previous account has been recorded. You can either pass an account or call connect() first'
+      );
+    }
+
+    if (isNaN(Number(chainId))) {
+      throw new Error(
+        'FormoAnalytics::chain: chainId must be a valid hex or decimal number'
+      );
+    }
+
+    this.currentChainId = chainId.toString();
+
+    return this.trackEvent(Event.CHAIN_CHANGED, {
+      chainId,
+      account: account || this.currentConnectedAccount,
+    });
   }
 
   init(apiKey: string, projectId: string): Promise<FormoAnalytics> {
