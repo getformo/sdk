@@ -106,6 +106,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     return newSessionId;
   }
 
+  private getOrigin(): string {
+    return window.location.origin || 'ORIGIN_NOT_FOUND';
+  }
+
   // Function to set the session cookie
   private setSessionCookie(domain?: string) {
     const sessionId = this.getSessionId();
@@ -155,6 +159,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         const response = await axios.post(apiUrl, JSON.stringify(requestData), {
           headers: {
             'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`,
+            'Origin': this.getOrigin(),
           },
         });
 
