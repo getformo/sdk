@@ -1,7 +1,7 @@
 import axios from 'axios';
 import {
   COUNTRY_LIST,
-  EVENTS_API,
+  EVENTS_API_URL,
   SESSION_STORAGE_ID_KEY,
   Event,
 } from './constants';
@@ -141,7 +141,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     let attempt = 0;
 
     this.setSessionCookie(this.config.domain);
-    const apiUrl = this.buildApiUrl();
     const address = await this.getCurrentWallet();
 
     const requestData = {
@@ -156,7 +155,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const sendRequest = async (): Promise<void> => {
       try {
-        const response = await axios.post(apiUrl, JSON.stringify(requestData), {
+        const response = await axios.post(EVENTS_API_URL, JSON.stringify(requestData), {
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${this.apiKey}`,
@@ -493,24 +492,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private clearWalletAddress(): void {
     sessionStorage.removeItem(this.sessionKey);
-  }
-
-  // Function to build the API URL
-  private buildApiUrl(): string {
-    const { host, proxy, token, dataSource = 'analytics_events' } = this.config;
-    if (token) {
-      if (proxy) {
-        return `${proxy}/api/tracking`;
-      }
-      if (host) {
-        return `${host.replace(
-          /\/+$/,
-          ''
-        )}/v0/events?name=${dataSource}&token=${token}`;
-      }
-      return `${EVENTS_API}?name=${dataSource}&token=${token}`;
-    }
-    return 'Error: No token provided';
   }
 
   connect({ account, chainId }: { account: string; chainId: ChainID }) {
