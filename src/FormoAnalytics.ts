@@ -48,9 +48,6 @@ interface IFormoAnalytics {
 interface Config {
   token: string;
   domain?: string;
-  host?: string;
-  proxy?: string;
-  dataSource?: string;
 }
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
