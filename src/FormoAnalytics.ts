@@ -47,7 +47,6 @@ interface IFormoAnalytics {
 }
 interface Config {
   token: string;
-  domain?: string;
 }
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
@@ -66,13 +65,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private constructor(
     public readonly apiKey: string,
-    public options: Options
+    public options: Options = {}
   ) {
     this.config = {
       token: this.apiKey,
     };
 
-    const provider = window?.ethereum || window.web3?.currentProvider;
+    const provider = window?.ethereum || window.web3?.currentProvider || options?.provider;
     if (provider) {
       this.trackProvider(provider);
     }
@@ -115,12 +114,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   // Function to set the session cookie
-  private setSessionCookie(domain?: string) {
+  private setSessionCookie(): void {
     const sessionId = this.getSessionId();
-    let cookieValue = `${this.sessionIdKey}=${sessionId}; Max-Age=1800; path=/; secure`;
-    if (domain) {
-      cookieValue += `; domain=${domain}`;
-    }
+    let cookieValue = `${this.sessionIdKey}=${sessionId}; Max-Age=1800; path=/; secure; domain=${this.getOrigin()}`;
     document.cookie = cookieValue;
   }
 
@@ -144,7 +140,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const maxRetries = 3;
     let attempt = 0;
 
-    this.setSessionCookie(this.config.domain);
+    this.setSessionCookie();
     const address = await this.getCurrentWallet();
 
     const requestData = {
