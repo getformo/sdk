@@ -45,6 +45,9 @@ interface IFormoAnalytics {
    */
   chain(attributes: { chainId: ChainID; account?: string }): void;
 }
+interface Options {
+  provider?: EIP1193Provider;
+}
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _registeredProviderListeners: Record<
@@ -62,13 +65,14 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private constructor(
     public readonly apiKey: string,
-    public projectId: string
+    public projectId: string,
+    public options: Options
   ) {
     this.config = {
       token: this.apiKey,
     };
 
-    const provider = window?.ethereum || window.web3?.currentProvider;
+    const provider = window?.ethereum || window.web3?.currentProvider || options.provider;
     if (provider) {
       this.trackProvider(provider);
     }
@@ -76,12 +80,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   static async init(
     apiKey: string,
-    projectId: string
+    projectId: string,
+    options: Options
   ): Promise<FormoAnalytics> {
     const config = {
       token: apiKey,
     };
-    const instance = new FormoAnalytics(apiKey, projectId);
+    const instance = new FormoAnalytics(apiKey, projectId, options);
     instance.config = config;
 
     return instance;
