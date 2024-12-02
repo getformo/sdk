@@ -160,8 +160,18 @@ const YourComponent = () => {
 
 # Development notes
 
+## Setup
+
+```
+yarn install
+
+yarn build
+```
+
+## Development
+
 To run a local version of the script:
 
-1. Run `yarn build-cjs && yarn build-esm && yarn webpack --mode=production` or `npm run build` at the root level to build the script.
+1. Run `yarn build-cjs && yarn build-esm && yarn webpack --mode=production` or `yarn build` at the root level to build the script.
 2. To authorize device, login into npmjs using `npm login` or `npm adduser`
 3. Run `yarn publish` or `npm run publish` to publish new versions of the package.

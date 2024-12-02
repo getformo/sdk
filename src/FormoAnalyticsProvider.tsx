@@ -16,7 +16,7 @@ export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
 
 export const FormoAnalyticsProvider = ({
   apiKey,
-  projectId,
+  options,
   disabled,
   children,
 }: FormoAnalyticsProviderProps) => {
@@ -48,10 +48,10 @@ export const FormoAnalyticsProvider = ({
       },
     });
 
-    FormoAnalytics.init(apiKey, projectId).then((sdkInstance) =>
+    FormoAnalytics.init(apiKey, options).then((sdkInstance) =>
       setSdk(sdkInstance)
     );
-  }, [apiKey, disabled, projectId]);
+  }, [apiKey, disabled, options]);
 
   return (
     <ErrorBoundary onError={(error, info) => H.consumeError(error, info)}>

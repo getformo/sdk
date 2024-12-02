@@ -7,13 +7,13 @@ import {
 } from './constants';
 import { isNotEmpty } from './utils';
 import { H } from 'highlight.run';
-import { ChainID, EIP1193Provider, RequestArguments } from './types';
+import { ChainID, EIP1193Provider, Options } from './types';
 
 interface IFormoAnalytics {
   /**
    * Initializes the FormoAnalytics instance with the provided API key and project ID.
    */
-  init(apiKey: string, projectId: string): Promise<FormoAnalytics>;
+  init(apiKey: string, options: Options): Promise<FormoAnalytics>;
 
   /**
    * Identifies the user with the provided user data.
@@ -45,6 +45,13 @@ interface IFormoAnalytics {
    */
   chain(attributes: { chainId: ChainID; account?: string }): void;
 }
+interface Config {
+  token: string;
+  domain?: string;
+  host?: string;
+  proxy?: string;
+  dataSource?: string;
+}
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _registeredProviderListeners: Record<
@@ -52,8 +59,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     (...args: unknown[]) => void
   > = {};
 
-  private sessionKey = 'walletAddress';
-  private config: any;
+  private walletAddressSessionKey = 'walletAddress';
+  private config: Config;
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
@@ -62,7 +69,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private constructor(
     public readonly apiKey: string,
-    public projectId: string
+    public options: Options
   ) {
     this.config = {
       token: this.apiKey,
@@ -76,12 +83,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   static async init(
     apiKey: string,
-    projectId: string
+    options: Options
   ): Promise<FormoAnalytics> {
     const config = {
       token: apiKey,
     };
-    const instance = new FormoAnalytics(apiKey, projectId);
+    const instance = new FormoAnalytics(apiKey, options);
     instance.config = config;
 
     return instance;
@@ -144,7 +151,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     const address = await this.getCurrentWallet();
 
     const requestData = {
-      project_id: this.projectId,
       address: address,
       session_id: this.getSessionId(),
       timestamp: new Date().toISOString(),
@@ -449,7 +455,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
       return;
     }
-    const sessionData = sessionStorage.getItem(this.sessionKey);
+    const sessionData = sessionStorage.getItem(this.walletAddressSessionKey);
 
     if (!sessionData) {
       return null;
@@ -461,7 +467,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (currentTime - parsedData.timestamp > sessionExpiry) {
       console.warn('Session expired. Ignoring wallet address.');
-      sessionStorage.removeItem(this.sessionKey); // Clear expired session data
+      sessionStorage.removeItem(this.walletAddressSessionKey); // Clear expired session data
       return '';
     }
 
@@ -484,14 +490,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       timestamp: Date.now(),
     };
 
-    sessionStorage.setItem(this.sessionKey, JSON.stringify(sessionData));
+    sessionStorage.setItem(this.walletAddressSessionKey, JSON.stringify(sessionData));
   }
 
   /**
    * Clears the wallet address from session storage when disconnected.
    */
   private clearWalletAddress(): void {
-    sessionStorage.removeItem(this.sessionKey);
+    sessionStorage.removeItem(this.walletAddressSessionKey);
   }
 
   connect({ account, chainId }: { account: string; chainId: ChainID }) {
@@ -556,9 +562,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  init(apiKey: string, projectId: string): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey, projectId);
-
+  init(apiKey: string, options: Options): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey, options);
     return Promise.resolve(instance);
   }
 
