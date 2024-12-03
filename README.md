@@ -4,7 +4,7 @@
 
 ---
 
-Add the following to your `index.html`:
+Add the following to your page:
 
 ```html
 <script>
@@ -70,11 +70,11 @@ root.render(
 );
 ```
 
-**3. Tracking Events and Page Views**
+**3. Tracking Events**
 
-You can use the `useFormoAnalytics` hook from the SDK to track user interactions and page views.
+You can use the `useFormoAnalytics` hook from the SDK to track user interactions.
 
-Example: Tracking a Page View and Custom Event
+Example: Tracking a Custom Event
 
 ```jsx
 import React, { useEffect } from 'react';
@@ -84,11 +84,8 @@ const HomePage = () => {
   const analytics = useFormoAnalytics();
 
   useEffect(() => {
-    // Track a page view when the component is mounted
-    analytics?.page();
-
     // Track a custom event
-    analytics?.track('custom_event', { key: 'value' });
+    analytics.track('custom_event', { key: 'value' });
   }, [analytics]);
 
   return <div>Welcome to the Home Page!</div>;
@@ -195,11 +192,9 @@ const YourComponent = () => {
   useEffect(() => {
     const track = async () => {
       try {
-        console.log('Tracking page hit...');
-        analytics.page(); // Track the page view
         analytics.track('custom_event', { key: 'value' }); // Track a custom event
       } catch (error) {
-        console.error('Failed to track page hit', error);
+        console.error('Failed to track event', error);
       }
     };
 
