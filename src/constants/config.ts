@@ -1,4 +1,4 @@
-export const EVENTS_API = 'https://api.eu-central-1.aws.tinybird.co/v0/events';
+export const EVENTS_API_URL = 'https://events.formo.so/events';
 export const SESSION_STORAGE_ID_KEY = 'formo-analytics-session-id';
 export const COUNTRY_LIST = {
   // Africa

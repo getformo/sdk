@@ -1,19 +1,19 @@
 import axios from 'axios';
 import {
   COUNTRY_LIST,
-  EVENTS_API,
+  EVENTS_API_URL,
   SESSION_STORAGE_ID_KEY,
   Event,
 } from './constants';
 import { isNotEmpty } from './utils';
 import { H } from 'highlight.run';
-import { ChainID, EIP1193Provider, RequestArguments } from './types';
+import { ChainID, EIP1193Provider, Options } from './types';
 
 interface IFormoAnalytics {
   /**
    * Initializes the FormoAnalytics instance with the provided API key and project ID.
    */
-  init(apiKey: string, projectId: string): Promise<FormoAnalytics>;
+  init(apiKey: string, options: Options): Promise<FormoAnalytics>;
 
   /**
    * Identifies the user with the provided user data.
@@ -45,6 +45,9 @@ interface IFormoAnalytics {
    */
   chain(attributes: { chainId: ChainID; account?: string }): void;
 }
+interface Config {
+  token: string;
+}
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _registeredProviderListeners: Record<
@@ -52,8 +55,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     (...args: unknown[]) => void
   > = {};
 
-  private sessionKey = 'walletAddress';
-  private config: any;
+  private walletAddressSessionKey = 'walletAddress';
+  private config: Config;
   private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
@@ -62,13 +65,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private constructor(
     public readonly apiKey: string,
-    public projectId: string
+    public options: Options = {}
   ) {
     this.config = {
       token: this.apiKey,
     };
 
-    const provider = window?.ethereum || window.web3?.currentProvider;
+    const provider = window?.ethereum || window.web3?.currentProvider || options?.provider;
     if (provider) {
       this.trackProvider(provider);
     }
@@ -76,12 +79,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   static async init(
     apiKey: string,
-    projectId: string
+    options: Options
   ): Promise<FormoAnalytics> {
     const config = {
       token: apiKey,
     };
-    const instance = new FormoAnalytics(apiKey, projectId);
+    const instance = new FormoAnalytics(apiKey, options);
     instance.config = config;
 
     return instance;
@@ -106,13 +109,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     return newSessionId;
   }
 
+  private getOrigin(): string {
+    return window.location.origin || 'ORIGIN_NOT_FOUND';
+  }
+
   // Function to set the session cookie
-  private setSessionCookie(domain?: string) {
+  private setSessionCookie(): void {
     const sessionId = this.getSessionId();
-    let cookieValue = `${this.sessionIdKey}=${sessionId}; Max-Age=1800; path=/; secure`;
-    if (domain) {
-      cookieValue += `; domain=${domain}`;
-    }
+    let cookieValue = `${this.sessionIdKey}=${sessionId}; Max-Age=1800; path=/; secure; domain=${this.getOrigin()}`;
     document.cookie = cookieValue;
   }
 
@@ -136,12 +140,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     const maxRetries = 3;
     let attempt = 0;
 
-    this.setSessionCookie(this.config.domain);
-    const apiUrl = this.buildApiUrl();
+    this.setSessionCookie();
     const address = await this.getCurrentWallet();
 
     const requestData = {
-      project_id: this.projectId,
       address: address,
       session_id: this.getSessionId(),
       timestamp: new Date().toISOString(),
@@ -152,9 +154,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const sendRequest = async (): Promise<void> => {
       try {
-        const response = await axios.post(apiUrl, JSON.stringify(requestData), {
+        const response = await axios.post(EVENTS_API_URL, JSON.stringify(requestData), {
           headers: {
             'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`,
+            'Origin': this.getOrigin(),
           },
         });
 
@@ -444,7 +448,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
       return;
     }
-    const sessionData = sessionStorage.getItem(this.sessionKey);
+    const sessionData = sessionStorage.getItem(this.walletAddressSessionKey);
 
     if (!sessionData) {
       return null;
@@ -456,7 +460,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (currentTime - parsedData.timestamp > sessionExpiry) {
       console.warn('Session expired. Ignoring wallet address.');
-      sessionStorage.removeItem(this.sessionKey); // Clear expired session data
+      sessionStorage.removeItem(this.walletAddressSessionKey); // Clear expired session data
       return '';
     }
 
@@ -479,32 +483,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       timestamp: Date.now(),
     };
 
-    sessionStorage.setItem(this.sessionKey, JSON.stringify(sessionData));
+    sessionStorage.setItem(this.walletAddressSessionKey, JSON.stringify(sessionData));
   }
 
   /**
    * Clears the wallet address from session storage when disconnected.
    */
   private clearWalletAddress(): void {
-    sessionStorage.removeItem(this.sessionKey);
-  }
-
-  // Function to build the API URL
-  private buildApiUrl(): string {
-    const { host, proxy, token, dataSource = 'analytics_events' } = this.config;
-    if (token) {
-      if (proxy) {
-        return `${proxy}/api/tracking`;
-      }
-      if (host) {
-        return `${host.replace(
-          /\/+$/,
-          ''
-        )}/v0/events?name=${dataSource}&token=${token}`;
-      }
-      return `${EVENTS_API}?name=${dataSource}&token=${token}`;
-    }
-    return 'Error: No token provided';
+    sessionStorage.removeItem(this.walletAddressSessionKey);
   }
 
   connect({ account, chainId }: { account: string; chainId: ChainID }) {
@@ -569,9 +555,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  init(apiKey: string, projectId: string): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey, projectId);
-
+  init(apiKey: string, options: Options): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey, options);
     return Promise.resolve(instance);
   }
 
