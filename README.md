@@ -33,21 +33,99 @@ Add the following to your `index.html`:
 
 ---
 
-### 1. Install the npm package:
+### React Application
 
-Install @formo/analytics via yarn or npm:
+**1. Install the SDK**
+Install the Formo Analytics SDK using Yarn or NPM:
 
-```
+```jsx
 yarn add @formo/analytics
 ```
 
 or
 
-```
+```jsx
 npm install @formo/analytics --save
 ```
 
-### 2. Set up the `FormoAnalyticsProvider` in your application:
+**2. Set up FormoAnalyticsProvider in Your Application**
+
+Wrap your entire React application in the `FormoAnalyticsProvider` provided by the SDK.
+
+```jsx 
+//App.tsx (or App.js)
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { FormoAnalyticsProvider } from '@formo/analytics';
+import App from './App';
+
+const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
+
+root.render(
+  <React.StrictMode>
+    <FormoAnalyticsProvider apiKey="YOUR_API_KEY" projectId="YOUR_PROJECT_ID">
+      <App />
+    </FormoAnalyticsProvider>
+  </React.StrictMode>
+);
+```
+
+**3. Tracking Events and Page Views**
+
+You can use the `useFormoAnalytics` hook from the SDK to track user interactions and page views.
+
+Example: Tracking a Page View and Custom Event
+
+```jsx
+import React, { useEffect } from 'react';
+import { useFormoAnalytics } from '@formo/analytics';
+
+const HomePage = () => {
+  const analytics = useFormoAnalytics();
+
+  useEffect(() => {
+    // Track a page view when the component is mounted
+    analytics?.page();
+
+    // Track a custom event
+    analytics?.track('custom_event', { key: 'value' });
+  }, [analytics]);
+
+  return <div>Welcome to the Home Page!</div>;
+};
+
+export default HomePage;
+```
+
+**4. Folder Structure Example**
+
+```
+/src
+ ├── /components
+ │    └── HomePage.tsx
+ ├── /App.tsx
+ └── /index.tsx (or index.js)
+```
+
+---
+
+### Next.js Application
+
+**1. Install the npm package:**
+
+Install `@formo/analytics` via yarn or npm:
+
+```jsx
+yarn add @formo/analytics
+```
+
+or
+
+```jsx
+npm install @formo/analytics --save
+```
+
+**2. Set up the `FormoAnalyticsProvider` in your application:**
 
 ```jsx
 // AnalyticsProvider.tsx
@@ -69,32 +147,6 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
   projectId,
   children,
 }) => {
-  // Initialize the FormoAnalytics SDK inside useEffect
-  const [isInitialized, setIsInitialized] = useState(false);
-
-  useEffect(() => {
-    const initialize = async () => {
-      try {
-        await FormoAnalytics.init(apiKey, projectId);
-        console.log('FormoAnalytics SDK initialized');
-        setIsInitialized(true);
-      } catch (error) {
-        console.error('Failed to initialize FormoAnalytics SDK', error);
-      }
-    };
-
-    initialize();
-  }, [apiKey, projectId]);
-
-  // To prevent app crashes, render a loading state during initialization
-  if (!isInitialized) {
-    return (
-      <FormoAnalyticsProvider apiKey={apiKey} projectId={projectId}>
-        Loading Content
-      </FormoAnalyticsProvider>
-    );
-  }
-
   return (
     <FormoAnalyticsProvider apiKey={apiKey} projectId={projectId}>
       {children}
@@ -105,7 +157,7 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
 export default AnalyticsProvider;
 ```
 
-### 3. Integrating the Provider in Your Root Layout
+**3. Integrating the Provider in Your Root Layout**
 
 Wrap your application with the newly created `AnalyticsProvider` in your main layout file:
 
@@ -129,7 +181,7 @@ export default function RootLayout({
 }
 ```
 
-### 4. Using the SDK
+**4. Using the SDK**
 
 Once the SDK is initialized, you can use its methods to track events and user interactions. Here’s how to do that:
 
@@ -158,20 +210,54 @@ const YourComponent = () => {
 };
 ```
 
-# Development notes
+# Development Notes
 
-## Setup
+If you want to contribute or run a local version of the Formo Analytics SDK, follow these steps:
 
+1. Build the SDK Locally
+
+Run the following command to build both CommonJS and ESM versions of the SDK:
+
+```jsx
+yarn build-cjs && yarn build-esm && yarn webpack --mode=production
 ```
-yarn install
 
+or if you're using NPM:
+
+```jsx
 yarn build
 ```
 
-## Development
+2. Authenticate with NPM
 
-To run a local version of the script:
+To publish a new version of the package, log in to your NPM account:
 
-1. Run `yarn build-cjs && yarn build-esm && yarn webpack --mode=production` or `yarn build` at the root level to build the script.
-2. To authorize device, login into npmjs using `npm login` or `npm adduser`
-3. Run `yarn publish` or `npm run publish` to publish new versions of the package.
+```jsx
+npm login
+```
+
+or:
+
+```jsx
+npm adduser
+```
+
+3. Publish the Package
+
+Run the following command to publish the package to NPM:
+
+```jsx
+yarn publish
+```
+
+or:
+
+```jsx
+npm run publish
+```
+
+# Troubleshooting
+
+**API Key Not Provided:** Ensure you pass a valid apiKey when initializing the SDK.
+**SDK Not Initialized:** If you encounter issues with initialization, check the console logs for errors and ensure the project ID and API key are correct.
+**Network Errors:** Verify that the analytics service URL is accessible from your network.
