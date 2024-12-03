@@ -10,6 +10,8 @@ import { FormoAnalyticsProviderProps } from './types';
 import { ErrorBoundary } from '@highlight-run/react';
 import { H } from 'highlight.run';
 
+const HIGHLIGHT_PROJECT_ID = process.env.REACT_APP_HIGHLIGHT_PROJECT_ID;
+
 export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
   undefined
 );
@@ -21,40 +23,67 @@ export const FormoAnalyticsProvider = ({
   children,
 }: FormoAnalyticsProviderProps) => {
   const [sdk, setSdk] = useState<FormoAnalytics | undefined>();
+  const [isInitialized, setIsInitialized] = useState(false);
   const initializedStartedRef = useRef(false);
 
   useEffect(() => {
-    if (!apiKey) {
-      throw new Error('FormoAnalyticsProvider: No API key provided');
-    }
+    const initialize = async () => {
+      if (!apiKey) {
+        console.error('FormoAnalyticsProvider: No API key provided');
+        return;
+      }
 
-    if (disabled) return;
+      if (disabled) {
+        console.warn('FormoAnalytics is disabled');
+        return;
+      }
 
-    if (initializedStartedRef.current) return;
-    initializedStartedRef.current = true;
+      if (initializedStartedRef.current) return;
+      initializedStartedRef.current = true;
 
-    H.init(process.env.HIGHLIGHT_PROJECT_ID, {
-      serviceName: 'formo-analytics-sdk',
-      tracingOrigins: true,
-      networkRecording: {
-        enabled: true,
-        recordHeadersAndBody: true,
-        urlBlocklist: [
-          // insert full or partial urls that you don't want to record here
-          // Out of the box, Highlight will not record these URLs (they can be safely removed):
-          'https://www.googleapis.com/identitytoolkit',
-          'https://securetoken.googleapis.com',
-        ],
-      },
-    });
+      // Initialize Highlight.run if project ID is available
+      if (HIGHLIGHT_PROJECT_ID) {
+        try {
+          H.init(HIGHLIGHT_PROJECT_ID, {
+            serviceName: 'formo-analytics-sdk',
+            tracingOrigins: true,
+            networkRecording: {
+              enabled: true,
+              recordHeadersAndBody: true,
+              urlBlocklist: [
+                'https://www.googleapis.com/identitytoolkit',
+                'https://securetoken.googleapis.com',
+              ],
+            },
+          });
+          console.log('Highlight.run initialized successfully');
+        } catch (error) {
+          console.error('Failed to initialize Highlight.run', error);
+        }
+      }
 
-    FormoAnalytics.init(apiKey, projectId).then((sdkInstance) =>
-      setSdk(sdkInstance)
-    );
+      // Initialize FormoAnalytics
+      try {
+        const sdkInstance = await FormoAnalytics.init(apiKey, projectId);
+        setSdk(sdkInstance);
+        console.log('FormoAnalytics SDK initialized successfully');
+      } catch (error) {
+        console.error('Failed to initialize FormoAnalytics SDK', error);
+      } finally {
+        setIsInitialized(true); // Ensure UI renders even after failure
+      }
+    };
+
+    initialize();
   }, [apiKey, disabled, projectId]);
 
+  if (!isInitialized) {
+    // Optionally show a loading state until initialization attempt finishes
+    return <div>Loading analytics...</div>;
+  }
+
   return (
-    <ErrorBoundary onError={(error, info) => H.consumeError(error, info)}>
+    <ErrorBoundary onError={(error, info) => H?.consumeError(error, info)}>
       <FormoAnalyticsContext.Provider value={sdk}>
         {children}
       </FormoAnalyticsContext.Provider>
@@ -66,10 +95,8 @@ export const useFormoAnalytics = () => {
   const context = useContext(FormoAnalyticsContext);
 
   if (!context) {
-    throw new Error(
-      'useFormoAnalytics must be used within a FormoAnalyticsProvider'
-    );
+    console.warn('useFormoAnalytics called without a valid context');
   }
 
-  return context;
+  return context; // Return undefined if SDK is not initialized, handle accordingly in consumer
 };

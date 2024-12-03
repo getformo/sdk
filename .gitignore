@@ -56,3 +56,5 @@ dist
 
 # Ignore test build folder in the example site
 example/cra-script-tag/public/sdk
+# Environment configuration
+**/.env
