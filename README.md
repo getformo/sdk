@@ -4,7 +4,7 @@
 
 ---
 
-Add the following to your `index.html`:
+Add the following to your page:
 
 ```html
 <script>
@@ -84,9 +84,6 @@ const HomePage = () => {
   const analytics = useFormoAnalytics();
 
   useEffect(() => {
-    // Track a page view when the component is mounted
-    analytics?.page();
-
     // Track a custom event
     analytics?.track('custom_event', { key: 'value' });
   }, [analytics]);
@@ -196,7 +193,6 @@ const YourComponent = () => {
     const track = async () => {
       try {
         console.log('Tracking page hit...');
-        analytics.page(); // Track the page view
         analytics.track('custom_event', { key: 'value' }); // Track a custom event
       } catch (error) {
         console.error('Failed to track page hit', error);
