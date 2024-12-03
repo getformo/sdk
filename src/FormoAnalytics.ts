@@ -157,8 +157,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const response = await axios.post(EVENTS_API_URL, JSON.stringify(requestData), {
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.apiKey}`,
-            'Origin': this.getOrigin(),
+            Authorization: `Bearer ${this.apiKey}`
           },
         });
 
