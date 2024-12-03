@@ -10,11 +10,10 @@ Add the following to your page:
 <script>
   const script = document.createElement('script');
   const apiKey = 'YOUR_API_KEY';
-  const projectId = 'YOUR_PROJECT_ID';
 
   script.src = 'https://unpkg.com/@formo/analytics';
   script.onload = function () {
-    FormoAnalytics.init(apiKey, projectId)
+    FormoAnalytics.init(apiKey)
       .then((sdkInstance) => {
         window.formo = sdkInstance;
 
@@ -63,7 +62,7 @@ const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement)
 
 root.render(
   <React.StrictMode>
-    <FormoAnalyticsProvider apiKey="YOUR_API_KEY" projectId="YOUR_PROJECT_ID">
+    <FormoAnalyticsProvider apiKey="YOUR_API_KEY">
       <App />
     </FormoAnalyticsProvider>
   </React.StrictMode>
@@ -134,18 +133,16 @@ import React, { FC, useEffect } from 'react';
 
 type FormoAnalyticsProviderProps = {
   apiKey: string,
-  projectId: string,
   children: React.ReactNode,
 };
 
 // The provider component
 export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
   apiKey,
-  projectId,
   children,
 }) => {
   return (
-    <FormoAnalyticsProvider apiKey={apiKey} projectId={projectId}>
+    <FormoAnalyticsProvider apiKey={apiKey}>
       {children}
     </FormoAnalyticsProvider>
   );
@@ -169,7 +166,7 @@ export default function RootLayout({
   return (
     <html lang='en'>
       <body>
-        <AnalyticsProvider apiKey='YOUR_API_KEY' projectId='YOUR_PROJECT_ID'>
+        <AnalyticsProvider apiKey='YOUR_API_KEY'>
           Your Page Content
         </AnalyticsProvider>
       </body>
