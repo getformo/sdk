@@ -16,11 +16,6 @@ interface IFormoAnalytics {
   init(apiKey: string, options: Options): Promise<FormoAnalytics>;
 
   /**
-   * Identifies the user with the provided user data.
-   */
-  identify(userData: Record<string, any>): void;
-
-  /**
    * Tracks page visit events.
    */
   page(): void;
@@ -33,12 +28,12 @@ interface IFormoAnalytics {
   /**
    * Disconnects the current wallet and clears the session information.
    */
-  disconnect(attributes?: { chainId?: ChainID, address?: string; }): void;
+  disconnect(params?: { chainId?: ChainID, address?: string; }): void;
 
   /**
-   * Switches the blockchain chain context and optionally logs additional attributes.
+   * Switches the blockchain chain context and optionally logs additional params.
    */
-  chain(attributes: { chainId: ChainID; address?: string }): void;
+  chain(params: { chainId: ChainID; address?: string }): void;
 
   /**
    * Tracks a specific event with a name and associated data.
@@ -443,8 +438,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  disconnect(attributes?: { chainId?: ChainID, address?: string }) {
-    const address = attributes?.address || this.currentConnectedAddress;
+  disconnect(params?: { chainId?: ChainID, address?: string }) {
+    const address = params?.address || this.currentConnectedAddress;
     if (!address) {
       // We have most likely already reported this disconnection with the automatic
       // `disconnect` detection
@@ -452,7 +447,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const payload = {
-      chain_id: attributes?.chainId || this.currentChainId,
+      chain_id: params?.chainId || this.currentChainId,
       address,      
     };
     this.currentChainId = undefined;
@@ -487,10 +482,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   init(apiKey: string, options: Options): Promise<FormoAnalytics> {
     const instance = new FormoAnalytics(apiKey, options);
     return Promise.resolve(instance);
-  }
-
-  identify(userData: any) {
-    this.identifyUser(userData);
   }
 
   page() {
