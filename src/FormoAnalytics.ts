@@ -264,7 +264,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return '';
     }
 
-    this.onAccountConnected(parsedData.address);
+    this.onAddressConnected(parsedData.address);
     return parsedData.address || '';
   }
 
@@ -287,14 +287,14 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private registerAddressChangedListener() {
     const listener = (...args: unknown[]) =>
-      this.onAccountsChanged(args[0] as string[]);
+      this.onAddressChanged(args[0] as string[]);
 
     this._provider?.on('accountsChanged', listener);
     this._registeredProviderListeners['accountsChanged'] = listener;
 
-    const onAccountDisconnected = this.onAccountDisconnected.bind(this);
-    this._provider?.on('disconnect', onAccountDisconnected);
-    this._registeredProviderListeners['disconnect'] = onAccountDisconnected;
+    const onAddressDisconnected = this.onAddressDisconnected.bind(this);
+    this._provider?.on('disconnect', onAddressDisconnected);
+    this._registeredProviderListeners['disconnect'] = onAddressDisconnected;
   }
 
   private registerChainChangedListener() {
@@ -304,18 +304,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._registeredProviderListeners['chainChanged'] = listener;
   }
   
-  private async onAccountsChanged(accounts: string[]) {
-    if (accounts.length > 0) {
-      const newAccount = accounts[0];
+  private async onAddressChanged(addresses: string[]) {
+    if (addresses.length > 0) {
+      const newAccount = addresses[0];
       if (newAccount !== this.currentConnectedAddress) {
-        this.onAccountConnected(newAccount);
+        this.onAddressConnected(newAccount);
       }
     } else {
-      this.onAccountDisconnected();
+      this.onAddressDisconnected();
     }
   }
 
-  private async onAccountConnected(address: string) {
+  private async onAddressConnected(address: string) {
     if (address === this.currentConnectedAddress) {
       // We have already reported this address
       return;
@@ -329,7 +329,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.storeWalletAddress(address);
   }
 
-  private onAccountDisconnected() {
+  private onAddressDisconnected() {
     if (!this.currentConnectedAddress) {
       return;
     }
