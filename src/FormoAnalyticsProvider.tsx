@@ -32,15 +32,12 @@ export const FormoAnalyticsProvider = ({
         console.error('FormoAnalyticsProvider: No API key provided');
         return;
       }
-
       if (disabled) {
         console.warn('FormoAnalytics is disabled');
         return;
       }
-
       if (initializedStartedRef.current) return;
       initializedStartedRef.current = true;
-
       // Initialize Highlight.run if project ID is available
       if (HIGHLIGHT_PROJECT_ID) {
         try {

@@ -5,7 +5,6 @@ import {
   SESSION_STORAGE_ID_KEY,
   Event,
 } from './constants';
-import { isNotEmpty } from './utils';
 import { H } from 'highlight.run';
 import { ChainID, EIP1193Provider, Options } from './types';
 
@@ -16,11 +15,6 @@ interface IFormoAnalytics {
   init(apiKey: string, options: Options): Promise<FormoAnalytics>;
 
   /**
-   * Identifies the user with the provided user data.
-   */
-  identify(userData: Record<string, any>): void;
-
-  /**
    * Tracks page visit events.
    */
   page(): void;
@@ -28,22 +22,22 @@ interface IFormoAnalytics {
   /**
    * Connects to a wallet with the specified chain ID and address.
    */
-  connect(params: { account: string; chainId: ChainID }): Promise<void>;
+  connect(params: { chainId: ChainID, address: string; }): Promise<void>;
 
   /**
    * Disconnects the current wallet and clears the session information.
    */
-  disconnect(attributes?: { account?: string; chainId?: ChainID }): void;
+  disconnect(params?: { chainId?: ChainID, address?: string; }): void;
+
+  /**
+   * Switches the blockchain chain context and optionally logs additional params.
+   */
+  chain(params: { chainId: ChainID; address?: string }): void;
 
   /**
    * Tracks a specific event with a name and associated data.
    */
   track(eventName: string, eventData: Record<string, any>): void;
-
-  /**
-   * Switches the blockchain chain context and optionally logs additional attributes.
-   */
-  chain(attributes: { chainId: ChainID; account?: string }): void;
 }
 interface Config {
   token: string;
@@ -61,7 +55,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
   currentChainId?: string | null;
-  currentConnectedAccount?: string;
+  currentConnectedAddress?: string;
 
   private constructor(
     public readonly apiKey: string,
@@ -92,10 +86,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
-  }
-
-  private identifyUser(userData: any) {
-    this.trackEvent(Event.IDENTIFY, userData);
   }
 
   private getSessionId() {
@@ -147,9 +137,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       address: address,
       session_id: this.getSessionId(),
       timestamp: new Date().toISOString(),
-      action: action,
+      action,
       version: '1',
-      payload: isNotEmpty(payload) ? this.maskSensitiveData(payload) : payload,
+      payload,
     };
 
     const sendRequest = async (): Promise<void> => {
@@ -190,72 +180,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     await sendRequest();
-  }
-
-  // Function to mask sensitive data in the payload
-  private maskSensitiveData(
-    data: string | undefined | null
-  ): Record<string, any> | null {
-    // Check if data is null or undefined
-    if (data === null || data === undefined) {
-      console.warn('Data is null or undefined, returning null');
-      return null;
-    }
-
-    // Check if data is a string; if so, parse it to an object
-    if (typeof data === 'string') {
-      let parsedData: Record<string, any>;
-      try {
-        parsedData = JSON.parse(data);
-      } catch (error) {
-        console.error('Failed to parse JSON:', error);
-        return null; // Return null if parsing fails
-      }
-
-      const sensitiveFields = [
-        'username',
-        'user',
-        'user_id',
-        'password',
-        'email',
-        'phone',
-      ];
-
-      // Create a new object to store masked data
-      const maskedData = { ...parsedData };
-
-      // Mask sensitive fields
-      sensitiveFields.forEach((field) => {
-        if (field in maskedData) {
-          maskedData[field] = '********'; // Replace value with masked string
-        }
-      });
-
-      return maskedData; // Return the new object with masked fields
-    } else if (typeof data === 'object') {
-      // If data is already an object, handle masking directly
-      const sensitiveFields = [
-        'username',
-        'user',
-        'user_id',
-        'password',
-        'email',
-        'phone',
-      ];
-
-      const maskedData = { ...(data as Record<string, any>) };
-
-      // Mask sensitive fields
-      sensitiveFields.forEach((field) => {
-        if (field in maskedData) {
-          maskedData[field] = '********'; // Replace value with masked string
-        }
-      });
-
-      return maskedData; // Return the new object with masked fields
-    }
-
-    return data;
   }
 
   // Function to track page hits
@@ -300,7 +224,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = undefined;
-    this.currentConnectedAccount = undefined;
+    this.currentConnectedAddress = undefined;
 
     if (this._provider) {
       const eventNames = Object.keys(this._registeredProviderListeners);
@@ -316,8 +240,61 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._provider = provider;
 
     this.getCurrentWallet();
-    this.registerAccountsChangedListener();
+    this.registerAddressChangedListener();
     this.registerChainChangedListener();
+  }
+
+  private async getCurrentWallet() {
+    if (!this.provider) {
+      console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
+      return;
+    }
+    const sessionData = sessionStorage.getItem(this.walletAddressSessionKey);
+    if (!sessionData) {
+      return null;
+    }
+
+    const parsedData = JSON.parse(sessionData);
+    const sessionExpiry = 30 * 60 * 1000; // 30 minutes
+    const currentTime = Date.now();
+
+    if (currentTime - parsedData.timestamp > sessionExpiry) {
+      console.warn('Session expired. Ignoring wallet address.');
+      sessionStorage.removeItem(this.walletAddressSessionKey); // Clear expired session data
+      return '';
+    }
+
+    this.onAddressConnected(parsedData.address);
+    return parsedData.address || '';
+  }
+
+  private async getCurrentChainId(): Promise<string> {
+    if (!this.provider) {
+      console.error('FormoAnalytics::getCurrentChainId: provider not set');
+    }
+    const chainIdHex = await this.provider?.request<string>({
+      method: 'eth_chainId',
+    });
+    // Because we're connected, the chainId cannot be null
+    if (!chainIdHex) {
+      console.error(
+        `FormoAnalytics::getCurrentChainId: chainIdHex is: ${chainIdHex}`
+      );
+    }
+
+    return parseInt(chainIdHex as string, 16).toString();
+  }  
+
+  private registerAddressChangedListener() {
+    const listener = (...args: unknown[]) =>
+      this.onAddressChanged(args[0] as string[]);
+
+    this._provider?.on('accountsChanged', listener);
+    this._registeredProviderListeners['accountsChanged'] = listener;
+
+    const onAddressDisconnected = this.onAddressDisconnected.bind(this);
+    this._provider?.on('disconnect', onAddressDisconnected);
+    this._registeredProviderListeners['disconnect'] = onAddressDisconnected;
   }
 
   private registerChainChangedListener() {
@@ -326,26 +303,51 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.provider?.on('chainChanged', listener);
     this._registeredProviderListeners['chainChanged'] = listener;
   }
+  
+  private async onAddressChanged(addresses: string[]) {
+    if (addresses.length > 0) {
+      const newAccount = addresses[0];
+      if (newAccount !== this.currentConnectedAddress) {
+        this.onAddressConnected(newAccount);
+      }
+    } else {
+      this.onAddressDisconnected();
+    }
+  }
 
-  private handleAccountDisconnected() {
-    if (!this.currentConnectedAccount) {
+  private async onAddressConnected(address: string) {
+    if (address === this.currentConnectedAddress) {
+      // We have already reported this address
+      return;
+    } else {
+      this.currentConnectedAddress = address;
+    }
+
+    this.currentChainId = await this.getCurrentChainId();
+
+    this.connect({ chainId: this.currentChainId, address });
+    this.storeWalletAddress(address);
+  }
+
+  private onAddressDisconnected() {
+    if (!this.currentConnectedAddress) {
       return;
     }
 
-    const disconnectAttributes = {
-      address: this.currentConnectedAccount,
-      chainId: this.currentChainId,
+    const payload = {
+      chain_id: this.currentChainId,      
+      address: this.currentConnectedAddress,
     };
     this.currentChainId = undefined;
-    this.currentConnectedAccount = undefined;
+    this.currentConnectedAddress = undefined;
     this.clearWalletAddress();
 
-    return this.trackEvent(Event.DISCONNECT, disconnectAttributes);
+    return this.trackEvent(Event.DISCONNECT, payload);
   }
 
   private async onChainChanged(chainIdHex: string) {
     this.currentChainId = parseInt(chainIdHex).toString();
-    if (!this.currentConnectedAccount) {
+    if (!this.currentConnectedAddress) {
       if (!this.provider) {
         console.error(
           'error',
@@ -366,7 +368,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           return;
         }
 
-        this.currentConnectedAccount = res[0];
+        this.currentConnectedAddress = res[0];
       } catch (err) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if ((err as any).code !== 4001) {
@@ -383,89 +385,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     return this.chain({
       chainId: this.currentChainId,
-      account: this.currentConnectedAccount,
+      address: this.currentConnectedAddress,
     });
-  }
-
-  private async onAccountsChanged(accounts: string[]) {
-    if (accounts.length > 0) {
-      const newAccount = accounts[0];
-      if (newAccount !== this.currentConnectedAccount) {
-        this.handleAccountConnected(newAccount);
-      }
-    } else {
-      this.handleAccountDisconnected();
-    }
-  }
-
-  private registerAccountsChangedListener() {
-    const listener = (...args: unknown[]) =>
-      this.onAccountsChanged(args[0] as string[]);
-
-    this._provider?.on('accountsChanged', listener);
-    this._registeredProviderListeners['accountsChanged'] = listener;
-
-    const handleAccountDisconnected = this.handleAccountDisconnected.bind(this);
-    this._provider?.on('disconnect', handleAccountDisconnected);
-    this._registeredProviderListeners['disconnect'] = handleAccountDisconnected;
-  }
-
-  private async getCurrentChainId(): Promise<string> {
-    if (!this.provider) {
-      console.error('FormoAnalytics::getCurrentChainId: provider not set');
-    }
-
-    const chainIdHex = await this.provider?.request<string>({
-      method: 'eth_chainId',
-    });
-    // Because we're connected, the chainId cannot be null
-    if (!chainIdHex) {
-      console.error(
-        `FormoAnalytics::getCurrentChainId: chainIdHex is: ${chainIdHex}`
-      );
-    }
-
-    return parseInt(chainIdHex as string, 16).toString();
-  }
-
-  private async handleAccountConnected(account: string) {
-    if (account === this.currentConnectedAccount) {
-      // We have already reported this account
-      return;
-    } else {
-      this.currentConnectedAccount = account;
-    }
-
-    this.currentChainId = await this.getCurrentChainId();
-
-    this.connect({ account, chainId: this.currentChainId });
-    this.storeWalletAddress(account);
-  }
-
-  private async getCurrentWallet() {
-    if (!this.provider) {
-      console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
-      return;
-    }
-    const sessionData = sessionStorage.getItem(this.walletAddressSessionKey);
-
-    if (!sessionData) {
-      return null;
-    }
-
-    const parsedData = JSON.parse(sessionData);
-    const sessionExpiry = 30 * 60 * 1000; // 30 minutes
-    const currentTime = Date.now();
-
-    if (currentTime - parsedData.timestamp > sessionExpiry) {
-      console.warn('Session expired. Ignoring wallet address.');
-      sessionStorage.removeItem(this.walletAddressSessionKey); // Clear expired session data
-      return '';
-    }
-
-    this.handleAccountConnected(parsedData.address);
-    return parsedData.address || '';
-  }
+  }  
 
   /**
    * Stores the wallet address in session storage when connected.
@@ -492,54 +414,55 @@ export class FormoAnalytics implements IFormoAnalytics {
     sessionStorage.removeItem(this.walletAddressSessionKey);
   }
 
-  connect({ account, chainId }: { account: string; chainId: ChainID }) {
+  init(apiKey: string, options: Options): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey, options);
+    return Promise.resolve(instance);
+  }  
+
+  connect({ chainId, address }: { chainId: ChainID, address: string;  }) {
     if (!chainId) {
-      throw new Error('FormoAnalytics::connect: chainId cannot be empty');
+      throw new Error('FormoAnalytics::connect: chain ID cannot be empty');
     }
-    if (!account) {
-      throw new Error('FormoAnalytics::connect: account cannot be empty');
+    if (!address) {
+      throw new Error('FormoAnalytics::connect: address cannot be empty');
     }
 
     this.currentChainId = chainId.toString();
-    this.currentConnectedAccount = account;
+    this.currentConnectedAddress = address;
 
     return this.trackEvent(Event.CONNECT, {
-      chainId,
-      address: account,
+      chain_id: chainId,
+      address: address,
     });
   }
 
-  disconnect(attributes?: { account?: string; chainId?: ChainID }) {
-    const account = attributes?.account || this.currentConnectedAccount;
-    if (!account) {
+  disconnect(params?: { chainId?: ChainID, address?: string }) {
+    const address = params?.address || this.currentConnectedAddress;
+    if (!address) {
       // We have most likely already reported this disconnection with the automatic
       // `disconnect` detection
       return;
     }
 
-    const chainId = attributes?.chainId || this.currentChainId;
-    const eventAttributes = {
-      account,
-      ...(chainId && { chainId }),
+    const payload = {
+      chain_id: params?.chainId || this.currentChainId,
+      address,      
     };
-
     this.currentChainId = undefined;
-    this.currentConnectedAccount = undefined;
+    this.currentConnectedAddress = undefined;
 
-    return this.trackEvent(Event.DISCONNECT, eventAttributes);
+    return this.trackEvent(Event.DISCONNECT, payload);
   }
 
-  chain({ chainId, account }: { chainId: ChainID; account?: string }) {
+  chain({ chainId, address }: { chainId: ChainID; address?: string }) {
     if (!chainId || Number(chainId) === 0) {
       throw new Error('FormoAnalytics::chain: chainId cannot be empty or 0');
     }
-
-    if (!account && !this.currentConnectedAccount) {
+    if (!address && !this.currentConnectedAddress) {
       throw new Error(
-        'FormoAnalytics::chain: account was empty and no previous account has been recorded. You can either pass an account or call connect() first'
+        'FormoAnalytics::chain: address was empty and no previous address has been recorded. You can either pass an address or call connect() first'
       );
     }
-
     if (isNaN(Number(chainId))) {
       throw new Error(
         'FormoAnalytics::chain: chainId must be a valid hex or decimal number'
@@ -549,18 +472,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId.toString();
 
     return this.trackEvent(Event.CHAIN_CHANGED, {
-      chainId,
-      account: account || this.currentConnectedAccount,
+      chain_id: chainId,
+      address: address || this.currentConnectedAddress,
     });
-  }
-
-  init(apiKey: string, options: Options): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey, options);
-    return Promise.resolve(instance);
-  }
-
-  identify(userData: any) {
-    this.identifyUser(userData);
   }
 
   page() {
