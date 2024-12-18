@@ -12,10 +12,7 @@ interface IFormoAnalytics {
   /**
    * Initializes the FormoAnalytics instance with the provided API key and project ID.
    */
-  init(
-    apiKey: string,
-    options?: Options
-  ): Promise<FormoAnalytics>;
+  init(apiKey: string, options?: Options): Promise<FormoAnalytics>;
 
   /**
    * Tracks page visit events.
@@ -257,6 +254,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.registerChainChangedListener();
   }
 
+  private async getAndStoreConnectedAddress(): Promise<string | null> {
+    console.warn(
+      'Session data missing. Attempting to fetch address from provider.'
+    );
+    try {
+      const accounts = await this.fetchAccounts();
+      if (accounts && accounts.length > 0) {
+        const address = accounts[0];
+        this.storeWalletAddress(address);
+        return address;
+      }
+    } catch (err) {
+      console.error('Failed to fetch accounts from provider:', err);
+    }
+    return null;
+  }
+
   private async getCurrentWallet() {
     if (!this.provider) {
       console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
@@ -266,22 +280,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const sessionData = sessionStorage.getItem(this.walletAddressSessionKey);
 
     if (!sessionData) {
-      console.warn(
-        'Session data missing. Attempting to fetch address from provider.'
-      );
-      try {
-        const accounts = await this.provider.request<string[]>({
-          method: 'eth_accounts',
-        });
-        if (accounts && accounts.length > 0) {
-          const address = accounts[0];
-          this.storeWalletAddress(address);
-          return address;
-        }
-      } catch (err) {
-        console.error('Failed to fetch accounts from provider:', err);
-      }
-      return null;
+      return await this.getAndStoreConnectedAddress();
     }
 
     const parsedData = JSON.parse(sessionData);
@@ -298,13 +297,61 @@ export class FormoAnalytics implements IFormoAnalytics {
     return parsedData.address || '';
   }
 
+  // Utility to fetch accounts
+  private async fetchAccounts(): Promise<string[] | null> {
+    try {
+      const res: string[] | null | undefined = await this.provider?.request({
+        method: 'eth_accounts',
+      });
+      if (!res || res.length === 0) {
+        console.error(
+          'error',
+          'FormoAnalytics::fetchAccounts: unable to get account. eth_accounts returned empty'
+        );
+        return null;
+      }
+      return res;
+    } catch (err) {
+      if ((err as any).code !== 4001) {
+        console.error(
+          'error',
+          'FormoAnalytics::fetchAccounts: eth_accounts threw an error',
+          err
+        );
+      }
+      return null;
+    }
+  }
+
+  // Utility to fetch chain ID
+  private async fetchChainId(): Promise<string | null> {
+    try {
+      const chainIdHex = await this.provider?.request<string>({
+        method: 'eth_chainId',
+      });
+      if (!chainIdHex) {
+        console.error(
+          'FormoAnalytics::fetchChainId: chainIdHex is null or undefined'
+        );
+        return null;
+      }
+      return chainIdHex;
+    } catch (err) {
+      console.error(
+        'error',
+        'FormoAnalytics::fetchChainId: eth_chainId threw an error',
+        err
+      );
+      return null;
+    }
+  }
+
   private async getCurrentChainId(): Promise<string> {
     if (!this.provider) {
       console.error('FormoAnalytics::getCurrentChainId: provider not set');
     }
-    const chainIdHex = await this.provider?.request<string>({
-      method: 'eth_chainId',
-    });
+
+    const chainIdHex = await this.fetchChainId();
     // Because we're connected, the chainId cannot be null
     if (!chainIdHex) {
       console.error(
@@ -387,9 +434,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       try {
-        const res: string[] | null | undefined = await this.provider.request({
-          method: 'eth_accounts',
-        });
+        const res: string[] | null | undefined = await this.fetchAccounts();
+
         if (!res || res.length === 0) {
           console.error(
             'error',
