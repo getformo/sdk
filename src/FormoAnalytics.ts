@@ -191,39 +191,76 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   // Function to track page hits
   private trackPageHit() {
-    if (window.__nightmare || window.navigator.webdriver || window.Cypress)
-      return;
+    if (this.isAutomationEnvironment()) return;
 
-    let location: string | undefined;
-    let language: string;
+    const location = this.getUserLocation();
+    const language = this.getUserLanguage();
+
+    setTimeout(async () => {
+      const eventData = await this.buildPageEventData(location, language);
+      this.trackEvent(Event.PAGE, eventData);
+    }, 300);
+  }
+
+  private isAutomationEnvironment(): boolean {
+    return (
+      window.__nightmare ||
+      window.navigator.webdriver ||
+      window.Cypress ||
+      false
+    );
+  }
+
+  private getUserLocation(): string | undefined {
     try {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      location = this.timezoneToCountry[timezone];
-      language =
-        navigator.languages && navigator.languages.length
-          ? navigator.languages[0]
-          : navigator.language || 'en';
+      return this.timezoneToCountry[timezone];
     } catch (error) {
-      console.error('Error resolving timezone or language:', error);
+      console.error('Error resolving timezone:', error);
+      return undefined;
     }
+  }
 
-    setTimeout(() => {
-      const url = new URL(window.location.href);
-      const params = new URLSearchParams(url.search);
-      this.trackEvent(Event.PAGE, {
-        'user-agent': window.navigator.userAgent,
-        address: this.currentConnectedAddress,
-        locale: language,
-        location: location,
-        referrer: document.referrer,
-        pathname: window.location.pathname,
-        href: window.location.href,
-        utm_source: params.get('utm_source'),
-        utm_medium: params.get('utm_medium'),
-        utm_campaign: params.get('utm_campaign'),
-        ref: params.get('ref'),
-      });
-    }, 300);
+  private getUserLanguage(): string {
+    try {
+      return (
+        (navigator.languages && navigator.languages.length
+          ? navigator.languages[0]
+          : navigator.language) || 'en'
+      );
+    } catch (error) {
+      console.error('Error resolving language:', error);
+      return 'en';
+    }
+  }
+
+  async buildPageEventData(location: string | undefined, language: string): Promise<Record<string, unknown>> {
+    const url = new URL(window.location.href);
+    const params = new URLSearchParams(url.search);
+  
+    const address = await this.getAndStoreConnectedAddress();
+    if (address === null) {
+      console.warn('Wallet address could not be retrieved.');
+    }
+  
+    const eventData: Record<string, unknown> = {
+      'user-agent': window.navigator.userAgent,
+      locale: language,
+      location,
+      referrer: document.referrer,
+      pathname: window.location.pathname,
+      href: window.location.href,
+      utm_source: params.get('utm_source'),
+      utm_medium: params.get('utm_medium'),
+      utm_campaign: params.get('utm_campaign'),
+      ref: params.get('ref'),
+    };
+  
+    if (address !== null) {
+      eventData['address'] = address;
+    }
+  
+    return eventData;
   }
 
   private trackProvider(provider: EIP1193Provider) {
@@ -413,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const payload = {
       chain_id: this.currentChainId,
-      address: this.currentConnectedAddress,
+      address: this.getAndStoreConnectedAddress(),
     };
     this.currentChainId = undefined;
     this.currentConnectedAddress = undefined;
@@ -433,36 +470,31 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      try {
-        const res: string[] | null | undefined = await this.fetchAccounts();
-
-        if (!res || res.length === 0) {
-          console.error(
-            'error',
-            'FormoAnalytics::onChainChanged: unable to get account. eth_accounts returned empty'
-          );
-          return;
-        }
-
-        this.currentConnectedAddress = res[0];
-      } catch (err) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        if ((err as any).code !== 4001) {
-          // 4001: The request is rejected by the user , see https://docs.metamask.io/wallet/reference/provider-api/#errors
-          console.error(
-            'error',
-            `FormoAnalytics::onChainChanged: unable to get account. eth_accounts threw an error`,
-            err
-          );
-          return;
-        }
+      // Attempt to fetch and store the connected address
+      const address = await this.getAndStoreConnectedAddress();
+      if (!address) {
+        console.error(
+          'error',
+          'FormoAnalytics::onChainChanged: Unable to fetch or store connected address'
+        );
+        return;
       }
+
+      this.currentConnectedAddress = address[0];
     }
 
-    return this.chain({
-      chainId: this.currentChainId,
-      address: this.currentConnectedAddress,
-    });
+    // Proceed only if the address exists
+    if (this.currentConnectedAddress) {
+      return this.chain({
+        chainId: this.currentChainId,
+        address: this.currentConnectedAddress,
+      });
+    } else {
+      console.error(
+        'error',
+        'FormoAnalytics::onChainChanged: currentConnectedAddress is null despite fetch attempt'
+      );
+    }
   }
 
   /**
