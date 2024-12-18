@@ -19,7 +19,6 @@ export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
 export const FormoAnalyticsProvider = ({
   apiKey,
   options,
-  projectId,
   disabled,
   children,
 }: FormoAnalyticsProviderProps) => {
@@ -62,7 +61,7 @@ export const FormoAnalyticsProvider = ({
 
       // Initialize FormoAnalytics
       try {
-        const sdkInstance = await FormoAnalytics.init(apiKey, projectId, options);
+        const sdkInstance = await FormoAnalytics.init(apiKey, options);
         setSdk(sdkInstance);
         console.log('FormoAnalytics SDK initialized successfully');
       } catch (error) {

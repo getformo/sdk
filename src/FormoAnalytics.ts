@@ -14,7 +14,6 @@ interface IFormoAnalytics {
    */
   init(
     apiKey: string,
-    projectId: string,
     options?: Options
   ): Promise<FormoAnalytics>;
 
@@ -63,7 +62,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private constructor(
     public readonly apiKey: string,
-    public readonly projectId: string,
     public options: Options = {}
   ) {
     this.config = {
@@ -79,13 +77,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   static async init(
     apiKey: string,
-    projectId: string,
     options?: Options
   ): Promise<FormoAnalytics> {
     const config = {
       token: apiKey,
     };
-    const instance = new FormoAnalytics(apiKey, projectId, options);
+    const instance = new FormoAnalytics(apiKey, options);
     instance.config = config;
 
     return instance;
@@ -450,8 +447,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     sessionStorage.removeItem(this.walletAddressSessionKey);
   }
 
-  init(apiKey: string, projectId: string, options: Options): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey, projectId, options);
+  init(apiKey: string, options: Options): Promise<FormoAnalytics> {
+    const instance = new FormoAnalytics(apiKey, options);
     return Promise.resolve(instance);
   }
 
