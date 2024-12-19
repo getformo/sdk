@@ -217,7 +217,7 @@ yarn build-cjs && yarn build-esm && yarn webpack --mode=production
 or if you're using NPM:
 
 ```jsx
-yarn build
+npm run build
 ```
 
 2. Authenticate with NPM

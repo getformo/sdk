@@ -8,7 +8,7 @@ export interface Options {
 
 export interface FormoAnalyticsProviderProps {
   apiKey: string;
-  options: Options;
+  options?: Options;
   disabled?: boolean;
   children: React.ReactNode;
 }
