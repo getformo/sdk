@@ -234,17 +234,21 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  async buildPageEventData(location: string | undefined, language: string): Promise<Record<string, unknown>> {
+  async buildPageEventData(
+    location: string | undefined,
+    language: string
+  ): Promise<Record<string, unknown>> {
     const url = new URL(window.location.href);
     const params = new URLSearchParams(url.search);
-  
+
     const address = await this.getAndStoreConnectedAddress();
     if (address === null) {
       console.warn('Wallet address could not be retrieved.');
     }
-  
-    const eventData: Record<string, unknown> = {
+
+    return {
       'user-agent': window.navigator.userAgent,
+      address,
       locale: language,
       location,
       referrer: document.referrer,
@@ -255,12 +259,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       utm_campaign: params.get('utm_campaign'),
       ref: params.get('ref'),
     };
-  
-    if (address !== null) {
-      eventData['address'] = address;
-    }
-  
-    return eventData;
   }
 
   private trackProvider(provider: EIP1193Provider) {
@@ -292,7 +290,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async getAndStoreConnectedAddress(): Promise<string | null> {
-    console.warn(
+    console.log(
       'Session data missing. Attempting to fetch address from provider.'
     );
     try {
@@ -310,7 +308,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async getCurrentWallet() {
     if (!this.provider) {
-      console.warn('FormoAnalytics::getCurrentWallet: the provider is not set');
+      console.log('FormoAnalytics::getCurrentWallet: the provider is not set');
       return;
     }
 
