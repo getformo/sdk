@@ -142,7 +142,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       timestamp: new Date().toISOString(),
       action,
       version: "1",
-      payload: await this.buildEventPayload(...payload),
+      payload: await this.buildEventPayload(payload),
     };
 
     const sendRequest = async (): Promise<void> => {
