@@ -141,10 +141,12 @@ export const AnalyticsProvider: FC<FormoAnalyticsProviderProps> = ({
   apiKey,
   children,
 }) => {
-  return (
-    <FormoAnalyticsProvider apiKey={apiKey}>
+  return apiKey ? (
+    <FormoAnalyticsProvider apiKey={apiKey} options={options}>
       {children}
     </FormoAnalyticsProvider>
+  ) : (
+    children
   );
 };
 
@@ -163,6 +165,10 @@ export default function RootLayout({
 }: {
   children: React.ReactNode,
 }) {
+    if (!API_KEY) {
+    console.log("API key is missing! Create a .env file based on .env.example and add your API key.");
+  }
+  
   return (
     <html lang='en'>
       <body>

@@ -323,7 +323,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const parsedData = JSON.parse(sessionData);
-    const sessionExpiry = 30 * 60 * 1000; // 30 minutes
+    const sessionExpiry = 30 * 60 * 1000; // 30 minutesNo
     const currentTime = Date.now();
 
     if (currentTime - parsedData.timestamp > sessionExpiry) {

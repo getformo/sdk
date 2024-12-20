@@ -29,7 +29,7 @@ export const FormoAnalyticsProvider = ({
   useEffect(() => {
     const initialize = async () => {
       if (!apiKey) {
-        console.error('FormoAnalyticsProvider: No API key provided');
+        console.warn('FormoAnalyticsProvider: No API key provided');
         return;
       }
       if (disabled) {
