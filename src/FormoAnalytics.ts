@@ -38,11 +38,7 @@ interface IFormoAnalytics {
    */
   track(eventName: string, eventData: Record<string, any>): void;
 }
-interface Config {
-  token: string;
-  sessionIdKey: string;
-  sessionAddressKey: string,
-}
+
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _registeredProviderListeners: Record<
@@ -50,7 +46,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     (...args: unknown[]) => void
   > = {};
 
-  private config: Config;
+  private sessionIdKey: string;
+  private sessionAddressKey: string;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
   currentChainId?: string | null;
@@ -60,11 +57,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     public readonly apiKey: string,
     public options: Options = {}
   ) {
-    this.config = {
-      token: this.apiKey,
-      sessionAddressKey: `formo-wallet-address-${this.apiKey}`,
-      sessionIdKey: `formo-session-id-${this.apiKey}`, // TODO: hash the api key
-    };
+    const projectHash = crypto.subtle.digest("SHA-256", new TextEncoder().encode(this.apiKey)).toString();
+    this.sessionIdKey = `formo-session-${projectHash}`;
+    this.sessionAddressKey = `formo-address-${projectHash}`;
 
     const provider =
       window?.ethereum || window.web3?.currentProvider || options?.provider;
@@ -86,14 +81,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private getSessionId() {
-    const existingSessionId = this.getCookieValue(this.config.sessionIdKey);
-
-    if (existingSessionId) {
-      return existingSessionId;
+    const sessionId = sessionStorage.getItem(this.sessionIdKey);
+    if (sessionId) {
+      return sessionId;
     }
 
-    const newSessionId = this.generateSessionId();
-    return newSessionId;
+    return this.generateSessionId();
   }
 
   // Function to set the session cookie
@@ -102,28 +95,28 @@ export class FormoAnalytics implements IFormoAnalytics {
      * Try to keep same session id if session cookie exists, generate a new one otherwise.
      *   - First request in a session will generate a new session id
      *   - The next request will keep the same session id and extend the TTL for 30 more minutes
-     */    
+     */
+    // TODO: cookieless
     const sessionId = this.getSessionId();
-    let cookieValue = `${
-      this.config.sessionIdKey
-    }=${sessionId}; Max-Age=1800; path=/; secure`;
-    document.cookie = cookieValue;
+    sessionStorage.setItem(this.sessionIdKey, sessionId);
+    // TODO: set expiry / TTL?
+
+    // let cookieValue = `${
+    //   this.sessionIdKey
+    // }=${sessionId}; Max-Age=1800; path=/; secure`;
+    // document.cookie = cookieValue;
   }
 
 
-  // Function to generate a new session ID
+  // Function to generate a new, daily changing session ID
   private generateSessionId(): string {
-    return crypto.randomUUID();
-  }
+    // hash(daily_salt + website_domain + ip_address + user_agent)
+    // Note: IP address is not available in the browser
 
-  // Function to get a cookie value by name
-  private getCookieValue(name: string): string | undefined {
-    const cookies = document.cookie.split(";").reduce((acc, cookie) => {
-      const [key, value] = cookie.split("=");
-      acc[key.trim()] = value;
-      return acc;
-    }, {} as Record<string, string>);
-    return cookies[name];
+    // If we set the session id in the backend, how do we generate it here?
+
+    const contents = `${daily_salt} + ${this.getDomain()} + ${ip_address} + ${this.getUserAgent()}`;
+    return crypto.subtle.digest("SHA-256", new TextEncoder().encode(contents)).toString();
   }
 
   // Function to send tracking data
@@ -239,6 +232,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
+  private getDomain(): string {
+    return window.location.hostname;
+  }
+
+  private getUserAgent(): string {
+    return window.navigator.userAgent;
+  }  
+
   async buildEventPayload(
     eventSpecificPayload: Record<string, unknown> = {}
   ): Promise<Record<string, unknown>> {
@@ -255,7 +256,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // common fields
     return {
-      "user-agent": window.navigator.userAgent,
+      "user-agent": this.getUserAgent(),
       address,
       locale: language,
       location,
@@ -319,7 +320,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    const sessionData = sessionStorage.getItem(this.config.sessionAddressKey);
+    const sessionData = sessionStorage.getItem(this.sessionAddressKey);
 
     if (!sessionData) {
       return await this.getAndStoreConnectedAddress();
@@ -331,7 +332,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (currentTime - parsedData.timestamp > sessionExpiry) {
       console.warn("Session expired. Ignoring wallet address.");
-      sessionStorage.removeItem(this.config.sessionAddressKey); // Clear expired session data
+      sessionStorage.removeItem(this.sessionAddressKey); // Clear expired session data
       return "";
     }
 
@@ -518,7 +519,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     sessionStorage.setItem(
-      this.config.sessionAddressKey,
+      this.sessionAddressKey,
       JSON.stringify(sessionData)
     );
   }
@@ -527,7 +528,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Clears the wallet address from session storage when disconnected.
    */
   private clearWalletAddress(): void {
-    sessionStorage.removeItem(this.config.sessionAddressKey);
+    sessionStorage.removeItem(this.sessionAddressKey);
   }
 
   init(apiKey: string, options: Options): Promise<FormoAnalytics> {
