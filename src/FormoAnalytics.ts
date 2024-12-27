@@ -445,20 +445,25 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.storeWalletAddress(address);
   }
 
-  private onAddressDisconnected() {
-    if (!this.currentConnectedAddress) {
+  private handleDisconnection(chainId?: string, address?: string) {
+    if (!address) {
       return;
     }
-
     const payload = {
-      chain_id: this.currentChainId,
-      address: this.getAndStoreConnectedAddress(),
+      chain_id: chainId || this.currentChainId,
+      address,
     };
     this.currentChainId = undefined;
     this.currentConnectedAddress = undefined;
     this.clearWalletAddress();
-
     return this.trackEvent(Event.DISCONNECT, payload);
+  }
+
+  private onAddressDisconnected() {
+    if (!this.currentConnectedAddress) {
+      return;
+    }
+    this.handleDisconnection(this.currentChainId || undefined, this.currentConnectedAddress);
   }
 
   private async onChainChanged(chainIdHex: string) {
@@ -556,15 +561,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // `disconnect` detection
       return;
     }
-
-    const payload = {
-      chain_id: params?.chainId || this.currentChainId,
-      address,
-    };
-    this.currentChainId = undefined;
-    this.currentConnectedAddress = undefined;
-
-    return this.trackEvent(Event.DISCONNECT, payload);
+    return this.handleDisconnection((params?.chainId?.toString() || this.currentChainId) as string, address);
   }
 
   chain({ chainId, address }: { chainId: ChainID; address?: string }) {
