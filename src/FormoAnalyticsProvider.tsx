@@ -26,6 +26,40 @@ export const FormoAnalyticsProvider = ({
   const [isInitialized, setIsInitialized] = useState(false);
   const initializedStartedRef = useRef(false);
 
+  const initializeHighlight = async () => {
+    if (HIGHLIGHT_PROJECT_ID) {
+      try {
+        H.init(HIGHLIGHT_PROJECT_ID, {
+          serviceName: 'formo-analytics-sdk',
+          tracingOrigins: true,
+          networkRecording: {
+            enabled: true,
+            recordHeadersAndBody: true,
+            urlBlocklist: [
+              'https://www.googleapis.com/identitytoolkit',
+              'https://securetoken.googleapis.com',
+            ],
+          },
+        });
+        console.log('Highlight.run initialized successfully');
+      } catch (error) {
+        console.error('Failed to initialize Highlight.run', error);
+      }
+    }
+  };
+
+  const initializeFormoAnalytics = async (apiKey: string, options: any) => {
+    try {
+      const sdkInstance = await FormoAnalytics.init(apiKey, options);
+      setSdk(sdkInstance);
+      console.log('FormoAnalytics SDK initialized successfully');
+    } catch (error) {
+      console.error('Failed to initialize FormoAnalytics SDK', error);
+    } finally {
+      setIsInitialized(true); // Ensure UI renders even after failure
+    }
+  };
+
   useEffect(() => {
     const initialize = async () => {
       if (!apiKey) {
@@ -38,37 +72,9 @@ export const FormoAnalyticsProvider = ({
       }
       if (initializedStartedRef.current) return;
       initializedStartedRef.current = true;
-      // Initialize Highlight.run if project ID is available
-      if (HIGHLIGHT_PROJECT_ID) {
-        try {
-          H.init(HIGHLIGHT_PROJECT_ID, {
-            serviceName: 'formo-analytics-sdk',
-            tracingOrigins: true,
-            networkRecording: {
-              enabled: true,
-              recordHeadersAndBody: true,
-              urlBlocklist: [
-                'https://www.googleapis.com/identitytoolkit',
-                'https://securetoken.googleapis.com',
-              ],
-            },
-          });
-          console.log('Highlight.run initialized successfully');
-        } catch (error) {
-          console.error('Failed to initialize Highlight.run', error);
-        }
-      }
 
-      // Initialize FormoAnalytics
-      try {
-        const sdkInstance = await FormoAnalytics.init(apiKey, options);
-        setSdk(sdkInstance);
-        console.log('FormoAnalytics SDK initialized successfully');
-      } catch (error) {
-        console.error('Failed to initialize FormoAnalytics SDK', error);
-      } finally {
-        setIsInitialized(true); // Ensure UI renders even after failure
-      }
+      await initializeHighlight();
+      await initializeFormoAnalytics(apiKey, options);
     };
 
     initialize();
