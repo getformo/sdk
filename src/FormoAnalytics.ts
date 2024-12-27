@@ -2,7 +2,6 @@ import axios from "axios";
 import {
   COUNTRY_LIST,
   EVENTS_API_URL,
-  SESSION_STORAGE_ID_KEY,
   Event,
 } from "./constants";
 import { H } from "highlight.run";
@@ -51,7 +50,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private walletAddressSessionKey = "walletAddress";
   private config: Config;
-  private sessionIdKey: string = SESSION_STORAGE_ID_KEY;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
   currentChainId?: string | null;
@@ -89,56 +87,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._provider;
   }
 
-  private getSessionId() {
-    const existingSessionId = this.getCookieValue(this.sessionIdKey);
-
-    if (existingSessionId) {
-      return existingSessionId;
-    }
-
-    const newSessionId = this.generateSessionId();
-    return newSessionId;
-  }
-
-  private getOrigin(): string {
-    return window.location.origin || "ORIGIN_NOT_FOUND";
-  }
-
-  // Function to set the session cookie
-  private setSessionCookie(): void {
-    const sessionId = this.getSessionId();
-    let cookieValue = `${
-      this.sessionIdKey
-    }=${sessionId}; Max-Age=1800; path=/; secure; domain=${this.getOrigin()}`;
-    document.cookie = cookieValue;
-  }
-
-  // Function to generate a new session ID
-  private generateSessionId(): string {
-    return crypto.randomUUID();
-  }
-
-  // Function to get a cookie value by name
-  private getCookieValue(name: string): string | undefined {
-    const cookies = document.cookie.split(";").reduce((acc, cookie) => {
-      const [key, value] = cookie.split("=");
-      acc[key.trim()] = value;
-      return acc;
-    }, {} as Record<string, string>);
-    return cookies[name];
-  }
 
   // Function to send tracking data
   private async trackEvent(action: string, payload: any) {
     const maxRetries = 3;
     let attempt = 0;
 
-    this.setSessionCookie();
     const address = await this.getCurrentWallet();
 
     const requestData = {
       address: address,
-      session_id: this.getSessionId(),
       timestamp: new Date().toISOString(),
       action,
       version: "1",
@@ -305,7 +263,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return address;
       }
     } catch (err) {
-      console.error("Failed to fetch accounts from provider:", err);
+      console.log("Failed to fetch accounts from provider:", err);
     }
     return null;
   }
@@ -327,7 +285,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const currentTime = Date.now();
 
     if (currentTime - parsedData.timestamp > sessionExpiry) {
-      console.warn("Session expired. Ignoring wallet address.");
+      console.log("Session expired. Ignoring wallet address.");
       sessionStorage.removeItem(this.walletAddressSessionKey); // Clear expired session data
       return "";
     }
@@ -343,8 +301,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_accounts",
       });
       if (!res || res.length === 0) {
-        console.error(
-          "error",
+        console.log(
           "FormoAnalytics::fetchAccounts: unable to get account. eth_accounts returned empty"
         );
         return null;
@@ -352,8 +309,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return res;
     } catch (err) {
       if ((err as any).code !== 4001) {
-        console.error(
-          "error",
+        console.log(
           "FormoAnalytics::fetchAccounts: eth_accounts threw an error",
           err
         );
@@ -369,15 +325,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_chainId",
       });
       if (!chainIdHex) {
-        console.error(
+        console.log(
           "FormoAnalytics::fetchChainId: chainIdHex is null or undefined"
         );
         return null;
       }
       return chainIdHex;
     } catch (err) {
-      console.error(
-        "error",
+      console.log(
         "FormoAnalytics::fetchChainId: eth_chainId threw an error",
         err
       );
@@ -387,13 +342,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async getCurrentChainId(): Promise<string> {
     if (!this.provider) {
-      console.error("FormoAnalytics::getCurrentChainId: provider not set");
+      console.log("FormoAnalytics::getCurrentChainId: provider not set");
     }
 
     const chainIdHex = await this.fetchChainId();
     // Because we're connected, the chainId cannot be null
     if (!chainIdHex) {
-      console.error(
+      console.log(
         `FormoAnalytics::getCurrentChainId: chainIdHex is: ${chainIdHex}`
       );
     }
@@ -470,8 +425,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = parseInt(chainIdHex).toString();
     if (!this.currentConnectedAddress) {
       if (!this.provider) {
-        console.error(
-          "error",
+        console.log(
           "FormoAnalytics::onChainChanged: provider not found. CHAIN_CHANGED not reported"
         );
         return;
@@ -480,8 +434,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Attempt to fetch and store the connected address
       const address = await this.getAndStoreConnectedAddress();
       if (!address) {
-        console.error(
-          "error",
+        console.log(
           "FormoAnalytics::onChainChanged: Unable to fetch or store connected address"
         );
         return;
@@ -497,8 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         address: this.currentConnectedAddress,
       });
     } else {
-      console.error(
-        "error",
+      console.log(
         "FormoAnalytics::onChainChanged: currentConnectedAddress is null despite fetch attempt"
       );
     }
@@ -510,7 +462,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private storeWalletAddress(address: string): void {
     if (!address) {
-      console.error("No wallet address provided to store.");
+      console.log("No wallet address provided to store.");
       return;
     }
 
