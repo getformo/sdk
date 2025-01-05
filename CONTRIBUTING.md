@@ -35,11 +35,9 @@ npm adduser
 Run the following command to publish the package to NPM:
 
 ```jsx
-yarn publish
-```
+npm version prerelease --preid alpha 
+OR
+npm version
 
-or:
-
-```jsx
 npm run publish
 ```

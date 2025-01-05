@@ -5,11 +5,11 @@ import {
   Event,
 } from "./constants";
 import { H } from "highlight.run";
-import { ChainID, EIP1193Provider, Options } from "./types";
+import { ChainID, Address, EIP1193Provider, Options } from "./types";
 
 interface IFormoAnalytics {
   /**
-   * Initializes the FormoAnalytics instance with the provided API key and project ID.
+   * Initializes the FormoAnalytics instance with the provided API key and options.
    */
   init(apiKey: string, options?: Options): Promise<FormoAnalytics>;
 
@@ -43,7 +43,7 @@ interface Config {
 }
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _registeredProviderListeners: Record<
+  private _providerListeners: Record<
     string,
     (...args: unknown[]) => void
   > = {};
@@ -52,8 +52,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   private config: Config;
   private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
 
-  currentChainId?: string | null;
-  currentConnectedAddress?: string;
+  currentChainId?: ChainID;
+  currentConnectedAddress?: Address;
 
   private constructor(
     public readonly apiKey: string,
@@ -74,25 +74,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     apiKey: string,
     options?: Options
   ): Promise<FormoAnalytics> {
-    const config = {
-      token: apiKey,
-    };
-    const instance = new FormoAnalytics(apiKey, options);
-    instance.config = config;
-
-    return instance;
+    // May be needed for delayed loading
+    // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
+    return new FormoAnalytics(apiKey, options);
   }
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
   }
 
-
   // Function to send tracking data
-  private async trackEvent(action: string, payload: any) {
-    const maxRetries = 3;
-    let attempt = 0;
-
+  // TODO: refactor this with event queue and flushing https://linear.app/getformo/issue/P-835/sdk-refactor-retries-with-event-queue-and-batching
+  private async trackEvent(action: string, payload: any): Promise<void> {
     const address = await this.getCurrentWallet();
 
     const requestData = {
@@ -103,52 +96,37 @@ export class FormoAnalytics implements IFormoAnalytics {
       payload: await this.buildEventPayload(payload),
     };
 
-    const sendRequest = async (): Promise<void> => {
-      try {
-        const response = await axios.post(
-          EVENTS_API_URL,
-          JSON.stringify(requestData),
-          {
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${this.apiKey}`,
-            },
-          }
-        );
-
-        if (response.status >= 200 && response.status < 300) {
-          console.log("Event sent successfully:", action);
-        } else {
-          throw new Error(`Failed with status: ${response.status}`);
+    try {
+      const response = await axios.post(
+        EVENTS_API_URL,
+        JSON.stringify(requestData),
+        {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.apiKey}`,
+          },
         }
-      } catch (error) {
-        attempt++;
+      );
 
-        if (attempt <= maxRetries) {
-          const retryDelay = Math.pow(2, attempt) * 1000;
-          console.error(
-            `Attempt ${attempt}: Retrying event "${action}" in ${
-              retryDelay / 1000
-            } seconds...`
-          );
-          setTimeout(sendRequest, retryDelay);
-        } else {
-          H.consumeError(
-            error as Error,
-            `Request data: ${JSON.stringify(requestData)}`
-          );
-          console.error(
-            `Event "${action}" failed after ${maxRetries} attempts. Error: ${error}`
-          );
-        }
+      if (response.status >= 200 && response.status < 300) {
+        console.log("Event sent successfully:", action);
+      } else {
+        throw new Error(`Failed with status: ${response.status}`);
       }
-    };
-
-    await sendRequest();
+    } catch (error) {
+      H.consumeError(
+        error as Error,
+        `Request data: ${JSON.stringify(requestData)}`
+      );
+      console.error(`Event "${action}" failed. Error: ${error}`);
+    }
   }
 
   // Function to track page hits
-  private trackPageHit() {
+  // TOFIX: support multiple page hit events
+  // TODO: Add event listener and support for SPA and hash-based navigation
+  // https://linear.app/getformo/issue/P-800/sdk-support-spa-and-hash-based-routing
+  private trackPageHit(): void {
     if (this.isAutomationEnvironment()) return;
 
     const pathname = window.location.pathname;
@@ -194,6 +172,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
+  // Adds browser properties to the user-supplied payload
   async buildEventPayload(
     eventSpecificPayload: Record<string, unknown> = {}
   ): Promise<Record<string, unknown>> {
@@ -205,10 +184,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const address = await this.getAndStoreConnectedAddress();
     if (address === null) {
-      console.warn("Wallet address could not be retrieved.");
+      console.log("Wallet address could not be retrieved.");
     }
 
-    // common fields
+    // common browser properties
     return {
       "user-agent": window.navigator.userAgent,
       address,
@@ -223,7 +202,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  private trackProvider(provider: EIP1193Provider) {
+  private trackProvider(provider: EIP1193Provider): void {
     if (provider === this._provider) {
       console.log("Provider already tracked.");
       return;
@@ -233,13 +212,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentConnectedAddress = undefined;
 
     if (this._provider) {
-      const eventNames = Object.keys(this._registeredProviderListeners);
+      const eventNames = Object.keys(this._providerListeners);
       for (const eventName of eventNames) {
         this._provider.removeListener(
           eventName,
-          this._registeredProviderListeners[eventName]
+          this._providerListeners[eventName]
         );
-        delete this._registeredProviderListeners[eventName];
+        delete this._providerListeners[eventName];
       }
     }
 
@@ -249,9 +228,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.getCurrentWallet();
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
+    // TODO: track signing and transactions
   }
 
-  private async getAndStoreConnectedAddress(): Promise<string | null> {
+  private async getAndStoreConnectedAddress(): Promise<Address | null> {
     console.log(
       "Session data missing. Attempting to fetch address from provider."
     );
@@ -268,14 +248,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     return null;
   }
 
-  private async getCurrentWallet() {
+  private async getCurrentWallet(): Promise<Address | null> {
     if (!this.provider) {
       console.warn("FormoAnalytics::getCurrentWallet: the provider is not set");
-      return;
+      return null;
     }
 
     const sessionData = sessionStorage.getItem(this.walletAddressSessionKey);
-
     if (!sessionData) {
       return await this.getAndStoreConnectedAddress();
     }
@@ -287,15 +266,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (currentTime - parsedData.timestamp > sessionExpiry) {
       console.log("Session expired. Ignoring wallet address.");
       sessionStorage.removeItem(this.walletAddressSessionKey); // Clear expired session data
-      return "";
+      return null;
     }
 
     this.onAddressConnected(parsedData.address);
-    return parsedData.address || "";
+    return parsedData.address || null;
   }
 
   // Utility to fetch accounts
-  private async fetchAccounts(): Promise<string[] | null> {
+  private async fetchAccounts(): Promise<Address[] | null> {
     try {
       const res: string[] | null | undefined = await this.provider?.request({
         method: "eth_accounts",
@@ -318,64 +297,53 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  // Utility to fetch chain ID
-  private async fetchChainId(): Promise<string | null> {
+
+  private async getCurrentChainId(): Promise<number> {
+    if (!this.provider) {
+      console.error("FormoAnalytics::getCurrentChainId: provider not set");
+    }
+
+    let chainIdHex;
     try {
-      const chainIdHex = await this.provider?.request<string>({
+      chainIdHex = await this.provider?.request<string>({
         method: "eth_chainId",
       });
       if (!chainIdHex) {
         console.log(
-          "FormoAnalytics::fetchChainId: chainIdHex is null or undefined"
+          "FormoAnalytics::fetchChainId: chain id not found"
         );
-        return null;
+        return 0;
       }
-      return chainIdHex;
+      return parseInt(chainIdHex as string, 16);
     } catch (err) {
       console.log(
         "FormoAnalytics::fetchChainId: eth_chainId threw an error",
         err
       );
-      return null;
+      return 0;
     }
   }
 
-  private async getCurrentChainId(): Promise<string> {
-    if (!this.provider) {
-      console.log("FormoAnalytics::getCurrentChainId: provider not set");
-    }
-
-    const chainIdHex = await this.fetchChainId();
-    // Because we're connected, the chainId cannot be null
-    if (!chainIdHex) {
-      console.log(
-        `FormoAnalytics::getCurrentChainId: chainIdHex is: ${chainIdHex}`
-      );
-    }
-
-    return parseInt(chainIdHex as string, 16).toString();
-  }
-
-  private registerAddressChangedListener() {
+  private registerAddressChangedListener(): void {
     const listener = (...args: unknown[]) =>
       this.onAddressChanged(args[0] as string[]);
 
     this._provider?.on("accountsChanged", listener);
-    this._registeredProviderListeners["accountsChanged"] = listener;
+    this._providerListeners["accountsChanged"] = listener;
 
     const onAddressDisconnected = this.onAddressDisconnected.bind(this);
     this._provider?.on("disconnect", onAddressDisconnected);
-    this._registeredProviderListeners["disconnect"] = onAddressDisconnected;
+    this._providerListeners["disconnect"] = onAddressDisconnected;
   }
 
-  private registerChainChangedListener() {
+  private registerChainChangedListener(): void {
     const listener = (...args: unknown[]) =>
       this.onChainChanged(args[0] as string);
     this.provider?.on("chainChanged", listener);
-    this._registeredProviderListeners["chainChanged"] = listener;
+    this._providerListeners["chainChanged"] = listener;
   }
 
-  private async onAddressChanged(addresses: string[]) {
+  private async onAddressChanged(addresses: Address[]): Promise<void> {
     if (addresses.length > 0) {
       const newAccount = addresses[0];
       if (newAccount !== this.currentConnectedAddress) {
@@ -386,7 +354,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private async onAddressConnected(address: string) {
+  private async onAddressConnected(address: Address): Promise<void> {
     if (address === this.currentConnectedAddress) {
       // We have already reported this address
       return;
@@ -400,9 +368,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.storeWalletAddress(address);
   }
 
-  private handleDisconnection(chainId?: string, address?: string) {
+  private handleDisconnection(chainId?: ChainID, address?: Address): Promise<void> {
     if (!address) {
-      return;
+      return Promise.resolve();
     }
     const payload = {
       chain_id: chainId || this.currentChainId,
@@ -414,21 +382,21 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.trackEvent(Event.DISCONNECT, payload);
   }
 
-  private onAddressDisconnected() {
+  private onAddressDisconnected(): Promise<void> {
     if (!this.currentConnectedAddress) {
-      return;
+      return Promise.resolve();
     }
-    this.handleDisconnection(this.currentChainId || undefined, this.currentConnectedAddress);
+    return this.handleDisconnection(this.currentChainId, this.currentConnectedAddress);
   }
 
-  private async onChainChanged(chainIdHex: string) {
-    this.currentChainId = parseInt(chainIdHex).toString();
+  private async onChainChanged(chainIdHex: string): Promise<void> {
+    this.currentChainId = parseInt(chainIdHex);
     if (!this.currentConnectedAddress) {
       if (!this.provider) {
         console.log(
           "FormoAnalytics::onChainChanged: provider not found. CHAIN_CHANGED not reported"
         );
-        return;
+        return Promise.resolve();
       }
 
       // Attempt to fetch and store the connected address
@@ -437,7 +405,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         console.log(
           "FormoAnalytics::onChainChanged: Unable to fetch or store connected address"
         );
-        return;
+        return Promise.resolve();
       }
 
       this.currentConnectedAddress = address[0];
@@ -460,7 +428,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Stores the wallet address in session storage when connected.
    * @param address - The wallet address to store.
    */
-  private storeWalletAddress(address: string): void {
+  private storeWalletAddress(address: Address): void {
     if (!address) {
       console.log("No wallet address provided to store.");
       return;
@@ -489,7 +457,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     return Promise.resolve(instance);
   }
 
-  connect({ chainId, address }: { chainId: ChainID; address: string }) {
+  connect({ chainId, address }: { chainId: ChainID; address: Address }): Promise<void> {
     if (!chainId) {
       throw new Error("FormoAnalytics::connect: chain ID cannot be empty");
     }
@@ -497,7 +465,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       throw new Error("FormoAnalytics::connect: address cannot be empty");
     }
 
-    this.currentChainId = chainId.toString();
+    this.currentChainId = chainId;
     this.currentConnectedAddress = address;
 
     return this.trackEvent(Event.CONNECT, {
@@ -506,17 +474,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  disconnect(params?: { chainId?: ChainID; address?: string }) {
+  disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void> {
     const address = params?.address || this.currentConnectedAddress;
+    const chainId = params?.chainId || this.currentChainId;
     if (!address) {
       // We have most likely already reported this disconnection with the automatic
       // `disconnect` detection
-      return;
+      return Promise.resolve();
     }
-    return this.handleDisconnection((params?.chainId?.toString() || this.currentChainId) as string, address);
+    return this.handleDisconnection(chainId, address);
   }
 
-  chain({ chainId, address }: { chainId: ChainID; address?: string }) {
+  chain({ chainId, address }: { chainId: ChainID; address?: Address }): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
       throw new Error("FormoAnalytics::chain: chainId cannot be empty or 0");
     }
@@ -527,11 +496,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     if (isNaN(Number(chainId))) {
       throw new Error(
-        "FormoAnalytics::chain: chainId must be a valid hex or decimal number"
+        "FormoAnalytics::chain: chainId must be a valid decimal number"
       );
     }
 
-    this.currentChainId = chainId.toString();
+    this.currentChainId = chainId;
 
     return this.trackEvent(Event.CHAIN_CHANGED, {
       chain_id: chainId,
