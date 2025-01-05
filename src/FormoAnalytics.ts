@@ -3,7 +3,6 @@ import {
   COUNTRY_LIST,
   EVENTS_API_URL,
   Event,
-  ADDRESS_SESSION_KEY,
 } from "./constants";
 import { H } from "highlight.run";
 import { ChainID, Address, EIP1193Provider, Options, Config } from "./types";
@@ -25,7 +24,7 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: string }): Promise<void>;
 
   /**
-   * Disconnects the current wallet and clears the session information.
+   * Disconnects the current wallet.
    */
   disconnect(params?: { chainId?: ChainID; address?: string }): void;
 
@@ -83,7 +82,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   // Function to send tracking data
   // TODO: refactor this with event queue and flushing https://linear.app/getformo/issue/P-835/sdk-refactor-retries-with-event-queue-and-batching
   private async trackEvent(action: string, payload: any): Promise<void> {
-    const address = await this.getCurrentWallet();
+    const address = await this.getAddress();
 
     const requestData = {
       address: address,
@@ -167,11 +166,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const location = this.getLocation();
     const language = this.getLanguage();
-
-    const address = await this.getAndStoreConnectedAddress();
-    if (address === null) {
-      console.log("Wallet address could not be retrieved.");
-    }
+    const address = await this.getAddress();
 
     // common browser properties
     return {
@@ -211,52 +206,31 @@ export class FormoAnalytics implements IFormoAnalytics {
     console.log("Tracking new provider:", provider);
     this._provider = provider;
 
-    this.getCurrentWallet();
+    this.getAddress();
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     // TODO: track signing and transactions
   }
 
-  private async getAndStoreConnectedAddress(): Promise<Address | null> {
-    console.log(
-      "Session data missing. Attempting to fetch address from provider."
-    );
+  private async getAddress(): Promise<Address | null> {
+    if (!this.provider) {
+      console.log("FormoAnalytics::getAddress: the provider is not set");
+      return null;
+    }
+
     try {
       const accounts = await this.getAccounts();
       if (accounts && accounts.length > 0) {
         const address = accounts[0];
-        this.storeWalletAddress(address);
+        // TODO: how to handle multiple addresses?
+        this.onAddressConnected(address); // TODO: should we emit a connect event here? Since the user has not manually connected
         return address;
       }
     } catch (err) {
       console.log("Failed to fetch accounts from provider:", err);
+      return null;
     }
     return null;
-  }
-
-  private async getCurrentWallet(): Promise<Address | null> {
-    if (!this.provider) {
-      console.log("FormoAnalytics::getCurrentWallet: the provider is not set");
-      return null;
-    }
-
-    const sessionData = sessionStorage.getItem(ADDRESS_SESSION_KEY);
-    if (!sessionData) {
-      return await this.getAndStoreConnectedAddress();
-    }
-
-    const parsedData = JSON.parse(sessionData);
-    const sessionExpiry = 30 * 60 * 1000; // 30 minutes
-    const currentTime = Date.now();
-
-    if (currentTime - parsedData.timestamp > sessionExpiry) {
-      console.log("Session expired. Ignoring wallet address.");
-      sessionStorage.removeItem(ADDRESS_SESSION_KEY); // Clear expired session data
-      return null;
-    }
-
-    this.onAddressConnected(parsedData.address);
-    return parsedData.address || null;
   }
 
   // Utility to get accounts
@@ -331,10 +305,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
     if (addresses.length > 0) {
-      const newAccount = addresses[0];
-      if (newAccount !== this.currentConnectedAddress) {
-        this.onAddressConnected(newAccount);
-      }
+      this.onAddressConnected(addresses[0]);
     } else {
       this.onAddressDisconnected();
     }
@@ -349,30 +320,21 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = await this.getCurrentChainId();
-
     this.connect({ chainId: this.currentChainId, address });
-    this.storeWalletAddress(address);
   }
 
-  private handleDisconnection(chainId?: ChainID, address?: Address): Promise<void> {
-    if (!address) {
-      return Promise.resolve();
-    }
+  private handleDisconnect(chainId?: ChainID, address?: Address): Promise<void> {
     const payload = {
       chain_id: chainId || this.currentChainId,
-      address,
+      address: address || this.currentConnectedAddress,
     };
     this.currentChainId = undefined;
     this.currentConnectedAddress = undefined;
-    this.clearWalletAddress();
     return this.trackEvent(Event.DISCONNECT, payload);
   }
 
   private onAddressDisconnected(): Promise<void> {
-    if (!this.currentConnectedAddress) {
-      return Promise.resolve();
-    }
-    return this.handleDisconnection(this.currentChainId, this.currentConnectedAddress);
+    return this.handleDisconnect(this.currentChainId, this.currentConnectedAddress);
   }
 
   private async onChainChanged(chainIdHex: string): Promise<void> {
@@ -386,7 +348,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Attempt to fetch and store the connected address
-      const address = await this.getAndStoreConnectedAddress();
+      const address = await this.getAddress();
       if (!address) {
         console.log(
           "FormoAnalytics::onChainChanged: Unable to fetch or store connected address"
@@ -408,34 +370,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         "FormoAnalytics::onChainChanged: currentConnectedAddress is null despite fetch attempt"
       );
     }
-  }
-
-  /**
-   * Stores the wallet address in session storage when connected.
-   * @param address - The wallet address to store.
-   */
-  private storeWalletAddress(address: Address): void {
-    if (!address) {
-      console.log("No wallet address provided to store.");
-      return;
-    }
-
-    const sessionData = {
-      address,
-      timestamp: Date.now(),
-    };
-
-    sessionStorage.setItem(
-      ADDRESS_SESSION_KEY,
-      JSON.stringify(sessionData)
-    );
-  }
-
-  /**
-   * Clears the wallet address from session storage when disconnected.
-   */
-  private clearWalletAddress(): void {
-    sessionStorage.removeItem(ADDRESS_SESSION_KEY);
   }
 
   init(apiKey: string, options: Options): Promise<FormoAnalytics> {
@@ -463,12 +397,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void> {
     const address = params?.address || this.currentConnectedAddress;
     const chainId = params?.chainId || this.currentChainId;
-    if (!address) {
-      // We have most likely already reported this disconnection with the automatic
-      // `disconnect` detection
-      return Promise.resolve();
-    }
-    return this.handleDisconnection(chainId, address);
+    return this.handleDisconnect(chainId, address);
   }
 
   chain({ chainId, address }: { chainId: ChainID; address?: Address }): Promise<void> {
