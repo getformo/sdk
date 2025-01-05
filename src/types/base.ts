@@ -16,3 +16,7 @@ export interface FormoAnalyticsProviderProps {
   disabled?: boolean;
   children: React.ReactNode;
 }
+
+export interface Config {
+  apiKey: string;
+}

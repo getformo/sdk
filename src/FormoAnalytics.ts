@@ -3,9 +3,10 @@ import {
   COUNTRY_LIST,
   EVENTS_API_URL,
   Event,
+  ADDRESS_SESSION_KEY,
 } from "./constants";
 import { H } from "highlight.run";
-import { ChainID, Address, EIP1193Provider, Options } from "./types";
+import { ChainID, Address, EIP1193Provider, Options, Config } from "./types";
 
 interface IFormoAnalytics {
   /**
@@ -38,9 +39,7 @@ interface IFormoAnalytics {
    */
   track(eventName: string, eventData: Record<string, any>): void;
 }
-interface Config {
-  token: string;
-}
+
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<
@@ -48,9 +47,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     (...args: unknown[]) => void
   > = {};
 
-  private walletAddressSessionKey = "walletAddress";
-  private config: Config;
-  private timezoneToCountry: Record<string, string> = COUNTRY_LIST;
+  config: Config;
 
   currentChainId?: ChainID;
   currentConnectedAddress?: Address;
@@ -60,7 +57,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     public options: Options = {}
   ) {
     this.config = {
-      token: this.apiKey,
+      apiKey: apiKey,
     };
 
     const provider =
@@ -103,7 +100,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         {
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
+            Authorization: `Bearer ${this.config.apiKey}`,
           },
         }
       );
@@ -127,8 +124,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   // TODO: Add event listener and support for SPA and hash-based navigation
   // https://linear.app/getformo/issue/P-800/sdk-support-spa-and-hash-based-routing
   private trackPageHit(): void {
-    if (this.isAutomationEnvironment()) return;
-
     const pathname = window.location.pathname;
     const href = window.location.href;
 
@@ -140,26 +135,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     }, 300);
   }
 
-  private isAutomationEnvironment(): boolean {
-    return (
-      window.__nightmare ||
-      window.navigator.webdriver ||
-      window.Cypress ||
-      false
-    );
-  }
-
-  private getUserLocation(): string | undefined {
+  private getLocation(): string | undefined {
     try {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      return this.timezoneToCountry[timezone];
+      return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
     } catch (error) {
       console.error("Error resolving timezone:", error);
       return undefined;
     }
   }
 
-  private getUserLanguage(): string {
+  private getLanguage(): string {
     try {
       return (
         (navigator.languages && navigator.languages.length
@@ -179,8 +165,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     const url = new URL(window.location.href);
     const params = new URLSearchParams(url.search);
 
-    const location = this.getUserLocation();
-    const language = this.getUserLanguage();
+    const location = this.getLocation();
+    const language = this.getLanguage();
 
     const address = await this.getAndStoreConnectedAddress();
     if (address === null) {
@@ -236,7 +222,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       "Session data missing. Attempting to fetch address from provider."
     );
     try {
-      const accounts = await this.fetchAccounts();
+      const accounts = await this.getAccounts();
       if (accounts && accounts.length > 0) {
         const address = accounts[0];
         this.storeWalletAddress(address);
@@ -250,11 +236,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async getCurrentWallet(): Promise<Address | null> {
     if (!this.provider) {
-      console.warn("FormoAnalytics::getCurrentWallet: the provider is not set");
+      console.log("FormoAnalytics::getCurrentWallet: the provider is not set");
       return null;
     }
 
-    const sessionData = sessionStorage.getItem(this.walletAddressSessionKey);
+    const sessionData = sessionStorage.getItem(ADDRESS_SESSION_KEY);
     if (!sessionData) {
       return await this.getAndStoreConnectedAddress();
     }
@@ -265,7 +251,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (currentTime - parsedData.timestamp > sessionExpiry) {
       console.log("Session expired. Ignoring wallet address.");
-      sessionStorage.removeItem(this.walletAddressSessionKey); // Clear expired session data
+      sessionStorage.removeItem(ADDRESS_SESSION_KEY); // Clear expired session data
       return null;
     }
 
@@ -273,15 +259,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     return parsedData.address || null;
   }
 
-  // Utility to fetch accounts
-  private async fetchAccounts(): Promise<Address[] | null> {
+  // Utility to get accounts
+  private async getAccounts(): Promise<Address[] | null> {
     try {
       const res: string[] | null | undefined = await this.provider?.request({
         method: "eth_accounts",
       });
       if (!res || res.length === 0) {
         console.log(
-          "FormoAnalytics::fetchAccounts: unable to get account. eth_accounts returned empty"
+          "FormoAnalytics::getAccounts: unable to get account. eth_accounts returned empty"
         );
         return null;
       }
@@ -289,7 +275,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch (err) {
       if ((err as any).code !== 4001) {
         console.log(
-          "FormoAnalytics::fetchAccounts: eth_accounts threw an error",
+          "FormoAnalytics::getAccounts: eth_accounts threw an error",
           err
         );
       }
@@ -440,7 +426,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     sessionStorage.setItem(
-      this.walletAddressSessionKey,
+      ADDRESS_SESSION_KEY,
       JSON.stringify(sessionData)
     );
   }
@@ -449,7 +435,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Clears the wallet address from session storage when disconnected.
    */
   private clearWalletAddress(): void {
-    sessionStorage.removeItem(this.walletAddressSessionKey);
+    sessionStorage.removeItem(ADDRESS_SESSION_KEY);
   }
 
   init(apiKey: string, options: Options): Promise<FormoAnalytics> {
