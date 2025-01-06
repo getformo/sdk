@@ -55,6 +55,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   /**
+   * Emits a page visit event with the current URL information.
+   * @returns {Promise<void>}
+   */
+  async page(): Promise<void> {
+    await this.trackPageHit();
+  }    
+
+  /**
    * Emits a wallet connect event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
@@ -123,14 +131,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits a page visit event with the current URL information.
-   * @returns {Promise<void>}
-   */
-  async page(): Promise<void> {
-    await this.trackPageHit();
-  }
-
-  /**
    * Emits a custom event with custom data.
    * @param {string} eventName
    * @param {Record<string, any>} eventData
@@ -164,9 +164,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
-    console.log("Tracking new provider:", provider);
     this._provider = provider;
 
+    // Register listeners for wallet events
     this.getAddress(); // TODO: currently this emits a connect event, but should it?
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
