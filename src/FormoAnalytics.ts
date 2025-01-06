@@ -73,6 +73,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     Public SDK functions
   */
 
+  /**
+   * Emits a wallet connect event.
+   * @param {ChainID} params.chainId
+   * @param {Address} params.address
+   * @throws {Error} If chainId or address is empty
+   * @returns {Promise<void>}
+   */
   async connect({ chainId, address }: { chainId: ChainID; address: Address }): Promise<void> {
     if (!chainId) {
       throw new Error("FormoAnalytics::connect: chain ID cannot be empty");
@@ -90,24 +97,39 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+  /**
+   * Emits a wallet disconnect event.
+   * @param {ChainID} params.chainId
+   * @param {Address} params.address
+   * @returns {Promise<void>}
+   */
   async disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void> {
     const address = params?.address || this.currentConnectedAddress;
     const chainId = params?.chainId || this.currentChainId;
+    
     await this.handleDisconnect(chainId, address);
   }
 
+  /**
+   * Emits a chain network change event.
+   * @param {ChainID} params.chainId
+   * @param {Address} params.address
+   * @throws {Error} If chainId is empty, zero, or not a valid number
+   * @throws {Error} If no address is provided and no previous address is recorded
+   * @returns {Promise<void>}
+   */
   async chain({ chainId, address }: { chainId: ChainID; address?: Address }): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
       throw new Error("FormoAnalytics::chain: chainId cannot be empty or 0");
     }
-    if (!address && !this.currentConnectedAddress) {
-      throw new Error(
-        "FormoAnalytics::chain: address was empty and no previous address has been recorded. You can either pass an address or call connect() first"
-      );
-    }
     if (isNaN(Number(chainId))) {
       throw new Error(
         "FormoAnalytics::chain: chainId must be a valid decimal number"
+      );
+    }
+    if (!address && !this.currentConnectedAddress) {
+      throw new Error(
+        "FormoAnalytics::chain: address was empty and no previous address has been recorded"
       );
     }
 
@@ -119,11 +141,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  // TODO: allow custom url as input
+  /**
+   * Emits a page visit event with the current URL information.
+   * @returns {Promise<void>}
+   */
   async page(): Promise<void> {
     await this.trackPageHit();
   }
 
+  /**
+   * Emits a custom event with custom data.
+   * @param {string} eventName
+   * @param {Record<string, any>} eventData
+   * @returns {Promise<void>}
+   */
   async track(eventName: string, eventData: Record<string, any>): Promise<void> {
     await this.trackEvent(eventName, eventData);
   }
@@ -155,7 +186,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     console.log("Tracking new provider:", provider);
     this._provider = provider;
 
-    this.getAddress();
+    this.getAddress(); // TODO: currently this emits a connect event, but should it?
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     // TODO: track signing and transactions
@@ -208,6 +239,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     this.currentChainId = undefined;
     this.currentConnectedAddress = undefined;
+
     await this.trackEvent(Event.DISCONNECT, payload);
   }
 

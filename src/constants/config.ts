@@ -1,5 +1,4 @@
 export const EVENTS_API_URL = 'https://events.formo.so/events';
-export const ADDRESS_SESSION_KEY = 'formo-address';
 export const COUNTRY_LIST = {
   // Africa
   'Africa/Accra': 'GH',
