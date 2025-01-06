@@ -4,4 +4,6 @@ export enum Event {
   CONNECT = 'connect',
   DISCONNECT = 'disconnect',
   CHAIN_CHANGED = 'chain_changed',
+  SIGNATURE = 'signature',
+  TRANSACTION = 'transaction',
 }
