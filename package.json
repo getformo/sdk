@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.11.14-alpha.1",
+  "version": "1.13.0-alpha.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/getformo/sdk.git"
@@ -69,7 +69,6 @@
   },
   "scripts": {
     "prebuild": "yarn clean",
-    "publish": "npm version && npm publish",
     "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production",
     "build-cjs": "yarn tsc --build",
     "build-esm": "yarn tsc -m es6 --outdir dist/esm",

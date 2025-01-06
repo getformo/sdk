@@ -85,9 +85,9 @@ npm adduser
 Run the following command to publish the package to NPM:
 
 ```jsx
-npm version prerelease --preid alpha 
-OR
+// Increment the version number in package.json and create git tag
 npm version
 
-npm run publish
+// Publish the package to NPM
+npm publish
 ```
