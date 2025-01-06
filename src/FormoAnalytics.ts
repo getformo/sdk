@@ -8,29 +8,10 @@ import { H } from "highlight.run";
 import { ChainID, Address, EIP1193Provider, Options, Config } from "./types";
 
 interface IFormoAnalytics {
-  /**
-   * Tracks page visit events.
-   */
   page(): void;
-
-  /**
-   * Connects to a wallet with the specified chain ID and address.
-   */
-  connect(params: { chainId: ChainID; address: string }): Promise<void>;
-
-  /**
-   * Disconnects the current wallet.
-   */
-  disconnect(params?: { chainId?: ChainID; address?: string }): Promise<void>;
-
-  /**
-   * Switches the blockchain chain context and optionally logs additional params.
-   */
-  chain(params: { chainId: ChainID; address?: string }): Promise<void>;
-
-  /**
-   * Tracks a specific event with a name and associated data.
-   */
+  connect(params: { chainId: ChainID; address: Address }): Promise<void>;
+  disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
+  chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
   track(eventName: string, eventData: Record<string, any>): Promise<void>;
 }
 
