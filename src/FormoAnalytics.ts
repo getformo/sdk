@@ -9,11 +9,6 @@ import { ChainID, Address, EIP1193Provider, Options, Config } from "./types";
 
 interface IFormoAnalytics {
   /**
-   * Initializes the FormoAnalytics instance with the provided API key and options.
-   */
-  init(apiKey: string, options?: Options): Promise<FormoAnalytics>;
-
-  /**
    * Tracks page visit events.
    */
   page(): void;
@@ -26,17 +21,17 @@ interface IFormoAnalytics {
   /**
    * Disconnects the current wallet.
    */
-  disconnect(params?: { chainId?: ChainID; address?: string }): void;
+  disconnect(params?: { chainId?: ChainID; address?: string }): Promise<void>;
 
   /**
    * Switches the blockchain chain context and optionally logs additional params.
    */
-  chain(params: { chainId: ChainID; address?: string }): void;
+  chain(params: { chainId: ChainID; address?: string }): Promise<void>;
 
   /**
    * Tracks a specific event with a name and associated data.
    */
-  track(eventName: string, eventData: Record<string, any>): void;
+  track(eventName: string, eventData: Record<string, any>): Promise<void>;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -47,7 +42,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   > = {};
 
   config: Config;
-
   currentChainId?: ChainID;
   currentConnectedAddress?: Address;
 
@@ -75,113 +69,68 @@ export class FormoAnalytics implements IFormoAnalytics {
     return new FormoAnalytics(apiKey, options);
   }
 
-  get provider(): EIP1193Provider | undefined {
-    return this._provider;
-  }
+  /*
+    Public SDK functions
+  */
 
-  // Function to send tracking data
-  // TODO: refactor this with event queue and flushing https://linear.app/getformo/issue/P-835/sdk-refactor-retries-with-event-queue-and-batching
-  private async trackEvent(action: string, payload: any): Promise<void> {
-    const address = await this.getAddress();
+  async connect({ chainId, address }: { chainId: ChainID; address: Address }): Promise<void> {
+    if (!chainId) {
+      throw new Error("FormoAnalytics::connect: chain ID cannot be empty");
+    }
+    if (!address) {
+      throw new Error("FormoAnalytics::connect: address cannot be empty");
+    }
 
-    const requestData = {
+    this.currentChainId = chainId;
+    this.currentConnectedAddress = address;
+
+    await this.trackEvent(Event.CONNECT, {
+      chain_id: chainId,
       address: address,
-      timestamp: new Date().toISOString(),
-      action,
-      version: "1",
-      payload: await this.buildEventPayload(payload),
-    };
+    });
+  }
 
-    try {
-      const response = await axios.post(
-        EVENTS_API_URL,
-        JSON.stringify(requestData),
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.config.apiKey}`,
-          },
-        }
-      );
+  async disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void> {
+    const address = params?.address || this.currentConnectedAddress;
+    const chainId = params?.chainId || this.currentChainId;
+    await this.handleDisconnect(chainId, address);
+  }
 
-      if (response.status >= 200 && response.status < 300) {
-        console.log("Event sent successfully:", action);
-      } else {
-        throw new Error(`Failed with status: ${response.status}`);
-      }
-    } catch (error) {
-      H.consumeError(
-        error as Error,
-        `Request data: ${JSON.stringify(requestData)}`
-      );
-      console.error(`Event "${action}" failed. Error: ${error}`);
+  async chain({ chainId, address }: { chainId: ChainID; address?: Address }): Promise<void> {
+    if (!chainId || Number(chainId) === 0) {
+      throw new Error("FormoAnalytics::chain: chainId cannot be empty or 0");
     }
-  }
-
-  // Function to track page hits
-  // TOFIX: support multiple page hit events
-  // TODO: Add event listener and support for SPA and hash-based navigation
-  // https://linear.app/getformo/issue/P-800/sdk-support-spa-and-hash-based-routing
-  private trackPageHit(): void {
-    const pathname = window.location.pathname;
-    const href = window.location.href;
-
-    setTimeout(async () => {
-      this.trackEvent(Event.PAGE, {
-        pathname,
-        href,
-      });
-    }, 300);
-  }
-
-  private getLocation(): string | undefined {
-    try {
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
-    } catch (error) {
-      console.error("Error resolving timezone:", error);
-      return undefined;
-    }
-  }
-
-  private getLanguage(): string {
-    try {
-      return (
-        (navigator.languages && navigator.languages.length
-          ? navigator.languages[0]
-          : navigator.language) || "en"
+    if (!address && !this.currentConnectedAddress) {
+      throw new Error(
+        "FormoAnalytics::chain: address was empty and no previous address has been recorded. You can either pass an address or call connect() first"
       );
-    } catch (error) {
-      console.error("Error resolving language:", error);
-      return "en";
     }
+    if (isNaN(Number(chainId))) {
+      throw new Error(
+        "FormoAnalytics::chain: chainId must be a valid decimal number"
+      );
+    }
+
+    this.currentChainId = chainId;
+
+    await this.trackEvent(Event.CHAIN_CHANGED, {
+      chain_id: chainId,
+      address: address || this.currentConnectedAddress,
+    });
   }
 
-  // Adds browser properties to the user-supplied payload
-  async buildEventPayload(
-    eventSpecificPayload: Record<string, unknown> = {}
-  ): Promise<Record<string, unknown>> {
-    const url = new URL(window.location.href);
-    const params = new URLSearchParams(url.search);
-
-    const location = this.getLocation();
-    const language = this.getLanguage();
-    const address = await this.getAddress();
-
-    // common browser properties
-    return {
-      "user-agent": window.navigator.userAgent,
-      address,
-      locale: language,
-      location,
-      referrer: document.referrer,
-      utm_source: params.get("utm_source"),
-      utm_medium: params.get("utm_medium"),
-      utm_campaign: params.get("utm_campaign"),
-      ref: params.get("ref"),
-      ...eventSpecificPayload,
-    };
+  // TODO: allow custom url as input
+  async page(): Promise<void> {
+    await this.trackPageHit();
   }
+
+  async track(eventName: string, eventData: Record<string, any>): Promise<void> {
+    await this.trackEvent(eventName, eventData);
+  }
+
+  /*
+    SDK tracking and event listener functions
+  */
 
   private trackProvider(provider: EIP1193Provider): void {
     if (provider === this._provider) {
@@ -210,78 +159,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     // TODO: track signing and transactions
-  }
-
-  private async getAddress(): Promise<Address | null> {
-    if (!this.provider) {
-      console.log("FormoAnalytics::getAddress: the provider is not set");
-      return null;
-    }
-
-    try {
-      const accounts = await this.getAccounts();
-      if (accounts && accounts.length > 0) {
-        const address = accounts[0];
-        // TODO: how to handle multiple addresses?
-        this.onAddressConnected(address); // TODO: should we emit a connect event here? Since the user has not manually connected
-        return address;
-      }
-    } catch (err) {
-      console.log("Failed to fetch accounts from provider:", err);
-      return null;
-    }
-    return null;
-  }
-
-  // Utility to get accounts
-  private async getAccounts(): Promise<Address[] | null> {
-    try {
-      const res: string[] | null | undefined = await this.provider?.request({
-        method: "eth_accounts",
-      });
-      if (!res || res.length === 0) {
-        console.log(
-          "FormoAnalytics::getAccounts: unable to get account. eth_accounts returned empty"
-        );
-        return null;
-      }
-      return res;
-    } catch (err) {
-      if ((err as any).code !== 4001) {
-        console.log(
-          "FormoAnalytics::getAccounts: eth_accounts threw an error",
-          err
-        );
-      }
-      return null;
-    }
-  }
-
-
-  private async getCurrentChainId(): Promise<number> {
-    if (!this.provider) {
-      console.error("FormoAnalytics::getCurrentChainId: provider not set");
-    }
-
-    let chainIdHex;
-    try {
-      chainIdHex = await this.provider?.request<string>({
-        method: "eth_chainId",
-      });
-      if (!chainIdHex) {
-        console.log(
-          "FormoAnalytics::fetchChainId: chain id not found"
-        );
-        return 0;
-      }
-      return parseInt(chainIdHex as string, 16);
-    } catch (err) {
-      console.log(
-        "FormoAnalytics::fetchChainId: eth_chainId threw an error",
-        err
-      );
-      return 0;
-    }
+    // https://linear.app/getformo/issue/P-607/sdk-support-signature-and-transaction-events
   }
 
   private registerAddressChangedListener(): void {
@@ -323,18 +201,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.connect({ chainId: this.currentChainId, address });
   }
 
-  private handleDisconnect(chainId?: ChainID, address?: Address): Promise<void> {
+  private async handleDisconnect(chainId?: ChainID, address?: Address): Promise<void> {
     const payload = {
       chain_id: chainId || this.currentChainId,
       address: address || this.currentConnectedAddress,
     };
     this.currentChainId = undefined;
     this.currentConnectedAddress = undefined;
-    return this.trackEvent(Event.DISCONNECT, payload);
+    await this.trackEvent(Event.DISCONNECT, payload);
   }
 
-  private onAddressDisconnected(): Promise<void> {
-    return this.handleDisconnect(this.currentChainId, this.currentConnectedAddress);
+  private async onAddressDisconnected(): Promise<void> {
+    await this.handleDisconnect(this.currentChainId, this.currentConnectedAddress);
   }
 
   private async onChainChanged(chainIdHex: string): Promise<void> {
@@ -372,62 +250,185 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  init(apiKey: string, options: Options): Promise<FormoAnalytics> {
-    const instance = new FormoAnalytics(apiKey, options);
-    return Promise.resolve(instance);
+  // TOFIX: support multiple page hit events
+  // TODO: Add event listener and support for SPA and hash-based navigation
+  // https://linear.app/getformo/issue/P-800/sdk-support-spa-and-hash-based-routing
+  private trackPageHit(): void {
+    const pathname = window.location.pathname;
+    const href = window.location.href;
+
+    setTimeout(async () => {
+      this.trackEvent(Event.PAGE, {
+        pathname,
+        href,
+      });
+    }, 300);
   }
 
-  connect({ chainId, address }: { chainId: ChainID; address: Address }): Promise<void> {
-    if (!chainId) {
-      throw new Error("FormoAnalytics::connect: chain ID cannot be empty");
-    }
-    if (!address) {
-      throw new Error("FormoAnalytics::connect: address cannot be empty");
-    }
+  // TODO: refactor this with event queue and flushing 
+  // https://linear.app/getformo/issue/P-835/sdk-refactor-retries-with-event-queue-and-batching
+  private async trackEvent(action: string, payload: any): Promise<void> {
+    const address = await this.getAddress();
 
-    this.currentChainId = chainId;
-    this.currentConnectedAddress = address;
-
-    return this.trackEvent(Event.CONNECT, {
-      chain_id: chainId,
+    const requestData = {
       address: address,
-    });
-  }
+      timestamp: new Date().toISOString(),
+      action,
+      version: "1",
+      payload: await this.buildEventPayload(payload),
+    };
 
-  disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void> {
-    const address = params?.address || this.currentConnectedAddress;
-    const chainId = params?.chainId || this.currentChainId;
-    return this.handleDisconnect(chainId, address);
-  }
-
-  chain({ chainId, address }: { chainId: ChainID; address?: Address }): Promise<void> {
-    if (!chainId || Number(chainId) === 0) {
-      throw new Error("FormoAnalytics::chain: chainId cannot be empty or 0");
-    }
-    if (!address && !this.currentConnectedAddress) {
-      throw new Error(
-        "FormoAnalytics::chain: address was empty and no previous address has been recorded. You can either pass an address or call connect() first"
+    try {
+      const response = await axios.post(
+        EVENTS_API_URL,
+        JSON.stringify(requestData),
+        {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.config.apiKey}`,
+          },
+        }
       );
-    }
-    if (isNaN(Number(chainId))) {
-      throw new Error(
-        "FormoAnalytics::chain: chainId must be a valid decimal number"
+
+      if (response.status >= 200 && response.status < 300) {
+        console.log("Event sent successfully:", action);
+      } else {
+        throw new Error(`Failed with status: ${response.status}`);
+      }
+    } catch (error) {
+      H.consumeError(
+        error as Error,
+        `Request data: ${JSON.stringify(requestData)}`
       );
+      console.error(`Event "${action}" failed. Error: ${error}`);
+    }
+  }
+
+  /*
+    Utility functions
+  */
+
+  get provider(): EIP1193Provider | undefined {
+    return this._provider;
+  }    
+
+  private async getAddress(): Promise<Address | null> {
+    if (!this.provider) {
+      console.log("FormoAnalytics::getAddress: the provider is not set");
+      return null;
     }
 
-    this.currentChainId = chainId;
-
-    return this.trackEvent(Event.CHAIN_CHANGED, {
-      chain_id: chainId,
-      address: address || this.currentConnectedAddress,
-    });
+    try {
+      const accounts = await this.getAccounts();
+      if (accounts && accounts.length > 0) {
+        const address = accounts[0];
+        // TODO: how to handle multiple addresses? Should we emit a connect event here? Since the user has not manually connected
+        // https://linear.app/getformo/issue/P-691/sdk-detect-multiple-wallets-using-eip6963
+        this.onAddressConnected(address); 
+        return address;
+      }
+    } catch (err) {
+      console.log("Failed to fetch accounts from provider:", err);
+      return null;
+    }
+    return null;
   }
 
-  page() {
-    this.trackPageHit();
+  private async getAccounts(): Promise<Address[] | null> {
+    try {
+      const res: string[] | null | undefined = await this.provider?.request({
+        method: "eth_accounts",
+      });
+      if (!res || res.length === 0) {
+        console.log(
+          "FormoAnalytics::getAccounts: unable to get account. eth_accounts returned empty"
+        );
+        return null;
+      }
+      return res;
+    } catch (err) {
+      if ((err as any).code !== 4001) {
+        console.log(
+          "FormoAnalytics::getAccounts: eth_accounts threw an error",
+          err
+        );
+      }
+      return null;
+    }
   }
 
-  track(eventName: string, eventData: any) {
-    this.trackEvent(eventName, eventData);
+  private async getCurrentChainId(): Promise<number> {
+    if (!this.provider) {
+      console.error("FormoAnalytics::getCurrentChainId: provider not set");
+    }
+
+    let chainIdHex;
+    try {
+      chainIdHex = await this.provider?.request<string>({
+        method: "eth_chainId",
+      });
+      if (!chainIdHex) {
+        console.log(
+          "FormoAnalytics::fetchChainId: chain id not found"
+        );
+        return 0;
+      }
+      return parseInt(chainIdHex as string, 16);
+    } catch (err) {
+      console.log(
+        "FormoAnalytics::fetchChainId: eth_chainId threw an error",
+        err
+      );
+      return 0;
+    }
   }
+
+  private getLocation(): string | undefined {
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
+    } catch (error) {
+      console.error("Error resolving timezone:", error);
+      return undefined;
+    }
+  }
+
+  private getLanguage(): string {
+    try {
+      return (
+        (navigator.languages && navigator.languages.length
+          ? navigator.languages[0]
+          : navigator.language) || "en"
+      );
+    } catch (error) {
+      console.error("Error resolving language:", error);
+      return "en";
+    }
+  }
+
+  // Adds browser properties to the user-supplied payload
+  private async buildEventPayload(
+    eventSpecificPayload: Record<string, unknown> = {}
+  ): Promise<Record<string, unknown>> {
+    const url = new URL(window.location.href);
+    const params = new URLSearchParams(url.search);
+
+    const location = this.getLocation();
+    const language = this.getLanguage();
+    const address = await this.getAddress();
+
+    // common browser properties
+    return {
+      "user-agent": window.navigator.userAgent,
+      address,
+      locale: language,
+      location,
+      referrer: document.referrer,
+      utm_source: params.get("utm_source"),
+      utm_medium: params.get("utm_medium"),
+      utm_campaign: params.get("utm_campaign"),
+      ref: params.get("ref"),
+      ...eventSpecificPayload,
+    };
+  }  
 }

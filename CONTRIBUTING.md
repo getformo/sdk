@@ -58,6 +58,12 @@ OR
 yarn unlink ../sdk
 ```
 
+## Troubleshooting
+
+- Remove your `node_modules` and `yarn link` and run `yarn link` and `yarn install` again.
+- Try running `yarn build` in the SDK directory to ensure the changes are applied.
+- Try running `yarn unlink` and `yarn link` again.
+
 # Publishing
 
 1. Authenticate with NPM
