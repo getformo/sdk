@@ -12,7 +12,7 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  track(eventName: string, eventData: Record<string, any>): Promise<void>;
+  track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -34,6 +34,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       apiKey: apiKey,
     };
 
+    // TODO: replace with eip6963
     const provider =
       window?.ethereum || window.web3?.currentProvider || options?.provider;
     if (provider) {
@@ -132,12 +133,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits a custom event with custom data.
-   * @param {string} eventName
-   * @param {Record<string, any>} eventData
+   * @param {string} action
+   * @param {Record<string, any>} payload
    * @returns {Promise<void>}
    */
-  async track(eventName: string, eventData: Record<string, any>): Promise<void> {
-    await this.trackEvent(eventName, eventData);
+  async track(action: string, payload: Record<string, any>): Promise<void> {
+    await this.trackEvent(action, payload);
   }
 
   /*
@@ -154,13 +155,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentConnectedAddress = undefined;
 
     if (this._provider) {
-      const eventNames = Object.keys(this._providerListeners);
-      for (const eventName of eventNames) {
+      const actions = Object.keys(this._providerListeners);
+      for (const action of actions) {
         this._provider.removeListener(
-          eventName,
-          this._providerListeners[eventName]
+          action,
+          this._providerListeners[action]
         );
-        delete this._providerListeners[eventName];
+        delete this._providerListeners[action];
       }
     }
 
