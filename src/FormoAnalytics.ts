@@ -5,13 +5,15 @@ import {
   Event,
 } from "./constants";
 import { H } from "highlight.run";
-import { ChainID, Address, EIP1193Provider, Options, Config } from "./types";
+import { ChainID, Address, EIP1193Provider, Options, Config, RequestArguments } from "./types";
 
 interface IFormoAnalytics {
   page(): void;
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
+  signature(params: { address: Address, signatureHash: string, message: string }): Promise<void>;
+  transaction(params: { chainId: ChainID, transactionHash: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -131,6 +133,21 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+  async signature({ address, signatureHash, message }: { address: Address; signatureHash: string; message: string; }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE, {
+      address,
+      signatureHash,
+      message,
+    });
+  }
+
+  async transaction({ chainId, transactionHash }: { chainId: ChainID; transactionHash: string; }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION, {
+      chainId,
+      transactionHash,
+    });
+  }
+
   /**
    * Emits a custom event with custom data.
    * @param {string} action
@@ -168,11 +185,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._provider = provider;
 
     // Register listeners for wallet events
+    console.log('Registering listeners')
     this.getAddress(); // TODO: currently this emits a connect event, but should it?
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
+    this.registerSignatureListener();
     // TODO: track signing and transactions
     // https://linear.app/getformo/issue/P-607/sdk-support-signature-and-transaction-events
+    console.log('Registered listeners')
   }
 
   private registerAddressChangedListener(): void {
@@ -193,6 +213,43 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.provider?.on("chainChanged", listener);
     this._providerListeners["chainChanged"] = listener;
   }
+
+  private registerSignatureListener(): void {
+    if (!this.provider) {
+      console.error('_trackSigning: provider not found')
+      return
+    }
+
+    if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
+      console.warn('_trackSigning: provider.request is not writable')
+      return
+    }
+
+    // Deliberately not using this._original request to not intefere with the transaction tracking's
+    // request modification
+    const request = this.provider.request.bind(this.provider)
+    this.provider.request = async ({ method, params }: RequestArguments) => {
+      console.log('request triggered')
+      console.log(params)
+      if (Array.isArray(params)) {
+        // if (['signTypedData_v4', 'eth_sign'].includes(method)) {
+        //   this.signature({
+        //     account: params[0],
+        //     message: params[1],
+        //   })
+        // }
+        if (method === 'personal_sign') {
+          // 
+          // this.signature({
+          //   message: params[0],
+          //   account: params[1],
+          // })
+        }
+      }
+      return request({ method, params })
+    }
+    return
+  }    
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
     if (addresses.length > 0) {
