@@ -12,9 +12,10 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signatureStarted(params: { address: Address, message: string }): Promise<void>;
-  signature(params: { address: Address, signatureHash: string, message: string }): Promise<void>;
-  transaction(params: { chainId: ChainID, transactionHash: string }): Promise<void>;  
+  signatureStarted(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
+  signatureConfirmed(params: { chainId?: ChainID, address: Address, signatureHash: string, message: string }): Promise<void>;
+  transactionStarted(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
+  transactionConfirmed(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -134,25 +135,42 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async signatureStarted({ address, message }: { address: Address; message: string; }): Promise<void> {
+  async signatureStarted({ chainId, address, message }: { chainId?: ChainID, address: Address; message: string; }): Promise<void> {
     await this.trackEvent(Event.SIGNATURE_STARTED, {
+      chainId,
       address,
       message,
     });
   }
 
-  async signature({ address, signatureHash, message }: { address: Address; signatureHash: string; message: string; }): Promise<void> {
+  async signatureConfirmed({ chainId, address, signatureHash, message }: { chainId?: ChainID, address: Address; signatureHash: string; message: string; }): Promise<void> {
     await this.trackEvent(Event.SIGNATURE_CONFIRMED, {
+      chainId,
       address,
       signatureHash,
       message,
     });
   }
 
-  async transaction({ chainId, transactionHash }: { chainId: ChainID; transactionHash: string; }): Promise<void> {
+  async transactionStarted({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
     await this.trackEvent(Event.TRANSACTION_STARTED, {
       chainId,
+      address,
       transactionHash,
+      data,
+      to,
+      value,
+    });
+  }
+
+  async transactionConfirmed({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION_CONFIRMED, {
+      chainId,
+      address,
+      transactionHash,
+      data,
+      to,
+      value,
     });
   }
 
@@ -234,6 +252,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (Array.isArray(params) && (['eth_signTypedData_v4', 'personal_sign'].includes(method))) {
         if (method === 'eth_signTypedData_v4') {
           this.signatureStarted({
+            chainId: this.currentChainId,
             address: params[0] as Address,
             message: params[1] as string
           })
@@ -241,6 +260,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         if (method === 'personal_sign') {
           const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
           this.signatureStarted({
+            chainId: this.currentChainId,
             address: params[1] as Address,
             message
           })
@@ -251,6 +271,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
           if (method === 'eth_signTypedData_v4') {
             this.signature({
+              chainId: this.currentChainId,
               address: params[0] as Address,
               signatureHash: response as string,
               message: params[1] as string
@@ -260,6 +281,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           if (method === 'personal_sign') {
             const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
             this.signature({
+              chainId: this.currentChainId,
               address: params[1] as Address,
               signatureHash: response as string,
               message
@@ -277,6 +299,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }    
 
   private registerTransactionListener(): void {
+    console.log('registerTransactionListener')
     const provider = this.provider
     if (!provider) {
       console.error('_trackTransactions: provider not found')
@@ -288,21 +311,31 @@ export class FormoAnalytics implements IFormoAnalytics {
       return
     }
 
-    // Deliberately not using this._original request to not intefere with the signature tracking's
-    // request modification
     const request = provider.request.bind(provider)
     provider.request = async ({ method, params }: RequestArguments) => {
-      console.log('transaction listener')
+      // TODO: detect transaction confirmation & receipt, handle nonce overrides
+      console.log('transaction listener triggered')
       console.log(method)
       console.log(params) // [{data, from, to ,value}]
-      if (Array.isArray(params) && method === 'eth_sendTransaction') {
-        // _logTransactionSubmitted(provider, params[0] as Record<string, unknown>)
+      if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
+        const { data, from, to, value } = params[0] as { data: string; from: string; to: string; value: string };
+        this.transactionStarted({
+          chainId: this.currentChainId || await this.getCurrentChainId(),
+          data,
+          address: from,
+          to,
+          value,
+          transactionHash: '' // TODO: predict transaction hash locally based on tx data and address nonce
+        })
       }
+
+      // TODO: emit transaction confirmed event
       return request({ method, params })
     }
 
     return
   }
+
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
     if (addresses.length > 0) {

@@ -7,4 +7,5 @@ export enum Event {
   SIGNATURE_STARTED = 'signature_started',
   SIGNATURE_CONFIRMED = 'signature_confirmed',
   TRANSACTION_STARTED = 'transaction_started',
+  TRANSACTION_CONFIRMED = 'transaction_confirmed',
 }
