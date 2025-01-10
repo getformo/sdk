@@ -12,7 +12,8 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signature(params: { address: Address, signatureHash?: string, message?: string }): Promise<void>;
+  signatureStarted(params: { address: Address, message: string }): Promise<void>;
+  signatureCompleted(params: { address: Address, signatureHash: string, message: string }): Promise<void>;
   transaction(params: { chainId: ChainID, transactionHash: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
@@ -133,8 +134,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async signature({ address, signatureHash, message }: { address: Address; signatureHash?: string; message?: string; }): Promise<void> {
-    await this.trackEvent(Event.SIGNATURE, {
+  async signatureStarted({ address, message }: { address: Address; message: string; }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE_STARTED, {
+      address,
+      message,
+    });
+  }
+
+  async signatureCompleted({ address, signatureHash, message }: { address: Address; signatureHash: string; message: string; }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE_COMPLETED, {
       address,
       signatureHash,
       message,
@@ -223,23 +231,35 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const request = this.provider.request.bind(this.provider)
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
-      console.log('signature listener')
-      console.log(method)
-      console.log(params)
-      if (Array.isArray(params) && (['signTypedData_v4', 'personal_sign'].includes(method))) {
+      if (Array.isArray(params) && (['eth_signTypedData_v4', 'personal_sign'].includes(method))) {
+        if (method === 'eth_signTypedData_v4') {
+          this.signatureStarted({
+            address: params[0] as Address,
+            message: params[1] as string
+          })
+        }
+        if (method === 'personal_sign') {
+          const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
+          this.signatureStarted({
+            address: params[1] as Address,
+            message
+          })
+        }
+
         try {
           const response = await request({ method, params }) as T
-          
-          if (method === 'signTypedData_v4') {
-            // TODO: test this
-            this.signature({
+
+          if (method === 'eth_signTypedData_v4') {
+            this.signatureCompleted({
               address: params[0] as Address,
               signatureHash: response as string,
+              message: params[1] as string
             })
           }
+          // https://docs.metamask.io/wallet/reference/json-rpc-methods/personal_sign/
           if (method === 'personal_sign') {
             const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
-            this.signature({
+            this.signatureCompleted({
               address: params[1] as Address,
               signatureHash: response as string,
               message
