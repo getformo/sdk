@@ -13,7 +13,7 @@ interface IFormoAnalytics {
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
   signatureStarted(params: { address: Address, message: string }): Promise<void>;
-  signatureCompleted(params: { address: Address, signatureHash: string, message: string }): Promise<void>;
+  signature(params: { address: Address, signatureHash: string, message: string }): Promise<void>;
   transaction(params: { chainId: ChainID, transactionHash: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
@@ -141,8 +141,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async signatureCompleted({ address, signatureHash, message }: { address: Address; signatureHash: string; message: string; }): Promise<void> {
-    await this.trackEvent(Event.SIGNATURE_COMPLETED, {
+  async signature({ address, signatureHash, message }: { address: Address; signatureHash: string; message: string; }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE_CONFIRMED, {
       address,
       signatureHash,
       message,
@@ -150,7 +150,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   async transaction({ chainId, transactionHash }: { chainId: ChainID; transactionHash: string; }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION, {
+    await this.trackEvent(Event.TRANSACTION_STARTED, {
       chainId,
       transactionHash,
     });
@@ -193,7 +193,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._provider = provider;
 
     // Register listeners for wallet events
-    this.getAddress(); // TODO: currently this emits a connect event, but should it?
+    this.getAddress(); // TODO: this should emit a detect event instead of connect event (wallet fingerprinting)
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     this.registerSignatureListener();
@@ -250,7 +250,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           const response = await request({ method, params }) as T
 
           if (method === 'eth_signTypedData_v4') {
-            this.signatureCompleted({
+            this.signature({
               address: params[0] as Address,
               signatureHash: response as string,
               message: params[1] as string
@@ -259,7 +259,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           // https://docs.metamask.io/wallet/reference/json-rpc-methods/personal_sign/
           if (method === 'personal_sign') {
             const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
-            this.signatureCompleted({
+            this.signature({
               address: params[1] as Address,
               signatureHash: response as string,
               message
@@ -294,7 +294,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     provider.request = async ({ method, params }: RequestArguments) => {
       console.log('transaction listener')
       console.log(method)
-      console.log(params)
+      console.log(params) // [{data, from, to ,value}]
       if (Array.isArray(params) && method === 'eth_sendTransaction') {
         // _logTransactionSubmitted(provider, params[0] as Record<string, unknown>)
       }

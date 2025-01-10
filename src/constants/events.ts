@@ -5,6 +5,6 @@ export enum Event {
   DISCONNECT = 'disconnect',
   CHAIN_CHANGED = 'chain_changed',
   SIGNATURE_STARTED = 'signature_started',
-  SIGNATURE_COMPLETED = 'signature_completed',
-  TRANSACTION = 'transaction',
+  SIGNATURE_CONFIRMED = 'signature_confirmed',
+  TRANSACTION_STARTED = 'transaction_started',
 }
