@@ -14,7 +14,8 @@ interface IFormoAnalytics {
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
   signatureRequested(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
   signatureConfirmed(params: { chainId?: ChainID, address: Address, signatureHash: string, message: string }): Promise<void>;
-  transactionBroadcasted(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;  
+  transactionStarted(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;  
+  transactionBroadcasted(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
   transactionConfirmed(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
@@ -152,8 +153,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async transactionBroadcasted({ chainId, address, data, to, value }: { chainId: ChainID; address: Address; data?: string; to?: string; value?: string; }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION_BROADCASTED, {
+  async transactionStarted({ chainId, address, data, to, value }: { chainId: ChainID; address: Address; data?: string; to?: string; value?: string; }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION_STARTED, {
       chainId,
       address,
       data,
@@ -161,6 +162,17 @@ export class FormoAnalytics implements IFormoAnalytics {
       value,
     });
   }
+
+  async transactionBroadcasted({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION_BROADCASTED, {
+      chainId,
+      address,
+      transactionHash,
+      data,
+      to,
+      value,
+    });
+  }  
 
   async transactionConfirmed({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
     await this.trackEvent(Event.TRANSACTION_CONFIRMED, {
@@ -312,7 +324,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.provider.request = async ({ method, params }: RequestArguments) => {
       if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
         const { data, from, to, value } = params[0] as { data: string; from: string; to: string; value: string };
-        this.transactionBroadcasted({
+        this.transactionStarted({
           chainId: this.currentChainId || await this.getCurrentChainId(),
           data,
           address: from,
@@ -321,9 +333,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         })
       }
 
-      // TODO: create listener for transaction confirmation
-      // TODO: detect transaction confirmation & receipt, handle nonce overrides
-      // TODO: handle transaction rejection
+      // TODO: create listener for transaction broadcast and confirmation
+      // TODO: create listener for transaction rejection
 
       return request({ method, params })
     }
