@@ -190,8 +190,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     this.registerSignatureListener();
-    // TODO: track signing and transactions
-    // https://linear.app/getformo/issue/P-607/sdk-support-signature-and-transaction-events
+    this.registerTransactionListener();
     console.log('Registered listeners')
   }
 
@@ -214,7 +213,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListeners["chainChanged"] = listener;
   }
 
+  // TOFIX: signing a message does not trigger this
   private registerSignatureListener(): void {
+    console.log('registerSignatureListener')
     if (!this.provider) {
       console.error('_trackSigning: provider not found')
       return
@@ -229,7 +230,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     // request modification
     const request = this.provider.request.bind(this.provider)
     this.provider.request = async ({ method, params }: RequestArguments) => {
-      console.log('request triggered')
+      console.log('signature listener')
+      console.log(method)
       console.log(params)
       if (Array.isArray(params)) {
         // if (['signTypedData_v4', 'eth_sign'].includes(method)) {
@@ -248,8 +250,40 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       return request({ method, params })
     }
+
+    console.log(this.provider)
+    console.log(this.provider.request)
+    console.log('bound')
     return
   }    
+
+  private registerTransactionListener(): void {
+    const provider = this.provider
+    if (!provider) {
+      console.error('_trackTransactions: provider not found')
+      return
+    }
+
+    if (Object.getOwnPropertyDescriptor(provider, 'request')?.writable === false) {
+      console.warn('_trackTransactions: provider.request is not writable')
+      return
+    }
+
+    // Deliberately not using this._original request to not intefere with the signature tracking's
+    // request modification
+    const request = provider.request.bind(provider)
+    provider.request = async ({ method, params }: RequestArguments) => {
+      console.log('transaction listener')
+      console.log(method)
+      console.log(params)
+      if (Array.isArray(params) && method === 'eth_sendTransaction') {
+        // _logTransactionSubmitted(provider, params[0] as Record<string, unknown>)
+      }
+      return request({ method, params })
+    }
+
+    return
+  }
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
     if (addresses.length > 0) {
