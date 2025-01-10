@@ -12,7 +12,7 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signature(params: { address: Address, signatureHash: string, message: string }): Promise<void>;
+  signature(params: { address: Address, signatureHash?: string, message?: string }): Promise<void>;
   transaction(params: { chainId: ChainID, transactionHash: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
@@ -133,7 +133,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async signature({ address, signatureHash, message }: { address: Address; signatureHash: string; message: string; }): Promise<void> {
+  async signature({ address, signatureHash, message }: { address: Address; signatureHash?: string; message?: string; }): Promise<void> {
     await this.trackEvent(Event.SIGNATURE, {
       address,
       signatureHash,
@@ -185,13 +185,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._provider = provider;
 
     // Register listeners for wallet events
-    console.log('Registering listeners')
     this.getAddress(); // TODO: currently this emits a connect event, but should it?
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     this.registerSignatureListener();
     this.registerTransactionListener();
-    console.log('Registered listeners')
   }
 
   private registerAddressChangedListener(): void {
@@ -213,9 +211,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListeners["chainChanged"] = listener;
   }
 
-  // TOFIX: signing a message does not trigger this
   private registerSignatureListener(): void {
-    console.log('registerSignatureListener')
     if (!this.provider) {
       console.error('_trackSigning: provider not found')
       return
@@ -229,31 +225,37 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Deliberately not using this._original request to not intefere with the transaction tracking's
     // request modification
     const request = this.provider.request.bind(this.provider)
-    this.provider.request = async ({ method, params }: RequestArguments) => {
+    this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       console.log('signature listener')
       console.log(method)
       console.log(params)
-      if (Array.isArray(params)) {
-        // if (['signTypedData_v4', 'eth_sign'].includes(method)) {
-        //   this.signature({
-        //     account: params[0],
-        //     message: params[1],
-        //   })
-        // }
-        if (method === 'personal_sign') {
-          // 
-          // this.signature({
-          //   message: params[0],
-          //   account: params[1],
-          // })
+      if (Array.isArray(params) && (['signTypedData_v4', 'personal_sign'].includes(method))) {
+        try {
+          const response = await request({ method, params }) as T
+          
+          if (method === 'signTypedData_v4') {
+            // TODO: test this
+            this.signature({
+              address: params[0] as Address,
+              signatureHash: response as string,
+            })
+          }
+          if (method === 'personal_sign') {
+            const message = Buffer.from(params[0] as string, 'hex').toString('utf8');
+            this.signature({
+              address: params[1] as Address,
+              signatureHash: response as string,
+              message
+            })
+          }
+          return response
+        } catch (error) {
+          throw error
         }
       }
       return request({ method, params })
     }
 
-    console.log(this.provider)
-    console.log(this.provider.request)
-    console.log('bound')
     return
   }    
 
