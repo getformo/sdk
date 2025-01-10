@@ -12,9 +12,9 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signatureStarted(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
+  signatureRequested(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
   signatureConfirmed(params: { chainId?: ChainID, address: Address, signatureHash: string, message: string }): Promise<void>;
-  transactionStarted(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
+  transactionBroadcasted(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
   transactionConfirmed(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
@@ -135,8 +135,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async signatureStarted({ chainId, address, message }: { chainId?: ChainID, address: Address; message: string; }): Promise<void> {
-    await this.trackEvent(Event.SIGNATURE_STARTED, {
+  async signatureRequested({ chainId, address, message }: { chainId?: ChainID, address: Address; message: string; }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE_REQUESTED, {
       chainId,
       address,
       message,
@@ -152,8 +152,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async transactionStarted({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION_STARTED, {
+  async transactionBroadcasted({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION_BROADCASTED, {
       chainId,
       address,
       transactionHash,
@@ -251,7 +251,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       if (Array.isArray(params) && (['eth_signTypedData_v4', 'personal_sign'].includes(method))) {
         if (method === 'eth_signTypedData_v4') {
-          this.signatureStarted({
+          this.signatureRequested({
             chainId: this.currentChainId,
             address: params[0] as Address,
             message: params[1] as string
@@ -259,7 +259,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
         if (method === 'personal_sign') {
           const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
-          this.signatureStarted({
+          this.signatureRequested({
             chainId: this.currentChainId,
             address: params[1] as Address,
             message
@@ -270,7 +270,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           const response = await request({ method, params }) as T
 
           if (method === 'eth_signTypedData_v4') {
-            this.signature({
+            this.signatureConfirmed({
               chainId: this.currentChainId,
               address: params[0] as Address,
               signatureHash: response as string,
@@ -280,7 +280,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           // https://docs.metamask.io/wallet/reference/json-rpc-methods/personal_sign/
           if (method === 'personal_sign') {
             const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
-            this.signature({
+            this.signatureConfirmed({
               chainId: this.currentChainId,
               address: params[1] as Address,
               signatureHash: response as string,
@@ -300,26 +300,25 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private registerTransactionListener(): void {
     console.log('registerTransactionListener')
-    const provider = this.provider
-    if (!provider) {
+    if (!this.provider) {
       console.error('_trackTransactions: provider not found')
       return
     }
 
-    if (Object.getOwnPropertyDescriptor(provider, 'request')?.writable === false) {
+    if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
       console.warn('_trackTransactions: provider.request is not writable')
       return
     }
 
-    const request = provider.request.bind(provider)
-    provider.request = async ({ method, params }: RequestArguments) => {
+    const request = this.provider.request.bind(this.provider)
+    this.provider.request = async ({ method, params }: RequestArguments) => {
       // TODO: detect transaction confirmation & receipt, handle nonce overrides
       console.log('transaction listener triggered')
       console.log(method)
       console.log(params) // [{data, from, to ,value}]
       if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
         const { data, from, to, value } = params[0] as { data: string; from: string; to: string; value: string };
-        this.transactionStarted({
+        this.transactionBroadcasted({
           chainId: this.currentChainId || await this.getCurrentChainId(),
           data,
           address: from,
@@ -329,7 +328,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         })
       }
 
-      // TODO: emit transaction confirmed event
+      // TODO: create listener for transaction confirmation
+      // TODO: handle transaction rejection
+
       return request({ method, params })
     }
 
