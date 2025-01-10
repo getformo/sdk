@@ -15,8 +15,6 @@ interface IFormoAnalytics {
   signatureRequested(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
   signatureConfirmed(params: { chainId?: ChainID, address: Address, signatureHash: string, message: string }): Promise<void>;
   transactionStarted(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;  
-  transactionBroadcasted(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
-  transactionConfirmed(params: { chainId: ChainID, address: Address, transactionHash?: string, data?: string, to?: string, value?: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -314,7 +312,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       console.error('_trackTransactions: provider not found')
       return
     }
-
     if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
       console.warn('_trackTransactions: provider.request is not writable')
       return
