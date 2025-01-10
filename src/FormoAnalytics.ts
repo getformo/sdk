@@ -216,14 +216,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       console.error('_trackSigning: provider not found')
       return
     }
-
     if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
       console.warn('_trackSigning: provider.request is not writable')
       return
     }
 
-    // Deliberately not using this._original request to not intefere with the transaction tracking's
-    // request modification
     const request = this.provider.request.bind(this.provider)
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       console.log('signature listener')
@@ -241,7 +238,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             })
           }
           if (method === 'personal_sign') {
-            const message = Buffer.from(params[0] as string, 'hex').toString('utf8');
+            const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
             this.signature({
               address: params[1] as Address,
               signatureHash: response as string,
