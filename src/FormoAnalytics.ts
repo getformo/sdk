@@ -5,19 +5,29 @@ import {
   Event,
 } from "./constants";
 import { H } from "highlight.run";
-import { ChainID, Address, EIP1193Provider, Options, Config, RequestArguments, RPCError } from "./types";
+import { ChainID, Address, EIP1193Provider, Options, Config, RequestArguments, RPCError, SignatureStatus, TransactionStatus } from "./types";
 
 interface IFormoAnalytics {
   page(): void;
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signatureRequested(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
-  signatureRejected(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
-  signatureConfirmed(params: { chainId?: ChainID, address: Address, signatureHash: string, message: string }): Promise<void>;
-  transactionStarted(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;  
-  transactionRejected(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;
-  transactionBroadcasted(params: { chainId: ChainID, address: Address, transactionHash: string, data?: string, to?: string, value?: string }): Promise<void>;
+  signature({ status, chainId, address, message, signatureHash }: { 
+    status: SignatureStatus, 
+    chainId?: ChainID, 
+    address: Address, 
+    message: string,
+    signatureHash?: string 
+  }): Promise<void>;
+  transaction({ status, chainId, address, data, to, value, transactionHash }: {
+    status: TransactionStatus,
+    chainId: ChainID,
+    address: Address,
+    data?: string,
+    to?: string,
+    value?: string,
+    transactionHash?: string
+  }): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -137,61 +147,41 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
-  async signatureRequested({ chainId, address, message }: { chainId?: ChainID, address: Address; message: string; }): Promise<void> {
-    await this.trackEvent(Event.SIGNATURE_REQUESTED, {
+  async signature({ status, chainId, address, message, signatureHash }: { 
+    status: SignatureStatus, 
+    chainId?: ChainID, 
+    address: Address, 
+    message: string,
+    signatureHash?: string 
+  }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE, {
+      status,
       chainId,
       address,
       message,
+      ...(signatureHash && { signatureHash })
     });
   }
 
-  async signatureRejected({ chainId, address, message }: { chainId?: ChainID, address: Address; message: string; }): Promise<void> {
-    await this.trackEvent(Event.SIGNATURE_REJECTED, {
-      chainId,
-      address,
-      message,
-    });
-  }
-
-  async signatureConfirmed({ chainId, address, signatureHash, message }: { chainId?: ChainID, address: Address; signatureHash: string; message: string; }): Promise<void> {
-    await this.trackEvent(Event.SIGNATURE_CONFIRMED, {
-      chainId,
-      address,
-      signatureHash,
-      message,
-    });
-  }
-
-  async transactionStarted({ chainId, address, data, to, value }: { chainId: ChainID; address: Address; data?: string; to?: string; value?: string; }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION_STARTED, {
+  async transaction({ status, chainId, address, data, to, value, transactionHash }: {
+    status: TransactionStatus,
+    chainId: ChainID,
+    address: Address,
+    data?: string,
+    to?: string,
+    value?: string,
+    transactionHash?: string
+  }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION, {
+      status,
       chainId,
       address,
       data,
       to,
       value,
+      ...(transactionHash && { transactionHash })
     });
   }
-
-  async transactionRejected({ chainId, address, data, to, value }: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION_REJECTED, {
-      chainId,
-      address,
-      data,
-      to,
-      value,
-    });
-  }
-
-  async transactionBroadcasted({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION_BROADCASTED, {
-      chainId,
-      address,
-      transactionHash,
-      data,
-      to,
-      value,
-    });
-  }  
 
   /**
    * Emits a custom event with custom data.
@@ -202,6 +192,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   async track(action: string, payload: Record<string, any>): Promise<void> {
     await this.trackEvent(action, payload);
   }
+
 
   /*
     SDK tracking and event listener functions
@@ -270,23 +261,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
         // Emit signature request event
-        this.signatureRequested(this.buildSignatureEventPayload(method, params));
+        this.signature({ status: SignatureStatus.REQUESTED, ...this.buildSignatureEventPayload(method, params) });
 
         try {
           const response = await request({ method, params }) as T;
           if (response) {
             // Emit signature confirmed event
-            this.signatureConfirmed({
-              ...this.buildSignatureEventPayload(method, params),
-              signatureHash: response as string
-            });
+            this.signature({ status: SignatureStatus.CONFIRMED, ...this.buildSignatureEventPayload(method, params, response) });
           }
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
           if (rpcError && rpcError?.code === 4001) {
             // Emit signature rejected event
-            this.signatureRejected(this.buildSignatureEventPayload(method, params));
+            this.signature({ status: SignatureStatus.REJECTED, ...this.buildSignatureEventPayload(method, params) });
           }
           throw error;
         }
@@ -310,17 +298,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
         // Track transaction start
         const payload = await this.buildTransactionEventPayload(params);
-        this.transactionStarted(payload);
+        this.transaction({ status: TransactionStatus.STARTED, ...payload });
 
         try {
           // Wait for the transaction hash
           const transactionHash = await request({ method, params }) as string;
           
           // Track transaction broadcast
-          this.transactionBroadcasted({
-            ...payload,
-            transactionHash
-          });
+          this.transaction({ status: TransactionStatus.BROADCASTED, ...payload, transactionHash });
 
           return;
         } catch (error) {
@@ -329,7 +314,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           const rpcError = error as RPCError;
           if (rpcError && rpcError?.code === 4001) {
             // Emit transaction rejected event
-            this.transactionRejected(payload);
+            this.transaction({ status: TransactionStatus.REJECTED, ...payload });
           }
           throw error;
         }
