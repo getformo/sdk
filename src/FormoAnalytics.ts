@@ -13,9 +13,15 @@ interface IFormoAnalytics {
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
   signatureRequested(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
+  signatureRejected(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
   signatureConfirmed(params: { chainId?: ChainID, address: Address, signatureHash: string, message: string }): Promise<void>;
   transactionStarted(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;  
   track(action: string, payload: Record<string, any>): Promise<void>;
+}
+
+interface RPCError extends Error {
+  code: number;
+  data?: unknown;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -142,6 +148,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+  async signatureRejected({ chainId, address, message }: { chainId?: ChainID, address: Address; message: string; }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE_REJECTED, {
+      chainId,
+      address,
+      message,
+    });
+  }
+
   async signatureConfirmed({ chainId, address, signatureHash, message }: { chainId?: ChainID, address: Address; signatureHash: string; message: string; }): Promise<void> {
     await this.trackEvent(Event.SIGNATURE_CONFIRMED, {
       chainId,
@@ -171,17 +185,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       value,
     });
   }  
-
-  async transactionConfirmed({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION_CONFIRMED, {
-      chainId,
-      address,
-      transactionHash,
-      data,
-      to,
-      value,
-    });
-  }
 
   /**
    * Emits a custom event with custom data.
@@ -258,52 +261,31 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const request = this.provider.request.bind(this.provider)
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
-      if (Array.isArray(params) && (['eth_signTypedData_v4', 'personal_sign'].includes(method))) {
-        if (method === 'eth_signTypedData_v4') {
-          this.signatureRequested({
-            chainId: this.currentChainId,
-            address: params[0] as Address,
-            message: params[1] as string
-          })
-        }
-        if (method === 'personal_sign') {
-          const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
-          this.signatureRequested({
-            chainId: this.currentChainId,
-            address: params[1] as Address,
-            message
-          })
-        }
+      if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
+        // Emit signature request event
+        this.signatureRequested(this.getSignatureEventPayload(method, params));
 
         try {
-          const response = await request({ method, params }) as T
-          // https://docs.metamask.io/wallet/reference/json-rpc-methods/eth_signtypeddata_v4/
-          if (method === 'eth_signTypedData_v4') {
+          const response = await request({ method, params }) as T;
+          if (response) {
+            // Emit signature confirmed event
             this.signatureConfirmed({
-              chainId: this.currentChainId,
-              address: params[0] as Address,
-              signatureHash: response as string,
-              message: params[1] as string
-            })
+              ...this.getSignatureEventPayload(method, params),
+              signatureHash: response as string
+            });
           }
-          // https://docs.metamask.io/wallet/reference/json-rpc-methods/personal_sign/
-          if (method === 'personal_sign') {
-            const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
-            this.signatureConfirmed({
-              chainId: this.currentChainId,
-              address: params[1] as Address,
-              signatureHash: response as string,
-              message
-            })
-          }
-          return response
+          return response;
         } catch (error) {
-          throw error
+          const rpcError = error as RPCError;
+          if (rpcError && rpcError?.code === 4001) {
+            // Emit signature rejected event
+            this.signatureRejected(this.getSignatureEventPayload(method, params));
+          }
+          throw error;
         }
       }
-      return request({ method, params })
+      return request({ method, params });
     }
-
     return
   }    
 
@@ -316,11 +298,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       console.warn('_trackTransactions: provider.request is not writable')
       return
     }
-
     const request = this.provider.request.bind(this.provider)
-    this.provider.request = async ({ method, params }: RequestArguments) => {
+    this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
         const { data, from, to, value } = params[0] as { data: string; from: string; to: string; value: string };
+
+        // Track transaction start
         this.transactionStarted({
           chainId: this.currentChainId || await this.getCurrentChainId(),
           data,
@@ -328,10 +311,34 @@ export class FormoAnalytics implements IFormoAnalytics {
           to,
           value,
         })
-      }
 
-      // TODO: create listener for transaction broadcast and confirmation
-      // TODO: create listener for transaction rejection
+        try {
+          // Wait for the transaction hash
+          // TODO: handle this in a non-blocking way
+          const transactionHash = await request({ method, params }) as string;
+          
+          // Track transaction broadcast
+          this.transactionBroadcasted({
+            chainId: this.currentChainId || await this.getCurrentChainId(),
+            data,
+            address: from,
+            to,
+            value,
+            transactionHash
+          });
+
+          // TODO: handle transaction confirmed by getting transaction receipt in a non-blocking way
+          // https://github.com/wevm/viem/blob/7235c49543637b4734e12f9a53392b2b32914264/src/actions/public/getTransactionReceipt.ts#L16
+
+          return;
+        } catch (error) {
+          // https://docs.metamask.io/wallet/reference/provider-api/#errors
+          console.log('transaction listener catch')
+          console.log(error)
+          // TODO: Handle transaction rejection
+          throw error;
+        }
+      }
 
       return request({ method, params })
     }
@@ -591,4 +598,26 @@ export class FormoAnalytics implements IFormoAnalytics {
       ...eventSpecificPayload,
     };
   }  
+
+  private getSignatureEventPayload(method: string, params: unknown[], response?: unknown) {
+    const basePayload = {
+      chainId: this.currentChainId,
+      address: method === 'personal_sign' ? params[1] as Address : params[0] as Address,
+    };
+
+    if (method === 'personal_sign') {
+      const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
+      return {
+        ...basePayload,
+        message,
+        ...(response ? { signatureHash: response as string } : {}),
+      };
+    }
+
+    return {
+      ...basePayload,
+      message: params[1] as string,
+      ...(response ? { signatureHash: response as string } : {}),
+    };
+  }
 }
