@@ -16,6 +16,8 @@ interface IFormoAnalytics {
   signatureRejected(params: { chainId?: ChainID, address: Address, message: string }): Promise<void>;
   signatureConfirmed(params: { chainId?: ChainID, address: Address, signatureHash: string, message: string }): Promise<void>;
   transactionStarted(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;  
+  transactionRejected(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;
+  transactionBroadcasted(params: { chainId: ChainID, address: Address, transactionHash: string, data?: string, to?: string, value?: string }): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -175,6 +177,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+  async transactionRejected({ chainId, address, data, to, value }: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION_REJECTED, {
+      chainId,
+      address,
+      data,
+      to,
+      value,
+    });
+  }
+
   async transactionBroadcasted({ chainId, address, transactionHash, data, to, value }: { chainId: ChainID; address: Address; transactionHash: string; data?: string; to?: string; value?: string; }): Promise<void> {
     await this.trackEvent(Event.TRANSACTION_BROADCASTED, {
       chainId,
@@ -301,41 +313,29 @@ export class FormoAnalytics implements IFormoAnalytics {
     const request = this.provider.request.bind(this.provider)
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
-        const { data, from, to, value } = params[0] as { data: string; from: string; to: string; value: string };
-
         // Track transaction start
-        this.transactionStarted({
-          chainId: this.currentChainId || await this.getCurrentChainId(),
-          data,
-          address: from,
-          to,
-          value,
-        })
+        const payload = await this.getTransactionEventPayload(params);
+        this.transactionStarted(payload);
 
         try {
           // Wait for the transaction hash
-          // TODO: handle this in a non-blocking way
           const transactionHash = await request({ method, params }) as string;
           
           // Track transaction broadcast
           this.transactionBroadcasted({
-            chainId: this.currentChainId || await this.getCurrentChainId(),
-            data,
-            address: from,
-            to,
-            value,
+            ...payload,
             transactionHash
           });
 
-          // TODO: handle transaction confirmed by getting transaction receipt in a non-blocking way
-          // https://github.com/wevm/viem/blob/7235c49543637b4734e12f9a53392b2b32914264/src/actions/public/getTransactionReceipt.ts#L16
-
           return;
         } catch (error) {
-          // https://docs.metamask.io/wallet/reference/provider-api/#errors
           console.log('transaction listener catch')
           console.log(error)
-          // TODO: Handle transaction rejection
+          const rpcError = error as RPCError;
+          if (rpcError && rpcError?.code === 4001) {
+            // Emit transaction rejected event
+            this.transactionRejected(payload);
+          }
           throw error;
         }
       }
@@ -345,7 +345,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     return
   }
-
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
     if (addresses.length > 0) {
@@ -620,4 +619,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       ...(response ? { signatureHash: response as string } : {}),
     };
   }
+
+  private async getTransactionEventPayload(params: unknown[]) {
+    const { data, from, to, value } = (params[0] as { data: string; from: string; to: string; value: string });
+    return {
+      chainId: this.currentChainId || await this.getCurrentChainId(),
+      data,
+      address: from,
+      to,
+      value,
+    };
+  }  
 }
