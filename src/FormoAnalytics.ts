@@ -277,7 +277,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         try {
           const response = await request({ method, params }) as T
-
+          // https://docs.metamask.io/wallet/reference/json-rpc-methods/eth_signtypeddata_v4/
           if (method === 'eth_signTypedData_v4') {
             this.signatureConfirmed({
               chainId: this.currentChainId,
