@@ -437,7 +437,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
       if (response.status >= 200 && response.status < 300) {
-        console.log("Event sent successfully:", action);
+        console.log(`Event sent successfully: ${action} ${payload.status}`);
       } else {
         throw new Error(`Failed with status: ${response.status}`);
       }
