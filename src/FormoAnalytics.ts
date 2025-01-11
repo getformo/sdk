@@ -5,7 +5,7 @@ import {
   Event,
 } from "./constants";
 import { H } from "highlight.run";
-import { ChainID, Address, EIP1193Provider, Options, Config, RequestArguments } from "./types";
+import { ChainID, Address, EIP1193Provider, Options, Config, RequestArguments, RPCError } from "./types";
 
 interface IFormoAnalytics {
   page(): void;
@@ -19,11 +19,6 @@ interface IFormoAnalytics {
   transactionRejected(params: { chainId: ChainID, address: Address, data?: string, to?: string, value?: string }): Promise<void>;
   transactionBroadcasted(params: { chainId: ChainID, address: Address, transactionHash: string, data?: string, to?: string, value?: string }): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
-}
-
-interface RPCError extends Error {
-  code: number;
-  data?: unknown;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -275,14 +270,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
         // Emit signature request event
-        this.signatureRequested(this.getSignatureEventPayload(method, params));
+        this.signatureRequested(this.buildSignatureEventPayload(method, params));
 
         try {
           const response = await request({ method, params }) as T;
           if (response) {
             // Emit signature confirmed event
             this.signatureConfirmed({
-              ...this.getSignatureEventPayload(method, params),
+              ...this.buildSignatureEventPayload(method, params),
               signatureHash: response as string
             });
           }
@@ -291,7 +286,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           const rpcError = error as RPCError;
           if (rpcError && rpcError?.code === 4001) {
             // Emit signature rejected event
-            this.signatureRejected(this.getSignatureEventPayload(method, params));
+            this.signatureRejected(this.buildSignatureEventPayload(method, params));
           }
           throw error;
         }
@@ -314,7 +309,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
       if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
         // Track transaction start
-        const payload = await this.getTransactionEventPayload(params);
+        const payload = await this.buildTransactionEventPayload(params);
         this.transactionStarted(payload);
 
         try {
@@ -598,7 +593,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }  
 
-  private getSignatureEventPayload(method: string, params: unknown[], response?: unknown) {
+  private buildSignatureEventPayload(method: string, params: unknown[], response?: unknown) {
     const basePayload = {
       chainId: this.currentChainId,
       address: method === 'personal_sign' ? params[1] as Address : params[0] as Address,
@@ -620,7 +615,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  private async getTransactionEventPayload(params: unknown[]) {
+  private async buildTransactionEventPayload(params: unknown[]) {
     const { data, from, to, value } = (params[0] as { data: string; from: string; to: string; value: string });
     return {
       chainId: this.currentChainId || await this.getCurrentChainId(),
