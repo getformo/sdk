@@ -195,8 +195,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   public async identify(params?: { address: Address }): Promise<void> {
+    const address = params?.address || await this.getAddress()
     await this.trackEvent(Event.IDENTIFY, {
-      address: params?.address || this.getAddress(),
+      address,
+      // TODO: detect wallet type https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call
     });
   }
 
@@ -452,7 +454,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
       if (response.status >= 200 && response.status < 300) {
-        console.log(`Event sent successfully: ${action} ${payload.status}`);
+        console.log(`Event sent successfully: ${this.getActionDescriptor(action, payload)}`);
       } else {
         throw new Error(`Failed with status: ${response.status}`);
       }
@@ -474,6 +476,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }    
 
   private async getAddress(): Promise<Address | null> {
+    if (this.currentConnectedAddress) return this.currentConnectedAddress;
     if (!this.provider) {
       console.log("FormoAnalytics::getAddress: the provider is not set");
       return null;
@@ -622,5 +625,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       to,
       value,
     };
-  }  
+  }
+
+  private getActionDescriptor(action: string, payload: any): string {
+    return `${action}${payload.status ? ` ${payload.status}` : ''}`;
+  }
 }
