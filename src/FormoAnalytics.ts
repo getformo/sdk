@@ -28,6 +28,7 @@ interface IFormoAnalytics {
     value?: string,
     transactionHash?: string
   }): Promise<void>;
+  identify(params: { address: Address }): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -189,6 +190,17 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Emits a identify event with current wallet address.
+   * @param {Address} params.address
+   * @returns {Promise<void>}
+   */
+  public async identify(params?: { address: Address }): Promise<void> {
+    await this.trackEvent(Event.IDENTIFY, {
+      address: params?.address || this.getAddress(),
+    });
+  }
+
+  /**
    * Emits a custom event with custom data.
    * @param {string} action
    * @param {Record<string, any>} payload
@@ -230,13 +242,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.registerChainChangedListener();
     this.registerSignatureListener();
     this.registerTransactionListener();
-  }
-
-  private identify(): void {
-    const currentAddress = this.getAddress();
-    this.trackEvent(Event.IDENTIFY, {
-      address: this.currentConnectedAddress,
-    });
   }
 
   private registerAddressChangedListener(): void {
