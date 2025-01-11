@@ -64,7 +64,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<FormoAnalytics> {
     // May be needed for delayed loading
     // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
-    return new FormoAnalytics(apiKey, options);
+    const analytics = new FormoAnalytics(apiKey, options);
+
+    // Identify current user on init (TODO: make this toggleable)
+    analytics.identify();
+    
+    return analytics;
   }
 
   /*
@@ -220,12 +225,18 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this._provider = provider;
 
-    // Register listeners for wallet events
-    this.getAddress(); // TODO: this should emit a detect event instead of connect event (wallet fingerprinting)
+    // Register listeners for web3 provider events
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     this.registerSignatureListener();
     this.registerTransactionListener();
+  }
+
+  private identify(): void {
+    const currentAddress = this.getAddress();
+    this.trackEvent(Event.IDENTIFY, {
+      address: this.currentConnectedAddress,
+    });
   }
 
   private registerAddressChangedListener(): void {
@@ -371,7 +382,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         return Promise.resolve();
       }
 
-      // Attempt to fetch and store the connected address
       const address = await this.getAddress();
       if (!address) {
         console.log(
@@ -380,7 +390,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return Promise.resolve();
       }
 
-      this.currentConnectedAddress = address[0];
+      this.currentConnectedAddress = address;
     }
 
     // Proceed only if the address exists
@@ -467,11 +477,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts();
       if (accounts && accounts.length > 0) {
-        const address = accounts[0];
+        return accounts[0];
         // TODO: how to handle multiple addresses? Should we emit a connect event here? Since the user has not manually connected
         // https://linear.app/getformo/issue/P-691/sdk-detect-multiple-wallets-using-eip6963
-        this.onAddressConnected(address); 
-        return address;
       }
     } catch (err) {
       console.log("Failed to fetch accounts from provider:", err);
