@@ -98,7 +98,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     console.log(this._providers)
     
     // Check accounts for initial providers
-    for (const provider of this._providers) {
+    for (const p of this._providers) {
+      const providerName = p.provider.info.name
       // Interface detailing the structure of provider information and its Ethereum provider.
       // interface EIP6963ProviderDetail {
       //   info: EIP6963ProviderInfo; // The provider's info
@@ -113,16 +114,40 @@ export class FormoAnalytics implements IFormoAnalytics {
       //   icon: string; // URL to the wallet's icon
       // }
 
+      // IDEA: attach listeners to all providers to detect which one is connected, and then track that provider
+      // Alternatively: attach listeners to all providers
+      const request = p.provider.request.bind(p.provider)
+      p.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
+        console.log(`request ${p.provider.info.name}`)
+        console.log(method)
+        console.log(params)
+        // if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
+        //   // Emit signature request event
+        //   this.signature({ status: SignatureStatus.REQUESTED, ...this.buildSignatureEventPayload(method, params) });
+
+        //   try {
+        //     const response = await request({ method, params }) as T;
+        //     if (response) {
+        //       // Emit signature confirmed event
+        //       this.signature({ status: SignatureStatus.CONFIRMED, ...this.buildSignatureEventPayload(method, params, response) });
+        //     }
+        //     return response;
+        //   } catch (error) {
+        //     throw error;
+        //   }
+        // }
+        return request({ method, params });
+      }
+
       try {
-        const accounts = await this.getAccounts(provider.provider);
+        const accounts = await this.getAccounts(p.provider);
         if (accounts && accounts.length > 0) {
-          const providerName = provider.info.name
           console.log(`Initial accounts for ${providerName}:`, accounts);
           // TODO: emit identify event for each detected provider address and providerName
           // this.identify({ address: accounts[0] });
         }
       } catch (err) {
-        console.error(`Failed to get initial accounts for ${provider.info.name}:`, err);
+        console.error(`Failed to get initial accounts for ${providerName}:`, err);
       }
     }
 
