@@ -67,34 +67,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     // TODO: replace with eip6963
     analytics.detectProviders() // providers have info and provider fields
 
-    console.log('listing mipd providers')
-    console.log(analytics._providers)    
-
-    // Interface detailing the structure of provider information and its Ethereum provider.
-    // interface EIP6963ProviderDetail {
-    //   info: EIP6963ProviderInfo; // The provider's info
-    //   provider: EIP1193Provider; // The EIP-1193 compatible provider
-    // }
-
-    // Interface for provider information following EIP-6963.
-    // interface EIP6963ProviderInfo {
-    //   walletId: string; // Unique identifier for the wallet e.g io.metamask, io.metamask.flask 
-    //   uuid: string; // Globally unique ID to differentiate between provider sessions for the lifetime of the page
-    //   name: string; // Human-readable name of the wallet
-    //   icon: string; // URL to the wallet's icon
-    // }
-
-    // TOFIX: below doesn't work for multiple wallets
+    // TOFIX: below doesn't work for browsers with multiple wallets
     // TODO: how to know which provider is connected?
-    // A: check provider.isStatus field below
-    // interface EIP1193Provider {
-    //   isStatus?: boolean; // Optional: Indicates the status of the provider
-    //   host?: string; // Optional: Host URL of the Ethereum node
-    //   path?: string; // Optional: Path to a specific endpoint or service on the host
-    //   sendAsync?: (request: { method: string, params?: Array<unknown> }, callback: (error: Error | null, response: unknown) => void) => void; // For sending asynchronous requests
-    //   send?: (request: { method: string, params?: Array<unknown> }, callback: (error: Error | null, response: unknown) => void) => void; // For sending synchronous requests
-    //   request: (request: { method: string, params?: Array<unknown> }) => Promise<unknown>; // Standard method for sending requests per EIP-1193
-    // }
+    // possible solution is to bind request eth_requestAccounts calls
+
+    // TODO: what should happen when we switch providers?
+    // Note: we need to only do the step below when the user has connected a wallet?
+    // We may need to add a listener for when the user changes wallets 
+    // which adds new listeners and removes old listeners
 
     const provider =
       window?.ethereum || options?.provider;
@@ -102,7 +82,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     console.log(provider)
     if (provider) {
       analytics.trackProvider(provider);
-      // TODO: what should happen when we switch providers? Will we need to delete the old listeners?
     }
 
     // Identify current user on init (TODO: make this toggleable)
@@ -111,35 +90,43 @@ export class FormoAnalytics implements IFormoAnalytics {
     return analytics;
   }
 
-  private async detectProviders(): Promise<void> {
-    // The MIPD Store stores the Providers that have been emitted by a Wallet (or other source),
-    // and provides a way to subscribe to the store and retrieve the Providers.
-    
-    // initialize mipd
-    console.log('detectProviders')
-    this._mipd = createStore();
-
-    // subscribe to mipd
-    this._mipd.subscribe((providerDetails: EIP6963ProviderDetail[]) => {
-      console.log('MIPD providers updated:', providerDetails);
-      this._providers = providerDetails;
-    });
-
-    // Get initial providers
-    this._providers = this._mipd.getProviders();
+  private async detectProviders(): Promise<EIP6963ProviderDetail[]> {
+    const store = createStore();
+    this._providers = [...store.getProviders()];
+    store.destroy();
+    console.log('this._providers')
+    console.log(this._providers)
     
     // Check accounts for initial providers
     for (const provider of this._providers) {
+      // Interface detailing the structure of provider information and its Ethereum provider.
+      // interface EIP6963ProviderDetail {
+      //   info: EIP6963ProviderInfo; // The provider's info
+      //   provider: EIP1193Provider; // The EIP-1193 compatible provider
+      // }
+
+      // Interface for provider information following EIP-6963.
+      // interface EIP6963ProviderInfo {
+      //   walletId: string; // Unique identifier for the wallet e.g io.metamask, io.metamask.flask 
+      //   uuid: string; // Globally unique ID to differentiate between provider sessions for the lifetime of the page
+      //   name: string; // Human-readable name of the wallet
+      //   icon: string; // URL to the wallet's icon
+      // }
+
       try {
         const accounts = await this.getAccounts(provider.provider);
-        const providerName = provider.info.name
-        console.log(`Initial accounts for ${providerName}:`, accounts);
-
-        // TODO: emit identify event for each detected provider address and providerName
+        if (accounts && accounts.length > 0) {
+          const providerName = provider.info.name
+          console.log(`Initial accounts for ${providerName}:`, accounts);
+          // TODO: emit identify event for each detected provider address and providerName
+          // this.identify({ address: accounts[0] });
+        }
       } catch (err) {
         console.error(`Failed to get initial accounts for ${provider.info.name}:`, err);
       }
     }
+
+    return this._providers;
   }
 
   /*
