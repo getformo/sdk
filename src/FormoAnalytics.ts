@@ -1,4 +1,5 @@
 import axios from "axios";
+import { createStore, EIP6963ProviderDetail } from 'mipd';
 import {
   COUNTRY_LIST,
   EVENTS_API_URL,
@@ -38,6 +39,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     string,
     (...args: unknown[]) => void
   > = {};
+  private _mipd: any;
+  private _providers: EIP6963ProviderDetail[] = [];
 
   config: Config;
   currentChainId?: ChainID;
@@ -49,28 +52,46 @@ export class FormoAnalytics implements IFormoAnalytics {
   ) {
     this.config = {
       apiKey: apiKey,
+      options: options
     };
-
-    // TODO: replace with eip6963
-    const provider =
-      window?.ethereum || window.web3?.currentProvider || options?.provider;
-    if (provider) {
-      this.trackProvider(provider);
-    }
   }
 
   static async init(
     apiKey: string,
     options?: Options
   ): Promise<FormoAnalytics> {
-    // May be needed for delayed loading
+    // TODO: support lazy loading
     // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
     const analytics = new FormoAnalytics(apiKey, options);
+
+    // TODO: replace with eip6963
+    analytics.detectProviders()
+
+    const provider =
+      window?.ethereum || window.web3?.currentProvider || options?.provider;
+    if (provider) {
+      analytics.trackProvider(provider);
+      // TODO: what should happen when we switch providers? Will we need to delete the old listeners?
+    }
 
     // Identify current user on init (TODO: make this toggleable)
     analytics.identify();
     
     return analytics;
+  }
+
+  private detectProviders(): void {
+    // The MIPD Store stores the Providers that have been emitted by a Wallet (or other source),
+    // and provides a way to subscribe to the store and retrieve the Providers.
+    console.log('detectProviders')
+    this._mipd = createStore();
+    console.log(this._mipd)
+    this._mipd.subscribe((providerDetails: EIP6963ProviderDetail[]) => {
+      console.log('MIPD providers updated:', providerDetails);
+      this._providers = providerDetails;
+    });
+    this._providers = this._mipd.getProviders();
+    console.log(this._providers)
   }
 
   /*

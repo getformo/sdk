@@ -19,4 +19,5 @@ export interface FormoAnalyticsProviderProps {
 
 export interface Config {
   apiKey: string;
+  options?: Options;
 }
