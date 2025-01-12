@@ -65,7 +65,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const analytics = new FormoAnalytics(apiKey, options);
 
     // TODO: replace with eip6963
-    analytics.detectProviders()
+    analytics.detectProviders() // providers have info and provider fields
 
     const provider =
       window?.ethereum || window.web3?.currentProvider || options?.provider;
@@ -80,18 +80,32 @@ export class FormoAnalytics implements IFormoAnalytics {
     return analytics;
   }
 
-  private detectProviders(): void {
+  private async detectProviders(): Promise<void> {
     // The MIPD Store stores the Providers that have been emitted by a Wallet (or other source),
     // and provides a way to subscribe to the store and retrieve the Providers.
+    
+    // initialize mipd
     console.log('detectProviders')
     this._mipd = createStore();
-    console.log(this._mipd)
+
+    // subscribe to mipd
     this._mipd.subscribe((providerDetails: EIP6963ProviderDetail[]) => {
       console.log('MIPD providers updated:', providerDetails);
       this._providers = providerDetails;
     });
+
+    // Get initial providers
     this._providers = this._mipd.getProviders();
-    console.log(this._providers)
+    
+    // Check accounts for initial providers
+    for (const provider of this._providers) {
+      try {
+        const accounts = await this.getAccounts(provider.provider);
+        console.log(`Initial accounts for ${provider.info.name}:`, accounts);
+      } catch (err) {
+        console.error(`Failed to get initial accounts for ${provider.info.name}:`, err);
+      }
+    }
   }
 
   /*
@@ -496,19 +510,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._provider;
   }    
 
-  private async getAddress(): Promise<Address | null> {
-    if (this.currentConnectedAddress) return this.currentConnectedAddress;
-    if (!this.provider) {
+  private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
+    const p = provider || this.provider;
+    if (!p) {
       console.log("FormoAnalytics::getAddress: the provider is not set");
       return null;
     }
 
     try {
-      const accounts = await this.getAccounts();
+      const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
         return accounts[0];
-        // TODO: how to handle multiple addresses? Should we emit a connect event here? Since the user has not manually connected
-        // https://linear.app/getformo/issue/P-691/sdk-detect-multiple-wallets-using-eip6963
+        // TODO: how to handle multiple addresses?
       }
     } catch (err) {
       console.log("Failed to fetch accounts from provider:", err);
@@ -517,9 +530,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     return null;
   }
 
-  private async getAccounts(): Promise<Address[] | null> {
+  private async getAccounts(provider?: EIP1193Provider): Promise<Address[] | null> {
+    const p = provider || this.provider;
     try {
-      const res: string[] | null | undefined = await this.provider?.request({
+      const res: string[] | null | undefined = await p?.request({
         method: "eth_accounts",
       });
       if (!res || res.length === 0) {
