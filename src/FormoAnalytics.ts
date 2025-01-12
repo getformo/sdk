@@ -67,8 +67,39 @@ export class FormoAnalytics implements IFormoAnalytics {
     // TODO: replace with eip6963
     analytics.detectProviders() // providers have info and provider fields
 
+    console.log('listing mipd providers')
+    console.log(analytics._providers)    
+
+    // Interface detailing the structure of provider information and its Ethereum provider.
+    // interface EIP6963ProviderDetail {
+    //   info: EIP6963ProviderInfo; // The provider's info
+    //   provider: EIP1193Provider; // The EIP-1193 compatible provider
+    // }
+
+    // Interface for provider information following EIP-6963.
+    // interface EIP6963ProviderInfo {
+    //   walletId: string; // Unique identifier for the wallet e.g io.metamask, io.metamask.flask 
+    //   uuid: string; // Globally unique ID to differentiate between provider sessions for the lifetime of the page
+    //   name: string; // Human-readable name of the wallet
+    //   icon: string; // URL to the wallet's icon
+    // }
+
+    // TOFIX: below doesn't work for multiple wallets
+    // TODO: how to know which provider is connected?
+    // A: check provider.isStatus field below
+    // interface EIP1193Provider {
+    //   isStatus?: boolean; // Optional: Indicates the status of the provider
+    //   host?: string; // Optional: Host URL of the Ethereum node
+    //   path?: string; // Optional: Path to a specific endpoint or service on the host
+    //   sendAsync?: (request: { method: string, params?: Array<unknown> }, callback: (error: Error | null, response: unknown) => void) => void; // For sending asynchronous requests
+    //   send?: (request: { method: string, params?: Array<unknown> }, callback: (error: Error | null, response: unknown) => void) => void; // For sending synchronous requests
+    //   request: (request: { method: string, params?: Array<unknown> }) => Promise<unknown>; // Standard method for sending requests per EIP-1193
+    // }
+
     const provider =
-      window?.ethereum || window.web3?.currentProvider || options?.provider;
+      window?.ethereum || options?.provider;
+    console.log('provider')
+    console.log(provider)
     if (provider) {
       analytics.trackProvider(provider);
       // TODO: what should happen when we switch providers? Will we need to delete the old listeners?
@@ -101,7 +132,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     for (const provider of this._providers) {
       try {
         const accounts = await this.getAccounts(provider.provider);
-        console.log(`Initial accounts for ${provider.info.name}:`, accounts);
+        const providerName = provider.info.name
+        console.log(`Initial accounts for ${providerName}:`, accounts);
+
+        // TODO: emit identify event for each detected provider address and providerName
       } catch (err) {
         console.error(`Failed to get initial accounts for ${provider.info.name}:`, err);
       }
@@ -233,7 +267,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const address = params?.address || await this.getAddress()
     await this.trackEvent(Event.IDENTIFY, {
       address,
-      // TODO: detect wallet type https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call
+      // TODO: detect provider name https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call
     });
   }
 
