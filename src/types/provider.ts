@@ -10,3 +10,8 @@ export interface EIP1193Provider extends EventEmitter {
   on(eventName: string | symbol, listener: (...args: unknown[]) => void): this
   removeListener(eventName: string | symbol, listener: (...args: unknown[]) => void): this
 }
+
+export interface RPCError extends Error {
+  code: number;
+  data?: unknown;
+}

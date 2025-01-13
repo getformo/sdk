@@ -1,4 +1,4 @@
-import { EIP1193Provider } from "./wallet";
+import { EIP1193Provider } from "./provider";
 
 // Decimal chain ID
 export type ChainID = number

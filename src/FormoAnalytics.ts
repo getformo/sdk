@@ -5,14 +5,30 @@ import {
   Event,
 } from "./constants";
 import { H } from "highlight.run";
-import { ChainID, Address, EIP1193Provider, Options, Config } from "./types";
+import { ChainID, Address, EIP1193Provider, Options, Config, RequestArguments, RPCError, SignatureStatus, TransactionStatus } from "./types";
 
 interface IFormoAnalytics {
   page(): void;
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  track(eventName: string, eventData: Record<string, any>): Promise<void>;
+  signature({ status, chainId, address, message, signatureHash }: { 
+    status: SignatureStatus, 
+    chainId?: ChainID, 
+    address: Address, 
+    message: string,
+    signatureHash?: string 
+  }): Promise<void>;
+  transaction({ status, chainId, address, data, to, value, transactionHash }: {
+    status: TransactionStatus,
+    chainId: ChainID,
+    address: Address,
+    data?: string,
+    to?: string,
+    value?: string,
+    transactionHash?: string
+  }): Promise<void>;
+  track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -34,6 +50,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       apiKey: apiKey,
     };
 
+    // TODO: replace with eip6963
     const provider =
       window?.ethereum || window.web3?.currentProvider || options?.provider;
     if (provider) {
@@ -130,15 +147,52 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+  async signature({ status, chainId, address, message, signatureHash }: { 
+    status: SignatureStatus, 
+    chainId?: ChainID, 
+    address: Address, 
+    message: string,
+    signatureHash?: string 
+  }): Promise<void> {
+    await this.trackEvent(Event.SIGNATURE, {
+      status,
+      chainId,
+      address,
+      message,
+      ...(signatureHash && { signatureHash })
+    });
+  }
+
+  async transaction({ status, chainId, address, data, to, value, transactionHash }: {
+    status: TransactionStatus,
+    chainId: ChainID,
+    address: Address,
+    data?: string,
+    to?: string,
+    value?: string,
+    transactionHash?: string
+  }): Promise<void> {
+    await this.trackEvent(Event.TRANSACTION, {
+      status,
+      chainId,
+      address,
+      data,
+      to,
+      value,
+      ...(transactionHash && { transactionHash })
+    });
+  }
+
   /**
    * Emits a custom event with custom data.
-   * @param {string} eventName
-   * @param {Record<string, any>} eventData
+   * @param {string} action
+   * @param {Record<string, any>} payload
    * @returns {Promise<void>}
    */
-  async track(eventName: string, eventData: Record<string, any>): Promise<void> {
-    await this.trackEvent(eventName, eventData);
+  async track(action: string, payload: Record<string, any>): Promise<void> {
+    await this.trackEvent(action, payload);
   }
+
 
   /*
     SDK tracking and event listener functions
@@ -154,24 +208,24 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentConnectedAddress = undefined;
 
     if (this._provider) {
-      const eventNames = Object.keys(this._providerListeners);
-      for (const eventName of eventNames) {
+      const actions = Object.keys(this._providerListeners);
+      for (const action of actions) {
         this._provider.removeListener(
-          eventName,
-          this._providerListeners[eventName]
+          action,
+          this._providerListeners[action]
         );
-        delete this._providerListeners[eventName];
+        delete this._providerListeners[action];
       }
     }
 
     this._provider = provider;
 
     // Register listeners for wallet events
-    this.getAddress(); // TODO: currently this emits a connect event, but should it?
+    this.getAddress(); // TODO: this should emit a detect event instead of connect event (wallet fingerprinting)
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
-    // TODO: track signing and transactions
-    // https://linear.app/getformo/issue/P-607/sdk-support-signature-and-transaction-events
+    this.registerSignatureListener();
+    this.registerTransactionListener();
   }
 
   private registerAddressChangedListener(): void {
@@ -191,6 +245,85 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.onChainChanged(args[0] as string);
     this.provider?.on("chainChanged", listener);
     this._providerListeners["chainChanged"] = listener;
+  }
+
+  private registerSignatureListener(): void {
+    if (!this.provider) {
+      console.error('_trackSigning: provider not found')
+      return
+    }
+    if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
+      console.warn('_trackSigning: provider.request is not writable')
+      return
+    }
+
+    const request = this.provider.request.bind(this.provider)
+    this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
+      if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
+        // Emit signature request event
+        this.signature({ status: SignatureStatus.REQUESTED, ...this.buildSignatureEventPayload(method, params) });
+
+        try {
+          const response = await request({ method, params }) as T;
+          if (response) {
+            // Emit signature confirmed event
+            this.signature({ status: SignatureStatus.CONFIRMED, ...this.buildSignatureEventPayload(method, params, response) });
+          }
+          return response;
+        } catch (error) {
+          const rpcError = error as RPCError;
+          if (rpcError && rpcError?.code === 4001) {
+            // Emit signature rejected event
+            this.signature({ status: SignatureStatus.REJECTED, ...this.buildSignatureEventPayload(method, params) });
+          }
+          throw error;
+        }
+      }
+      return request({ method, params });
+    }
+    return
+  }    
+
+  private registerTransactionListener(): void {
+    if (!this.provider) {
+      console.error('_trackTransactions: provider not found')
+      return
+    }
+    if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
+      console.warn('_trackTransactions: provider.request is not writable')
+      return
+    }
+    const request = this.provider.request.bind(this.provider)
+    this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
+      if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
+        // Track transaction start
+        const payload = await this.buildTransactionEventPayload(params);
+        this.transaction({ status: TransactionStatus.STARTED, ...payload });
+
+        try {
+          // Wait for the transaction hash
+          const transactionHash = await request({ method, params }) as string;
+          
+          // Track transaction broadcast
+          this.transaction({ status: TransactionStatus.BROADCASTED, ...payload, transactionHash });
+
+          return;
+        } catch (error) {
+          console.log('transaction listener catch')
+          console.log(error)
+          const rpcError = error as RPCError;
+          if (rpcError && rpcError?.code === 4001) {
+            // Emit transaction rejected event
+            this.transaction({ status: TransactionStatus.REJECTED, ...payload });
+          }
+          throw error;
+        }
+      }
+
+      return request({ method, params })
+    }
+
+    return
   }
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
@@ -304,7 +437,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
       if (response.status >= 200 && response.status < 300) {
-        console.log("Event sent successfully:", action);
+        console.log(`Event sent successfully: ${action} ${payload.status}`);
       } else {
         throw new Error(`Failed with status: ${response.status}`);
       }
@@ -442,6 +575,39 @@ export class FormoAnalytics implements IFormoAnalytics {
       utm_campaign: params.get("utm_campaign"),
       ref: params.get("ref"),
       ...eventSpecificPayload,
+    };
+  }  
+
+  private buildSignatureEventPayload(method: string, params: unknown[], response?: unknown) {
+    const basePayload = {
+      chainId: this.currentChainId,
+      address: method === 'personal_sign' ? params[1] as Address : params[0] as Address,
+    };
+
+    if (method === 'personal_sign') {
+      const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
+      return {
+        ...basePayload,
+        message,
+        ...(response ? { signatureHash: response as string } : {}),
+      };
+    }
+
+    return {
+      ...basePayload,
+      message: params[1] as string,
+      ...(response ? { signatureHash: response as string } : {}),
+    };
+  }
+
+  private async buildTransactionEventPayload(params: unknown[]) {
+    const { data, from, to, value } = (params[0] as { data: string; from: string; to: string; value: string });
+    return {
+      chainId: this.currentChainId || await this.getCurrentChainId(),
+      data,
+      address: from,
+      to,
+      value,
     };
   }  
 }
