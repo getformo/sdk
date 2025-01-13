@@ -74,7 +74,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // which adds new listeners and removes old listeners
 
     const provider =
-      window?.ethereum || options?.provider;
+      window?.ethereum;
     console.log('window.ethereum provider')
     console.log(provider)
 
@@ -223,6 +223,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+
+  /**
+   * Emits a signature event.
+   * @param {SignatureStatus} params.status - requested, confirmed, rejected
+   * @param {ChainID} params.chainId
+   * @param {Address} params.address
+   * @param {string} params.message
+   * @param {string} params.signatureHash - only provided if status is confirmed
+   * @returns {Promise<void>}
+   */
   async signature({ status, chainId, address, message, signatureHash }: { 
     status: SignatureStatus, 
     chainId?: ChainID, 
@@ -239,6 +249,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+
+  /**
+   * Emits a transaction event.
+   * @param {TransactionStatus} params.status - started, broadcasted, rejected
+   * @param {ChainID} params.chainId
+   * @param {Address} params.address
+   * @param {string} params.data
+   * @param {string} params.to
+   * @param {string} params.value
+   * @param {string} params.transactionHash - only provided if status is broadcasted
+   * @returns {Promise<void>}
+   */
   async transaction({ status, chainId, address, data, to, value, transactionHash }: {
     status: TransactionStatus,
     chainId: ChainID,
