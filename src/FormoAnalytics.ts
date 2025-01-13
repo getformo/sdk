@@ -28,6 +28,7 @@ interface IFormoAnalytics {
     value?: string,
     transactionHash?: string
   }): Promise<void>;
+  identify(params: { address: Address }): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -64,7 +65,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<FormoAnalytics> {
     // May be needed for delayed loading
     // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
-    return new FormoAnalytics(apiKey, options);
+    const analytics = new FormoAnalytics(apiKey, options);
+
+    // Identify current user on init (TODO: make this toggleable)
+    analytics.identify();
+    
+    return analytics;
   }
 
   /*
@@ -184,6 +190,19 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Emits a identify event with current wallet address.
+   * @param {Address} params.address
+   * @returns {Promise<void>}
+   */
+  public async identify(params?: { address: Address }): Promise<void> {
+    const address = params?.address || await this.getAddress()
+    await this.trackEvent(Event.IDENTIFY, {
+      address,
+      // TODO: detect wallet type https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call
+    });
+  }
+
+  /**
    * Emits a custom event with custom data.
    * @param {string} action
    * @param {Record<string, any>} payload
@@ -220,8 +239,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this._provider = provider;
 
-    // Register listeners for wallet events
-    this.getAddress(); // TODO: this should emit a detect event instead of connect event (wallet fingerprinting)
+    // Register listeners for web3 provider events
     this.registerAddressChangedListener();
     this.registerChainChangedListener();
     this.registerSignatureListener();
@@ -371,7 +389,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         return Promise.resolve();
       }
 
-      // Attempt to fetch and store the connected address
       const address = await this.getAddress();
       if (!address) {
         console.log(
@@ -380,7 +397,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return Promise.resolve();
       }
 
-      this.currentConnectedAddress = address[0];
+      this.currentConnectedAddress = address;
     }
 
     // Proceed only if the address exists
@@ -437,7 +454,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
       if (response.status >= 200 && response.status < 300) {
-        console.log(`Event sent successfully: ${action} ${payload.status}`);
+        console.log(`Event sent successfully: ${this.getActionDescriptor(action, payload)}`);
       } else {
         throw new Error(`Failed with status: ${response.status}`);
       }
@@ -459,6 +476,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }    
 
   private async getAddress(): Promise<Address | null> {
+    if (this.currentConnectedAddress) return this.currentConnectedAddress;
     if (!this.provider) {
       console.log("FormoAnalytics::getAddress: the provider is not set");
       return null;
@@ -467,11 +485,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts();
       if (accounts && accounts.length > 0) {
-        const address = accounts[0];
+        return accounts[0];
         // TODO: how to handle multiple addresses? Should we emit a connect event here? Since the user has not manually connected
         // https://linear.app/getformo/issue/P-691/sdk-detect-multiple-wallets-using-eip6963
-        this.onAddressConnected(address); 
-        return address;
       }
     } catch (err) {
       console.log("Failed to fetch accounts from provider:", err);
@@ -609,5 +625,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       to,
       value,
     };
-  }  
+  }
+
+  private getActionDescriptor(action: string, payload: any): string {
+    return `${action}${payload.status ? ` ${payload.status}` : ''}`;
+  }
 }
