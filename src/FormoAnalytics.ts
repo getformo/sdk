@@ -39,8 +39,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     string,
     (...args: unknown[]) => void
   > = {};
-  private _mipd: any;
-  private _providers: EIP6963ProviderDetail[] = [];
 
   config: Config;
   currentChainId?: ChainID;
@@ -63,10 +61,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // TODO: support lazy loading
     // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
     const analytics = new FormoAnalytics(apiKey, options);
+    const providers = await analytics.getProviders() // providers have info and provider fields
 
-    // TODO: replace with eip6963
-    analytics.detectProviders() // providers have info and provider fields
-
+    
     // TOFIX: below doesn't work for browsers with multiple wallets
     // TODO: how to know which provider is connected?
     // possible solution is to bind request eth_requestAccounts calls
@@ -78,47 +75,21 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const provider =
       window?.ethereum || options?.provider;
-    console.log('provider')
+    console.log('window.ethereum provider')
     console.log(provider)
-    if (provider) {
-      analytics.trackProvider(provider);
-    }
 
-    // Identify current user on init (TODO: make this toggleable)
-    analytics.identify();
-    
-    return analytics;
-  }
+    console.log('viewing eip6963 providers')
+    console.log(providers.length)
+    console.log(providers)
+    for (const { provider, info } of providers) {
+      console.log(provider)
+      console.log(info)
 
-  private async detectProviders(): Promise<EIP6963ProviderDetail[]> {
-    const store = createStore();
-    this._providers = [...store.getProviders()];
-    store.destroy();
-    console.log('this._providers')
-    console.log(this._providers)
-    
-    // Check accounts for initial providers
-    for (const p of this._providers) {
-      const providerName = p.provider.info.name
-      // Interface detailing the structure of provider information and its Ethereum provider.
-      // interface EIP6963ProviderDetail {
-      //   info: EIP6963ProviderInfo; // The provider's info
-      //   provider: EIP1193Provider; // The EIP-1193 compatible provider
-      // }
-
-      // Interface for provider information following EIP-6963.
-      // interface EIP6963ProviderInfo {
-      //   walletId: string; // Unique identifier for the wallet e.g io.metamask, io.metamask.flask 
-      //   uuid: string; // Globally unique ID to differentiate between provider sessions for the lifetime of the page
-      //   name: string; // Human-readable name of the wallet
-      //   icon: string; // URL to the wallet's icon
-      // }
-
-      // IDEA: attach listeners to all providers to detect which one is connected, and then track that provider
+            // IDEA: attach listeners to all providers to detect which one is connected, and then track that provider
       // Alternatively: attach listeners to all providers
-      const request = p.provider.request.bind(p.provider)
-      p.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
-        console.log(`request ${p.provider.info.name}`)
+      const request = provider.request.bind(provider)
+      provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
+        console.log(`request ${info.name}`)
         console.log(method)
         console.log(params)
         // if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
@@ -139,19 +110,37 @@ export class FormoAnalytics implements IFormoAnalytics {
         return request({ method, params });
       }
 
+      // Identify current user on init (TODO: make this toggleable)
+      // Note: need to do this for each provider and account?
       try {
-        const accounts = await this.getAccounts(p.provider);
+        const accounts = await analytics.getAccounts(provider);
         if (accounts && accounts.length > 0) {
-          console.log(`Initial accounts for ${providerName}:`, accounts);
+          console.log(accounts);
           // TODO: emit identify event for each detected provider address and providerName
           // this.identify({ address: accounts[0] });
         }
       } catch (err) {
-        console.error(`Failed to get initial accounts for ${providerName}:`, err);
-      }
+        console.error(`Failed to get initial accounts for ${provider}:`, err);
+      }      
+
+
+      // TODO
+      // analytics.identify(p.provider);
+      // console.log(`trackProvider ${provider.info.name}`)
+      // analytics.trackProvider(provider);
+      // TOFIX: Failed to initialize FormoAnalytics SDK TypeError: Cannot read properties of undefined (reading 'name')
     }
 
-    return this._providers;
+    
+    return analytics;
+  }
+
+  private async getProviders(): Promise<EIP6963ProviderDetail[]> {
+    const store = createStore();
+    const providers = [...store.getProviders()];
+    // TODO: consider using store.subscribe to detect changes to providers list
+    // store.subscribe(providers => (state.providers = providers))
+    return providers;
   }
 
   /*
