@@ -178,23 +178,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   async page(): Promise<void> {
-    const oldPushState = history.pushState;
-    history.pushState = function pushState(...args) {
-      const ret = oldPushState.apply(this, args);
-      window.dispatchEvent(new window.Event("locationchange"));
-      return ret;
-    };
-
-    const oldReplaceState = history.replaceState;
-    history.replaceState = function replaceState(...args) {
-      const ret = oldReplaceState.apply(this, args);
-      window.dispatchEvent(new window.Event("locationchange"));
-      return ret;
-    };
-
-    window.addEventListener("popstate", () => this.onLocationChange());
-
-    window.addEventListener("locationchange", () => this.onLocationChange());
+    await this.trackPageHit();
   }
 
   /**
