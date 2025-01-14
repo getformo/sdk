@@ -251,6 +251,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public async identify(params?: { address: Address }): Promise<void> {
     const address = params?.address || (await this.getAddress());
+    if (!address) return;
+    
     await this.trackEvent(Event.IDENTIFY, {
       address,
       // TODO: detect wallet type https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call

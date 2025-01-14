@@ -85,9 +85,9 @@ npm adduser
 Run the following command to publish the package to NPM:
 
 ```jsx
-// Increment the version number in package.json and create git tag
-npm version
+// Increment the version number in package.json and create git tag https://docs.npmjs.com/cli/v8/commands/npm-version
+npm version <major/minor/patch>
 
 // Publish the package to NPM
-npm publish
+npm publish 
 ```
