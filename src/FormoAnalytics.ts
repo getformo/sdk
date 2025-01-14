@@ -2,32 +2,58 @@ import axios from "axios";
 import { createStore, EIP6963ProviderDetail } from 'mipd';
 import {
   COUNTRY_LIST,
+  CURRENT_URL_KEY,
   EVENTS_API_URL,
   Event,
 } from "./constants";
 import { H } from "highlight.run";
-import { ChainID, Address, EIP1193Provider, Options, Config, RequestArguments, RPCError, SignatureStatus, TransactionStatus } from "./types";
+import {
+  ChainID,
+  Address,
+  EIP1193Provider,
+  Options,
+  Config,
+  RequestArguments,
+  RPCError,
+  SignatureStatus,
+  TransactionStatus,
+} from "./types";
 
 interface IFormoAnalytics {
   page(): void;
+  // trackPagesChange(): void;
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signature({ status, chainId, address, message, signatureHash }: { 
-    status: SignatureStatus, 
-    chainId?: ChainID, 
-    address: Address, 
-    message: string,
-    signatureHash?: string 
+  signature({
+    status,
+    chainId,
+    address,
+    message,
+    signatureHash,
+  }: {
+    status: SignatureStatus;
+    chainId?: ChainID;
+    address: Address;
+    message: string;
+    signatureHash?: string;
   }): Promise<void>;
-  transaction({ status, chainId, address, data, to, value, transactionHash }: {
-    status: TransactionStatus,
-    chainId: ChainID,
-    address: Address,
-    data?: string,
-    to?: string,
-    value?: string,
-    transactionHash?: string
+  transaction({
+    status,
+    chainId,
+    address,
+    data,
+    to,
+    value,
+    transactionHash,
+  }: {
+    status: TransactionStatus;
+    chainId: ChainID;
+    address: Address;
+    data?: string;
+    to?: string;
+    value?: string;
+    transactionHash?: string;
   }): Promise<void>;
   identify(params: { address: Address }): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
@@ -35,10 +61,7 @@ interface IFormoAnalytics {
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _providerListeners: Record<
-    string,
-    (...args: unknown[]) => void
-  > = {};
+  private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
 
   config: Config;
   currentChainId?: ChainID;
@@ -52,6 +75,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       apiKey: apiKey,
       options: options
     };
+
+    this.trackFirstPageVisit();
+    this.trackPagesChange();
   }
 
   static async init(
@@ -148,12 +174,28 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   /**
-   * Emits a page visit event with the current URL information.
+   * Emits a page visit event with the current URL information, fire on page change.
    * @returns {Promise<void>}
    */
   async page(): Promise<void> {
-    await this.trackPageHit();
-  }    
+    const oldPushState = history.pushState;
+    history.pushState = function pushState(...args) {
+      const ret = oldPushState.apply(this, args);
+      window.dispatchEvent(new window.Event("locationchange"));
+      return ret;
+    };
+
+    const oldReplaceState = history.replaceState;
+    history.replaceState = function replaceState(...args) {
+      const ret = oldReplaceState.apply(this, args);
+      window.dispatchEvent(new window.Event("locationchange"));
+      return ret;
+    };
+
+    window.addEventListener("popstate", () => this.onLocationChange());
+
+    window.addEventListener("locationchange", () => this.onLocationChange());
+  }
 
   /**
    * Emits a wallet connect event.
@@ -162,7 +204,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @throws {Error} If chainId or address is empty
    * @returns {Promise<void>}
    */
-  async connect({ chainId, address }: { chainId: ChainID; address: Address }): Promise<void> {
+  async connect({
+    chainId,
+    address,
+  }: {
+    chainId: ChainID;
+    address: Address;
+  }): Promise<void> {
     if (!chainId) {
       throw new Error("FormoAnalytics::connect: chain ID cannot be empty");
     }
@@ -185,10 +233,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
-  async disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void> {
+  async disconnect(params?: {
+    chainId?: ChainID;
+    address?: Address;
+  }): Promise<void> {
     const address = params?.address || this.currentConnectedAddress;
     const chainId = params?.chainId || this.currentChainId;
-    
+
     await this.handleDisconnect(chainId, address);
   }
 
@@ -200,7 +251,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @throws {Error} If no address is provided and no previous address is recorded
    * @returns {Promise<void>}
    */
-  async chain({ chainId, address }: { chainId: ChainID; address?: Address }): Promise<void> {
+  async chain({
+    chainId,
+    address,
+  }: {
+    chainId: ChainID;
+    address?: Address;
+  }): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
       throw new Error("FormoAnalytics::chain: chainId cannot be empty or 0");
     }
@@ -233,19 +290,25 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} params.signatureHash - only provided if status is confirmed
    * @returns {Promise<void>}
    */
-  async signature({ status, chainId, address, message, signatureHash }: { 
-    status: SignatureStatus, 
-    chainId?: ChainID, 
-    address: Address, 
-    message: string,
-    signatureHash?: string 
+  async signature({
+    status,
+    chainId,
+    address,
+    message,
+    signatureHash,
+  }: {
+    status: SignatureStatus;
+    chainId?: ChainID;
+    address: Address;
+    message: string;
+    signatureHash?: string;
   }): Promise<void> {
     await this.trackEvent(Event.SIGNATURE, {
       status,
       chainId,
       address,
       message,
-      ...(signatureHash && { signatureHash })
+      ...(signatureHash && { signatureHash }),
     });
   }
 
@@ -261,14 +324,22 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} params.transactionHash - only provided if status is broadcasted
    * @returns {Promise<void>}
    */
-  async transaction({ status, chainId, address, data, to, value, transactionHash }: {
-    status: TransactionStatus,
-    chainId: ChainID,
-    address: Address,
-    data?: string,
-    to?: string,
-    value?: string,
-    transactionHash?: string
+  async transaction({
+    status,
+    chainId,
+    address,
+    data,
+    to,
+    value,
+    transactionHash,
+  }: {
+    status: TransactionStatus;
+    chainId: ChainID;
+    address: Address;
+    data?: string;
+    to?: string;
+    value?: string;
+    transactionHash?: string;
   }): Promise<void> {
     await this.trackEvent(Event.TRANSACTION, {
       status,
@@ -277,7 +348,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       data,
       to,
       value,
-      ...(transactionHash && { transactionHash })
+      ...(transactionHash && { transactionHash }),
     });
   }
 
@@ -287,7 +358,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   public async identify(params?: { address: Address }): Promise<void> {
-    const address = params?.address || await this.getAddress()
+    const address = params?.address || (await this.getAddress());
     await this.trackEvent(Event.IDENTIFY, {
       address,
       // TODO: detect provider name https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call
@@ -303,7 +374,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   async track(action: string, payload: Record<string, any>): Promise<void> {
     await this.trackEvent(action, payload);
   }
-
 
   /*
     SDK tracking and event listener functions
@@ -321,10 +391,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (this._provider) {
       const actions = Object.keys(this._providerListeners);
       for (const action of actions) {
-        this._provider.removeListener(
-          action,
-          this._providerListeners[action]
-        );
+        this._provider.removeListener(action, this._providerListeners[action]);
         delete this._providerListeners[action];
       }
     }
@@ -359,81 +426,116 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private registerSignatureListener(): void {
     if (!this.provider) {
-      console.error('_trackSigning: provider not found')
-      return
+      console.error("_trackSigning: provider not found");
+      return;
     }
-    if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
-      console.warn('_trackSigning: provider.request is not writable')
-      return
+    if (
+      Object.getOwnPropertyDescriptor(this.provider, "request")?.writable ===
+      false
+    ) {
+      console.warn("_trackSigning: provider.request is not writable");
+      return;
     }
 
-    const request = this.provider.request.bind(this.provider)
-    this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
-      if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
+    const request = this.provider.request.bind(this.provider);
+    this.provider.request = async <T>({
+      method,
+      params,
+    }: RequestArguments): Promise<T | null | undefined> => {
+      if (
+        Array.isArray(params) &&
+        ["eth_signTypedData_v4", "personal_sign"].includes(method)
+      ) {
         // Emit signature request event
-        this.signature({ status: SignatureStatus.REQUESTED, ...this.buildSignatureEventPayload(method, params) });
+        this.signature({
+          status: SignatureStatus.REQUESTED,
+          ...this.buildSignatureEventPayload(method, params),
+        });
 
         try {
-          const response = await request({ method, params }) as T;
+          const response = (await request({ method, params })) as T;
           if (response) {
             // Emit signature confirmed event
-            this.signature({ status: SignatureStatus.CONFIRMED, ...this.buildSignatureEventPayload(method, params, response) });
+            this.signature({
+              status: SignatureStatus.CONFIRMED,
+              ...this.buildSignatureEventPayload(method, params, response),
+            });
           }
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
           if (rpcError && rpcError?.code === 4001) {
             // Emit signature rejected event
-            this.signature({ status: SignatureStatus.REJECTED, ...this.buildSignatureEventPayload(method, params) });
+            this.signature({
+              status: SignatureStatus.REJECTED,
+              ...this.buildSignatureEventPayload(method, params),
+            });
           }
           throw error;
         }
       }
       return request({ method, params });
-    }
-    return
-  }    
+    };
+    return;
+  }
 
   private registerTransactionListener(): void {
     if (!this.provider) {
-      console.error('_trackTransactions: provider not found')
-      return
+      console.error("_trackTransactions: provider not found");
+      return;
     }
-    if (Object.getOwnPropertyDescriptor(this.provider, 'request')?.writable === false) {
-      console.warn('_trackTransactions: provider.request is not writable')
-      return
+    if (
+      Object.getOwnPropertyDescriptor(this.provider, "request")?.writable ===
+      false
+    ) {
+      console.warn("_trackTransactions: provider.request is not writable");
+      return;
     }
-    const request = this.provider.request.bind(this.provider)
-    this.provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
-      if (Array.isArray(params) && method === 'eth_sendTransaction' && params[0]) {
+    const request = this.provider.request.bind(this.provider);
+    this.provider.request = async <T>({
+      method,
+      params,
+    }: RequestArguments): Promise<T | null | undefined> => {
+      if (
+        Array.isArray(params) &&
+        method === "eth_sendTransaction" &&
+        params[0]
+      ) {
         // Track transaction start
         const payload = await this.buildTransactionEventPayload(params);
         this.transaction({ status: TransactionStatus.STARTED, ...payload });
 
         try {
           // Wait for the transaction hash
-          const transactionHash = await request({ method, params }) as string;
-          
+          const transactionHash = (await request({ method, params })) as string;
+
           // Track transaction broadcast
-          this.transaction({ status: TransactionStatus.BROADCASTED, ...payload, transactionHash });
+          this.transaction({
+            status: TransactionStatus.BROADCASTED,
+            ...payload,
+            transactionHash,
+          });
 
           return;
         } catch (error) {
-          console.log('transaction listener catch')
-          console.log(error)
+          console.log("transaction listener catch");
+          console.log(error);
           const rpcError = error as RPCError;
           if (rpcError && rpcError?.code === 4001) {
             // Emit transaction rejected event
-            this.transaction({ status: TransactionStatus.REJECTED, ...payload });
+            this.transaction({
+              status: TransactionStatus.REJECTED,
+              ...payload,
+            });
           }
           throw error;
         }
       }
 
-      return request({ method, params })
-    }
+      return request({ method, params });
+    };
 
-    return
+    return;
   }
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
@@ -456,7 +558,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.connect({ chainId: this.currentChainId, address });
   }
 
-  private async handleDisconnect(chainId?: ChainID, address?: Address): Promise<void> {
+  private async handleDisconnect(
+    chainId?: ChainID,
+    address?: Address
+  ): Promise<void> {
     const payload = {
       chain_id: chainId || this.currentChainId,
       address: address || this.currentConnectedAddress,
@@ -468,7 +573,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onAddressDisconnected(): Promise<void> {
-    await this.handleDisconnect(this.currentChainId, this.currentConnectedAddress);
+    await this.handleDisconnect(
+      this.currentChainId,
+      this.currentConnectedAddress
+    );
   }
 
   private async onChainChanged(chainIdHex: string): Promise<void> {
@@ -505,22 +613,60 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  // TOFIX: support multiple page hit events
+  private async trackFirstPageVisit(): Promise<void> {
+    if (sessionStorage.getItem(CURRENT_URL_KEY) === null) {
+      sessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
+    }
+
+    return this.trackPageHit();
+  }
+
+  private async trackPagesChange(): Promise<void> {
+    const oldPushState = history.pushState;
+    history.pushState = function pushState(...args) {
+      const ret = oldPushState.apply(this, args);
+      window.dispatchEvent(new window.Event("locationchange"));
+      return ret;
+    };
+
+    const oldReplaceState = history.replaceState;
+    history.replaceState = function replaceState(...args) {
+      const ret = oldReplaceState.apply(this, args);
+      window.dispatchEvent(new window.Event("locationchange"));
+      return ret;
+    };
+
+    window.addEventListener("popstate", () => this.onLocationChange());
+
+    window.addEventListener("locationchange", () => this.onLocationChange());
+  }
+
+  private async onLocationChange(): Promise<void> {
+    const currentUrl = sessionStorage.getItem(CURRENT_URL_KEY);
+
+    if (currentUrl !== window.location.href) {
+      sessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
+      this.trackPageHit();
+    }
+  }
+
   // TODO: Add event listener and support for SPA and hash-based navigation
   // https://linear.app/getformo/issue/P-800/sdk-support-spa-and-hash-based-routing
   private trackPageHit(): void {
     const pathname = window.location.pathname;
     const href = window.location.href;
+    const hash = window.location.hash;
 
     setTimeout(async () => {
       this.trackEvent(Event.PAGE, {
         pathname,
         href,
+        hash,
       });
     }, 300);
   }
 
-  // TODO: refactor this with event queue and flushing 
+  // TODO: refactor this with event queue and flushing
   // https://linear.app/getformo/issue/P-835/sdk-refactor-retries-with-event-queue-and-batching
   private async trackEvent(action: string, payload: any): Promise<void> {
     const address = await this.getAddress();
@@ -546,7 +692,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
       if (response.status >= 200 && response.status < 300) {
-        console.log(`Event sent successfully: ${this.getActionDescriptor(action, payload)}`);
+        console.log(
+          `Event sent successfully: ${this.getActionDescriptor(
+            action,
+            payload
+          )}`
+        );
       } else {
         throw new Error(`Failed with status: ${response.status}`);
       }
@@ -565,7 +716,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
-  }    
+  }
 
   private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
     const p = provider || this.provider;
@@ -622,9 +773,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_chainId",
       });
       if (!chainIdHex) {
-        console.log(
-          "FormoAnalytics::fetchChainId: chain id not found"
-        );
+        console.log("FormoAnalytics::fetchChainId: chain id not found");
         return 0;
       }
       return parseInt(chainIdHex as string, 16);
@@ -640,10 +789,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   private getLocation(): string | undefined {
     try {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
+      if (timezone in COUNTRY_LIST)
+        return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
+      return timezone;
     } catch (error) {
       console.error("Error resolving timezone:", error);
-      return undefined;
+      return "";
     }
   }
 
@@ -684,16 +835,26 @@ export class FormoAnalytics implements IFormoAnalytics {
       ref: params.get("ref"),
       ...eventSpecificPayload,
     };
-  }  
+  }
 
-  private buildSignatureEventPayload(method: string, params: unknown[], response?: unknown) {
+  private buildSignatureEventPayload(
+    method: string,
+    params: unknown[],
+    response?: unknown
+  ) {
     const basePayload = {
       chainId: this.currentChainId,
-      address: method === 'personal_sign' ? params[1] as Address : params[0] as Address,
+      address:
+        method === "personal_sign"
+          ? (params[1] as Address)
+          : (params[0] as Address),
     };
 
-    if (method === 'personal_sign') {
-      const message = Buffer.from((params[0] as string).slice(2), 'hex').toString('utf8');
+    if (method === "personal_sign") {
+      const message = Buffer.from(
+        (params[0] as string).slice(2),
+        "hex"
+      ).toString("utf8");
       return {
         ...basePayload,
         message,
@@ -709,9 +870,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async buildTransactionEventPayload(params: unknown[]) {
-    const { data, from, to, value } = (params[0] as { data: string; from: string; to: string; value: string });
+    const { data, from, to, value } = params[0] as {
+      data: string;
+      from: string;
+      to: string;
+      value: string;
+    };
     return {
-      chainId: this.currentChainId || await this.getCurrentChainId(),
+      chainId: this.currentChainId || (await this.getCurrentChainId()),
       data,
       address: from,
       to,
@@ -720,6 +886,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private getActionDescriptor(action: string, payload: any): string {
-    return `${action}${payload.status ? ` ${payload.status}` : ''}`;
+    return `${action}${payload.status ? ` ${payload.status}` : ""}`;
   }
 }
