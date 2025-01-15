@@ -60,9 +60,8 @@ interface IFormoAnalytics {
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
-  private _provider?: EIP1193Provider; // TODO: rename to currentProvider
-  private _providerListeners: Record<string, (...args: unknown[]) => void> = {}; // TODO: rename to currentProviderListeners
-
+  currentProvider?: EIP1193Provider;
+  currentProviderListeners: Record<string, (...args: unknown[]) => void> = {};
   config: Config;
   currentChainId?: ChainID;
   currentConnectedAddress?: Address;
@@ -344,14 +343,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   private trackProvider(provider: EIP1193Provider): void {
     console.log('trackProvider')
     console.log(provider)
-    console.log(this._provider)
-    if (provider === this._provider) {
+    console.log(this.currentProvider)
+    if (provider === this.currentProvider) {
       console.log("Provider already tracked.");
       return;
     }
 
-    this.clearProvider(this._provider)
-    this._provider = provider;
+    this.clearProvider(this.currentProvider)
+    this.currentProvider = provider;
 
     // Register listeners for web3 provider events
     this.registerAddressChangedListener();
@@ -363,18 +362,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   private clearProvider(provider?: EIP1193Provider): void {
     console.log('clearProvider')
     console.log(provider)
-    console.log(this._provider)
+    console.log(this.currentProvider)
 
     // Only clear if the current provider is the same as the one we are clearing
-    if (this._provider && provider === this._provider) {
+    if (this.currentProvider && provider === this.currentProvider) {
       this.currentChainId = undefined;
       this.currentConnectedAddress = undefined;
-      const actions = Object.keys(this._providerListeners);
+      const actions = Object.keys(this.currentProviderListeners);
       for (const action of actions) {
-        this._provider.removeListener(action, this._providerListeners[action]);
-        delete this._providerListeners[action];
+        this.currentProvider.removeListener(action, this.currentProviderListeners[action]);
+        delete this.currentProviderListeners[action];
       }
-      this._provider = undefined;
+      this.currentProvider = undefined;
     }
   }
 
@@ -382,36 +381,36 @@ export class FormoAnalytics implements IFormoAnalytics {
     const listener = (...args: unknown[]) =>
       this.onAddressChanged(args[0] as string[]);
 
-    this._provider?.on("accountsChanged", listener);
-    this._providerListeners["accountsChanged"] = listener;
+    this.currentProvider?.on("accountsChanged", listener);
+    this.currentProviderListeners["accountsChanged"] = listener;
 
     const onAddressDisconnected = this.onAddressDisconnected.bind(this);
-    this._provider?.on("disconnect", onAddressDisconnected);
-    this._providerListeners["disconnect"] = onAddressDisconnected;
+    this.currentProvider?.on("disconnect", onAddressDisconnected);
+    this.currentProviderListeners["disconnect"] = onAddressDisconnected;
   }
 
   private registerChainChangedListener(): void {
     const listener = (...args: unknown[]) =>
       this.onChainChanged(args[0] as string);
-    this.provider?.on("chainChanged", listener);
-    this._providerListeners["chainChanged"] = listener;
+    this.currentProvider?.on("chainChanged", listener);
+    this.currentProviderListeners["chainChanged"] = listener;
   }
 
   private registerSignatureListener(): void {
-    if (!this.provider) {
+    if (!this.currentProvider) {
       console.error("_trackSigning: provider not found");
       return;
     }
     if (
-      Object.getOwnPropertyDescriptor(this.provider, "request")?.writable ===
+      Object.getOwnPropertyDescriptor(this.currentProvider, "request")?.writable ===
       false
     ) {
       console.warn("_trackSigning: provider.request is not writable");
       return;
     }
 
-    const request = this.provider.request.bind(this.provider);
-    this.provider.request = async <T>({
+    const request = this.currentProvider.request.bind(this.currentProvider);
+    this.currentProvider.request = async <T>({
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
@@ -453,19 +452,19 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private registerTransactionListener(): void {
-    if (!this.provider) {
+    if (!this.currentProvider) {
       console.error("_trackTransactions: provider not found");
       return;
     }
     if (
-      Object.getOwnPropertyDescriptor(this.provider, "request")?.writable ===
+      Object.getOwnPropertyDescriptor(this.currentProvider, "request")?.writable ===
       false
     ) {
       console.warn("_trackTransactions: provider.request is not writable");
       return;
     }
-    const request = this.provider.request.bind(this.provider);
-    this.provider.request = async <T>({
+    const request = this.currentProvider.request.bind(this.currentProvider);
+    this.currentProvider.request = async <T>({
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
@@ -555,7 +554,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async onChainChanged(chainIdHex: string): Promise<void> {
     this.currentChainId = parseInt(chainIdHex);
     if (!this.currentConnectedAddress) {
-      if (!this.provider) {
+      if (!this.currentProvider) {
         console.log(
           "FormoAnalytics::onChainChanged: provider not found. CHAIN_CHANGED not reported"
         );
@@ -687,12 +686,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
-  get provider(): EIP1193Provider | undefined {
-    return this._provider;
-  }
-
   private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
-    const p = provider || this.provider;
+    const p = provider || this.currentProvider;
     if (!p) return null;
 
     try {
@@ -709,7 +704,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async getAccounts(provider?: EIP1193Provider): Promise<Address[] | null> {
-    const p = provider || this.provider;
+    const p = provider || this.currentProvider;
     try {
       const res: string[] | null | undefined = await p?.request({
         method: "eth_accounts",
@@ -728,14 +723,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async getCurrentChainId(): Promise<number> {
-    if (!this.provider) {
+    if (!this.currentProvider) {
       console.error("FormoAnalytics::getCurrentChainId: provider not set");
       return 0;
     }
 
     let chainIdHex;
     try {
-      chainIdHex = await this.provider?.request<string>({
+      chainIdHex = await this.currentProvider?.request<string>({
         method: "eth_chainId",
       });
       if (!chainIdHex) {
