@@ -1,4 +1,5 @@
 import axios from "axios";
+import { createStore, EIP6963ProviderDetail, EIP6963ProviderInfo } from 'mipd';
 import {
   COUNTRY_LIST,
   CURRENT_URL_KEY,
@@ -75,8 +76,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     // TODO: replace with eip6963
-    const provider =
-      window?.ethereum || window.web3?.currentProvider || options?.provider;
+    const provider = options.provider || window?.ethereum
     if (provider) {
       this.trackProvider(provider);
     }
@@ -89,16 +89,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     apiKey: string,
     options?: Options
   ): Promise<FormoAnalytics> {
-    // May be needed for delayed loading
-    // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
     const analytics = new FormoAnalytics(apiKey, options);
-
-    // Identify current user on init (TODO: make this toggleable)
-    analytics.identify();
+    
+    // Identify
+    const providers = await analytics.getProviders();
+    await analytics.identifyAll(providers);
 
     return analytics;
   }
-
+ 
   /*
     Public SDK functions
   */
@@ -194,6 +193,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+  /**
+   * Emits a signature event.
+   * @param {SignatureStatus} params.status - requested, confirmed, rejected
+   * @param {ChainID} params.chainId
+   * @param {Address} params.address
+   * @param {string} params.message
+   * @param {string} params.signatureHash - only provided if status is confirmed
+   * @returns {Promise<void>}
+   */
   async signature({
     status,
     chainId,
@@ -216,6 +224,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
   }
 
+  /**
+   * Emits a transaction event.
+   * @param {TransactionStatus} params.status - started, broadcasted, rejected
+   * @param {ChainID} params.chainId
+   * @param {Address} params.address
+   * @param {string} params.data
+   * @param {string} params.to
+   * @param {string} params.value
+   * @param {string} params.transactionHash - only provided if status is broadcasted
+   * @returns {Promise<void>}
+   */  
   async transaction({
     status,
     chainId,
@@ -249,14 +268,14 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
-  public async identify(params?: { address: Address }): Promise<void> {
-    const address = params?.address || (await this.getAddress());
-    if (!address) return;
-    
-    await this.trackEvent(Event.IDENTIFY, {
-      address,
-      // TODO: detect wallet type https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call
-    });
+  public async identify({ address, providerName, rdns }: { address: Address, providerName?: string, rdns?: string }): Promise<void> {
+    if (address) {
+      await this.trackEvent(Event.IDENTIFY, {
+        address,
+        name: providerName,
+        rdns,
+      });
+    }
   }
 
   /**
@@ -608,6 +627,32 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
+  private async getProviders(): Promise<EIP6963ProviderDetail[]> {
+    const store = createStore();
+    const providers = [...store.getProviders()];
+    // TODO: consider using store.subscribe to detect changes to providers list
+    // store.subscribe(providers => (state.providers = providers))
+
+    // Fallback to injected provider if no providers are found
+    if (providers.length === 0) {
+      return [window?.ethereum]
+    }
+    return providers;
+  }
+
+  private async identifyAll(providers: EIP6963ProviderDetail[]): Promise<void> {
+    for (const { provider, info } of providers) {
+      try {
+        const accounts = await this.getAccounts(provider);
+        if (accounts && accounts.length > 0) {
+          for (const address of accounts) {
+            await this.identify({ address, providerName: info.name, rdns: info.rdns });
+          }
+        }
+      } catch (err) {}
+    }
+  }      
+
   get provider(): EIP1193Provider | undefined {
     return this._provider;
   }
@@ -633,17 +678,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     return null;
   }
 
-  private async getAccounts(): Promise<Address[] | null> {
+  private async getAccounts(provider?: EIP1193Provider): Promise<Address[] | null> {
+    const p = provider || this.provider;
     try {
-      const res: string[] | null | undefined = await this.provider?.request({
+      const res: string[] | null | undefined = await p?.request({
         method: "eth_accounts",
       });
-      if (!res || res.length === 0) {
-        console.log(
-          "FormoAnalytics::getAccounts: unable to get account. eth_accounts returned empty"
-        );
-        return null;
-      }
+      if (!res || res.length === 0) return null;
       return res;
     } catch (err) {
       if ((err as any).code !== 4001) {
