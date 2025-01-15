@@ -106,7 +106,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             if (rpcError?.code === 4001) {
               // User rejected the wallet switch
               console.log('rejected switch to ', info.name)
-              analytics.clearProvider();
+              analytics.clearProvider(provider);
               console.log('cleared provider', info.name)
             }
             throw error;
@@ -350,7 +350,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.clearProvider()
+    this.clearProvider(this._provider)
     this._provider = provider;
 
     // Register listeners for web3 provider events
@@ -360,21 +360,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.registerTransactionListener();
   }
 
-  private clearProvider(): void {
+  private clearProvider(provider?: EIP1193Provider): void {
     console.log('clearProvider')
-    this.currentChainId = undefined;
-    this.currentConnectedAddress = undefined;
+    console.log(provider)
+    console.log(this._provider)
 
-    if (this._provider) {
-      // TODO: only clear if the provider is the same as the one we are clearing
-      console.log(this._provider)
+    // Only clear if the current provider is the same as the one we are clearing
+    if (this._provider && provider === this._provider) {
+      this.currentChainId = undefined;
+      this.currentConnectedAddress = undefined;
       const actions = Object.keys(this._providerListeners);
       for (const action of actions) {
         this._provider.removeListener(action, this._providerListeners[action]);
         delete this._providerListeners[action];
       }
+      this._provider = undefined;
     }
-    this._provider = undefined;
   }
 
   private registerAddressChangedListener(): void {
