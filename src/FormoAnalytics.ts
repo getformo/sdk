@@ -60,8 +60,8 @@ interface IFormoAnalytics {
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
-  private _provider?: EIP1193Provider;
-  private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
+  private _provider?: EIP1193Provider; // TODO: rename to currentProvider
+  private _providerListeners: Record<string, (...args: unknown[]) => void> = {}; // TODO: rename to currentProviderListeners
 
   config: Config;
   currentChainId?: ChainID;
@@ -87,46 +87,45 @@ export class FormoAnalytics implements IFormoAnalytics {
     // TODO: support lazy loading
     // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
     const analytics = new FormoAnalytics(apiKey, options);
-    const providers = await analytics.getProviders() // providers have info and provider fields
-
-    // TOFIX: below doesn't work for browsers with multiple wallets
-    // TODO: how to know which provider is connected?
-    // possible solution is to bind request eth_requestAccounts calls
-
-    // TODO: what should happen when we switch providers?
-    // Note: we need to only do the step below when the user has connected a wallet?
-    // We may need to add a listener for when the user changes wallets 
-    // which adds new listeners and removes old listeners
-
+    const providers = await analytics.getProviders()
     console.log(providers)
+
+    // Attach listeners to all providers to detect which one is connected, and then track that provider
     for (const { provider, info } of providers) {
-      // IDEA: attach listeners to all providers to detect which one is connected, and then track that provider
-      // Alternatively: attach listeners to all providers
       const request = provider.request.bind(provider)
       provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
-        console.log(`request ${info.name}`)
-        console.log(method)
-        console.log(params)
         if (Array.isArray(params) && ['wallet_requestPermissions', 'eth_requestAccounts'].includes(method)) {
-          console.log('user is attempting to switch wallets to ', info.name)
+          console.log('switching wallets to ', info.name)
+          try {
+            const response = await request({ method, params });
+            analytics.trackProvider(provider);
+            console.log('tracking provider', info.name)
+            return response;
+          } catch (error) {
+            const rpcError = error as RPCError;
+            if (rpcError?.code === 4001) {
+              // User rejected the wallet switch
+              console.log('rejected switch to ', info.name)
+              analytics.clearProvider();
+              console.log('cleared provider', info.name)
+            }
+            throw error;
+          }
         }
+
         return request({ method, params });
       }
 
       // Identify all connected accounts
       // TODO: refactor to a helper function identifyMultiple(providers)
-      try {
-        const accounts = await analytics.getAccounts(provider);
-        if (accounts && accounts.length > 0) {
-          for (const address of accounts) {
-            analytics.identify({ address, providerName: info.name, rdns: info.rdns});
-          }
-        }
-      } catch (err) {}
-
-
-      // analytics.trackProvider(provider);
-      // TOFIX: Failed to initialize FormoAnalytics SDK TypeError: Cannot read properties of undefined (reading 'name')
+      // try {
+      //   const accounts = await analytics.getAccounts(provider);
+      //   if (accounts && accounts.length > 0) {
+      //     for (const address of accounts) {
+      //       analytics.identify({ address, providerName: info.name, rdns: info.rdns});
+      //     }
+      //   }
+      // } catch (err) {}
     }
 
     
@@ -351,17 +350,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.currentChainId = undefined;
-    this.currentConnectedAddress = undefined;
-
-    // Delete previous provider listeners
-    if (this._provider) {
-      const actions = Object.keys(this._providerListeners);
-      for (const action of actions) {
-        this._provider.removeListener(action, this._providerListeners[action]);
-        delete this._providerListeners[action];
-      }
-    }
+    this.clearProvider()
     this._provider = provider;
 
     // Register listeners for web3 provider events
@@ -369,6 +358,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.registerChainChangedListener();
     this.registerSignatureListener();
     this.registerTransactionListener();
+  }
+
+  private clearProvider(): void {
+    console.log('clearProvider')
+    this.currentChainId = undefined;
+    this.currentConnectedAddress = undefined;
+
+    if (this._provider) {
+      // TODO: only clear if the provider is the same as the one we are clearing
+      console.log(this._provider)
+      const actions = Object.keys(this._providerListeners);
+      for (const action of actions) {
+        this._provider.removeListener(action, this._providerListeners[action]);
+        delete this._providerListeners[action];
+      }
+    }
+    this._provider = undefined;
   }
 
   private registerAddressChangedListener(): void {
@@ -686,10 +692,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
     const p = provider || this.provider;
-    if (!p) {
-      console.log("FormoAnalytics::getAddress: the provider is not set");
-      return null;
-    }
+    if (!p) return null;
 
     try {
       const accounts = await this.getAccounts(p);
@@ -710,12 +713,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const res: string[] | null | undefined = await p?.request({
         method: "eth_accounts",
       });
-      if (!res || res.length === 0) {
-        console.log(
-          "FormoAnalytics::getAccounts: unable to get account. eth_accounts returned empty"
-        );
-        return null;
-      }
+      if (!res || res.length === 0) return null;
       return res;
     } catch (err) {
       if ((err as any).code !== 4001) {
