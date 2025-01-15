@@ -98,17 +98,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     // We may need to add a listener for when the user changes wallets 
     // which adds new listeners and removes old listeners
 
-    // const provider =
-    //   window?.ethereum;
-    // console.log('window.ethereum provider')
-    // console.log(provider)
-
-    console.log('viewing eip6963 providers')
     console.log(providers)
     for (const { provider, info } of providers) {
-      console.log(provider)
-      console.log(info)
-
       // IDEA: attach listeners to all providers to detect which one is connected, and then track that provider
       // Alternatively: attach listeners to all providers
       const request = provider.request.bind(provider)
@@ -116,35 +107,22 @@ export class FormoAnalytics implements IFormoAnalytics {
         console.log(`request ${info.name}`)
         console.log(method)
         console.log(params)
-        // if (Array.isArray(params) && ['eth_signTypedData_v4', 'personal_sign'].includes(method)) {
-        //   // Emit signature request event
-        //   this.signature({ status: SignatureStatus.REQUESTED, ...this.buildSignatureEventPayload(method, params) });
-
-        //   try {
-        //     const response = await request({ method, params }) as T;
-        //     if (response) {
-        //       // Emit signature confirmed event
-        //       this.signature({ status: SignatureStatus.CONFIRMED, ...this.buildSignatureEventPayload(method, params, response) });
-        //     }
-        //     return response;
-        //   } catch (error) {
-        //     throw error;
-        //   }
-        // }
+        if (Array.isArray(params) && ['wallet_requestPermissions', 'eth_requestAccounts'].includes(method)) {
+          console.log('user is attempting to switch wallets to ', info.name)
+        }
         return request({ method, params });
       }
 
+      // Identify all connected accounts
+      // TODO: refactor to a helper function identifyMultiple(providers)
       try {
         const accounts = await analytics.getAccounts(provider);
-        console.log(accounts)
         if (accounts && accounts.length > 0) {
           for (const address of accounts) {
             analytics.identify({ address, providerName: info.name, rdns: info.rdns});
           }
         }
-      } catch (err) {
-        console.error(`Failed to get initial accounts for ${provider}:`, err);
-      }      
+      } catch (err) {}
 
 
       // analytics.trackProvider(provider);
@@ -160,6 +138,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     const providers = [...store.getProviders()];
     // TODO: consider using store.subscribe to detect changes to providers list
     // store.subscribe(providers => (state.providers = providers))
+
+    // Fallback to injected provider if no providers are found
+    if (providers.length === 0) {
+      return [window?.ethereum]
+    }
     return providers;
   }
 
