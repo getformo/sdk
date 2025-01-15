@@ -21,7 +21,6 @@ import {
 
 interface IFormoAnalytics {
   page(): void;
-  // trackPagesChange(): void;
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
@@ -87,16 +86,28 @@ export class FormoAnalytics implements IFormoAnalytics {
     // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
     const analytics = new FormoAnalytics(apiKey, options);
     const providers = await analytics.getProviders()
-    console.log(providers)
+    // console.log(providers)
+
+    // TODO: need to track an initial provider, but which one?
+    const initialProvider = window?.ethereum;
+    const initialAddress = await analytics.getAddress(initialProvider);    
+    console.log('initialProvider', initialProvider)
+    console.log('initialAddress', initialAddress)
+    if (initialProvider) {
+      console.log('tracking initial provider', initialProvider)
+      analytics.trackProvider(initialProvider);
+    }
 
     // Attach listeners to all providers to detect which one is connected, and then track that provider
     for (const { provider, info } of providers) {
       const request = provider.request.bind(provider)
       provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
+        console.log('init listener', method, params)
         if (Array.isArray(params) && ['wallet_requestPermissions', 'eth_requestAccounts'].includes(method)) {
           console.log('switching wallets to ', info.name)
           try {
             const response = await request({ method, params });
+            console.log('response', response)
             analytics.trackProvider(provider);
             console.log('tracking provider', info.name)
             return response;
@@ -104,9 +115,8 @@ export class FormoAnalytics implements IFormoAnalytics {
             const rpcError = error as RPCError;
             if (rpcError?.code === 4001) {
               // User rejected the wallet switch
-              console.log('rejected switch to ', info.name)
+              console.log('rejected switch to and clearing provider', info.name)
               analytics.clearProvider(provider);
-              console.log('cleared provider', info.name)
             }
             throw error;
           }
@@ -114,20 +124,21 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         return request({ method, params });
       }
-
-      // Identify all connected accounts
-      // TODO: refactor to a helper function identifyMultiple(providers)
-      // try {
-      //   const accounts = await analytics.getAccounts(provider);
-      //   if (accounts && accounts.length > 0) {
-      //     for (const address of accounts) {
-      //       analytics.identify({ address, providerName: info.name, rdns: info.rdns});
-      //     }
-      //   }
-      // } catch (err) {}
     }
 
-    
+    // Identify all connected accounts
+    // TODO: refactor to a helper function identifyMultiple(providers)
+    // try {
+    //   const accounts = await analytics.getAccounts(provider);
+    //   if (accounts && accounts.length > 0) {
+    //     for (const address of accounts) {
+    //       analytics.identify({ address, providerName: info.name, rdns: info.rdns});
+    //     }
+    //   }
+    // } catch (err) {}
+
+    console.log('currentProvider', analytics.currentProvider)    
+
     return analytics;
   }
 
@@ -341,9 +352,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   private trackProvider(provider: EIP1193Provider): void {
-    console.log('trackProvider')
-    console.log(provider)
-    console.log(this.currentProvider)
+    console.log('trackProvider', provider, this.currentProvider)
     if (provider === this.currentProvider) {
       console.log("Provider already tracked.");
       return;
@@ -353,17 +362,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentProvider = provider;
 
     // Register listeners for web3 provider events
-    this.registerAddressChangedListener();
-    this.registerChainChangedListener();
-    this.registerSignatureListener();
-    this.registerTransactionListener();
+    console.log('registering listeners for', provider)
+    this.registerAddressChangedListener(provider);
+    this.registerChainChangedListener(provider);
+    this.registerSignatureListener(provider);
+    this.registerTransactionListener(provider);
   }
 
   private clearProvider(provider?: EIP1193Provider): void {
-    console.log('clearProvider')
-    console.log(provider)
-    console.log(this.currentProvider)
-
+    console.log('clearProvider', provider, this.currentProvider)
     // Only clear if the current provider is the same as the one we are clearing
     if (this.currentProvider && provider === this.currentProvider) {
       this.currentChainId = undefined;
@@ -374,6 +381,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         delete this.currentProviderListeners[action];
       }
       this.currentProvider = undefined;
+      console.log('cleared provider', provider)
+    } else {
+      console.log('skip clearing provider', provider)
     }
   }
 
@@ -414,6 +424,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
+      console.log('signature listener', method, params, this.currentProvider)
       if (
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
@@ -468,6 +479,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
+      // console.log('transaction listener', method, params)
       if (
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
@@ -490,8 +502,8 @@ export class FormoAnalytics implements IFormoAnalytics {
 
           return;
         } catch (error) {
-          console.log("transaction listener catch");
-          console.log(error);
+          // console.log("transaction listener catch");
+          // console.log(error);
           const rpcError = error as RPCError;
           if (rpcError && rpcError?.code === 4001) {
             // Emit transaction rejected event
@@ -511,6 +523,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
+    console.log('onAddressChanged', addresses)
     if (addresses.length > 0) {
       this.onAddressConnected(addresses[0]);
     } else {
@@ -519,6 +532,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onAddressConnected(address: Address): Promise<void> {
+    console.log('onAddressConnected', address)
     if (address === this.currentConnectedAddress) {
       // We have already reported this address
       return;
@@ -528,6 +542,14 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentChainId = await this.getCurrentChainId();
     this.connect({ chainId: this.currentChainId, address });
+  }
+
+  private async onAddressDisconnected(): Promise<void> {
+    console.log('onAddressDisconnected', this.currentChainId, this.currentConnectedAddress)
+    await this.handleDisconnect(
+      this.currentChainId,
+      this.currentConnectedAddress
+    );
   }
 
   private async handleDisconnect(
@@ -544,15 +566,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     await this.trackEvent(Event.DISCONNECT, payload);
   }
 
-  private async onAddressDisconnected(): Promise<void> {
-    await this.handleDisconnect(
-      this.currentChainId,
-      this.currentConnectedAddress
-    );
-  }
-
   private async onChainChanged(chainIdHex: string): Promise<void> {
     this.currentChainId = parseInt(chainIdHex);
+    console.log('onChainChanged', this.currentChainId)
     if (!this.currentConnectedAddress) {
       if (!this.currentProvider) {
         console.log(
@@ -687,11 +703,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
+    // console.log('getAddress', provider, this.currentProvider)
     const p = provider || this.currentProvider;
     if (!p) return null;
 
     try {
-      const accounts = await this.getAccounts(p);
+      const accounts = await this.getAccounts(p);      
       if (accounts && accounts.length > 0) {
         return accounts[0];
         // TODO: how to handle multiple addresses?
