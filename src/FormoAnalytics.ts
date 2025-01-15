@@ -1,5 +1,5 @@
 import axios from "axios";
-import { createStore, EIP6963ProviderDetail } from 'mipd';
+import { createStore, EIP6963ProviderDetail, EIP6963ProviderInfo } from 'mipd';
 import {
   COUNTRY_LIST,
   CURRENT_URL_KEY,
@@ -55,7 +55,7 @@ interface IFormoAnalytics {
     value?: string;
     transactionHash?: string;
   }): Promise<void>;
-  identify(params: { address: Address }): Promise<void>;
+  identify(params: { address: Address, providerName?: string, rdns?: string }): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -89,7 +89,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     const analytics = new FormoAnalytics(apiKey, options);
     const providers = await analytics.getProviders() // providers have info and provider fields
 
-    
     // TOFIX: below doesn't work for browsers with multiple wallets
     // TODO: how to know which provider is connected?
     // possible solution is to bind request eth_requestAccounts calls
@@ -99,19 +98,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     // We may need to add a listener for when the user changes wallets 
     // which adds new listeners and removes old listeners
 
-    const provider =
-      window?.ethereum;
-    console.log('window.ethereum provider')
-    console.log(provider)
+    // const provider =
+    //   window?.ethereum;
+    // console.log('window.ethereum provider')
+    // console.log(provider)
 
     console.log('viewing eip6963 providers')
-    console.log(providers.length)
     console.log(providers)
     for (const { provider, info } of providers) {
       console.log(provider)
       console.log(info)
 
-            // IDEA: attach listeners to all providers to detect which one is connected, and then track that provider
+      // IDEA: attach listeners to all providers to detect which one is connected, and then track that provider
       // Alternatively: attach listeners to all providers
       const request = provider.request.bind(provider)
       provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
@@ -136,23 +134,19 @@ export class FormoAnalytics implements IFormoAnalytics {
         return request({ method, params });
       }
 
-      // Identify current user on init (TODO: make this toggleable)
-      // Note: need to do this for each provider and account?
       try {
         const accounts = await analytics.getAccounts(provider);
+        console.log(accounts)
         if (accounts && accounts.length > 0) {
-          console.log(accounts);
-          // TODO: emit identify event for each detected provider address and providerName
-          // this.identify({ address: accounts[0] });
+          for (const address of accounts) {
+            analytics.identify({ address, providerName: info.name, rdns: info.rdns});
+          }
         }
       } catch (err) {
         console.error(`Failed to get initial accounts for ${provider}:`, err);
       }      
 
 
-      // TODO
-      // analytics.identify(p.provider);
-      // console.log(`trackProvider ${provider.info.name}`)
       // analytics.trackProvider(provider);
       // TOFIX: Failed to initialize FormoAnalytics SDK TypeError: Cannot read properties of undefined (reading 'name')
     }
@@ -341,14 +335,14 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
-  public async identify(params?: { address: Address }): Promise<void> {
-    const address = params?.address || (await this.getAddress());
-    if (!address) return;
-    
-    await this.trackEvent(Event.IDENTIFY, {
-      address,
-      // TODO: detect provider name https://linear.app/getformo/issue/P-837/sdk-detect-user-wallet-type-in-identify-call
-    });
+  public async identify({ address, providerName, rdns }: { address: Address, providerName?: string, rdns?: string }): Promise<void> {
+    if (address) {
+      await this.trackEvent(Event.IDENTIFY, {
+        address,
+        name: providerName,
+        rdns,
+      });
+    }
   }
 
   /**
@@ -366,6 +360,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   private trackProvider(provider: EIP1193Provider): void {
+    console.log('trackProvider')
+    console.log(provider)
+    console.log(this._provider)
     if (provider === this._provider) {
       console.log("Provider already tracked.");
       return;
@@ -374,6 +371,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = undefined;
     this.currentConnectedAddress = undefined;
 
+    // Delete previous provider listeners
     if (this._provider) {
       const actions = Object.keys(this._providerListeners);
       for (const action of actions) {
@@ -381,7 +379,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         delete this._providerListeners[action];
       }
     }
-
     this._provider = provider;
 
     // Register listeners for web3 provider events
@@ -655,10 +652,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   // TODO: refactor this with event queue and flushing
   // https://linear.app/getformo/issue/P-835/sdk-refactor-retries-with-event-queue-and-batching
   private async trackEvent(action: string, payload: any): Promise<void> {
-    const address = await this.getAddress();
+    const address = payload.address || (await this.getAddress());
 
     const requestData = {
-      address: address,
+      address,
       timestamp: new Date().toISOString(),
       action,
       version: "1",
@@ -717,11 +714,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         return accounts[0];
         // TODO: how to handle multiple addresses?
       }
+      return null;
     } catch (err) {
       console.log("Failed to fetch accounts from provider:", err);
       return null;
     }
-    return null;
   }
 
   private async getAccounts(provider?: EIP1193Provider): Promise<Address[] | null> {
@@ -751,6 +748,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async getCurrentChainId(): Promise<number> {
     if (!this.provider) {
       console.error("FormoAnalytics::getCurrentChainId: provider not set");
+      return 0;
     }
 
     let chainIdHex;
