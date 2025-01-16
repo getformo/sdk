@@ -1,5 +1,5 @@
 import axios from "axios";
-import { createStore, EIP6963ProviderDetail, EIP6963ProviderInfo } from 'mipd';
+import { createStore, EIP6963ProviderDetail, EIP6963ProviderInfo } from "mipd";
 import {
   COUNTRY_LIST,
   CURRENT_URL_KEY,
@@ -18,6 +18,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
+import { toSnakeCase } from "./lib/utils";
 
 interface IFormoAnalytics {
   page(): void;
@@ -76,7 +77,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     // TODO: replace with eip6963
-    const provider = options.provider || window?.ethereum
+    const provider = options.provider || window?.ethereum;
     if (provider) {
       this.trackProvider(provider);
     }
@@ -90,14 +91,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     options?: Options
   ): Promise<FormoAnalytics> {
     const analytics = new FormoAnalytics(apiKey, options);
-    
+
     // Identify
     const providers = await analytics.getProviders();
     await analytics.identifyAll(providers);
 
     return analytics;
   }
- 
+
   /*
     Public SDK functions
   */
@@ -135,8 +136,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentConnectedAddress = address;
 
     await this.trackEvent(Event.CONNECT, {
-      chain_id: chainId,
-      address: address,
+      chainId,
+      address,
     });
   }
 
@@ -188,7 +189,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
 
     await this.trackEvent(Event.CHAIN_CHANGED, {
-      chain_id: chainId,
+      chainId,
       address: address || this.currentConnectedAddress,
     });
   }
@@ -234,7 +235,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} params.value
    * @param {string} params.transactionHash - only provided if status is broadcasted
    * @returns {Promise<void>}
-   */  
+   */
   async transaction({
     status,
     chainId,
@@ -268,11 +269,19 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
-  public async identify({ address, providerName, rdns }: { address: Address, providerName?: string, rdns?: string }): Promise<void> {
+  public async identify({
+    address,
+    providerName,
+    rdns,
+  }: {
+    address: Address;
+    providerName?: string;
+    rdns?: string;
+  }): Promise<void> {
     if (address) {
       await this.trackEvent(Event.IDENTIFY, {
         address,
-        name: providerName,
+        providerName,
         rdns,
       });
     }
@@ -589,7 +598,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       timestamp: new Date().toISOString(),
       action,
       version: "1",
-      payload: await this.buildEventPayload(payload),
+      payload: await this.buildEventPayload(toSnakeCase(payload)),
     };
 
     try {
@@ -635,7 +644,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      return [window?.ethereum]
+      return [window?.ethereum];
     }
     return providers;
   }
@@ -646,12 +655,16 @@ export class FormoAnalytics implements IFormoAnalytics {
         const accounts = await this.getAccounts(provider);
         if (accounts && accounts.length > 0) {
           for (const address of accounts) {
-            await this.identify({ address, providerName: info.name, rdns: info.rdns });
+            await this.identify({
+              address,
+              providerName: info.name,
+              rdns: info.rdns,
+            });
           }
         }
       } catch (err) {}
     }
-  }      
+  }
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
@@ -678,7 +691,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     return null;
   }
 
-  private async getAccounts(provider?: EIP1193Provider): Promise<Address[] | null> {
+  private async getAccounts(
+    provider?: EIP1193Provider
+  ): Promise<Address[] | null> {
     const p = provider || this.provider;
     try {
       const res: string[] | null | undefined = await p?.request({
