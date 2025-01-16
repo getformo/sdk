@@ -272,7 +272,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (address) {
       await this.trackEvent(Event.IDENTIFY, {
         address,
-        name: providerName,
+        providerName,
         rdns,
       });
     }
