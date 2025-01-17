@@ -7,13 +7,15 @@ const toSnake = (str: string) =>
 // Converts object keys to snake_case, omitting keys in the omitKeys array
 export function toSnakeCase(obj: any, omitKeys: string[] = []) {
   const convert = (data: any): any => {
-    if (Array.isArray(obj)) {
-      return obj.map(convert);
-    } else if (obj !== null && typeof obj === "object") {
-      return Object.keys(obj).reduce((acc: any, key) => {
+    if (Array.isArray(data)) {
+      return data.map(convert); // Recursively handle array elements
+    } else if (data !== null && typeof data === "object") {
+      return Object.keys(data).reduce((acc: any, key) => {
         // If the key is in omitKeys, keep it as it is
         const resultKey = omitKeys.includes(key) ? key : toSnake(key);
-        acc[resultKey] = omitKeys.includes(key) ? obj[key] : convert(obj[key]);
+        acc[resultKey] = omitKeys.includes(key)
+          ? data[key]
+          : convert(data[key]);
         return acc;
       }, {});
     }
