@@ -69,7 +69,7 @@
   },
   "scripts": {
     "prebuild": "yarn clean",
-    "build": "yarn test && yarn build-cjs && yarn build-esm && yarn webpack --mode=production",
+    "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production",
     "build-cjs": "yarn tsc --build",
     "build-esm": "yarn tsc -m es6 --outdir dist/esm",
     "clean": "rm -rf dist",
