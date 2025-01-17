@@ -1,5 +1,5 @@
 import axios from "axios";
-import { createStore, EIP6963ProviderDetail, EIP6963ProviderInfo } from "mipd";
+import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
   COUNTRY_LIST,
   CURRENT_URL_KEY,
@@ -22,7 +22,6 @@ import { toSnakeCase } from "./lib/utils";
 
 interface IFormoAnalytics {
   page(): void;
-  // trackPagesChange(): void;
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
@@ -82,8 +81,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.trackProvider(provider);
     }
 
-    this.trackFirstPageVisit();
-    this.trackPagesChange();
+    this.trackFirstPageHit();
+    this.trackPageHits();
   }
 
   static async init(
@@ -535,7 +534,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private async trackFirstPageVisit(): Promise<void> {
+  private async trackFirstPageHit(): Promise<void> {
     if (sessionStorage.getItem(CURRENT_URL_KEY) === null) {
       sessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
     }
@@ -543,7 +542,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.trackPageHit();
   }
 
-  private async trackPagesChange(): Promise<void> {
+  private async trackPageHits(): Promise<void> {
     const oldPushState = history.pushState;
     history.pushState = function pushState(...args) {
       const ret = oldPushState.apply(this, args);
@@ -559,7 +558,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     window.addEventListener("popstate", () => this.onLocationChange());
-
     window.addEventListener("locationchange", () => this.onLocationChange());
   }
 
@@ -572,8 +570,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  // TODO: Add event listener and support for SPA and hash-based navigation
-  // https://linear.app/getformo/issue/P-800/sdk-support-spa-and-hash-based-routing
   private trackPageHit(): void {
     const pathname = window.location.pathname;
     const href = window.location.href;
@@ -681,8 +677,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       const accounts = await this.getAccounts();
       if (accounts && accounts.length > 0) {
         return accounts[0];
-        // TODO: how to handle multiple addresses? Should we emit a connect event here? Since the user has not manually connected
-        // https://linear.app/getformo/issue/P-691/sdk-detect-multiple-wallets-using-eip6963
       }
     } catch (err) {
       console.log("Failed to fetch accounts from provider:", err);
