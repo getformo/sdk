@@ -64,7 +64,7 @@ export const COUNTRY_LIST = {
   "America/Araguaina": "BR",
   "America/Argentina/Buenos_Aires": "AR",
   "America/Argentina/Catamarca": "AR",
-  "America/Argentina/ComodRivadavi": "AR",
+  "America/Argentina/ComodRivadavia": "AR",
   "America/Argentina/Cordoba": "AR",
   "America/Argentina/Jujuy": "AR",
   "America/Argentina/La_Rioja": "AR",

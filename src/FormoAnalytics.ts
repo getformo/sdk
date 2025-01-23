@@ -590,7 +590,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const address = await this.getAddress();
 
     const requestData = {
-      address: address,
+      address,
       timestamp: new Date().toISOString(),
       action,
       version: "1",
@@ -764,12 +764,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const location = this.getLocation();
     const language = this.getLanguage();
-    const address = await this.getAddress();
 
     // common browser properties
     return {
       "user-agent": window.navigator.userAgent,
-      address,
       locale: language,
       location,
       referrer: document.referrer,
