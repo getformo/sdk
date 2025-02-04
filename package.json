@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.13.2",
+  "version": "1.13.4-alpha.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/getformo/sdk.git"
@@ -69,12 +69,12 @@
   },
   "scripts": {
     "prebuild": "yarn clean",
-    "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production",
+    "build": "yarn test && yarn build-cjs && yarn build-esm && yarn webpack --mode=production",
     "build-cjs": "yarn tsc --build",
     "build-esm": "yarn tsc -m es6 --outdir dist/esm",
     "clean": "rm -rf dist",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
-    "test": "nyc mocha",
+    "test": "mocha --require ts-node/register test/**/*.ts",
     "test-watch": "nodemon --config test.nodemon.json",
     "prepare": "husky install",
     "commit": "git add . && cz"

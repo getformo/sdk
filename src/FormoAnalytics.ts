@@ -1,5 +1,5 @@
 import axios from "axios";
-import { createStore, EIP6963ProviderDetail, EIP6963ProviderInfo } from 'mipd';
+import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
   COUNTRY_LIST,
   CURRENT_URL_KEY,
@@ -18,6 +18,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
+import { toSnakeCase } from "./lib/utils";
 
 interface IFormoAnalytics {
   page(): void;
@@ -74,85 +75,27 @@ export class FormoAnalytics implements IFormoAnalytics {
       options: options
     };
 
-    this.trackFirstPageVisit();
-    this.trackPagesChange();
+    // TODO: replace with eip6963
+    const provider = options.provider || window?.ethereum;
+    if (provider) {
+      this.trackProvider(provider);
+    }
+
+    this.trackFirstPageHit();
+    this.trackPageHits();
   }
 
   static async init(
     apiKey: string,
     options?: Options
   ): Promise<FormoAnalytics> {
-    // TODO: support lazy loading
-    // https://github.com/segmentio/analytics-next/tree/master/packages/browser#lazy--delayed-loading
     const analytics = new FormoAnalytics(apiKey, options);
-    const providers = await analytics.getProviders()
-    // console.log(providers)
 
-    // TODO: need to track an initial provider, but which one?
-    const initialProvider = window?.ethereum;
-    const initialAddress = await analytics.getAddress(initialProvider);    
-    console.log('initialProvider', initialProvider)
-    console.log('initialAddress', initialAddress)
-    if (initialProvider) {
-      console.log('tracking initial provider', initialProvider)
-      analytics.trackProvider(initialProvider);
-    }
-
-    // Attach listeners to all providers to detect which one is connected, and then track that provider
-    for (const { provider, info } of providers) {
-      const request = provider.request.bind(provider)
-      provider.request = async <T>({ method, params }: RequestArguments): Promise<T | null | undefined> => {
-        console.log('init listener', method, params)
-        if (Array.isArray(params) && ['wallet_requestPermissions', 'eth_requestAccounts'].includes(method)) {
-          console.log('switching wallets to ', info.name)
-          try {
-            const response = await request({ method, params });
-            console.log('response', response)
-            analytics.trackProvider(provider);
-            console.log('tracking provider', info.name)
-            return response;
-          } catch (error) {
-            const rpcError = error as RPCError;
-            if (rpcError?.code === 4001) {
-              // User rejected the wallet switch
-              console.log('rejected switch to and clearing provider', info.name)
-              analytics.clearProvider(provider);
-            }
-            throw error;
-          }
-        }
-
-        return request({ method, params });
-      }
-    }
-
-    // Identify all connected accounts
-    // TODO: refactor to a helper function identifyMultiple(providers)
-    // try {
-    //   const accounts = await analytics.getAccounts(provider);
-    //   if (accounts && accounts.length > 0) {
-    //     for (const address of accounts) {
-    //       analytics.identify({ address, providerName: info.name, rdns: info.rdns});
-    //     }
-    //   }
-    // } catch (err) {}
-
-    console.log('currentProvider', analytics.currentProvider)    
+    // Identify
+    const providers = await analytics.getProviders();
+    await analytics.identifyAll(providers);
 
     return analytics;
-  }
-
-  private async getProviders(): Promise<EIP6963ProviderDetail[]> {
-    const store = createStore();
-    const providers = [...store.getProviders()];
-    // TODO: consider using store.subscribe to detect changes to providers list
-    // store.subscribe(providers => (state.providers = providers))
-
-    // Fallback to injected provider if no providers are found
-    if (providers.length === 0) {
-      return [window?.ethereum]
-    }
-    return providers;
   }
 
   /*
@@ -192,8 +135,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentConnectedAddress = address;
 
     await this.trackEvent(Event.CONNECT, {
-      chain_id: chainId,
-      address: address,
+      chainId,
+      address,
     });
   }
 
@@ -245,11 +188,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
 
     await this.trackEvent(Event.CHAIN_CHANGED, {
-      chain_id: chainId,
+      chainId,
       address: address || this.currentConnectedAddress,
     });
   }
-
 
   /**
    * Emits a signature event.
@@ -281,7 +223,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       ...(signatureHash && { signatureHash }),
     });
   }
-
 
   /**
    * Emits a transaction event.
@@ -327,11 +268,19 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
-  public async identify({ address, providerName, rdns }: { address: Address, providerName?: string, rdns?: string }): Promise<void> {
+  public async identify({
+    address,
+    providerName,
+    rdns,
+  }: {
+    address: Address;
+    providerName?: string;
+    rdns?: string;
+  }): Promise<void> {
     if (address) {
       await this.trackEvent(Event.IDENTIFY, {
         address,
-        name: providerName,
+        providerName,
         rdns,
       });
     }
@@ -353,20 +302,22 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private trackProvider(provider: EIP1193Provider): void {
     console.log('trackProvider', provider, this.currentProvider)
-    if (provider === this.currentProvider) {
+    const p = provider || this.provider;
+    if (p === this.currentProvider) {
       console.log("Provider already tracked.");
       return;
     }
 
     this.clearProvider(this.currentProvider)
-    this.currentProvider = provider;
+    this.currentProvider = p;
 
     // Register listeners for web3 provider events
-    console.log('registering listeners for', provider)
-    this.registerAddressChangedListener(provider);
-    this.registerChainChangedListener(provider);
-    this.registerSignatureListener(provider);
-    this.registerTransactionListener(provider);
+    console.log('registering listeners for', p)
+    // Todo: for provider only
+    this.registerAddressChangedListener();
+    this.registerChainChangedListener();
+    this.registerSignatureListener();
+    this.registerTransactionListener();
   }
 
   private clearProvider(provider?: EIP1193Provider): void {
@@ -601,7 +552,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private async trackFirstPageVisit(): Promise<void> {
+  private async trackFirstPageHit(): Promise<void> {
     if (sessionStorage.getItem(CURRENT_URL_KEY) === null) {
       sessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
     }
@@ -609,7 +560,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.trackPageHit();
   }
 
-  private async trackPagesChange(): Promise<void> {
+  private async trackPageHits(): Promise<void> {
     const oldPushState = history.pushState;
     history.pushState = function pushState(...args) {
       const ret = oldPushState.apply(this, args);
@@ -625,7 +576,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     window.addEventListener("popstate", () => this.onLocationChange());
-
     window.addEventListener("locationchange", () => this.onLocationChange());
   }
 
@@ -638,8 +588,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  // TODO: Add event listener and support for SPA and hash-based navigation
-  // https://linear.app/getformo/issue/P-800/sdk-support-spa-and-hash-based-routing
   private trackPageHit(): void {
     const pathname = window.location.pathname;
     const href = window.location.href;
@@ -664,7 +612,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       timestamp: new Date().toISOString(),
       action,
       version: "1",
-      payload: await this.buildEventPayload(payload),
+      payload: await this.buildEventPayload(toSnakeCase(payload)),
     };
 
     try {
@@ -702,16 +650,52 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
-  private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
-    // console.log('getAddress', provider, this.currentProvider)
-    const p = provider || this.currentProvider;
-    if (!p) return null;
+  private async getProviders(): Promise<EIP6963ProviderDetail[]> {
+    const store = createStore();
+    const providers = [...store.getProviders()];
+    // TODO: consider using store.subscribe to detect changes to providers list
+    // store.subscribe(providers => (state.providers = providers))
+
+    // Fallback to injected provider if no providers are found
+    if (providers.length === 0) {
+      return [window?.ethereum];
+    }
+    return providers;
+  }
+
+  private async identifyAll(providers: EIP6963ProviderDetail[]): Promise<void> {
+    for (const { provider, info } of providers) {
+      try {
+        const accounts = await this.getAccounts(provider);
+        if (accounts && accounts.length > 0) {
+          for (const address of accounts) {
+            await this.identify({
+              address,
+              providerName: info.name,
+              rdns: info.rdns,
+            });
+          }
+        }
+      } catch (err) {}
+    }
+  }
+
+  get provider(): EIP1193Provider | undefined {
+    return this.currentProvider;
+  }
+
+  private async getAddress(): Promise<Address | null> {
+    if (this.currentConnectedAddress) return this.currentConnectedAddress;
+    const p = this.provider;
+    if (!p) {
+      console.log("FormoAnalytics::getAddress: the provider is not set");
+      return null;
+    }
 
     try {
       const accounts = await this.getAccounts(p);      
       if (accounts && accounts.length > 0) {
         return accounts[0];
-        // TODO: how to handle multiple addresses?
       }
       return null;
     } catch (err) {
@@ -720,8 +704,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private async getAccounts(provider?: EIP1193Provider): Promise<Address[] | null> {
-    const p = provider || this.currentProvider;
+  private async getAccounts(
+    provider?: EIP1193Provider
+  ): Promise<Address[] | null> {
+    const p = provider || this.provider;
     try {
       const res: string[] | null | undefined = await p?.request({
         method: "eth_accounts",
@@ -798,12 +784,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const location = this.getLocation();
     const language = this.getLanguage();
-    const address = await this.getAddress();
 
     // common browser properties
     return {
       "user-agent": window.navigator.userAgent,
-      address,
       locale: language,
       location,
       referrer: document.referrer,
