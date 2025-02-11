@@ -23,7 +23,7 @@
   "dependencies": {
     "@highlight-run/react": "^7.0.2",
     "axios": "^1.7.8",
-    "highlight.run": "^9.5.2",
+    "highlight.run": "^9.7.3",
     "mipd": "^0.0.7"
   },
   "devDependencies": {
