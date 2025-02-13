@@ -6,7 +6,6 @@ import {
   EVENTS_API_URL,
   Event,
 } from "./constants";
-import { H } from "highlight.run";
 import {
   ChainID,
   Address,
@@ -620,10 +619,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         throw new Error(`Failed with status: ${response.status}`);
       }
     } catch (error) {
-      H.consumeError(
-        error as Error,
-        `Request data: ${JSON.stringify(requestData)}`
-      );
       console.error(`Event "${action}" failed. Error: ${error}`);
     }
   }
