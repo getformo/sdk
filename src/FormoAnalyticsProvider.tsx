@@ -7,10 +7,6 @@ import React, {
 } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { FormoAnalyticsProviderProps } from "./types";
-import { ErrorBoundary } from "@highlight-run/react";
-import { H } from "highlight.run";
-
-const HIGHLIGHT_PROJECT_ID = process.env.REACT_APP_HIGHLIGHT_PROJECT_ID;
 
 export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
   undefined
@@ -42,28 +38,6 @@ const InitializedAnalytics = ({
   const [isInitialized, setIsInitialized] = useState(false);
   const initializedStartedRef = useRef(false);
 
-  const initializeHighlight = async () => {
-    if (HIGHLIGHT_PROJECT_ID) {
-      try {
-        H.init(HIGHLIGHT_PROJECT_ID, {
-          serviceName: "formo-analytics-sdk",
-          tracingOrigins: true,
-          networkRecording: {
-            enabled: true,
-            recordHeadersAndBody: true,
-            urlBlocklist: [
-              "https://www.googleapis.com/identitytoolkit",
-              "https://securetoken.googleapis.com",
-            ],
-          },
-        });
-        console.log("Highlight.run initialized successfully");
-      } catch (error) {
-        console.error("Failed to initialize Highlight.run", error);
-      }
-    }
-  };
-
   const initializeFormoAnalytics = async (apiKey: string, options: any) => {
     try {
       const sdkInstance = await FormoAnalytics.init(apiKey, options);
@@ -81,7 +55,6 @@ const InitializedAnalytics = ({
       if (initializedStartedRef.current) return;
       initializedStartedRef.current = true;
 
-      await initializeHighlight();
       await initializeFormoAnalytics(apiKey, options);
     };
 
@@ -94,11 +67,9 @@ const InitializedAnalytics = ({
   }
 
   return (
-    <ErrorBoundary onError={(error, info) => H?.consumeError(error, info)}>
-      <FormoAnalyticsContext.Provider value={sdk}>
-        {children}
-      </FormoAnalyticsContext.Provider>
-    </ErrorBoundary>
+    <FormoAnalyticsContext.Provider value={sdk}>
+      {children}
+    </FormoAnalyticsContext.Provider>
   );
 };
 
