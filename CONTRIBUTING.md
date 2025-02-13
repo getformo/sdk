@@ -89,5 +89,5 @@ Run the following command to publish the package to NPM:
 npm version <major/minor/patch>
 
 // Publish the package to NPM
-npm publish 
+npm pub
 ```
