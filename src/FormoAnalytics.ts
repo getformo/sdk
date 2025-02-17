@@ -17,7 +17,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { toSnakeCase } from "./lib/utils";
+import { isLocalhost, toSnakeCase } from "./lib/utils";
 
 interface IFormoAnalytics {
   page(): void;
@@ -61,6 +61,8 @@ interface IFormoAnalytics {
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
+  private identifySent?: boolean;
+  readonly identifySentKey = "identifySent";
 
   config: Config;
   currentChainId?: ChainID;
@@ -71,8 +73,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     public options: Options = {}
   ) {
     this.config = {
-      apiKey: apiKey,
+      apiKey,
+      trackLocalhost: options.trackLocalhost,
     };
+
+    try {
+      const isWalletIdentified = JSON.parse(
+        sessionStorage.getItem(this.identifySentKey) || "false"
+      );
+      this.identifySent = isWalletIdentified;
+    } catch {
+      this.identifySent = false;
+    }
 
     // TODO: replace with eip6963
     const provider = options.provider || window?.ethereum;
@@ -263,7 +275,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits a identify event with current wallet address.
+   * Emits an identify event with current wallet address.
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
@@ -272,11 +284,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     providerName,
     rdns,
   }: {
-    address: Address;
+    address: Address | null;
     providerName?: string;
     rdns?: string;
   }): Promise<void> {
-    if (address) {
+    if (this.identifySent === false) {
+      this.identifySent = true;
+      sessionStorage.setItem(this.identifySentKey, "true");
       await this.trackEvent(Event.IDENTIFY, {
         address,
         providerName,
@@ -574,6 +588,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     const href = window.location.href;
     const hash = window.location.hash;
 
+    if (!this.config.trackLocalhost && isLocalhost()) {
+      return console.warn(
+        "[Formo] Ignoring event because website is running locally"
+      );
+    }
+
     setTimeout(async () => {
       this.trackEvent(Event.PAGE, {
         pathname,
@@ -644,6 +664,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     for (const { provider, info } of providers) {
       try {
         const accounts = await this.getAccounts(provider);
+        // Identify with accounts
         if (accounts && accounts.length > 0) {
           for (const address of accounts) {
             await this.identify({
@@ -652,8 +673,17 @@ export class FormoAnalytics implements IFormoAnalytics {
               rdns: info.rdns,
             });
           }
+        } else {
+          // Identify without accounts
+          await this.identify({
+            address: null,
+            providerName: info.name,
+            rdns: info.rdns,
+          });
         }
-      } catch (err) {}
+      } catch (err) {
+        console.log("identifying all => err", err);
+      }
     }
   }
 
@@ -763,6 +793,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // common browser properties
     return {
       "user-agent": window.navigator.userAgent,
+      origin: url.origin,
       locale: language,
       location,
       referrer: document.referrer,

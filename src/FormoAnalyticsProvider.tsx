@@ -1,10 +1,4 @@
-import React, {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  useRef,
-} from "react";
+import { createContext, useContext, useEffect, useState, useRef } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { FormoAnalyticsProviderProps } from "./types";
 
@@ -55,7 +49,7 @@ const InitializedAnalytics = ({
       if (initializedStartedRef.current) return;
       initializedStartedRef.current = true;
 
-      await initializeFormoAnalytics(apiKey, options);
+      await initializeFormoAnalytics(apiKey!, options);
     };
 
     initialize();
