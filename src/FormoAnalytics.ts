@@ -17,7 +17,8 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { isLocalhost, toSnakeCase } from "./lib/utils";
+import { formoSessionStorage, isLocalhost, toSnakeCase } from "./lib";
+import { SESSION_IDENTIFIED_KEY } from "./constants";
 
 interface IFormoAnalytics {
   page(): void;
@@ -61,8 +62,7 @@ interface IFormoAnalytics {
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
-  private identifySent?: boolean;
-  readonly identifySentKey = "identifySent";
+  private sessionIdentified?: boolean = false;
 
   config: Config;
   currentChainId?: ChainID;
@@ -77,14 +77,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       trackLocalhost: options.trackLocalhost,
     };
 
-    try {
-      const isWalletIdentified = JSON.parse(
-        sessionStorage.getItem(this.identifySentKey) || "false"
-      );
-      this.identifySent = isWalletIdentified;
-    } catch {
-      this.identifySent = false;
-    }
+    this.sessionIdentified =
+      (formoSessionStorage.getItem(SESSION_IDENTIFIED_KEY) as boolean) ?? false;
 
     // TODO: replace with eip6963
     const provider = options.provider || window?.ethereum;
@@ -288,9 +282,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     providerName?: string;
     rdns?: string;
   }): Promise<void> {
-    if (this.identifySent === false) {
-      this.identifySent = true;
-      sessionStorage.setItem(this.identifySentKey, "true");
+    if (this.sessionIdentified === false) {
+      this.sessionIdentified = true;
+      formoSessionStorage.setItem(SESSION_IDENTIFIED_KEY, true);
       await this.trackEvent(Event.IDENTIFY, {
         address,
         providerName,
@@ -548,8 +542,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async trackFirstPageHit(): Promise<void> {
-    if (sessionStorage.getItem(CURRENT_URL_KEY) === null) {
-      sessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
+    if (formoSessionStorage.getItem(CURRENT_URL_KEY) === null) {
+      formoSessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
     }
 
     return this.trackPageHit();
@@ -575,10 +569,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onLocationChange(): Promise<void> {
-    const currentUrl = sessionStorage.getItem(CURRENT_URL_KEY);
+    const currentUrl = formoSessionStorage.getItem(CURRENT_URL_KEY);
 
     if (currentUrl !== window.location.href) {
-      sessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
+      formoSessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
       this.trackPageHit();
     }
   }
