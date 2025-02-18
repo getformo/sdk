@@ -1,13 +1,14 @@
 import { EIP1193Provider } from "./provider";
 
 // Decimal chain ID
-export type ChainID = number
+export type ChainID = number;
 
 // Address (EVM, Solana, etc.)
-export type Address = string
+export type Address = string;
 
 export interface Options {
   provider?: EIP1193Provider;
+  trackLocalhost?: boolean;
 }
 
 export interface FormoAnalyticsProviderProps {
@@ -19,4 +20,5 @@ export interface FormoAnalyticsProviderProps {
 
 export interface Config {
   apiKey: string;
+  trackLocalhost?: boolean;
 }
