@@ -17,7 +17,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { formoSessionStorage, isLocalhost, toSnakeCase } from "./lib";
+import { session, isLocalhost, toSnakeCase } from "./lib";
 import { SESSION_IDENTIFIED_KEY } from "./constants";
 
 interface IFormoAnalytics {
@@ -62,7 +62,7 @@ interface IFormoAnalytics {
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
-  private sessionIdentified?: boolean = false;
+  private session: FormoAnalyticsSession;
 
   config: Config;
   currentChainId?: ChainID;
@@ -77,8 +77,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       trackLocalhost: options.trackLocalhost,
     };
 
-    this.sessionIdentified =
-      (formoSessionStorage.getItem(SESSION_IDENTIFIED_KEY) as boolean) ?? false;
+    this.session = new FormoAnalyticsSession();
 
     // TODO: replace with eip6963
     const provider = options.provider || window?.ethereum;
@@ -282,15 +281,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     providerName?: string;
     rdns?: string;
   }): Promise<void> {
-    if (this.sessionIdentified === false) {
-      this.sessionIdentified = true;
-      formoSessionStorage.setItem(SESSION_IDENTIFIED_KEY, true);
-      await this.trackEvent(Event.IDENTIFY, {
-        address,
-        providerName,
-        rdns,
-      });
-    }
+    if (this.session.isIdentified())
+      return console.warn(
+        "FormoAnalytics::identify: Wallet already identified in this session"
+      );
+
+    this.session.identify();
+    await this.trackEvent(Event.IDENTIFY, {
+      address,
+      providerName,
+      rdns,
+    });
   }
 
   /**
@@ -309,7 +310,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private trackProvider(provider: EIP1193Provider): void {
     if (provider === this._provider) {
-      console.log("Provider already tracked.");
+      console.warn("FormoAnalytics::trackProvider: Provider already tracked.");
       return;
     }
 
@@ -542,8 +543,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async trackFirstPageHit(): Promise<void> {
-    if (formoSessionStorage.getItem(CURRENT_URL_KEY) === null) {
-      formoSessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
+    if (session.get(CURRENT_URL_KEY) === null) {
+      session.set(CURRENT_URL_KEY, window.location.href);
     }
 
     return this.trackPageHit();
@@ -569,10 +570,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onLocationChange(): Promise<void> {
-    const currentUrl = formoSessionStorage.getItem(CURRENT_URL_KEY);
+    const currentUrl = session.get(CURRENT_URL_KEY);
 
     if (currentUrl !== window.location.href) {
-      formoSessionStorage.setItem(CURRENT_URL_KEY, window.location.href);
+      session.set(CURRENT_URL_KEY, window.location.href);
       this.trackPageHit();
     }
   }
@@ -584,7 +585,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (!this.config.trackLocalhost && isLocalhost()) {
       return console.warn(
-        "[Formo] Ignoring event because website is running locally"
+        "FormoAnalytics::trackPageHit: Ignoring event because website is running locally"
       );
     }
 
@@ -849,5 +850,22 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private getActionDescriptor(action: string, payload: any): string {
     return `${action}${payload.status ? ` ${payload.status}` : ""}`;
+  }
+}
+
+interface IFormoAnalyticsSession {
+  isIdentified(): boolean;
+  identify(): void;
+}
+
+class FormoAnalyticsSession implements IFormoAnalyticsSession {
+  constructor() {}
+
+  public isIdentified(): boolean {
+    return session.get(SESSION_IDENTIFIED_KEY) === true;
+  }
+
+  public identify(): void {
+    session.set(SESSION_IDENTIFIED_KEY, true);
   }
 }
