@@ -580,7 +580,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private trackPageHit(): void {
     const pathname = window.location.pathname;
-    const href = window.location.href;
     const hash = window.location.hash;
 
     if (!this.config.trackLocalhost && isLocalhost()) {
@@ -592,7 +591,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     setTimeout(async () => {
       this.trackEvent(Event.PAGE, {
         pathname,
-        href,
         hash,
       });
     }, 300);
@@ -788,13 +786,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     // common browser properties
     return {
       "user-agent": window.navigator.userAgent,
-      origin: url.origin,
+      href: url.href,
       locale: language,
       location,
       referrer: document.referrer,
       utm_source: params.get("utm_source"),
       utm_medium: params.get("utm_medium"),
       utm_campaign: params.get("utm_campaign"),
+      utm_content: params.get("utm_content"),
+      utm_term: params.get("utm_term"),
       ref: params.get("ref"),
       ...eventSpecificPayload,
     };
