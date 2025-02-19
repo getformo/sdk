@@ -17,7 +17,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { session, isLocalhost, toSnakeCase } from "./lib";
+import { session, isLocalhost, toSnakeCase, isAddress } from "./lib";
 import { SESSION_IDENTIFIED_KEY } from "./constants";
 
 interface IFormoAnalytics {
@@ -696,7 +696,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts();
       if (accounts && accounts.length > 0) {
-        return accounts[0];
+        return isAddress(accounts[0]) ? accounts[0] : null;
       }
     } catch (err) {
       console.log("Failed to fetch accounts from provider:", err);
@@ -714,7 +714,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_accounts",
       });
       if (!res || res.length === 0) return null;
-      return res;
+      return res.filter(isAddress);
     } catch (err) {
       if ((err as any).code !== 4001) {
         console.log(
