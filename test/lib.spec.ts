@@ -1,5 +1,5 @@
 import { describe, it } from "mocha";
-import { toSnakeCase } from "../src/lib";
+import { isAddress, toSnakeCase } from "../src/lib";
 import { expect } from "chai";
 
 describe("toSnakeCase", () => {
@@ -27,5 +27,17 @@ describe("toSnakeCase", () => {
       hash_message: "John Doe",
       "user-agent": "Mozilla/5.0",
     });
+  });
+});
+
+describe("isAddress", () => {
+  it("should return true if the input is a valid ethereum address", () => {
+    expect(isAddress("0xa5cc3c03994DB5b0d9A5eEdD10CabaB0813678AC")).to.equal(
+      true
+    );
+  });
+
+  it("should return false otherwise", () => {
+    expect(isAddress("o")).to.equal(false);
   });
 });
