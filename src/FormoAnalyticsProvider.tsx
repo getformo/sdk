@@ -29,7 +29,6 @@ const InitializedAnalytics = ({
   children,
 }: FormoAnalyticsProviderProps) => {
   const [sdk, setSdk] = useState<FormoAnalytics | undefined>();
-  const [isInitialized, setIsInitialized] = useState(false);
   const initializedStartedRef = useRef(false);
 
   const initializeFormoAnalytics = async (apiKey: string, options: any) => {
@@ -39,8 +38,6 @@ const InitializedAnalytics = ({
       console.log("FormoAnalytics SDK initialized successfully");
     } catch (error) {
       console.error("Failed to initialize FormoAnalytics SDK", error);
-    } finally {
-      setIsInitialized(true); // Ensure UI renders even after failure
     }
   };
 
@@ -54,11 +51,6 @@ const InitializedAnalytics = ({
 
     initialize();
   }, [apiKey, options]);
-
-  if (!isInitialized) {
-    // Optionally show a loading state until initialization attempt finishes
-    return <div>Loading analytics...</div>;
-  }
 
   return (
     <FormoAnalyticsContext.Provider value={sdk}>
