@@ -9,6 +9,11 @@ export type Address = string;
 export interface Options {
   provider?: EIP1193Provider;
   trackLocalhost?: boolean;
+
+  flushAt?: number;
+  flushInterval?: number;
+  retryCount?: number;
+  maxQueueSize?: number;
 }
 
 export interface FormoAnalyticsProviderProps {
