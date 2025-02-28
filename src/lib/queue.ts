@@ -1,7 +1,13 @@
 import fetch from "fetch-retry";
 import isNetworkError from "is-network-error";
-import FingerprintJS from "@fingerprintjs/fingerprintjs";
-import { RequestEvent } from "./types";
+import { RequestEvent } from "../types";
+import {
+  clampNumber,
+  getActionDescriptor,
+  millisecondsToSecond,
+  toDateHourMinute,
+} from "./utils";
+import { Fingerprint } from "./fingerprint";
 
 const sdkFetch = fetch(global.fetch);
 
@@ -34,11 +40,11 @@ const DEFAULT_QUEUE_SIZE = 1_024 * 500; // 500kB
 const MAX_QUEUE_SIZE = 1_024 * 500; // 500kB
 const MIN_QUEUE_SIZE = 200; // 200 bytes
 
-const DEFAULT_FLUSH_INTERVAL = 1_000 * 60; // 1 MINUTE
+const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 1 MINUTE
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
-export class FormoAnalyticsEventQueue {
+export class EventQueue {
   private writeKey: string;
   private url: string;
   private queue: QueueItem[];
@@ -50,6 +56,7 @@ export class FormoAnalyticsEventQueue {
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
+  private payloadHashes: Set<string> = new Set();
 
   constructor(writeKey: string, options: Options) {
     options = options || {};
@@ -57,22 +64,22 @@ export class FormoAnalyticsEventQueue {
     this.queue = [];
     this.writeKey = writeKey;
     this.url = options.url;
-    this.retryCount = this.getFormattedNumericParams(
+    this.retryCount = clampNumber(
       options.retryCount || DEFAULT_RETRY,
       MAX_RETRY,
       MIN_RETRY
     );
-    this.flushAt = this.getFormattedNumericParams(
+    this.flushAt = clampNumber(
       options.flushAt || DEFAULT_FLUSH_AT,
       MAX_FLUSH_AT,
       MIN_FLUSH_AT
     );
-    this.maxQueueSize = this.getFormattedNumericParams(
+    this.maxQueueSize = clampNumber(
       options.maxQueueSize || DEFAULT_QUEUE_SIZE,
       MAX_QUEUE_SIZE,
       MIN_QUEUE_SIZE
     );
-    this.flushInterval = this.getFormattedNumericParams(
+    this.flushInterval = clampNumber(
       options.flushInterval || DEFAULT_FLUSH_INTERVAL,
       MAX_FLUSH_INTERVAL,
       MIN_FLUSH_INTERVAL
@@ -82,21 +89,21 @@ export class FormoAnalyticsEventQueue {
     this.pendingFlush = null;
     this.timer = null;
 
-    // flush before page close
-    window.addEventListener("beforeunload", async (e) => {
-      e.stopImmediatePropagation();
-      await this.flush();
+    this.onPageLeave(async (isAccessible: boolean) => {
+      if (isAccessible === false) {
+        await this.flush();
+      }
     });
   }
 
   //#region Public functions
-  enqueue(message: RequestEvent, callback?: (...args: any) => void) {
+  async enqueue(message: RequestEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
     // check if the message already exists
-    if (this.checkDuplicate(message)) {
+    if (await this.checkDuplicate(message)) {
       console.warn(
-        `Event already enqueued, try again after ${this.millisecondsToSecond(
+        `Event already enqueued, try again after ${millisecondsToSecond(
           this.flushInterval
         )} seconds.`
       );
@@ -104,11 +111,9 @@ export class FormoAnalyticsEventQueue {
     }
 
     this.queue.push({ message, callback });
+
     console.log(
-      `Event enqueued: ${this.getActionDescriptor(
-        message.action,
-        message.payload
-      )}`
+      `Event enqueued: ${getActionDescriptor(message.action, message.payload)}`
     );
 
     if (!this.flushed) {
@@ -155,6 +160,7 @@ export class FormoAnalyticsEventQueue {
     }
 
     const items = this.queue.splice(0, this.flushAt);
+    this.payloadHashes.clear();
     const data = items.map((item) => item.message);
 
     const done = (err?: Error) => {
@@ -166,13 +172,14 @@ export class FormoAnalyticsEventQueue {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Basic ${this.writeKey}`,
-        "X-Visitor-Id": await this.getVisitorId(),
+        "X-Visitor-Id": await Fingerprint.getVisitorId(),
       },
     };
 
     return (this.pendingFlush = sdkFetch(`${this.url}`, {
       method: "POST",
       body: JSON.stringify(data),
+      keepalive: true,
       retries: this.retryCount,
       retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
       retryOn: (_, error) => this.isErrorRetryable(error),
@@ -199,16 +206,7 @@ export class FormoAnalyticsEventQueue {
       }));
   }
 
-  //#endregion
-
   //#region Utility functions
-
-  private async getVisitorId(): Promise<string> {
-    const fp = await FingerprintJS.load();
-    const { visitorId } = await fp.get();
-    return visitorId;
-  }
-
   private isErrorRetryable(error: any) {
     // Retry Network Errors.
     if (isNetworkError(error)) return true;
@@ -226,57 +224,87 @@ export class FormoAnalyticsEventQueue {
     return false;
   }
 
-  private millisecondsToSecond(milliseconds: number): number {
-    return Math.ceil(milliseconds / 1_000);
-  }
-
-  private toDateHourMinute(date: Date) {
-    return (
-      date.getUTCFullYear() +
-      "-" +
-      ("0" + (date.getUTCMonth() + 1)).slice(-2) +
-      "-" +
-      ("0" + date.getUTCDate()).slice(-2) +
-      " " +
-      ("0" + date.getUTCHours()).slice(-2) +
-      ":" +
-      ("0" + date.getUTCMinutes()).slice(-2)
-    );
-  }
-
-  private checkDuplicate(newMessage: RequestEvent) {
+  private async checkDuplicate(newMessage: RequestEvent) {
     // check if exists a message with identical payload within 1 minute
-    const formattedTimestamp = this.toDateHourMinute(
-      new Date(newMessage.timestamp)
-    );
-    const stringifiedMessage = JSON.stringify({
-      ...newMessage,
-      timestamp: formattedTimestamp,
+    const formattedTimestamp = toDateHourMinute(new Date(newMessage.timestamp));
+    newMessage.timestamp = formattedTimestamp;
+
+    const hash = await this.hashPayload(newMessage);
+    if (this.payloadHashes.has(hash)) {
+      return true;
+    }
+    this.payloadHashes.add(hash);
+    return false;
+  }
+
+  private async hashPayload(payload: RequestEvent, algo = "SHA-1") {
+    return Array.from(
+      new Uint8Array(
+        await crypto.subtle.digest(
+          algo,
+          new TextEncoder().encode(JSON.stringify(payload))
+        )
+      ),
+      (byte) => byte.toString(16).padStart(2, "0")
+    ).join("");
+  }
+
+  private onPageLeave = (callback: (isAccessible: boolean) => void) => {
+    // To ensure the callback is only called once even if more than one events
+    // are fired at once.
+    let pageLeft = false;
+    let isAccessible = false;
+
+    function handleOnLeave() {
+      if (pageLeft) {
+        return;
+      }
+
+      pageLeft = true;
+
+      callback(isAccessible);
+
+      // Reset pageLeft on the next tick
+      // to ensure callback executes for other listeners
+      // when closing an inactive browser tab.
+      setTimeout(() => {
+        pageLeft = false;
+      }, 0);
+    }
+
+    // Catches the unloading of the page (e.g., closing the tab or navigating away).
+    // Includes user actions like clicking a link, entering a new URL,
+    // refreshing the page, or closing the browser tab
+    // Note that 'pagehide' is not supported in IE.
+    // So, this is a fallback.
+    (globalThis as typeof window).addEventListener("beforeunload", () => {
+      isAccessible = false;
+      handleOnLeave();
     });
 
-    return this.queue.some((item) => {
-      const { message } = item;
-      const formattedItemTimestamp = this.toDateHourMinute(
-        new Date(message.timestamp)
-      );
-      const stringifiedItem = JSON.stringify({
-        ...message,
-        timestamp: formattedItemTimestamp,
-      });
-
-      return stringifiedItem === stringifiedMessage;
+    (globalThis as typeof window).addEventListener("blur", () => {
+      isAccessible = true;
+      handleOnLeave();
     });
-  }
 
-  private getActionDescriptor(action: string, payload: any): string {
-    return `${action}${payload?.status ? ` ${payload?.status}` : ""}`;
-  }
+    (globalThis as typeof window).addEventListener("focus", () => {
+      pageLeft = false;
+    });
 
-  private getFormattedNumericParams(value: number, max: number, min: number) {
-    if (value < min) return min;
-    if (value > max) return max;
+    // Catches the page being hidden, including scenarios like closing the tab.
+    document.addEventListener("pagehide", () => {
+      isAccessible = document.visibilityState === "hidden";
+      handleOnLeave();
+    });
 
-    return value;
-  }
-  //#endregion
+    // Catches visibility changes, such as switching tabs or minimizing the browser.
+    document.addEventListener("visibilitychange", () => {
+      isAccessible = true;
+      if (document.visibilityState === "hidden") {
+        handleOnLeave();
+      } else {
+        pageLeft = false;
+      }
+    });
+  };
 }

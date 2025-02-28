@@ -7,11 +7,11 @@ export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
 );
 
 export const FormoAnalyticsProvider = (props: FormoAnalyticsProviderProps) => {
-  const { apiKey, disabled, children } = props;
+  const { writeKey, disabled, children } = props;
 
-  // Keep the app running without analytics if no API key is provided or disabled
-  if (!apiKey) {
-    console.error("FormoAnalyticsProvider: No API key provided");
+  // Keep the app running without analytics if no Write Key is provided or disabled
+  if (!writeKey) {
+    console.error("FormoAnalyticsProvider: No Write Key provided");
     return children;
   }
 
@@ -24,16 +24,16 @@ export const FormoAnalyticsProvider = (props: FormoAnalyticsProviderProps) => {
 };
 
 const InitializedAnalytics = ({
-  apiKey,
+  writeKey,
   options,
   children,
 }: FormoAnalyticsProviderProps) => {
   const [sdk, setSdk] = useState<FormoAnalytics | undefined>();
   const initializedStartedRef = useRef(false);
 
-  const initializeFormoAnalytics = async (apiKey: string, options: any) => {
+  const initializeFormoAnalytics = async (writeKey: string, options: any) => {
     try {
-      const sdkInstance = await FormoAnalytics.init(apiKey, options);
+      const sdkInstance = await FormoAnalytics.init(writeKey, options);
       setSdk(sdkInstance);
       console.log("FormoAnalytics SDK initialized successfully");
     } catch (error) {
@@ -46,11 +46,11 @@ const InitializedAnalytics = ({
       if (initializedStartedRef.current) return;
       initializedStartedRef.current = true;
 
-      await initializeFormoAnalytics(apiKey!, options);
+      await initializeFormoAnalytics(writeKey!, options);
     };
 
     initialize();
-  }, [apiKey, options]);
+  }, [writeKey, options]);
 
   return (
     <FormoAnalyticsContext.Provider value={sdk}>

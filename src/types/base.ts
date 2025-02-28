@@ -17,13 +17,13 @@ export interface Options {
 }
 
 export interface FormoAnalyticsProviderProps {
-  apiKey: string;
+  writeKey: string;
   options?: Options;
   disabled?: boolean;
   children: React.ReactNode;
 }
 
 export interface Config {
-  apiKey: string;
+  writeKey: string;
   trackLocalhost?: boolean;
 }

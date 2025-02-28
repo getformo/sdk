@@ -19,7 +19,7 @@ import {
 } from "./types";
 import { session, isLocalhost, toSnakeCase, isAddress } from "./lib";
 import { SESSION_IDENTIFIED_KEY } from "./constants";
-import { FormoAnalyticsEventQueue } from "./FormoAnalyticsEventQueue";
+import { EventQueue } from "./lib/queue";
 
 interface IFormoAnalytics {
   page(): void;
@@ -64,24 +64,24 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
   private session: FormoAnalyticsSession;
-  private eventQueue: FormoAnalyticsEventQueue;
+  private eventQueue: EventQueue;
 
   config: Config;
   currentChainId?: ChainID;
   currentConnectedAddress?: Address;
 
   private constructor(
-    public readonly apiKey: string,
+    public readonly writeKey: string,
     public options: Options = {}
   ) {
     this.config = {
-      apiKey,
+      writeKey,
       trackLocalhost: options.trackLocalhost || false,
     };
 
     this.session = new FormoAnalyticsSession();
 
-    this.eventQueue = new FormoAnalyticsEventQueue(this.config.apiKey, {
+    this.eventQueue = new EventQueue(this.config.writeKey, {
       url: EVENTS_API_URL,
       flushAt: options.flushAt,
       retryCount: options.retryCount,
@@ -100,10 +100,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   static async init(
-    apiKey: string,
+    writeKey: string,
     options?: Options
   ): Promise<FormoAnalytics> {
-    const analytics = new FormoAnalytics(apiKey, options);
+    const analytics = new FormoAnalytics(writeKey, options);
 
     // Identify
     const providers = await analytics.getProviders();
@@ -617,7 +617,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       payload: await this.buildEventPayload(toSnakeCase(payload)),
     };
 
-    this.eventQueue.enqueue(requestData, (err, _, data) => {
+    await this.eventQueue.enqueue(requestData, (err, _, data) => {
       if (err) {
         console.error(err);
       } else console.log(`Events sent successfully: ${data.length} events`);

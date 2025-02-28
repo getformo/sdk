@@ -33,3 +33,25 @@ export const isLocalhost = () =>
   ) || window.location.protocol === "file:";
 
 export const isAddress = (address: string) => REGEX.addressRegex.test(address);
+
+export const millisecondsToSecond = (milliseconds: number): number =>
+  Math.ceil(milliseconds / 1_000);
+
+export const toDateHourMinute = (date: Date) =>
+  date.getUTCFullYear() +
+  "-" +
+  ("0" + (date.getUTCMonth() + 1)).slice(-2) +
+  "-" +
+  ("0" + date.getUTCDate()).slice(-2) +
+  " " +
+  ("0" + date.getUTCHours()).slice(-2) +
+  ":" +
+  ("0" + date.getUTCMinutes()).slice(-2);
+
+export const clampNumber = (value: number, max: number, min: number) => {
+  return Math.min(Math.max(value, min), max);
+};
+
+export const getActionDescriptor = (action: string, payload: any): string => {
+  return `${action}${payload?.status ? ` ${payload?.status}` : ""}`;
+};
