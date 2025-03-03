@@ -1,4 +1,3 @@
-import axios from "axios";
 import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
   COUNTRY_LIST,
@@ -16,9 +15,11 @@ import {
   RPCError,
   SignatureStatus,
   TransactionStatus,
+  RequestEvent,
 } from "./types";
 import { session, isLocalhost, toSnakeCase, isAddress } from "./lib";
 import { SESSION_IDENTIFIED_KEY } from "./constants";
+import { EventQueue } from "./lib/queue";
 
 interface IFormoAnalytics {
   page(): void;
@@ -63,21 +64,30 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
   private session: FormoAnalyticsSession;
+  private eventQueue: EventQueue;
 
   config: Config;
   currentChainId?: ChainID;
   currentConnectedAddress?: Address;
 
   private constructor(
-    public readonly apiKey: string,
+    public readonly writeKey: string,
     public options: Options = {}
   ) {
     this.config = {
-      apiKey,
-      trackLocalhost: options.trackLocalhost,
+      writeKey,
+      trackLocalhost: options.trackLocalhost || false,
     };
 
     this.session = new FormoAnalyticsSession();
+
+    this.eventQueue = new EventQueue(this.config.writeKey, {
+      url: EVENTS_API_URL,
+      flushAt: options.flushAt,
+      retryCount: options.retryCount,
+      maxQueueSize: options.maxQueueSize,
+      flushInterval: options.flushInterval,
+    });
 
     // TODO: replace with eip6963
     const provider = options.provider || window?.ethereum;
@@ -90,10 +100,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   static async init(
-    apiKey: string,
+    writeKey: string,
     options?: Options
   ): Promise<FormoAnalytics> {
-    const analytics = new FormoAnalytics(apiKey, options);
+    const analytics = new FormoAnalytics(writeKey, options);
 
     // Identify
     const providers = await analytics.getProviders();
@@ -596,12 +606,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     }, 300);
   }
 
-  // TODO: refactor this with event queue and flushing
-  // https://linear.app/getformo/issue/P-835/sdk-refactor-retries-with-event-queue-and-batching
   private async trackEvent(action: string, payload: any): Promise<void> {
     const address = await this.getAddress();
 
-    const requestData = {
+    const requestData: RequestEvent = {
       address,
       timestamp: new Date().toISOString(),
       action,
@@ -609,31 +617,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       payload: await this.buildEventPayload(toSnakeCase(payload)),
     };
 
-    try {
-      const response = await axios.post(
-        EVENTS_API_URL,
-        JSON.stringify(requestData),
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.config.apiKey}`,
-          },
-        }
-      );
-
-      if (response.status >= 200 && response.status < 300) {
-        console.log(
-          `Event sent successfully: ${this.getActionDescriptor(
-            action,
-            payload
-          )}`
-        );
-      } else {
-        throw new Error(`Failed with status: ${response.status}`);
-      }
-    } catch (error) {
-      console.error(`Event "${action}" failed. Error: ${error}`);
-    }
+    await this.eventQueue.enqueue(requestData, (err, _, data) => {
+      if (err) {
+        console.error(err);
+      } else console.log(`Events sent successfully: ${data.length} events`);
+    });
   }
 
   /*
@@ -654,8 +642,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async identifyAll(providers: EIP6963ProviderDetail[]): Promise<void> {
-    for (const { provider, info } of providers) {
-      try {
+    try {
+      for (const { provider, info } of providers) {
         const accounts = await this.getAccounts(provider);
         // Identify with accounts
         if (accounts && accounts.length > 0) {
@@ -674,9 +662,9 @@ export class FormoAnalytics implements IFormoAnalytics {
             rdns: info.rdns,
           });
         }
-      } catch (err) {
-        console.log("identifying all => err", err);
       }
+    } catch (err) {
+      console.log("identifying all => err", err);
     }
   }
 
@@ -686,7 +674,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async getAddress(): Promise<Address | null> {
     if (this.currentConnectedAddress) return this.currentConnectedAddress;
-    if (!this.provider) {
+    if (!this?.provider) {
       console.log("FormoAnalytics::getAddress: the provider is not set");
       return null;
     }
@@ -846,10 +834,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       to,
       value,
     };
-  }
-
-  private getActionDescriptor(action: string, payload: any): string {
-    return `${action}${payload.status ? ` ${payload.status}` : ""}`;
   }
 }
 

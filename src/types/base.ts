@@ -9,16 +9,21 @@ export type Address = string;
 export interface Options {
   provider?: EIP1193Provider;
   trackLocalhost?: boolean;
+
+  flushAt?: number;
+  flushInterval?: number;
+  retryCount?: number;
+  maxQueueSize?: number;
 }
 
 export interface FormoAnalyticsProviderProps {
-  apiKey: string;
+  writeKey: string;
   options?: Options;
   disabled?: boolean;
   children: React.ReactNode;
 }
 
 export interface Config {
-  apiKey: string;
+  writeKey: string;
   trackLocalhost?: boolean;
 }
