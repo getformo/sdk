@@ -319,29 +319,38 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   private trackProvider(provider: EIP1193Provider): void {
-    if (provider === this._provider) {
-      console.warn("FormoAnalytics::trackProvider: Provider already tracked.");
-      return;
-    }
-
-    this.currentChainId = undefined;
-    this.currentConnectedAddress = undefined;
-
-    if (this._provider) {
-      const actions = Object.keys(this._providerListeners);
-      for (const action of actions) {
-        this._provider.removeListener(action, this._providerListeners[action]);
-        delete this._providerListeners[action];
+    try {
+      if (provider === this._provider) {
+        console.warn(
+          "FormoAnalytics::trackProvider: Provider already tracked."
+        );
+        return;
       }
+
+      this.currentChainId = undefined;
+      this.currentConnectedAddress = undefined;
+
+      if (this._provider) {
+        const actions = Object.keys(this._providerListeners);
+        for (const action of actions) {
+          this._provider.removeListener(
+            action,
+            this._providerListeners[action]
+          );
+          delete this._providerListeners[action];
+        }
+      }
+
+      this._provider = provider;
+
+      // Register listeners for web3 provider events
+      this.registerAddressChangedListener();
+      this.registerChainChangedListener();
+      this.registerSignatureListener();
+      this.registerTransactionListener();
+    } catch (error) {
+      console.error("FormoAnalytics::trackProvider: error:", error);
     }
-
-    this._provider = provider;
-
-    // Register listeners for web3 provider events
-    this.registerAddressChangedListener();
-    this.registerChainChangedListener();
-    this.registerSignatureListener();
-    this.registerTransactionListener();
   }
 
   private registerAddressChangedListener(): void {
@@ -607,59 +616,68 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async trackEvent(action: string, payload: any): Promise<void> {
-    const address = await this.getAddress();
+    try {
+      const address = await this.getAddress();
 
-    const requestData: RequestEvent = {
-      address,
-      timestamp: new Date().toISOString(),
-      action,
-      version: "1",
-      payload: await this.buildEventPayload(toSnakeCase(payload)),
-    };
+      const requestData: RequestEvent = {
+        address,
+        timestamp: new Date().toISOString(),
+        action,
+        version: "1",
+        payload: await this.buildEventPayload(toSnakeCase(payload)),
+      };
 
-    await this.eventQueue.enqueue(requestData, (err, _, data) => {
-      if (err) {
-        console.error(err);
-      } else console.log(`Events sent successfully: ${data.length} events`);
-    });
+      await this.eventQueue.enqueue(requestData, (err, _, data) => {
+        if (err) {
+          console.error(err);
+        } else console.log(`Events sent successfully: ${data.length} events`);
+      });
+    } catch (error) {
+      console.error("FormoAnalytics::trackEvent: error:", error);
+    }
   }
 
   /*
     Utility functions
   */
 
-  private async getProviders(): Promise<EIP6963ProviderDetail[]> {
+  private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
-    const providers = [...store.getProviders()];
+    let providers = store.getProviders();
     // TODO: consider using store.subscribe to detect changes to providers list
-    // store.subscribe(providers => (state.providers = providers))
+    store.subscribe((providerDetails) => (providers = providerDetails));
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      return [window?.ethereum];
+      return window?.ethereum ? [window.ethereum] : [];
     }
     return providers;
   }
 
-  private async identifyAll(providers: EIP6963ProviderDetail[]): Promise<void> {
+  private async identifyAll(
+    providers: readonly EIP6963ProviderDetail[]
+  ): Promise<void> {
     try {
-      for (const { provider, info } of providers) {
-        const accounts = await this.getAccounts(provider);
+      for (const eip6963ProviderDetail of providers) {
+        if (!eip6963ProviderDetail) continue;
+        const accounts = await this.getAccounts(
+          eip6963ProviderDetail?.provider
+        );
         // Identify with accounts
         if (accounts && accounts.length > 0) {
           for (const address of accounts) {
             await this.identify({
               address,
-              providerName: info.name,
-              rdns: info.rdns,
+              providerName: eip6963ProviderDetail?.info.name,
+              rdns: eip6963ProviderDetail?.info.rdns,
             });
           }
         } else {
           // Identify without accounts
           await this.identify({
             address: null,
-            providerName: info.name,
-            rdns: info.rdns,
+            providerName: eip6963ProviderDetail?.info.name,
+            rdns: eip6963ProviderDetail?.info.rdns,
           });
         }
       }
