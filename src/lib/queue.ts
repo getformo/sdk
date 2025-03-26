@@ -1,20 +1,19 @@
-import fetch from "fetch-retry";
 import isNetworkError from "is-network-error";
-import { RequestEvent } from "../types";
+import { RequestEvent, RequestEventPayload } from "../types";
 import {
   clampNumber,
   getActionDescriptor,
+  hash,
   millisecondsToSecond,
   toDateHourMinute,
-} from "./utils";
-import { Fingerprint } from "./fingerprint";
-
-const sdkFetch = fetch(global.fetch);
-
+} from "../utils";
+import { logger } from "./logger";
+import { EVENTS_API_REQUEST_HEADER } from "../constants";
+import fetch from "./fetch";
 const noop = () => {};
 
 type QueueItem = {
-  message: RequestEvent;
+  message: RequestEventPayload;
   callback: (...args: any) => any;
 };
 
@@ -47,10 +46,10 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 export class EventQueue {
   private writeKey: string;
   private url: string;
-  private queue: QueueItem[];
+  private queue: QueueItem[] = [];
   private timer: null | NodeJS.Timeout;
   private flushAt: number;
-  private flushInterval: number;
+  private flushIntervalMs: number;
   private flushed: boolean;
   private maxQueueSize: number; // min 200 bytes, max 500kB
   private errorHandler: any;
@@ -79,7 +78,7 @@ export class EventQueue {
       MAX_QUEUE_SIZE,
       MIN_QUEUE_SIZE
     );
-    this.flushInterval = clampNumber(
+    this.flushIntervalMs = clampNumber(
       options.flushInterval || DEFAULT_FLUSH_INTERVAL,
       MAX_FLUSH_INTERVAL,
       MIN_FLUSH_INTERVAL
@@ -97,23 +96,28 @@ export class EventQueue {
   }
 
   //#region Public functions
-  async enqueue(message: RequestEvent, callback?: (...args: any) => void) {
+  async enqueue(event: RequestEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
+    const formattedTimestamp = toDateHourMinute(new Date(event.timestamp));
+    event.timestamp = formattedTimestamp;
+
+    const eventString = JSON.stringify(event);
+    const eventId = await hash(eventString);
     // check if the message already exists
-    if (await this.checkDuplicate(message)) {
-      console.warn(
+    if (await this.isDuplicate(eventId)) {
+      logger.warn(
         `Event already enqueued, try again after ${millisecondsToSecond(
-          this.flushInterval
+          this.flushIntervalMs
         )} seconds.`
       );
       return;
     }
 
-    this.queue.push({ message, callback });
+    this.queue.push({ message: { ...event, id: eventId }, callback });
 
-    console.log(
-      `Event enqueued: ${getActionDescriptor(message.action, message.payload)}`
+    logger.log(
+      `Event enqueued: ${getActionDescriptor(event.action, event.payload)}`
     );
 
     if (!this.flushed) {
@@ -132,8 +136,8 @@ export class EventQueue {
       return;
     }
 
-    if (this.flushInterval && !this.timer) {
-      this.timer = setTimeout(this.flush.bind(this), this.flushInterval);
+    if (this.flushIntervalMs && !this.timer) {
+      this.timer = setTimeout(this.flush.bind(this), this.flushIntervalMs);
     }
   }
 
@@ -168,22 +172,14 @@ export class EventQueue {
       callback(err, data);
     };
 
-    const req = {
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Basic ${this.writeKey}`,
-        "X-Visitor-Id": await Fingerprint.getVisitorId(),
-      },
-    };
-
-    return (this.pendingFlush = sdkFetch(`${this.url}`, {
+    return (this.pendingFlush = fetch(`${this.url}`, {
+      headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
       method: "POST",
       body: JSON.stringify(data),
       keepalive: true,
       retries: this.retryCount,
       retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
       retryOn: (_, error) => this.isErrorRetryable(error),
-      ...req,
     })
       .then(() => {
         done();
@@ -224,29 +220,12 @@ export class EventQueue {
     return false;
   }
 
-  private async checkDuplicate(newMessage: RequestEvent) {
+  private async isDuplicate(eventId: string) {
     // check if exists a message with identical payload within 1 minute
-    const formattedTimestamp = toDateHourMinute(new Date(newMessage.timestamp));
-    newMessage.timestamp = formattedTimestamp;
+    if (this.payloadHashes.has(eventId)) return true;
 
-    const hash = await this.hashPayload(newMessage);
-    if (this.payloadHashes.has(hash)) {
-      return true;
-    }
-    this.payloadHashes.add(hash);
+    this.payloadHashes.add(eventId);
     return false;
-  }
-
-  private async hashPayload(payload: RequestEvent, algo = "SHA-1") {
-    return Array.from(
-      new Uint8Array(
-        await crypto.subtle.digest(
-          algo,
-          new TextEncoder().encode(JSON.stringify(payload))
-        )
-      ),
-      (byte) => byte.toString(16).padStart(2, "0")
-    ).join("");
   }
 
   private onPageLeave = (callback: (isAccessible: boolean) => void) => {

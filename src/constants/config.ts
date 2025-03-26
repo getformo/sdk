@@ -1,5 +1,12 @@
-export const EVENTS_API_URL = "https://events.formo.so/events";
-export const CURRENT_URL_KEY = "formo-analytics-current-url";
+export const EVENTS_API_HOST = "https://events.formo.so";
+export const EVENTS_API_URL = `${EVENTS_API_HOST}/events`;
+export const USER_API_URL = `${EVENTS_API_HOST}/user`;
+
+export const EVENTS_API_REQUEST_HEADER = (writeKey: string) => ({
+  "Content-Type": "application/json",
+  Authorization: `Basic ${writeKey}`,
+});
+
 export const COUNTRY_LIST = {
   // Africa
   "Africa/Abidjan": "CI",

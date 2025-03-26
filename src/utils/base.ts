@@ -1,4 +1,4 @@
-import { REGEX } from "../constants";
+import { UUID } from "crypto";
 
 const toSnake = (str: string) =>
   str
@@ -27,13 +27,6 @@ export function toSnakeCase(obj: any, omitKeys: string[] = []) {
   return convert(obj);
 }
 
-export const isLocalhost = () =>
-  /^localhost$|^127(?:\.[0-9]+){0,2}\.[0-9]+$|^(?:0*:)*?:?0*1$/.test(
-    window.location.hostname
-  ) || window.location.protocol === "file:";
-
-export const isAddress = (address: string) => REGEX.addressRegex.test(address);
-
 export const millisecondsToSecond = (milliseconds: number): number =>
   Math.ceil(milliseconds / 1_000);
 
@@ -55,3 +48,18 @@ export const clampNumber = (value: number, max: number, min: number) => {
 export const getActionDescriptor = (action: string, payload: any): string => {
   return `${action}${payload?.status ? ` ${payload?.status}` : ""}`;
 };
+
+export async function hash(input: string): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(input)
+  );
+  const byteArray = new Uint8Array(hashBuffer);
+  return Array.from(byteArray)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export function generateNativeUUID(): UUID {
+  return crypto.randomUUID();
+}

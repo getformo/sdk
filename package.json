@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.14.3",
+  "version": "1.15.2",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/getformo/sdk.git"
@@ -21,7 +21,6 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@fingerprintjs/fingerprintjs": "^4.6.0",
     "fetch-retry": "^6.0.0",
     "is-network-error": "^1.1.0",
     "mipd": "^0.0.7"
