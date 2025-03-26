@@ -1,5 +1,5 @@
 import { describe, it } from "mocha";
-import { isAddress, toSnakeCase } from "../src/lib";
+import { isAddress, toSnakeCase } from "../src/utils";
 import { expect } from "chai";
 
 describe("toSnakeCase", () => {

@@ -1,3 +1,4 @@
+import { LogLevel } from "../lib";
 import { EIP1193Provider } from "./provider";
 
 // Decimal chain ID
@@ -14,6 +15,10 @@ export interface Options {
   flushInterval?: number;
   retryCount?: number;
   maxQueueSize?: number;
+  logger?: {
+    enabled: boolean;
+    levels?: LogLevel[];
+  };
 }
 
 export interface FormoAnalyticsProviderProps {

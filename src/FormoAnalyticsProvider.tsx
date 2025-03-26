@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useRef } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { FormoAnalyticsProviderProps } from "./types";
+import { logger } from "./lib";
 
 export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
   undefined
@@ -11,12 +12,12 @@ export const FormoAnalyticsProvider = (props: FormoAnalyticsProviderProps) => {
 
   // Keep the app running without analytics if no Write Key is provided or disabled
   if (!writeKey) {
-    console.error("FormoAnalyticsProvider: No Write Key provided");
+    logger.error("FormoAnalyticsProvider: No Write Key provided");
     return children;
   }
 
   if (disabled) {
-    console.warn("FormoAnalytics is disabled");
+    logger.warn("FormoAnalytics is disabled");
     return children;
   }
 
@@ -35,9 +36,9 @@ const InitializedAnalytics = ({
     try {
       const sdkInstance = await FormoAnalytics.init(writeKey, options);
       setSdk(sdkInstance);
-      console.log("FormoAnalytics SDK initialized successfully");
+      logger.log("FormoAnalytics SDK initialized successfully");
     } catch (error) {
-      console.error("Failed to initialize FormoAnalytics SDK", error);
+      logger.error("Failed to initialize FormoAnalytics SDK", error);
     }
   };
 
@@ -63,7 +64,7 @@ export const useFormoAnalytics = () => {
   const context = useContext(FormoAnalyticsContext);
 
   if (!context) {
-    console.warn("useFormoAnalytics called without a valid context");
+    logger.warn("useFormoAnalytics called without a valid context");
   }
 
   return context; // Return undefined if SDK is not initialized, handle accordingly in consumer
