@@ -6,4 +6,5 @@ export enum Event {
   CHAIN_CHANGED = 'chain_changed',
   SIGNATURE = 'signature',
   TRANSACTION = 'transaction',
+  CUSTOM = 'custom_event',
 }

@@ -337,12 +337,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits a custom event with custom data.
-   * @param {string} action
-   * @param {Record<string, any>} payload
+   * @param {string} action - The action name.
+   * @param {Record<string, any>} payload - The custom payload data.
    * @returns {Promise<void>}
    */
   async track(action: string, payload: Record<string, any>): Promise<void> {
-    await this.trackEvent(action, payload);
+    const validAction = this.sanitize(action);
+    await this.trackEvent(validAction, payload);
   }
 
   /*
@@ -916,6 +917,27 @@ export class FormoAnalytics implements IFormoAnalytics {
       to,
       value,
     };
+  }
+
+  /**
+   * Sanitizes the action name to ensure it only contains alphanumeric characters and underscores.
+   * Converts space/hyphen-separated words to underscore-separated words 
+   * (e.g., 'Song Played' -> 'song_played', 'Song-played' -> 'song_played'),
+   * removes invalid characters, and truncates to 200 characters.
+   * @param {string} action - The original action name.
+   * @returns {string} - The sanitized action name.
+   */
+  private sanitize(action: string): string {
+    // Convert to lowercase and replace spaces and hyphens with underscores
+    let sanitized = action.toLowerCase().replace(/[\s-]+/g, '_');
+    // Remove any remaining invalid characters (keeping alphanumeric and underscores)
+    sanitized = sanitized.replace(/[^a-z0-9_]/g, '');
+    // Truncate to 200 characters
+    if (sanitized.length > 200) {
+      sanitized = sanitized.substring(0, 200);
+    }
+    // If the sanitized action is empty, provide a default name
+    return sanitized || Event.CUSTOM;
   }
 }
 
