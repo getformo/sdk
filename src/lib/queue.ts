@@ -100,6 +100,7 @@ export class EventQueue {
     callback = callback || noop;
 
     const formattedTimestamp = toDateHourMinute(new Date(event.timestamp));
+    const originTimestamp = event.timestamp;
     event.timestamp = formattedTimestamp;
 
     const eventString = JSON.stringify(event);
@@ -114,7 +115,7 @@ export class EventQueue {
       return;
     }
 
-    this.queue.push({ message: { ...event, id: eventId }, callback });
+    this.queue.push({ message: { ...event, timestamp: originTimestamp, id: eventId }, callback });
 
     logger.log(
       `Event enqueued: ${getActionDescriptor(event.action, event.payload)}`

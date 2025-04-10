@@ -2,7 +2,7 @@ import { UUID } from "crypto";
 
 export interface RequestEvent {
   anonymous_id: UUID;
-  user_id: UUID | null;
+  user_id: string | null;
   action: string;
   payload: Record<string, unknown>;
   address: string | null;

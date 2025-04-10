@@ -6,8 +6,6 @@ import {
   EVENTS_API_URL,
   Event,
   SESSION_USER_ID_KEY,
-  EVENTS_API_REQUEST_HEADER,
-  USER_API_URL,
 } from "./constants";
 import {
   ChainID,
@@ -21,14 +19,14 @@ import {
   TransactionStatus,
   RequestEvent,
 } from "./types";
-import { session, local, logger, EventQueue, fetch, Logger } from "./lib";
+import { session, local, logger, EventQueue, Logger } from "./lib";
 import {
   isLocalhost,
   isAddress,
   toSnakeCase,
   generateNativeUUID,
 } from "./utils";
-import { SESSION_IDENTIFIED_KEY } from "./constants";
+import { SESSION_WALLET_DETECTED_KEY } from "./constants";
 import { UUID } from "crypto";
 
 interface IFormoAnalytics {
@@ -77,7 +75,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private session: FormoAnalyticsSession;
   private eventQueue: EventQueue;
   private anonymousId: UUID | null = null;
-  private userId: UUID | null = null;
+  private userId: string | null = null;
 
   config: Config;
   currentChainId?: ChainID;
@@ -109,7 +107,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
 
     this.anonymousId = this.getAnonymousId();
-    this.getUserId(null).then((userId) => (this.userId = userId));
+    this.userId = session.get(SESSION_USER_ID_KEY) as string | null;
 
     // TODO: replace with eip6963
     const provider = options.provider || window?.ethereum;
@@ -127,9 +125,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<FormoAnalytics> {
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Identify
+    // Detect
     const providers = await analytics.getProviders();
-    await analytics.identifyAll(providers);
+    await analytics.detects(providers);
 
     return analytics;
   }
@@ -311,25 +309,48 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits an identify event with current wallet address.
+   * Emits an detect event with current wallet provider info.
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
   public async identify({
     address,
     providerName,
+    userId,
     rdns,
   }: {
     address: Address | null;
     providerName?: string;
+    userId?: string;
     rdns?: string;
   }): Promise<void> {
-    if (this.session.isIdentified())
-      return logger.warn("Identify: Wallet already identified in this session");
-
-    this.session.identify();
+    if (userId) this.userId = userId || null;
     await this.trackEvent(Event.IDENTIFY, {
       address,
+      providerName,
+      rdns,
+    });
+  }
+
+  /**
+   * Emits an identify event with current wallet address.
+   * @param {Address} params.address
+   * @returns {Promise<void>}
+   */
+  private async detect({
+    providerName,
+    rdns,
+  }: {
+    providerName: string;
+    rdns: string;
+  }): Promise<void> {
+    if (this.session.isWalletDetected(rdns))
+      return logger.warn(
+        `detect: Wallet ${providerName} already detected in this session`
+      );
+
+    this.session.markWalletdetected(rdns);
+    await this.trackEvent(Event.DETECT_WALLET, {
       providerName,
       rdns,
     });
@@ -573,7 +594,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         return Promise.resolve();
       }
       this.currentConnectedAddress = address;
-      this.userId = await this.getUserId(address);
     }
 
     // Proceed only if the address exists
@@ -646,7 +666,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async trackEvent(action: string, payload: any): Promise<void> {
     try {
       const address = await this.getAddress();
-      const user_id = await this.getUserId(address);
+      const user_id = this.userId;
 
       const requestData: RequestEvent = {
         anonymous_id: this.anonymousId as UUID,
@@ -685,37 +705,53 @@ export class FormoAnalytics implements IFormoAnalytics {
     return providers;
   }
 
-  private async identifyAll(
+  private async detects(
     providers: readonly EIP6963ProviderDetail[]
   ): Promise<void> {
     try {
       for (const eip6963ProviderDetail of providers) {
-        if (!eip6963ProviderDetail) continue;
-        const accounts = await this.getAccounts(
-          eip6963ProviderDetail?.provider
-        );
-        // Identify with accounts
-        if (accounts && accounts.length > 0) {
-          for (const address of accounts) {
-            await this.identify({
-              address,
-              providerName: eip6963ProviderDetail?.info.name,
-              rdns: eip6963ProviderDetail?.info.rdns,
-            });
-          }
-        } else {
-          // Identify without accounts
-          await this.identify({
-            address: null,
-            providerName: eip6963ProviderDetail?.info.name,
-            rdns: eip6963ProviderDetail?.info.rdns,
-          });
-        }
+        await this.detect({
+          providerName: eip6963ProviderDetail?.info.name,
+          rdns: eip6963ProviderDetail?.info.rdns,
+        });
       }
     } catch (err) {
-      logger.error("Error identifying all:", err);
+      logger.error("Error detect all wallets:", err);
     }
   }
+
+  // TODO: Refactoring => public this function as API
+  // private async identifyAll(
+  //   providers: readonly EIP6963ProviderDetail[]
+  // ): Promise<void> {
+  //   try {
+  //     for (const eip6963ProviderDetail of providers) {
+  //       if (!eip6963ProviderDetail) continue;
+  //       const accounts = await this.getAccounts(
+  //         eip6963ProviderDetail?.provider
+  //       );
+  //       // Identify with accounts
+  //       if (accounts && accounts.length > 0) {
+  //         for (const address of accounts) {
+  //           await this.identify({
+  //             address,
+  //             providerName: eip6963ProviderDetail?.info.name,
+  //             rdns: eip6963ProviderDetail?.info.rdns,
+  //           });
+  //         }
+  //       } else {
+  //         // Identify without accounts
+  //         await this.identify({
+  //           address: null,
+  //           providerName: eip6963ProviderDetail?.info.name,
+  //           rdns: eip6963ProviderDetail?.info.rdns,
+  //         });
+  //       }
+  //     }
+  //   } catch (err) {
+  //     logger.error("Error identifying all:", err);
+  //   }
+  // }
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
@@ -728,31 +764,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     const newAnonymousId = generateNativeUUID();
     local.set(LOCAL_ANONYMOUS_ID_KEY, newAnonymousId);
     return newAnonymousId;
-  }
-
-  private async getUserId(address: string | null): Promise<UUID | null> {
-    const storedUserId = session.get(SESSION_USER_ID_KEY);
-    if (storedUserId && typeof storedUserId === "string")
-      return storedUserId as UUID;
-
-    if (address) {
-      const res = await fetch(`${USER_API_URL}?address=${address}`, {
-        headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
-        method: "GET",
-      });
-      const data = await res.json();
-      const userId = data?.data?.[0]?.user_id;
-      if (userId) {
-        session.set(SESSION_USER_ID_KEY, userId);
-        return userId;
-      }
-
-      const newUserId = generateNativeUUID();
-      session.set(SESSION_USER_ID_KEY, newUserId);
-      return newUserId;
-    }
-
-    return null;
   }
 
   private async getAddress(): Promise<Address | null> {
@@ -860,12 +871,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       locale: language,
       location,
       referrer: document.referrer,
-      utm_source: params.get("utm_source"),
-      utm_medium: params.get("utm_medium"),
-      utm_campaign: params.get("utm_campaign"),
-      utm_content: params.get("utm_content"),
-      utm_term: params.get("utm_term"),
-      ref: params.get("ref"),
+      utm_source: params.get("utm_source")?.trim() || "",
+      utm_medium: params.get("utm_medium")?.trim() || "",
+      utm_campaign: params.get("utm_campaign")?.trim() || "",
+      utm_content: params.get("utm_content")?.trim() || "",
+      utm_term: params.get("utm_term")?.trim() || "",
+      ref: params.get("ref")?.trim() || "",
       ...eventSpecificPayload,
     };
   }
@@ -920,18 +931,21 @@ export class FormoAnalytics implements IFormoAnalytics {
 }
 
 interface IFormoAnalyticsSession {
-  isIdentified(): boolean;
-  identify(): void;
+  isWalletDetected(rdns: string): boolean;
+  markWalletdetected(rdns: string): void;
 }
 
 class FormoAnalyticsSession implements IFormoAnalyticsSession {
   constructor() {}
 
-  public isIdentified(): boolean {
-    return session.get(SESSION_IDENTIFIED_KEY) === true;
+  public isWalletDetected(rdns: string): boolean {
+    const rdnses = (session.get(SESSION_WALLET_DETECTED_KEY) as string[]) || [];
+    return rdnses.includes(rdns);
   }
 
-  public identify(): void {
-    session.set(SESSION_IDENTIFIED_KEY, true);
+  public markWalletdetected(rdns: string): void {
+    const rdnses = (session.get(SESSION_WALLET_DETECTED_KEY) as string[]) || [];
+    rdnses.push(rdns);
+    session.set(SESSION_WALLET_DETECTED_KEY, rdnses);
   }
 }
