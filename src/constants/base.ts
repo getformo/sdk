@@ -2,8 +2,9 @@ const STORAGE_PREFIX = "formo-";
 
 const generateStoragePrefix = (prefix: string) => `${STORAGE_PREFIX}${prefix}`;
 
-export const SESSION_IDENTIFIED_KEY =
-  generateStoragePrefix("session-identified");
+export const SESSION_WALLET_DETECTED_KEY = generateStoragePrefix(
+  "session-wallet-detected"
+);
 export const SESSION_CURRENT_URL_KEY = generateStoragePrefix(
   "analytics-current-url"
 );
