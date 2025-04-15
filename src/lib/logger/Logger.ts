@@ -1,7 +1,7 @@
-export type LogLevel = "debug" | "info" | "warn" | "error" | "trace";
+import { ILogger, LogLevel } from "./type";
 
-export class Logger {
-  private static instance: Logger;
+export class Logger implements ILogger {
+  private static instance: ILogger;
   private enabledLevels: Set<LogLevel>;
   private enabled: boolean;
 
@@ -32,7 +32,7 @@ export class Logger {
   public static getInstance(config?: {
     enabled?: boolean;
     enabledLevels?: LogLevel[];
-  }): Logger {
+  }): ILogger {
     if (!Logger.instance) {
       Logger.instance = new Logger(
         config?.enabled ?? false,

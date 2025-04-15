@@ -1,3 +1,4 @@
+export * from "./event";
 export * from "./logger";
 export * from "./queue";
 export * from "./storage";
