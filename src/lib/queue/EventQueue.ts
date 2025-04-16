@@ -1,19 +1,20 @@
 import isNetworkError from "is-network-error";
-import { RequestEvent, RequestEventPayload } from "../types";
+import { IFormoEvent, IFormoEventPayload } from "../../types";
 import {
   clampNumber,
   getActionDescriptor,
   hash,
   millisecondsToSecond,
   toDateHourMinute,
-} from "../utils";
-import { logger } from "./logger";
-import { EVENTS_API_REQUEST_HEADER } from "../constants";
-import fetch from "./fetch";
+} from "../../utils";
+import { logger } from "../logger";
+import { EVENTS_API_REQUEST_HEADER } from "../../constants";
+import fetch from "../fetch";
+import { IEventQueue } from "./type";
 const noop = () => {};
 
 type QueueItem = {
-  message: RequestEventPayload;
+  message: IFormoEventPayload;
   callback: (...args: any) => any;
 };
 
@@ -43,7 +44,7 @@ const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 1 MINUTE
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
-export class EventQueue {
+export class EventQueue implements IEventQueue {
   private writeKey: string;
   private url: string;
   private queue: QueueItem[] = [];
@@ -96,7 +97,7 @@ export class EventQueue {
   }
 
   //#region Public functions
-  async enqueue(event: RequestEvent, callback?: (...args: any) => void) {
+  async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
     const formattedTimestamp = toDateHourMinute(new Date(event.timestamp));
@@ -115,7 +116,10 @@ export class EventQueue {
       return;
     }
 
-    this.queue.push({ message: { ...event, timestamp: originTimestamp, id: eventId }, callback });
+    this.queue.push({
+      message: { ...event, timestamp: originTimestamp, id: eventId },
+      callback,
+    });
 
     logger.log(
       `Event enqueued: ${getActionDescriptor(event.action, event.payload)}`

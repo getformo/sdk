@@ -1,33 +1,35 @@
+import { UUID } from "crypto";
 import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
-  LOCAL_ANONYMOUS_ID_KEY,
-  COUNTRY_LIST,
-  SESSION_CURRENT_URL_KEY,
-  EVENTS_API_URL,
   Event,
+  EVENTS_API_URL,
+  LOCAL_ANONYMOUS_ID_KEY,
+  SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
+  SESSION_WALLET_DETECTED_KEY,
 } from "./constants";
 import {
-  ChainID,
+  EventFactory,
+  EventQueue,
+  IEventFactory,
+  local,
+  logger,
+  Logger,
+  session,
+} from "./lib";
+import {
   Address,
+  ChainID,
+  Config,
   EIP1193Provider,
   Options,
-  Config,
   RequestArguments,
   RPCError,
   SignatureStatus,
   TransactionStatus,
-  RequestEvent,
 } from "./types";
-import { session, local, logger, EventQueue, Logger } from "./lib";
-import {
-  isLocalhost,
-  isAddress,
-  toSnakeCase,
-  generateNativeUUID,
-} from "./utils";
-import { SESSION_WALLET_DETECTED_KEY } from "./constants";
-import { UUID } from "crypto";
+import { generateNativeUUID } from "./utils";
+import { isAddress, isArray, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
   page(): void;
@@ -35,28 +37,14 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signature({
-    status,
-    chainId,
-    address,
-    message,
-    signatureHash,
-  }: {
+  signature(params: {
     status: SignatureStatus;
     chainId?: ChainID;
     address: Address;
     message: string;
     signatureHash?: string;
   }): Promise<void>;
-  transaction({
-    status,
-    chainId,
-    address,
-    data,
-    to,
-    value,
-    transactionHash,
-  }: {
+  transaction(params: {
     status: TransactionStatus;
     chainId: ChainID;
     address: Address;
@@ -65,7 +53,16 @@ interface IFormoAnalytics {
     value?: string;
     transactionHash?: string;
   }): Promise<void>;
-  identify(params: { address: Address }): Promise<void>;
+  identify(
+    params?:
+      | {
+          address: Address | null;
+          providerName?: string;
+          userId?: string;
+          rdns?: string;
+        }
+      | readonly EIP6963ProviderDetail[]
+  ): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -76,6 +73,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private eventQueue: EventQueue;
   private anonymousId: UUID | null = null;
   private userId: string | null = null;
+  private eventFactory: IEventFactory;
 
   config: Config;
   currentChainId?: ChainID;
@@ -97,6 +95,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       enabled: options.logger?.enabled || false,
       enabledLevels: options.logger?.levels || [],
     });
+
+    this.eventFactory = new EventFactory();
 
     this.eventQueue = new EventQueue(this.config.writeKey, {
       url: EVENTS_API_URL,
@@ -310,26 +310,66 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits an detect event with current wallet provider info.
-   * @param {Address} params.address
+   * @param {string} params.providerName
+   * @param {string} params.rdns
+   * @param {string} params.userId
+   * @param {string} params.address
+   *
    * @returns {Promise<void>}
    */
-  public async identify({
-    address,
-    providerName,
-    userId,
-    rdns,
-  }: {
-    address: Address | null;
-    providerName?: string;
-    userId?: string;
-    rdns?: string;
-  }): Promise<void> {
-    if (userId) this.userId = userId || null;
-    await this.trackEvent(Event.IDENTIFY, {
-      address,
-      providerName,
-      rdns,
-    });
+  public async identify(
+    params?:
+      | {
+          address: Address | null;
+          providerName?: string;
+          userId?: string;
+          rdns?: string;
+        }
+      | readonly EIP6963ProviderDetail[]
+  ): Promise<void> {
+    if (isArray(params) || !params) {
+      const providers = isArray(params) ? params : await this.getProviders();
+      try {
+        for (const eip6963ProviderDetail of providers) {
+          if (!eip6963ProviderDetail) continue;
+          const accounts = await this.getAccounts(
+            eip6963ProviderDetail?.provider
+          );
+          // Identify with accounts
+          if (accounts && accounts.length > 0) {
+            for (const address of accounts) {
+              await this.identify({
+                address,
+                providerName: eip6963ProviderDetail?.info.name,
+                rdns: eip6963ProviderDetail?.info.rdns,
+              });
+            }
+          } else {
+            // Identify without accounts
+            await this.identify({
+              address: null,
+              providerName: eip6963ProviderDetail?.info.name,
+              rdns: eip6963ProviderDetail?.info.rdns,
+            });
+          }
+        }
+      } catch (err) {
+        logger.error("Error identifying all:", err);
+      }
+    } else {
+      const { userId, address, providerName, rdns } = params as {
+        address: Address | null;
+        providerName?: string;
+        userId?: string;
+        rdns?: string;
+      };
+      if (userId) this.userId = userId || null;
+      await this.trackEvent(Event.IDENTIFY, {
+        address,
+        providerName,
+        rdns,
+      });
+    }
   }
 
   /**
@@ -646,9 +686,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private trackPageHit(): void {
-    const pathname = window.location.pathname;
-    const hash = window.location.hash;
-
     if (!this.config.trackLocalhost && isLocalhost()) {
       return logger.warn(
         "Track page hit: Ignoring event because website is running locally"
@@ -656,27 +693,24 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     setTimeout(async () => {
-      this.trackEvent(Event.PAGE, {
-        pathname,
-        hash,
-      });
+      this.trackEvent(Event.PAGE);
     }, 300);
   }
 
-  private async trackEvent(action: string, payload: any): Promise<void> {
+  private async trackEvent(action: string, payload?: any): Promise<void> {
     try {
       const address = await this.getAddress();
       const user_id = this.userId;
 
-      const requestData: RequestEvent = {
-        anonymous_id: this.anonymousId as UUID,
+      const requestData = this.eventFactory.create(
+        this.anonymousId as UUID,
         user_id,
         address,
-        timestamp: new Date().toISOString(),
-        action,
-        version: "1",
-        payload: await this.buildEventPayload(toSnakeCase(payload)),
-      };
+        {
+          action,
+          ...payload,
+        }
+      );
 
       await this.eventQueue.enqueue(requestData, (err, _, data) => {
         if (err) {
@@ -719,39 +753,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.error("Error detect all wallets:", err);
     }
   }
-
-  // TODO: Refactoring => public this function as API
-  // private async identifyAll(
-  //   providers: readonly EIP6963ProviderDetail[]
-  // ): Promise<void> {
-  //   try {
-  //     for (const eip6963ProviderDetail of providers) {
-  //       if (!eip6963ProviderDetail) continue;
-  //       const accounts = await this.getAccounts(
-  //         eip6963ProviderDetail?.provider
-  //       );
-  //       // Identify with accounts
-  //       if (accounts && accounts.length > 0) {
-  //         for (const address of accounts) {
-  //           await this.identify({
-  //             address,
-  //             providerName: eip6963ProviderDetail?.info.name,
-  //             rdns: eip6963ProviderDetail?.info.rdns,
-  //           });
-  //         }
-  //       } else {
-  //         // Identify without accounts
-  //         await this.identify({
-  //           address: null,
-  //           providerName: eip6963ProviderDetail?.info.name,
-  //           rdns: eip6963ProviderDetail?.info.rdns,
-  //         });
-  //       }
-  //     }
-  //   } catch (err) {
-  //     logger.error("Error identifying all:", err);
-  //   }
-  // }
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
@@ -796,7 +797,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_accounts",
       });
       if (!res || res.length === 0) return null;
-      return res.filter(isAddress);
+      return res.filter((e) => isAddress(e));
     } catch (err) {
       if ((err as any).code !== 4001) {
         logger.error(
@@ -827,58 +828,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.error("eth_chainId threw an error:", err);
       return 0;
     }
-  }
-
-  private getLocation(): string | undefined {
-    try {
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (timezone in COUNTRY_LIST)
-        return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
-      return timezone;
-    } catch (error) {
-      logger.error("Error resolving timezone:", error);
-      return "";
-    }
-  }
-
-  private getLanguage(): string {
-    try {
-      return (
-        (navigator.languages && navigator.languages.length
-          ? navigator.languages[0]
-          : navigator.language) || "en"
-      );
-    } catch (error) {
-      logger.error("Error resolving language:", error);
-      return "en";
-    }
-  }
-
-  // Adds browser properties to the user-supplied payload
-  private async buildEventPayload(
-    eventSpecificPayload: Record<string, unknown> = {}
-  ): Promise<Record<string, unknown>> {
-    const url = new URL(window.location.href);
-    const params = new URLSearchParams(url.search);
-
-    const location = this.getLocation();
-    const language = this.getLanguage();
-
-    // common browser properties
-    return {
-      "user-agent": window.navigator.userAgent,
-      href: url.href,
-      locale: language,
-      location,
-      referrer: document.referrer,
-      utm_source: params.get("utm_source")?.trim() || "",
-      utm_medium: params.get("utm_medium")?.trim() || "",
-      utm_campaign: params.get("utm_campaign")?.trim() || "",
-      utm_content: params.get("utm_content")?.trim() || "",
-      utm_term: params.get("utm_term")?.trim() || "",
-      ref: params.get("ref")?.trim() || "",
-      ...eventSpecificPayload,
-    };
   }
 
   private buildSignatureEventPayload(

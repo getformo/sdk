@@ -7,6 +7,8 @@ export type ChainID = number;
 // Address (EVM, Solana, etc.)
 export type Address = string;
 
+export type ValidInputTypes = Uint8Array | bigint | string | number | boolean;
+
 export interface Options {
   provider?: EIP1193Provider;
   trackLocalhost?: boolean;
