@@ -60,11 +60,11 @@ const InitializedAnalytics = ({
   );
 };
 
-export const useFormoAnalytics = () => {
+export const useFormo = () => {
   const context = useContext(FormoAnalyticsContext);
 
   if (!context) {
-    logger.warn("useFormoAnalytics called without a valid context");
+    logger.warn("useFormo called without a valid context");
   }
 
   return context; // Return undefined if SDK is not initialized, handle accordingly in consumer

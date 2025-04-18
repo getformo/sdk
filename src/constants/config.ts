@@ -657,4 +657,4 @@ export const COUNTRY_LIST = {
   WET: "WET",
   // Zulu
   Zulu: "Zulu",
-};
+} as const;

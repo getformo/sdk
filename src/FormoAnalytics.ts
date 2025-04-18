@@ -1,35 +1,35 @@
+import { UUID } from "crypto";
 import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
-  LOCAL_ANONYMOUS_ID_KEY,
-  COUNTRY_LIST,
-  SESSION_CURRENT_URL_KEY,
-  EVENTS_API_URL,
   Event,
+  EVENTS_API_URL,
+  LOCAL_ANONYMOUS_ID_KEY,
+  SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
-  EVENTS_API_REQUEST_HEADER,
-  USER_API_URL,
+  SESSION_WALLET_DETECTED_KEY,
 } from "./constants";
 import {
-  ChainID,
+  EventFactory,
+  EventQueue,
+  IEventFactory,
+  local,
+  logger,
+  Logger,
+  session,
+} from "./lib";
+import {
   Address,
+  ChainID,
+  Config,
   EIP1193Provider,
   Options,
-  Config,
   RequestArguments,
   RPCError,
   SignatureStatus,
   TransactionStatus,
-  RequestEvent,
 } from "./types";
-import { session, local, logger, EventQueue, fetch, Logger } from "./lib";
-import {
-  isLocalhost,
-  isAddress,
-  toSnakeCase,
-  generateNativeUUID,
-} from "./utils";
-import { SESSION_IDENTIFIED_KEY } from "./constants";
-import { UUID } from "crypto";
+import { generateNativeUUID } from "./utils";
+import { isAddress, isArray, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
   page(): void;
@@ -37,28 +37,14 @@ interface IFormoAnalytics {
   connect(params: { chainId: ChainID; address: Address }): Promise<void>;
   disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
   chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signature({
-    status,
-    chainId,
-    address,
-    message,
-    signatureHash,
-  }: {
+  signature(params: {
     status: SignatureStatus;
     chainId?: ChainID;
     address: Address;
     message: string;
     signatureHash?: string;
   }): Promise<void>;
-  transaction({
-    status,
-    chainId,
-    address,
-    data,
-    to,
-    value,
-    transactionHash,
-  }: {
+  transaction(params: {
     status: TransactionStatus;
     chainId: ChainID;
     address: Address;
@@ -67,7 +53,16 @@ interface IFormoAnalytics {
     value?: string;
     transactionHash?: string;
   }): Promise<void>;
-  identify(params: { address: Address }): Promise<void>;
+  identify(
+    params?:
+      | {
+          address: Address | null;
+          providerName?: string;
+          userId?: string;
+          rdns?: string;
+        }
+      | readonly EIP6963ProviderDetail[]
+  ): Promise<void>;
   track(action: string, payload: Record<string, any>): Promise<void>;
 }
 
@@ -77,7 +72,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   private session: FormoAnalyticsSession;
   private eventQueue: EventQueue;
   private anonymousId: UUID | null = null;
-  private userId: UUID | null = null;
+  private userId: string | null = null;
+  private eventFactory: IEventFactory;
 
   config: Config;
   currentChainId?: ChainID;
@@ -100,6 +96,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       enabledLevels: options.logger?.levels || [],
     });
 
+    this.eventFactory = new EventFactory();
+
     this.eventQueue = new EventQueue(this.config.writeKey, {
       url: EVENTS_API_URL,
       flushAt: options.flushAt,
@@ -109,7 +107,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     });
 
     this.anonymousId = this.getAnonymousId();
-    this.getUserId(null).then((userId) => (this.userId = userId));
+    this.userId = session.get(SESSION_USER_ID_KEY) as string | null;
 
     // TODO: replace with eip6963
     const provider = options.provider || window?.ethereum;
@@ -127,9 +125,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<FormoAnalytics> {
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Identify
+    // Detect
     const providers = await analytics.getProviders();
-    await analytics.identifyAll(providers);
+    await analytics.detects(providers);
 
     return analytics;
   }
@@ -311,25 +309,88 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Emits an detect event with current wallet provider info.
+   * @param {string} params.providerName
+   * @param {string} params.rdns
+   * @param {string} params.userId
+   * @param {string} params.address
+   *
+   * @returns {Promise<void>}
+   */
+  public async identify(
+    params?:
+      | {
+          address: Address | null;
+          providerName?: string;
+          userId?: string;
+          rdns?: string;
+        }
+      | readonly EIP6963ProviderDetail[]
+  ): Promise<void> {
+    if (isArray(params) || !params) {
+      const providers = isArray(params) ? params : await this.getProviders();
+      try {
+        for (const eip6963ProviderDetail of providers) {
+          if (!eip6963ProviderDetail) continue;
+          const accounts = await this.getAccounts(
+            eip6963ProviderDetail?.provider
+          );
+          // Identify with accounts
+          if (accounts && accounts.length > 0) {
+            for (const address of accounts) {
+              await this.identify({
+                address,
+                providerName: eip6963ProviderDetail?.info.name,
+                rdns: eip6963ProviderDetail?.info.rdns,
+              });
+            }
+          } else {
+            // Identify without accounts
+            await this.identify({
+              address: null,
+              providerName: eip6963ProviderDetail?.info.name,
+              rdns: eip6963ProviderDetail?.info.rdns,
+            });
+          }
+        }
+      } catch (err) {
+        logger.error("Error identifying all:", err);
+      }
+    } else {
+      const { userId, address, providerName, rdns } = params as {
+        address: Address | null;
+        providerName?: string;
+        userId?: string;
+        rdns?: string;
+      };
+      if (userId) this.userId = userId || null;
+      await this.trackEvent(Event.IDENTIFY, {
+        address,
+        providerName,
+        rdns,
+      });
+    }
+  }
+
+  /**
    * Emits an identify event with current wallet address.
    * @param {Address} params.address
    * @returns {Promise<void>}
    */
-  public async identify({
-    address,
+  private async detect({
     providerName,
     rdns,
   }: {
-    address: Address | null;
-    providerName?: string;
-    rdns?: string;
+    providerName: string;
+    rdns: string;
   }): Promise<void> {
-    if (this.session.isIdentified())
-      return logger.warn("Identify: Wallet already identified in this session");
+    if (this.session.isWalletDetected(rdns))
+      return logger.warn(
+        `detect: Wallet ${providerName} already detected in this session`
+      );
 
-    this.session.identify();
-    await this.trackEvent(Event.IDENTIFY, {
-      address,
+    this.session.markWalletdetected(rdns);
+    await this.trackEvent(Event.DETECT_WALLET, {
       providerName,
       rdns,
     });
@@ -574,7 +635,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         return Promise.resolve();
       }
       this.currentConnectedAddress = address;
-      this.userId = await this.getUserId(address);
     }
 
     // Proceed only if the address exists
@@ -627,9 +687,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private trackPageHit(): void {
-    const pathname = window.location.pathname;
-    const hash = window.location.hash;
-
     if (!this.config.trackLocalhost && isLocalhost()) {
       return logger.warn(
         "Track page hit: Ignoring event because website is running locally"
@@ -637,27 +694,24 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     setTimeout(async () => {
-      this.trackEvent(Event.PAGE, {
-        pathname,
-        hash,
-      });
+      this.trackEvent(Event.PAGE);
     }, 300);
   }
 
-  private async trackEvent(action: string, payload: any): Promise<void> {
+  private async trackEvent(action: string, payload?: any): Promise<void> {
     try {
       const address = await this.getAddress();
-      const user_id = await this.getUserId(address);
+      const user_id = this.userId;
 
-      const requestData: RequestEvent = {
-        anonymous_id: this.anonymousId as UUID,
+      const requestData = this.eventFactory.create(
+        this.anonymousId as UUID,
         user_id,
         address,
-        timestamp: new Date().toISOString(),
-        action,
-        version: "1",
-        payload: await this.buildEventPayload(toSnakeCase(payload)),
-      };
+        {
+          action,
+          ...payload,
+        }
+      );
 
       await this.eventQueue.enqueue(requestData, (err, _, data) => {
         if (err) {
@@ -686,35 +740,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     return providers;
   }
 
-  private async identifyAll(
+  private async detects(
     providers: readonly EIP6963ProviderDetail[]
   ): Promise<void> {
     try {
       for (const eip6963ProviderDetail of providers) {
-        if (!eip6963ProviderDetail) continue;
-        const accounts = await this.getAccounts(
-          eip6963ProviderDetail?.provider
-        );
-        // Identify with accounts
-        if (accounts && accounts.length > 0) {
-          for (const address of accounts) {
-            await this.identify({
-              address,
-              providerName: eip6963ProviderDetail?.info.name,
-              rdns: eip6963ProviderDetail?.info.rdns,
-            });
-          }
-        } else {
-          // Identify without accounts
-          await this.identify({
-            address: null,
-            providerName: eip6963ProviderDetail?.info.name,
-            rdns: eip6963ProviderDetail?.info.rdns,
-          });
-        }
+        await this.detect({
+          providerName: eip6963ProviderDetail?.info.name,
+          rdns: eip6963ProviderDetail?.info.rdns,
+        });
       }
     } catch (err) {
-      logger.error("Error identifying all:", err);
+      logger.error("Error detect all wallets:", err);
     }
   }
 
@@ -729,31 +766,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     const newAnonymousId = generateNativeUUID();
     local.set(LOCAL_ANONYMOUS_ID_KEY, newAnonymousId);
     return newAnonymousId;
-  }
-
-  private async getUserId(address: string | null): Promise<UUID | null> {
-    const storedUserId = session.get(SESSION_USER_ID_KEY);
-    if (storedUserId && typeof storedUserId === "string")
-      return storedUserId as UUID;
-
-    if (address) {
-      const res = await fetch(`${USER_API_URL}?address=${address}`, {
-        headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
-        method: "GET",
-      });
-      const data = await res.json();
-      const userId = data?.data?.[0]?.user_id;
-      if (userId) {
-        session.set(SESSION_USER_ID_KEY, userId);
-        return userId;
-      }
-
-      const newUserId = generateNativeUUID();
-      session.set(SESSION_USER_ID_KEY, newUserId);
-      return newUserId;
-    }
-
-    return null;
   }
 
   private async getAddress(): Promise<Address | null> {
@@ -786,7 +798,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_accounts",
       });
       if (!res || res.length === 0) return null;
-      return res.filter(isAddress);
+      return res.filter((e) => isAddress(e));
     } catch (err) {
       if ((err as any).code !== 4001) {
         logger.error(
@@ -817,58 +829,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.error("eth_chainId threw an error:", err);
       return 0;
     }
-  }
-
-  private getLocation(): string | undefined {
-    try {
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (timezone in COUNTRY_LIST)
-        return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
-      return timezone;
-    } catch (error) {
-      logger.error("Error resolving timezone:", error);
-      return "";
-    }
-  }
-
-  private getLanguage(): string {
-    try {
-      return (
-        (navigator.languages && navigator.languages.length
-          ? navigator.languages[0]
-          : navigator.language) || "en"
-      );
-    } catch (error) {
-      logger.error("Error resolving language:", error);
-      return "en";
-    }
-  }
-
-  // Adds browser properties to the user-supplied payload
-  private async buildEventPayload(
-    eventSpecificPayload: Record<string, unknown> = {}
-  ): Promise<Record<string, unknown>> {
-    const url = new URL(window.location.href);
-    const params = new URLSearchParams(url.search);
-
-    const location = this.getLocation();
-    const language = this.getLanguage();
-
-    // common browser properties
-    return {
-      "user-agent": window.navigator.userAgent,
-      href: url.href,
-      locale: language,
-      location,
-      referrer: document.referrer,
-      utm_source: params.get("utm_source"),
-      utm_medium: params.get("utm_medium"),
-      utm_campaign: params.get("utm_campaign"),
-      utm_content: params.get("utm_content"),
-      utm_term: params.get("utm_term"),
-      ref: params.get("ref"),
-      ...eventSpecificPayload,
-    };
   }
 
   private buildSignatureEventPayload(
@@ -942,18 +902,21 @@ export class FormoAnalytics implements IFormoAnalytics {
 }
 
 interface IFormoAnalyticsSession {
-  isIdentified(): boolean;
-  identify(): void;
+  isWalletDetected(rdns: string): boolean;
+  markWalletdetected(rdns: string): void;
 }
 
 class FormoAnalyticsSession implements IFormoAnalyticsSession {
   constructor() {}
 
-  public isIdentified(): boolean {
-    return session.get(SESSION_IDENTIFIED_KEY) === true;
+  public isWalletDetected(rdns: string): boolean {
+    const rdnses = (session.get(SESSION_WALLET_DETECTED_KEY) as string[]) || [];
+    return rdnses.includes(rdns);
   }
 
-  public identify(): void {
-    session.set(SESSION_IDENTIFIED_KEY, true);
+  public markWalletdetected(rdns: string): void {
+    const rdnses = (session.get(SESSION_WALLET_DETECTED_KEY) as string[]) || [];
+    rdnses.push(rdns);
+    session.set(SESSION_WALLET_DETECTED_KEY, rdnses);
   }
 }
