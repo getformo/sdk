@@ -1,5 +1,5 @@
 import { UUID } from "crypto";
-import { COUNTRY_LIST } from "../../constants";
+import { COUNTRY_LIST, EventType } from "../../constants";
 import {
   Address,
   APIEvent,
@@ -210,59 +210,61 @@ class EventFactory implements IEventFactory {
     const context = this.generateContext();
     let properties;
     
-    if (event.type === "page_hit") {
-      properties = this.generatePageEvent();
-    }
-    if (event.type === "connect") {
-      properties = this.generateConnectEvent(
-        event.chainId,
-        event.address
-      );
-    }
-    if (event.type === "disconnect") {
-      properties = this.generateDisconnectEvent(
-        event.chainId,
-        event.address
-      );
-    }
-    if (event.type === "detect_wallet") {
-      properties = this.generateDetectWalletEvent(
-        event.providerName,
-        event.rdns
-      );
-    }
-    if (event.type === "identify") {
-      properties = this.generateIdentifyEvent(
-        event.address,
-        event.providerName,
-        event.rdns
-      );
-    }
-    if (event.type === "chain_changed") {
-      properties = this.generateChainChangedEvent(
-        event.chainId,
-        event.address
-      );
-    }
-    if (event.type === "signature") {
-      properties = this.generateSignatureEvent(
-        event.status,
-        event.chainId,
-        event.address,
-        event.message,
-        event.signatureHash
-      );
-    }
-    if (event.type === "transaction") {
-      properties = this.generateTransactionEvent(
-        event.status,
-        event.chainId,
-        event.address,
-        event.data,
-        event.to,
-        event.value,
-        event.transactionHash
-      );
+    switch (event.type) {
+      case EventType.PAGE:
+        properties = this.generatePageEvent();
+        break;
+      case EventType.CONNECT:
+        properties = this.generateConnectEvent(
+          event.chainId,
+          event.address
+        );
+        break;
+      case EventType.DISCONNECT:
+        properties = this.generateDisconnectEvent(
+          event.chainId,
+          event.address
+        );
+        break;
+      case EventType.DETECT_WALLET:
+        properties = this.generateDetectWalletEvent(
+          event.providerName,
+          event.rdns
+        );
+        break;
+      case EventType.IDENTIFY:
+        properties = this.generateIdentifyEvent(
+          event.address,
+          event.providerName,
+          event.rdns
+        );
+        break;
+      case EventType.CHAIN_CHANGED:
+        properties = this.generateChainChangedEvent(
+          event.chainId,
+          event.address
+        );
+        break;
+      case EventType.SIGNATURE:
+        properties = this.generateSignatureEvent(
+          event.status,
+          event.chainId,
+          event.address,
+          event.message,
+          event.signatureHash
+        );
+        break;
+      case EventType.TRANSACTION:
+        properties = this.generateTransactionEvent(
+          event.status,
+          event.chainId,
+          event.address,
+          event.data,
+          event.to,
+          event.value,
+          event.transactionHash
+        );
+        break;
     }
 
     return toSnakeCase(
