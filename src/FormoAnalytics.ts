@@ -28,7 +28,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { generateNativeUUID } from "./utils";
+import { generateNativeUUID, toSnake, toSnakeCase } from "./utils";
 import { isAddress, isArray, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
@@ -396,7 +396,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   async track(action: string, payload: Record<string, any>): Promise<void> {
-    await this.trackEvent(action, payload);
+    
+    await this.trackEvent(toSnake(action), toSnakeCase(payload));
   }
 
   /*

@@ -11,3 +11,6 @@ export const SESSION_CURRENT_URL_KEY = generateStoragePrefix(
 export const SESSION_USER_ID_KEY = generateStoragePrefix("user-id");
 
 export const LOCAL_ANONYMOUS_ID_KEY = generateStoragePrefix("anonymous-id");
+
+// SDK version - update this when releasing a new version
+export const SDK_VERSION = "2.0.0";

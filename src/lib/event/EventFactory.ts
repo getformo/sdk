@@ -10,18 +10,28 @@ import {
 import { logger } from "../logger";
 import { IEventFactory } from "./type";
 import { toChecksumAddress, toSnakeCase } from "../../utils";
+import { SDK_VERSION } from "../../constants";
 
 class EventFactory implements IEventFactory {
   constructor() {}
 
+  private getTimezone(): string {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch (error) {
+      logger.error("Error resolving timezone:", error);
+      return "";
+    }
+  }
+
   private getLocation(): string | undefined {
     try {
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const timezone = this.getTimezone();
       if (timezone in COUNTRY_LIST)
         return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
       return timezone;
     } catch (error) {
-      logger.error("Error resolving timezone:", error);
+      logger.error("Error resolving location:", error);
       return "";
     }
   }
@@ -52,26 +62,44 @@ class EventFactory implements IEventFactory {
       address: address && toChecksumAddress(address),
       timestamp: new Date().toISOString(),
       action,
-      version: "1",
+      channel: "web",
+      version: "2",
     };
   }
 
-  private buildCommonPayload() {
+  // Contextual fields that are automatically collected and populated by the Formo SDK
+  private buildContext() {
     const url = new URL(window.location.href);
-
-    const location = this.getLocation();
+    const params = new URLSearchParams(url.search);
+    const page_path = window.location.pathname;
+    const page_title = document.title;
+    const page_url = url.href;
     const language = this.getLanguage();
+    const timezone = this.getTimezone();
+    const location = this.getLocation();
 
-    // common properties
+    // contextual properties
     return {
-      "user-agent": window.navigator.userAgent,
+      "user_agent": window.navigator.userAgent,
       href: url.href,
       locale: language,
+      timezone,
       location,
+      utm_source: params.get("utm_source")?.trim() || "",
+      utm_medium: params.get("utm_medium")?.trim() || "",
+      utm_campaign: params.get("utm_campaign")?.trim() || "",
+      utm_content: params.get("utm_content")?.trim() || "",
+      utm_term: params.get("utm_term")?.trim() || "",
+      ref: params.get("ref")?.trim() || "",
+      page_path,
+      page_title,
+      page_url,
+      library_name: "Formo Web SDK",
+      library_version: SDK_VERSION,
     };
   }
 
-  generatePageEvent() {
+  buildPageEvent() {
     const url = new URL(window.location.href);
     const params = new URLSearchParams(url.search);
     const pathname = window.location.pathname;
@@ -90,28 +118,28 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  generateConnectEvent(chainId: ChainID, address: Address) {
+  buildConnectEvent(chainId: ChainID, address: Address) {
     return {
       chainId,
       address,
     };
   }
 
-  generateDisconnectEvent(chainId: ChainID, address: Address) {
+  buildDisconnectEvent(chainId: ChainID, address: Address) {
     return {
       chainId,
       address,
     };
   }
 
-  generateDetectWalletEvent(providerName: string, rdns: string) {
+  buildDetectWalletEvent(providerName: string, rdns: string) {
     return {
       providerName,
       rdns,
     };
   }
 
-  generateIdentifyEvent(
+  buildIdentifyEvent(
     address: Address | null,
     providerName: string,
     rdns: string
@@ -123,14 +151,14 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  generateChainChangedEvent(chainId: ChainID, address: Address) {
+  buildChainChangedEvent(chainId: ChainID, address: Address) {
     return {
       chainId,
       address,
     };
   }
 
-  generateSignatureEvent(
+  buildSignatureEvent(
     status: SignatureStatus,
     chainId: ChainID,
     address: Address,
@@ -146,7 +174,7 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  generateTransactionEvent(
+  buildTransactionEvent(
     status: TransactionStatus,
     chainId: ChainID,
     address: Address,
@@ -166,7 +194,7 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  generateCustomEvent(args: any) {
+  buildCustomEvent(args: any) {
     if (typeof args !== "object") {
       logger.warn("Invalid event data");
       return {};
@@ -190,44 +218,44 @@ class EventFactory implements IEventFactory {
       address,
       event.action
     );
-    const payload = this.buildCommonPayload();
-    let eventSpecificPayload = this.generateCustomEvent(event);
+    const context = this.buildContext();
+    let payload = this.buildCustomEvent(event);
     if (event.action === "page_hit") {
-      eventSpecificPayload = this.generatePageEvent();
+      payload = this.buildPageEvent();
     }
     if (event.action === "connect") {
-      eventSpecificPayload = this.generateConnectEvent(
+      payload = this.buildConnectEvent(
         event.chainId,
         event.address
       );
     }
     if (event.action === "disconnect") {
-      eventSpecificPayload = this.generateDisconnectEvent(
+      payload = this.buildDisconnectEvent(
         event.chainId,
         event.address
       );
     }
     if (event.action === "detect_wallet") {
-      eventSpecificPayload = this.generateDetectWalletEvent(
+      payload = this.buildDetectWalletEvent(
         event.providerName,
         event.rdns
       );
     }
     if (event.action === "identify") {
-      eventSpecificPayload = this.generateIdentifyEvent(
+      payload = this.buildIdentifyEvent(
         event.address,
         event.providerName,
         event.rdns
       );
     }
     if (event.action === "chain_changed") {
-      eventSpecificPayload = this.generateChainChangedEvent(
+      payload = this.buildChainChangedEvent(
         event.chainId,
         event.address
       );
     }
     if (event.action === "signature") {
-      eventSpecificPayload = this.generateSignatureEvent(
+      payload = this.buildSignatureEvent(
         event.status,
         event.chainId,
         event.address,
@@ -236,7 +264,7 @@ class EventFactory implements IEventFactory {
       );
     }
     if (event.action === "transaction") {
-      eventSpecificPayload = this.generateTransactionEvent(
+      payload = this.buildTransactionEvent(
         event.status,
         event.chainId,
         event.address,
@@ -250,12 +278,9 @@ class EventFactory implements IEventFactory {
     return toSnakeCase(
       {
         ...commonProperties,
-        payload: {
-          ...payload,
-          ...eventSpecificPayload,
-        },
-      },
-      ["user-agent"]
+        context,
+        payload,
+      }
     );
   }
 }
