@@ -7,4 +7,5 @@ export enum EventType {
   CHAIN_CHANGED = "chain_changed",
   SIGNATURE = "signature",
   TRANSACTION = "transaction",
+  TRACK = "track",
 }

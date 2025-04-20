@@ -63,7 +63,7 @@ interface IFormoAnalytics {
         }
       | readonly EIP6963ProviderDetail[]
   ): Promise<void>;
-  track(type: string, properties: Record<string, any>): Promise<void>;
+  track(event: string, properties: Record<string, any>): Promise<void>;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -391,14 +391,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits a custom event with custom data.
-   * @param {string} type
-   * @param {Record<string, any>} properties
+   * Emits a custom user event with custom properties.
+   * @param {string} event The name of the tracked event
+   * @param {Record<string, any>} properties The properties of the tracked event
    * @returns {Promise<void>}
    */
-  async track(type: string, properties: Record<string, any>): Promise<void> {
+  async track(event: string, properties: Record<string, any>): Promise<void> {
     // TODO: P-735
-    await this.trackEvent(type, properties);
+    await this.trackEvent(EventType.TRACK, { event, ...properties });
   }
 
   /*

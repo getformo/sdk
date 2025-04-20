@@ -209,6 +209,7 @@ class EventFactory implements IEventFactory {
     );
     const context = this.generateContext();
     let properties;
+    
     if (event.type === "page_hit") {
       properties = this.generatePageEvent();
     }
