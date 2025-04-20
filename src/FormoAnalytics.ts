@@ -28,7 +28,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { generateNativeUUID, toSnakeCase } from "./utils";
+import { generateNativeUUID } from "./utils";
 import { isAddress, isArray, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
@@ -125,9 +125,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<FormoAnalytics> {
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Detect
+    // Auto-detect wallet provider
     const providers = await analytics.getProviders();
-    await analytics.detects(providers);
+    await analytics.detectWallets(providers);
 
     return analytics;
   }
@@ -156,7 +156,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits a wallet connect event.
+   * Emits a connect wallet event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
    * @throws {Error} If chainId or address is empty
@@ -309,7 +309,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits an detect event with current wallet provider info.
+   * Emits an identify event with current wallet address and provider info.
    * @param {string} params.providerName
    * @param {string} params.rdns
    * @param {string} params.userId
@@ -366,8 +366,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits an identify event with current wallet address.
-   * @param {Address} params.address
+   * Emits a detect wallet event with current wallet provider info.
+   * @param {string} params.providerName
+   * @param {string} params.rdns
    * @returns {Promise<void>}
    */
   private async detect({
@@ -396,6 +397,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   async track(type: string, properties: Record<string, any>): Promise<void> {
+    // TODO: P-735
     await this.trackEvent(type, properties);
   }
 
@@ -732,7 +734,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     return providers;
   }
 
-  private async detects(
+  private async detectWallets(
     providers: readonly EIP6963ProviderDetail[]
   ): Promise<void> {
     try {

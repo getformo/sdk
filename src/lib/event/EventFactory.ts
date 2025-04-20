@@ -49,7 +49,7 @@ class EventFactory implements IEventFactory {
     }
   }
 
-  private buildCommonProperties(
+  private generateCommonProperties(
     anonymous_id: UUID,
     user_id: string | null,
     address: string | null,
@@ -68,12 +68,10 @@ class EventFactory implements IEventFactory {
   }
 
   // Contextual fields that are automatically collected and populated by the Formo SDK
-  private buildContext() {
+  private generateContext() {
     const url = new URL(window.location.href);
     const params = new URLSearchParams(url.search);
-    const page_path = window.location.pathname;
-    const page_title = document.title;
-    const page_url = url.href;
+    const path = window.location.pathname;
     const language = this.getLanguage();
     const timezone = this.getTimezone();
     const location = this.getLocation();
@@ -85,29 +83,6 @@ class EventFactory implements IEventFactory {
       locale: language,
       timezone,
       location,
-      utm_source: params.get("utm_source")?.trim() || "",
-      utm_medium: params.get("utm_medium")?.trim() || "",
-      utm_campaign: params.get("utm_campaign")?.trim() || "",
-      utm_content: params.get("utm_content")?.trim() || "",
-      utm_term: params.get("utm_term")?.trim() || "",
-      ref: params.get("ref")?.trim() || "",
-      page_path,
-      page_title,
-      page_url,
-      library_name: "Formo Web SDK",
-      library_version: SDK_VERSION,
-    };
-  }
-
-  buildPageEvent() {
-    const url = new URL(window.location.href);
-    const params = new URLSearchParams(url.search);
-    const pathname = window.location.pathname;
-    const hash = window.location.hash;
-
-    return {
-      pathname: pathname || url.pathname,
-      hash: hash || url.hash,
       referrer: document.referrer,
       utm_source: params.get("utm_source")?.trim() || "",
       utm_medium: params.get("utm_medium")?.trim() || "",
@@ -115,31 +90,49 @@ class EventFactory implements IEventFactory {
       utm_content: params.get("utm_content")?.trim() || "",
       utm_term: params.get("utm_term")?.trim() || "",
       ref: params.get("ref")?.trim() || "",
+      page_path: path,
+      page_title: document.title,
+      page_url: url.href,
+      library_name: "Formo Web SDK",
+      library_version: SDK_VERSION,
     };
   }
 
-  buildConnectEvent(chainId: ChainID, address: Address) {
+  generatePageEvent() {
+    const url = new URL(window.location.href);
+    const path = window.location.pathname;
+    const hash = window.location.hash;
+
+    return {
+      path: path || url.pathname,
+      url: url.href,
+      title: document.title,
+      hash: hash || url.hash
+    };
+  }
+
+  generateConnectEvent(chainId: ChainID, address: Address) {
     return {
       chainId,
       address,
     };
   }
 
-  buildDisconnectEvent(chainId: ChainID, address: Address) {
+  generateDisconnectEvent(chainId: ChainID, address: Address) {
     return {
       chainId,
       address,
     };
   }
 
-  buildDetectWalletEvent(providerName: string, rdns: string) {
+  generateDetectWalletEvent(providerName: string, rdns: string) {
     return {
       providerName,
       rdns,
     };
   }
 
-  buildIdentifyEvent(
+  generateIdentifyEvent(
     address: Address | null,
     providerName: string,
     rdns: string
@@ -151,14 +144,14 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  buildChainChangedEvent(chainId: ChainID, address: Address) {
+  generateChainChangedEvent(chainId: ChainID, address: Address) {
     return {
       chainId,
       address,
     };
   }
 
-  buildSignatureEvent(
+  generateSignatureEvent(
     status: SignatureStatus,
     chainId: ChainID,
     address: Address,
@@ -174,7 +167,7 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  buildTransactionEvent(
+  generateTransactionEvent(
     status: TransactionStatus,
     chainId: ChainID,
     address: Address,
@@ -200,50 +193,50 @@ class EventFactory implements IEventFactory {
     address: string | null,
     event: APIEvent
   ) {
-    const commonProperties = this.buildCommonProperties(
+    const commonProperties = this.generateCommonProperties(
       anonymous_id,
       user_id,
       address,
       event.type
     );
-    const context = this.buildContext();
+    const context = this.generateContext();
     let properties;
     if (event.type === "page_hit") {
-      properties = this.buildPageEvent();
+      properties = this.generatePageEvent();
     }
     if (event.type === "connect") {
-      properties = this.buildConnectEvent(
+      properties = this.generateConnectEvent(
         event.chainId,
         event.address
       );
     }
     if (event.type === "disconnect") {
-      properties = this.buildDisconnectEvent(
+      properties = this.generateDisconnectEvent(
         event.chainId,
         event.address
       );
     }
     if (event.type === "detect_wallet") {
-      properties = this.buildDetectWalletEvent(
+      properties = this.generateDetectWalletEvent(
         event.providerName,
         event.rdns
       );
     }
     if (event.type === "identify") {
-      properties = this.buildIdentifyEvent(
+      properties = this.generateIdentifyEvent(
         event.address,
         event.providerName,
         event.rdns
       );
     }
     if (event.type === "chain_changed") {
-      properties = this.buildChainChangedEvent(
+      properties = this.generateChainChangedEvent(
         event.chainId,
         event.address
       );
     }
     if (event.type === "signature") {
-      properties = this.buildSignatureEvent(
+      properties = this.generateSignatureEvent(
         event.status,
         event.chainId,
         event.address,
@@ -252,7 +245,7 @@ class EventFactory implements IEventFactory {
       );
     }
     if (event.type === "transaction") {
-      properties = this.buildTransactionEvent(
+      properties = this.generateTransactionEvent(
         event.status,
         event.chainId,
         event.address,
