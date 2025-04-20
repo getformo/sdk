@@ -5,6 +5,8 @@ export interface IFormoEvent {
   anonymous_id: UUID;
   user_id: string | null;
   type: string;
+  event: string | null;
+  context: Record<string, unknown>;
   properties: Record<string, unknown>;
   address: string | null;
   timestamp: string;

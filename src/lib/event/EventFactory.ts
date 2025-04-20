@@ -4,6 +4,7 @@ import {
   Address,
   APIEvent,
   ChainID,
+  IFormoEvent,
   SignatureStatus,
   TransactionStatus,
 } from "../../types";
@@ -98,6 +99,9 @@ class EventFactory implements IEventFactory {
     };
   }
 
+  // TODO: this function should return the full page event with type, context, properties, and common properties
+  // Example: https://github.com/rudderlabs/rudder-sdk-js/blob/develop/packages/analytics-js/src/components/eventManager/RudderEventFactory.ts#L31-L38
+  // TODO: accept category and name as parameters
   generatePageEvent() {
     const url = new URL(window.location.href);
     const path = window.location.pathname;
@@ -187,12 +191,16 @@ class EventFactory implements IEventFactory {
     };
   }
 
+  // TODO: this function should return the full event with type, context, properties, and common properties
+  // https://github.com/rudderlabs/rudder-sdk-js/blob/2294bdde8c967295e18533a2bd20e17231ae4768/packages/analytics-js-common/src/types/EventApi.ts#L30-L44
+  // https://github.com/rudderlabs/rudder-sdk-js/blob/develop/packages/analytics-js/src/components/eventManager/RudderEventFactory.ts#L132
+  // TODO: refactor with switch case
   create(
     anonymous_id: UUID,
     user_id: string | null,
     address: string | null,
     event: APIEvent
-  ) {
+  ): IFormoEvent {
     const commonProperties = this.generateCommonProperties(
       anonymous_id,
       user_id,
