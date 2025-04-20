@@ -4,40 +4,40 @@ import { Address, ChainID } from "./base";
 export interface IFormoEvent {
   anonymous_id: UUID;
   user_id: string | null;
-  action: string;
-  payload: Record<string, unknown>;
+  type: string;
+  properties: Record<string, unknown>;
   address: string | null;
   timestamp: string;
   version: string;
 }
 
 export type IFormoEventPayload = IFormoEvent & {
-  id: string;
+  messageId: string;
 };
 
 export type APIEvent =
   | {
-      action: "page_hit";
+      type: "page_hit";
     }
   | {
-      action: "detect_wallet";
+      type: "detect_wallet";
       providerName: string;
       rdns: string;
     }
   | {
-      action: "identify";
+      type: "identify";
       address: string;
       providerName: string;
       rdns: string;
       userId?: string;
     }
   | {
-      action: "chain_changed";
+      type: "chain_changed";
       chainId: ChainID;
       address: Address;
     }
   | {
-      action: "transaction";
+      type: "transaction";
       status: TransactionStatus;
       chainId: ChainID;
       address: Address;
@@ -47,7 +47,7 @@ export type APIEvent =
       transactionHash: string;
     }
   | {
-      action: "signature";
+      type: "signature";
       status: SignatureStatus;
       chainId: ChainID;
       address: Address;
@@ -55,12 +55,12 @@ export type APIEvent =
       signatureHash: string;
     }
   | {
-      action: "disconnect";
+      type: "disconnect";
       chainId: ChainID;
       address: Address;
     }
   | {
-      action: "connect";
+      type: "connect";
       chainId: ChainID;
       address: Address;
     };

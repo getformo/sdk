@@ -117,12 +117,12 @@ export class EventQueue implements IEventQueue {
     }
 
     this.queue.push({
-      message: { ...event, timestamp: originTimestamp, id: eventId },
+      message: { ...event, timestamp: originTimestamp, messageId: eventId },
       callback,
     });
 
     logger.log(
-      `Event enqueued: ${getActionDescriptor(event.action, event.payload)}`
+      `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
     );
 
     if (!this.flushed) {

@@ -1,4 +1,4 @@
-export enum Event {
+export enum EventType {
   PAGE = "page_hit",
   IDENTIFY = "identify",
   DETECT_WALLET = "detect_wallet",

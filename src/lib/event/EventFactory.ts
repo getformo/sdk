@@ -53,7 +53,7 @@ class EventFactory implements IEventFactory {
     anonymous_id: UUID,
     user_id: string | null,
     address: string | null,
-    action: string
+    type: string
   ) {
     // common properties
     return {
@@ -61,7 +61,7 @@ class EventFactory implements IEventFactory {
       user_id,
       address: address && toChecksumAddress(address),
       timestamp: new Date().toISOString(),
-      action,
+      type,
       channel: "web",
       version: "2",
     };
@@ -194,18 +194,6 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  buildCustomEvent(args: any) {
-    if (typeof args !== "object") {
-      logger.warn("Invalid event data");
-      return {};
-    }
-    const { action, ...rest } = args;
-
-    return {
-      ...rest,
-    };
-  }
-
   create(
     anonymous_id: UUID,
     user_id: string | null,
@@ -216,46 +204,46 @@ class EventFactory implements IEventFactory {
       anonymous_id,
       user_id,
       address,
-      event.action
+      event.type
     );
     const context = this.buildContext();
-    let payload = this.buildCustomEvent(event);
-    if (event.action === "page_hit") {
-      payload = this.buildPageEvent();
+    let properties;
+    if (event.type === "page_hit") {
+      properties = this.buildPageEvent();
     }
-    if (event.action === "connect") {
-      payload = this.buildConnectEvent(
+    if (event.type === "connect") {
+      properties = this.buildConnectEvent(
         event.chainId,
         event.address
       );
     }
-    if (event.action === "disconnect") {
-      payload = this.buildDisconnectEvent(
+    if (event.type === "disconnect") {
+      properties = this.buildDisconnectEvent(
         event.chainId,
         event.address
       );
     }
-    if (event.action === "detect_wallet") {
-      payload = this.buildDetectWalletEvent(
+    if (event.type === "detect_wallet") {
+      properties = this.buildDetectWalletEvent(
         event.providerName,
         event.rdns
       );
     }
-    if (event.action === "identify") {
-      payload = this.buildIdentifyEvent(
+    if (event.type === "identify") {
+      properties = this.buildIdentifyEvent(
         event.address,
         event.providerName,
         event.rdns
       );
     }
-    if (event.action === "chain_changed") {
-      payload = this.buildChainChangedEvent(
+    if (event.type === "chain_changed") {
+      properties = this.buildChainChangedEvent(
         event.chainId,
         event.address
       );
     }
-    if (event.action === "signature") {
-      payload = this.buildSignatureEvent(
+    if (event.type === "signature") {
+      properties = this.buildSignatureEvent(
         event.status,
         event.chainId,
         event.address,
@@ -263,8 +251,8 @@ class EventFactory implements IEventFactory {
         event.signatureHash
       );
     }
-    if (event.action === "transaction") {
-      payload = this.buildTransactionEvent(
+    if (event.type === "transaction") {
+      properties = this.buildTransactionEvent(
         event.status,
         event.chainId,
         event.address,
@@ -279,7 +267,7 @@ class EventFactory implements IEventFactory {
       {
         ...commonProperties,
         context,
-        payload,
+        properties,
       }
     );
   }

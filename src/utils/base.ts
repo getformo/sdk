@@ -1,3 +1,3 @@
-export const getActionDescriptor = (action: string, payload: any): string => {
-  return `${action}${payload?.status ? ` ${payload?.status}` : ""}`;
+export const getActionDescriptor = (type: string, properties: any): string => {
+  return `${type}${properties?.status ? ` ${properties?.status}` : ""}`;
 };

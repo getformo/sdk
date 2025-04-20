@@ -1,7 +1,7 @@
 import { UUID } from "crypto";
 import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
-  Event,
+  EventType,
   EVENTS_API_URL,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_CURRENT_URL_KEY,
@@ -28,7 +28,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { generateNativeUUID, toSnake, toSnakeCase } from "./utils";
+import { generateNativeUUID, toSnakeCase } from "./utils";
 import { isAddress, isArray, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
@@ -63,7 +63,7 @@ interface IFormoAnalytics {
         }
       | readonly EIP6963ProviderDetail[]
   ): Promise<void>;
-  track(action: string, payload: Record<string, any>): Promise<void>;
+  track(type: string, properties: Record<string, any>): Promise<void>;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -179,7 +179,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
     this.currentConnectedAddress = address;
 
-    await this.trackEvent(Event.CONNECT, {
+    await this.trackEvent(EventType.CONNECT, {
       chainId,
       address,
     });
@@ -232,7 +232,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentChainId = chainId;
 
-    await this.trackEvent(Event.CHAIN_CHANGED, {
+    await this.trackEvent(EventType.CHAIN_CHANGED, {
       chainId,
       address: address || this.currentConnectedAddress,
     });
@@ -260,7 +260,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     message: string;
     signatureHash?: string;
   }): Promise<void> {
-    await this.trackEvent(Event.SIGNATURE, {
+    await this.trackEvent(EventType.SIGNATURE, {
       status,
       chainId,
       address,
@@ -297,7 +297,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     value?: string;
     transactionHash?: string;
   }): Promise<void> {
-    await this.trackEvent(Event.TRANSACTION, {
+    await this.trackEvent(EventType.TRANSACTION, {
       status,
       chainId,
       address,
@@ -357,7 +357,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         rdns?: string;
       };
       if (userId) this.userId = userId || null;
-      await this.trackEvent(Event.IDENTIFY, {
+      await this.trackEvent(EventType.IDENTIFY, {
         address,
         providerName,
         rdns,
@@ -383,7 +383,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
     this.session.markWalletdetected(rdns);
-    await this.trackEvent(Event.DETECT_WALLET, {
+    await this.trackEvent(EventType.DETECT_WALLET, {
       providerName,
       rdns,
     });
@@ -391,13 +391,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits a custom event with custom data.
-   * @param {string} action
-   * @param {Record<string, any>} payload
+   * @param {string} type
+   * @param {Record<string, any>} properties
    * @returns {Promise<void>}
    */
-  async track(action: string, payload: Record<string, any>): Promise<void> {
-    
-    await this.trackEvent(toSnake(action), toSnakeCase(payload));
+  async track(type: string, properties: Record<string, any>): Promise<void> {
+    await this.trackEvent(type, properties);
   }
 
   /*
@@ -600,7 +599,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentConnectedAddress = undefined;
     session.remove(SESSION_USER_ID_KEY);
 
-    await this.trackEvent(Event.DISCONNECT, payload);
+    await this.trackEvent(EventType.DISCONNECT, payload);
   }
 
   private async onAddressDisconnected(): Promise<void> {
@@ -687,11 +686,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     setTimeout(async () => {
-      this.trackEvent(Event.PAGE);
+      this.trackEvent(EventType.PAGE);
     }, 300);
   }
 
-  private async trackEvent(action: string, payload?: any): Promise<void> {
+  private async trackEvent(type: string, properties?: any): Promise<void> {
     try {
       const address = await this.getAddress();
       const user_id = this.userId;
@@ -701,8 +700,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         user_id,
         address,
         {
-          action,
-          ...payload,
+          type,
+          ...properties,
         }
       );
 
