@@ -12,5 +12,5 @@ export const SESSION_USER_ID_KEY = generateStoragePrefix("user-id");
 
 export const LOCAL_ANONYMOUS_ID_KEY = generateStoragePrefix("anonymous-id");
 
-// SDK version - update this when releasing a new version
-export const SDK_VERSION = "2.0.0";
+// SDK version used for context.library_version - update this when releasing a new version
+export const SDK_VERSION = "x.x.x";

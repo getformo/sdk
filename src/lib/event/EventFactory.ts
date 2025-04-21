@@ -64,7 +64,7 @@ class EventFactory implements IEventFactory {
       timestamp: new Date().toISOString(),
       type,
       channel: "web",
-      version: "2",
+      version: "0",
     };
   }
 
@@ -191,10 +191,7 @@ class EventFactory implements IEventFactory {
     };
   }
 
-  // TODO: this function should return the full event with type, context, properties, and common properties
-  // https://github.com/rudderlabs/rudder-sdk-js/blob/2294bdde8c967295e18533a2bd20e17231ae4768/packages/analytics-js-common/src/types/EventApi.ts#L30-L44
-  // https://github.com/rudderlabs/rudder-sdk-js/blob/develop/packages/analytics-js/src/components/eventManager/RudderEventFactory.ts#L132
-  // TODO: refactor with switch case
+  // Returns an event with type, context, properties, and common properties
   create(
     anonymous_id: UUID,
     user_id: string | null,

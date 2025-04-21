@@ -1,14 +1,14 @@
 import { UUID } from "crypto";
 import { Address, ChainID } from "./base";
+import { EventType } from "../constants";
 
 export interface IFormoEvent {
+  type: EventType;
   anonymous_id: UUID;
   user_id: string | null;
-  type: string;
-  event: string | null;
+  address: string | null;
   context: Record<string, unknown>;
   properties: Record<string, unknown>;
-  address: string | null;
   timestamp: string;
   version: string;
 }

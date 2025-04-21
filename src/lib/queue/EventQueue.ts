@@ -105,9 +105,9 @@ export class EventQueue implements IEventQueue {
     event.timestamp = formattedTimestamp;
 
     const eventString = JSON.stringify(event);
-    const eventId = await hash(eventString);
+    const messageId = await hash(eventString);
     // check if the message already exists
-    if (await this.isDuplicate(eventId)) {
+    if (await this.isDuplicate(messageId)) {
       logger.warn(
         `Event already enqueued, try again after ${millisecondsToSecond(
           this.flushIntervalMs
@@ -117,7 +117,7 @@ export class EventQueue implements IEventQueue {
     }
 
     this.queue.push({
-      message: { ...event, timestamp: originTimestamp, messageId: eventId },
+      message: { ...event, timestamp: originTimestamp, messageId },
       callback,
     });
 

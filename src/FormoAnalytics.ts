@@ -396,7 +396,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Record<string, any>} properties The properties of the tracked event
    * @returns {Promise<void>}
    */
-  async track(event: string, properties: Record<string, any>): Promise<void> {
+  async track(event: EventType, properties: Record<string, any>): Promise<void> {
     // TODO: P-735
     await this.trackEvent(EventType.TRACK, { event, ...properties });
   }
