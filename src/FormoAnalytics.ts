@@ -344,13 +344,6 @@ export class FormoAnalytics implements IFormoAnalytics {
                 rdns: eip6963ProviderDetail?.info.rdns,
               });
             }
-          } else {
-            // Identify without accounts
-            await this.identify({
-              address: null,
-              providerName: eip6963ProviderDetail?.info.name,
-              rdns: eip6963ProviderDetail?.info.rdns,
-            });
           }
         }
       } catch (err) {
