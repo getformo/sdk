@@ -11,7 +11,7 @@ import {
 import { logger } from "../logger";
 import { IEventFactory } from "./type";
 import { toChecksumAddress, toSnakeCase } from "../../utils";
-import { SDK_VERSION } from "../../constants";
+import { version } from "../version";
 
 class EventFactory implements IEventFactory {
   constructor() {}
@@ -50,6 +50,10 @@ class EventFactory implements IEventFactory {
     }
   }
 
+  private getLibraryVersion(): string {
+    return version;
+  }
+
   private generateCommonProperties(
     anonymous_id: UUID,
     user_id: string | null,
@@ -76,10 +80,11 @@ class EventFactory implements IEventFactory {
     const language = this.getLanguage();
     const timezone = this.getTimezone();
     const location = this.getLocation();
+    const library_version = this.getLibraryVersion();
 
     // contextual properties
     return {
-      "user_agent": window.navigator.userAgent,
+      user_agent: window.navigator.userAgent,
       href: url.href,
       locale: language,
       timezone,
@@ -95,7 +100,7 @@ class EventFactory implements IEventFactory {
       page_title: document.title,
       page_url: url.href,
       library_name: "Formo Web SDK",
-      library_version: SDK_VERSION,
+      library_version,
     };
   }
 
@@ -111,7 +116,7 @@ class EventFactory implements IEventFactory {
       path: path || url.pathname,
       url: url.href,
       title: document.title,
-      hash: hash || url.hash
+      hash: hash || url.hash,
     };
   }
 
@@ -206,24 +211,18 @@ class EventFactory implements IEventFactory {
     );
     const context = this.generateContext();
     let properties;
-    
+
     switch (event.type) {
       case EventType.PAGE:
         properties = this.generatePageEvent();
         break;
       case EventType.CONNECT:
-        properties = this.generateConnectEvent(
-          event.chainId,
-          event.address
-        );
+        properties = this.generateConnectEvent(event.chainId, event.address);
         break;
       case EventType.DISCONNECT:
-        properties = this.generateDisconnectEvent(
-          event.chainId,
-          event.address
-        );
+        properties = this.generateDisconnectEvent(event.chainId, event.address);
         break;
-      case EventType.DETECT_WALLET:
+      case EventType.DETECT:
         properties = this.generateDetectWalletEvent(
           event.providerName,
           event.rdns
@@ -236,7 +235,7 @@ class EventFactory implements IEventFactory {
           event.rdns
         );
         break;
-      case EventType.CHAIN_CHANGED:
+      case EventType.CHAIN:
         properties = this.generateChainChangedEvent(
           event.chainId,
           event.address
@@ -264,13 +263,11 @@ class EventFactory implements IEventFactory {
         break;
     }
 
-    return toSnakeCase(
-      {
-        ...commonProperties,
-        context,
-        properties,
-      }
-    );
+    return toSnakeCase({
+      ...commonProperties,
+      context,
+      properties,
+    });
   }
 }
 

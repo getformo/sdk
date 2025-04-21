@@ -14,15 +14,15 @@ export interface IFormoEvent {
 }
 
 export type IFormoEventPayload = IFormoEvent & {
-  messageId: string;
+  message_id: string;
 };
 
 export type APIEvent =
   | {
-      type: "page_hit";
+      type: "page";
     }
   | {
-      type: "detect_wallet";
+      type: "detect";
       providerName: string;
       rdns: string;
     }
@@ -34,7 +34,7 @@ export type APIEvent =
       userId?: string;
     }
   | {
-      type: "chain_changed";
+      type: "chain";
       chainId: ChainID;
       address: Address;
     }

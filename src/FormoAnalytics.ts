@@ -232,7 +232,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentChainId = chainId;
 
-    await this.trackEvent(EventType.CHAIN_CHANGED, {
+    await this.trackEvent(EventType.CHAIN, {
       chainId,
       address: address || this.currentConnectedAddress,
     });
@@ -384,7 +384,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
 
     this.session.markWalletdetected(rdns);
-    await this.trackEvent(EventType.DETECT_WALLET, {
+    await this.trackEvent(EventType.DETECT, {
       providerName,
       rdns,
     });
@@ -396,7 +396,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Record<string, any>} properties The properties of the tracked event
    * @returns {Promise<void>}
    */
-  async track(event: EventType, properties: Record<string, any>): Promise<void> {
+  async track(
+    event: EventType,
+    properties: Record<string, any>
+  ): Promise<void> {
     // TODO: P-735
     await this.trackEvent(EventType.TRACK, { event, ...properties });
   }
