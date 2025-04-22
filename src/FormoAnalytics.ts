@@ -30,7 +30,7 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { isAddress, isArray, isLocalhost } from "./validators";
+import { isAddress, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
   page(
@@ -91,19 +91,15 @@ interface IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
-  identify(
-    params?:
-      | {
-          address: Address | null;
-          providerName?: string;
-          userId?: string;
-          rdns?: string;
-        }
-      | readonly EIP6963ProviderDetail[],
+  identify(params?: {
+    address: Address;
+    providerName?: string;
+    userId?: string;
+    rdns?: string;
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
-  ): Promise<void>;
+  }): Promise<void>;
   track(
     event: string,
     properties?: IFormoEventProperties,
@@ -120,7 +116,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   config: Config;
   currentChainId?: ChainID;
-  currentConnectedAddress?: Address;
+  currentAddress?: Address;
 
   private constructor(
     public readonly writeKey: string,
@@ -234,7 +230,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentConnectedAddress = address;
+    this.currentAddress = address;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -266,7 +262,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    const address = params?.address || this.currentConnectedAddress;
+    const address = params?.address || this.currentAddress;
     const chainId = params?.chainId || this.currentChainId;
 
     await this.handleDisconnect(
@@ -309,7 +305,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         "FormoAnalytics::chain: chainId must be a valid decimal number"
       );
     }
-    if (!address && !this.currentConnectedAddress) {
+    if (!address && !this.currentAddress) {
       throw new Error(
         "FormoAnalytics::chain: address was empty and no previous address has been recorded"
       );
@@ -321,7 +317,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       EventType.CHAIN,
       {
         chainId,
-        address: address || this.currentConnectedAddress,
+        address: address || this.currentAddress,
       },
       properties,
       context,
@@ -439,65 +435,39 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   public async identify(
-    params?:
-      | {
-          address: Address | null;
-          providerName?: string;
-          userId?: string;
-          rdns?: string;
-        }
-      | readonly EIP6963ProviderDetail[],
+    params?: {
+      address: Address | null; 
+      providerName?: string;
+      userId?: string;
+      rdns?: string;
+    },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    if (isArray(params) || !params) {
-      const providers = isArray(params) ? params : await this.getProviders();
-      try {
-        for (const eip6963ProviderDetail of providers) {
-          if (!eip6963ProviderDetail) continue;
-          const accounts = await this.getAccounts(
-            eip6963ProviderDetail?.provider
-          );
-          // Identify with accounts
-          if (accounts && accounts.length > 0) {
-            for (const address of accounts) {
-              await this.identify(
-                {
-                  address,
-                  providerName: eip6963ProviderDetail?.info.name,
-                  rdns: eip6963ProviderDetail?.info.rdns,
-                },
-                properties,
-                context,
-                callback
-              );
-            }
-          }
-        }
-      } catch (err) {
-        logger.error("Error identifying all:", err);
-      }
-    } else {
-      const { userId, address, providerName, rdns } = params as {
-        address: Address | null;
-        providerName?: string;
-        userId?: string;
-        rdns?: string;
-      };
-      await this.trackEvent(
-        EventType.IDENTIFY,
-        {
-          address,
-          providerName,
-          userId,
-          rdns,
-        },
-        properties,
-        context,
-        callback
-      );
-    }
+    const { userId, address, providerName, rdns } = params as {
+      address: Address | null;
+      providerName?: string;
+      userId?: string;
+      rdns?: string;
+    };
+
+    // TODO: enable this
+    // this.currentAddress = address;
+    // if (userId) this.userId = userId || null;
+    
+    await this.trackEvent(
+      EventType.IDENTIFY,
+      {
+        address,
+        providerName,
+        userId,
+        rdns,
+      },
+      properties,
+      context,
+      callback
+    );
   }
 
   /**
@@ -574,7 +544,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       this.currentChainId = undefined;
-      this.currentConnectedAddress = undefined;
+      this.currentAddress = undefined;
 
       if (this._provider) {
         const actions = Object.keys(this._providerListeners);
@@ -740,11 +710,11 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onAddressConnected(address: Address): Promise<void> {
-    if (address === this.currentConnectedAddress)
+    if (address === this.currentAddress)
       // We have already reported this address
       return;
 
-    this.currentConnectedAddress = address;
+    this.currentAddress = address;
 
     this.currentChainId = await this.getCurrentChainId();
     this.connect({ chainId: this.currentChainId, address });
@@ -759,10 +729,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     const payload = {
       chainId: chainId || this.currentChainId,
-      address: address || this.currentConnectedAddress,
+      address: address || this.currentAddress,
     };
     this.currentChainId = undefined;
-    this.currentConnectedAddress = undefined;
+    this.currentAddress = undefined;
     session.remove(SESSION_USER_ID_KEY);
 
     await this.trackEvent(
@@ -777,13 +747,13 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async onAddressDisconnected(): Promise<void> {
     await this.handleDisconnect(
       this.currentChainId,
-      this.currentConnectedAddress
+      this.currentAddress
     );
   }
 
   private async onChainChanged(chainIdHex: string): Promise<void> {
     this.currentChainId = parseInt(chainIdHex);
-    if (!this.currentConnectedAddress) {
+    if (!this.currentAddress) {
       if (!this.provider) {
         logger.info(
           "OnChainChanged: Provider not found. CHAIN_CHANGED not reported"
@@ -798,14 +768,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
         return Promise.resolve();
       }
-      this.currentConnectedAddress = address;
+      this.currentAddress = address;
     }
 
     // Proceed only if the address exists
-    if (this.currentConnectedAddress) {
+    if (this.currentAddress) {
       return this.chain({
         chainId: this.currentChainId,
-        address: this.currentConnectedAddress,
+        address: this.currentAddress,
       });
     } else {
       logger.info(
@@ -934,7 +904,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async getAddress(): Promise<Address | null> {
-    if (this.currentConnectedAddress) return this.currentConnectedAddress;
+    if (this.currentAddress) return this.currentAddress;
     if (!this?.provider) {
       logger.info("The provider is not set");
       return null;
