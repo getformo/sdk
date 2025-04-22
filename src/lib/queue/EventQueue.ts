@@ -176,9 +176,12 @@ export class EventQueue implements IEventQueue {
 
     const items = this.queue.splice(0, this.flushAt);
     this.payloadHashes.clear();
+    
+    // Generate sent_at once for the entire batch
+    const sentAt = new Date().toISOString();
     const data: IFormoEventFlushPayload[] = items.map((item) => ({
       ...item.message,
-      sent_at: new Date().toISOString()
+      sent_at: sentAt
     }));
 
     const done = (err?: Error) => {
