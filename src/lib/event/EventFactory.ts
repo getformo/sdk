@@ -1,27 +1,51 @@
-import { UUID } from "crypto";
 import { COUNTRY_LIST } from "../../constants";
 import {
   Address,
   APIEvent,
   ChainID,
+  IFormoEvent,
+  IFormoEventContext,
+  IFormoEventProperties,
+  Nullable,
   SignatureStatus,
   TransactionStatus,
+  UTMParameters,
 } from "../../types";
+import {
+  generateNativeUUID,
+  toChecksumAddress,
+  toSnakeCase,
+} from "../../utils";
+import { getCurrentTimeFormatted } from "../../utils/timestamp";
+import { isUndefined } from "../../validators";
 import { logger } from "../logger";
+import mergeDeepRight from "../ramda/mergeDeepRight";
+import { local } from "../storage";
+import { version } from "../version";
+import { CHANNEL, VERSION } from "./constants";
 import { IEventFactory } from "./type";
-import { toChecksumAddress, toSnakeCase } from "../../utils";
+import { generateAnonymousId } from "./utils";
 
 class EventFactory implements IEventFactory {
   constructor() {}
 
+  private getTimezone(): string {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch (error) {
+      logger.error("Error resolving timezone:", error);
+      return "";
+    }
+  }
+
   private getLocation(): string | undefined {
     try {
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const timezone = this.getTimezone();
       if (timezone in COUNTRY_LIST)
         return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
       return timezone;
     } catch (error) {
-      logger.error("Error resolving timezone:", error);
+      logger.error("Error resolving location:", error);
       return "";
     }
   }
@@ -39,95 +63,236 @@ class EventFactory implements IEventFactory {
     }
   }
 
-  private buildCommonProperties(
-    anonymous_id: UUID,
-    user_id: string | null,
-    address: string | null,
-    action: string
-  ) {
-    // common properties
-    return {
-      anonymous_id,
-      user_id,
-      address: address && toChecksumAddress(address),
-      timestamp: new Date().toISOString(),
-      action,
-      version: "1",
-    };
+  private getLibraryVersion(): string {
+    return version;
   }
 
-  private buildCommonPayload() {
-    const url = new URL(window.location.href);
+  private extractUTMParameters = (url: string): UTMParameters => {
+    const result: UTMParameters = {};
+    try {
+      const urlObj = new URL(url);
+      const UTM_PREFIX = "utm_";
+      urlObj.searchParams.forEach((value, sParam) => {
+        if (sParam.startsWith(UTM_PREFIX)) {
+          result[sParam] = value.trim() || "";
+        }
+      });
+    } catch (error) {}
+    return result;
+  };
 
-    const location = this.getLocation();
+  // Contextual fields that are automatically collected and populated by the Formo SDK
+  private generateContext(context?: IFormoEventContext): IFormoEventContext {
+    const url = new URL(globalThis.location.href);
+    const params = new URLSearchParams(url.search);
+    const path = globalThis.location.pathname;
     const language = this.getLanguage();
+    const timezone = this.getTimezone();
+    const location = this.getLocation();
+    const library_version = this.getLibraryVersion();
 
-    // common properties
-    return {
-      "user-agent": window.navigator.userAgent,
+    // contextual properties
+    const defaultContext = {
+      user_agent: globalThis.navigator.userAgent,
       href: url.href,
       locale: language,
+      timezone,
       location,
-    };
-  }
-
-  generatePageEvent() {
-    const url = new URL(window.location.href);
-    const params = new URLSearchParams(url.search);
-    const pathname = window.location.pathname;
-    const hash = window.location.hash;
-
-    return {
-      pathname: pathname || url.pathname,
-      hash: hash || url.hash,
       referrer: document.referrer,
-      utm_source: params.get("utm_source")?.trim() || "",
-      utm_medium: params.get("utm_medium")?.trim() || "",
-      utm_campaign: params.get("utm_campaign")?.trim() || "",
-      utm_content: params.get("utm_content")?.trim() || "",
-      utm_term: params.get("utm_term")?.trim() || "",
+      ...this.extractUTMParameters(globalThis.location.href),
       ref: params.get("ref")?.trim() || "",
+      page_path: path,
+      page_title: document.title,
+      page_url: url.href,
+      library_name: "Formo Web SDK",
+      library_version,
     };
+
+    const mergedContext = mergeDeepRight(
+      defaultContext,
+      context || {}
+    ) as IFormoEventContext;
+
+    return mergedContext;
   }
 
-  generateConnectEvent(chainId: ChainID, address: Address) {
-    return {
-      chainId,
-      address,
+  /**
+   * Add any missing default page properties using values from options and defaults
+   * @param properties Input page properties
+   * @param options API options
+   */
+  private getPageProperties = (
+    properties: IFormoEventProperties
+  ): IFormoEventProperties => {
+    const pageProps = properties;
+
+    if (isUndefined(pageProps.url)) {
+      pageProps.url = new URL(globalThis.location.href).href;
+    }
+
+    if (isUndefined(pageProps.path)) {
+      pageProps.path = globalThis.location.pathname;
+    }
+
+    if (isUndefined(pageProps.hash)) {
+      pageProps.hash = globalThis.location.hash;
+    }
+
+    return pageProps;
+  };
+
+  private getEnrichedEvent = (
+    formoEvent: Partial<IFormoEvent>,
+    context?: IFormoEventContext
+  ): IFormoEvent => {
+    const commonEventData = {
+      context: this.generateContext(context),
+      timestamp: getCurrentTimeFormatted(),
+      user_id: formoEvent.user_id,
+      type: formoEvent.type,
+      channel: CHANNEL,
+      version: VERSION,
+    } as Partial<IFormoEvent>;
+
+    if (!local.isAvailable()) {
+      commonEventData.anonymous_id = generateNativeUUID();
+    } else {
+      commonEventData.anonymous_id = generateAnonymousId();
+    }
+
+    if (formoEvent.address) {
+      commonEventData.address = toChecksumAddress(formoEvent.address);
+    } else {
+      commonEventData.address = formoEvent.address;
+    }
+
+    const processedEvent = mergeDeepRight(
+      formoEvent,
+      commonEventData
+    ) as IFormoEvent;
+
+    if (processedEvent.event === undefined) {
+      processedEvent.event = null;
+    }
+
+    if (processedEvent.properties === undefined) {
+      processedEvent.properties = null;
+    }
+
+    return toSnakeCase(processedEvent);
+  };
+
+  generatePageEvent(
+    category?: string,
+    name?: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ): IFormoEvent {
+    let props = properties ?? {};
+    props.category = category;
+    props.name = name;
+    props = this.getPageProperties(props);
+
+    const pageEvent: Partial<IFormoEvent> = {
+      properties: props,
+      type: "page",
     };
+
+    return this.getEnrichedEvent(pageEvent, context);
   }
 
-  generateDisconnectEvent(chainId: ChainID, address: Address) {
-    return {
-      chainId,
-      address,
+  generateDetectWalletEvent(
+    providerName: string,
+    rdns: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const detectEvent: Partial<IFormoEvent> = {
+      properties: {
+        providerName,
+        rdns,
+        ...properties,
+      },
+      type: "detect",
     };
-  }
 
-  generateDetectWalletEvent(providerName: string, rdns: string) {
-    return {
-      providerName,
-      rdns,
-    };
+    return this.getEnrichedEvent(detectEvent, context);
   }
 
   generateIdentifyEvent(
-    address: Address | null,
     providerName: string,
-    rdns: string
+    rdns: string,
+    address: Nullable<Address>,
+    userId?: Nullable<string>,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
   ) {
-    return {
+    const identifyEvent: Partial<IFormoEvent> = {
+      properties: {
+        providerName,
+        rdns,
+        ...properties,
+      },
+      user_id: userId,
       address,
-      providerName,
-      rdns,
+      type: "identify",
     };
+
+    return this.getEnrichedEvent(identifyEvent, context);
   }
 
-  generateChainChangedEvent(chainId: ChainID, address: Address) {
-    return {
-      chainId,
+  generateConnectEvent(
+    chainId: ChainID,
+    address: Address,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const connectEvent: Partial<IFormoEvent> = {
+      properties: {
+        chainId,
+        ...properties,
+      },
       address,
+      type: "connect",
     };
+
+    return this.getEnrichedEvent(connectEvent, context);
+  }
+
+  generateDisconnectEvent(
+    chainId: ChainID,
+    address: Address,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const disconnectEvent: Partial<IFormoEvent> = {
+      properties: {
+        chainId,
+        ...properties,
+      },
+      address,
+      type: "disconnect",
+    };
+
+    return this.getEnrichedEvent(disconnectEvent, context);
+  }
+
+  generateChainChangedEvent(
+    chainId: ChainID,
+    address: Address,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const chainEvent: Partial<IFormoEvent> = {
+      properties: {
+        chainId,
+        ...properties,
+      },
+      address,
+      type: "chain",
+    };
+
+    return this.getEnrichedEvent(chainEvent, context);
   }
 
   generateSignatureEvent(
@@ -135,15 +300,23 @@ class EventFactory implements IEventFactory {
     chainId: ChainID,
     address: Address,
     message: string,
-    signatureHash: string
+    signatureHash: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
   ) {
-    return {
-      status,
-      chainId,
+    const signatureEvent: Partial<IFormoEvent> = {
+      properties: {
+        status,
+        chainId,
+        message,
+        signatureHash,
+        ...properties,
+      },
       address,
-      message,
-      signatureHash,
+      type: "signature",
     };
+
+    return this.getEnrichedEvent(signatureEvent, context);
   }
 
   generateTransactionEvent(
@@ -153,110 +326,130 @@ class EventFactory implements IEventFactory {
     data: string,
     to: string,
     value: string,
-    transactionHash: string
+    transactionHash: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
   ) {
-    return {
-      status,
-      chainId,
-      address,
-      data,
-      to,
-      value,
-      transactionHash,
-    };
-  }
-
-  generateCustomEvent(args: any) {
-    if (typeof args !== "object") {
-      logger.warn("Invalid event data");
-      return {};
-    }
-    const { action, ...rest } = args;
-
-    return {
-      ...rest,
-    };
-  }
-
-  create(
-    anonymous_id: UUID,
-    user_id: string | null,
-    address: string | null,
-    event: APIEvent
-  ) {
-    const commonProperties = this.buildCommonProperties(
-      anonymous_id,
-      user_id,
-      address,
-      event.action
-    );
-    const payload = this.buildCommonPayload();
-    let eventSpecificPayload = this.generateCustomEvent(event);
-    if (event.action === "page_hit") {
-      eventSpecificPayload = this.generatePageEvent();
-    }
-    if (event.action === "connect") {
-      eventSpecificPayload = this.generateConnectEvent(
-        event.chainId,
-        event.address
-      );
-    }
-    if (event.action === "disconnect") {
-      eventSpecificPayload = this.generateDisconnectEvent(
-        event.chainId,
-        event.address
-      );
-    }
-    if (event.action === "detect_wallet") {
-      eventSpecificPayload = this.generateDetectWalletEvent(
-        event.providerName,
-        event.rdns
-      );
-    }
-    if (event.action === "identify") {
-      eventSpecificPayload = this.generateIdentifyEvent(
-        event.address,
-        event.providerName,
-        event.rdns
-      );
-    }
-    if (event.action === "chain_changed") {
-      eventSpecificPayload = this.generateChainChangedEvent(
-        event.chainId,
-        event.address
-      );
-    }
-    if (event.action === "signature") {
-      eventSpecificPayload = this.generateSignatureEvent(
-        event.status,
-        event.chainId,
-        event.address,
-        event.message,
-        event.signatureHash
-      );
-    }
-    if (event.action === "transaction") {
-      eventSpecificPayload = this.generateTransactionEvent(
-        event.status,
-        event.chainId,
-        event.address,
-        event.data,
-        event.to,
-        event.value,
-        event.transactionHash
-      );
-    }
-
-    return toSnakeCase(
-      {
-        ...commonProperties,
-        payload: {
-          ...payload,
-          ...eventSpecificPayload,
-        },
+    const transactionEvent: Partial<IFormoEvent> = {
+      properties: {
+        status,
+        chainId,
+        data,
+        to,
+        value,
+        transactionHash,
+        ...properties,
       },
-      ["user-agent"]
-    );
+      address,
+      type: "transaction",
+    };
+
+    return this.getEnrichedEvent(transactionEvent, context);
+  }
+
+  generateTrackEvent(
+    event: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const transactionEvent: Partial<IFormoEvent> = {
+      properties,
+      event,
+      type: "track",
+    };
+
+    return this.getEnrichedEvent(transactionEvent, context);
+  }
+
+  // Returns an event with type, context, properties, and common properties
+  create(event: APIEvent): IFormoEvent {
+    let properties: IFormoEvent;
+
+    switch (event.type) {
+      case "page":
+        properties = this.generatePageEvent(
+          event.category,
+          event.name,
+          event.properties,
+          event.context
+        );
+        break;
+      case "detect":
+        properties = this.generateDetectWalletEvent(
+          event.providerName,
+          event.rdns,
+          event.properties,
+          event.context
+        );
+        break;
+      case "identify":
+        properties = this.generateIdentifyEvent(
+          event.providerName,
+          event.rdns,
+          event.address,
+          event.userId,
+          event.properties,
+          event.context
+        );
+        break;
+      case "chain":
+        properties = this.generateChainChangedEvent(
+          event.chainId,
+          event.address,
+          event.properties,
+          event.context
+        );
+        break;
+      case "connect":
+        properties = this.generateConnectEvent(
+          event.chainId,
+          event.address,
+          event.properties,
+          event.context
+        );
+        break;
+      case "disconnect":
+        properties = this.generateDisconnectEvent(
+          event.chainId,
+          event.address,
+          event.properties,
+          event.context
+        );
+        break;
+      case "signature":
+        properties = this.generateSignatureEvent(
+          event.status,
+          event.chainId,
+          event.address,
+          event.message,
+          event.signatureHash,
+          event.properties,
+          event.context
+        );
+        break;
+      case "transaction":
+        properties = this.generateTransactionEvent(
+          event.status,
+          event.chainId,
+          event.address,
+          event.data,
+          event.to,
+          event.value,
+          event.transactionHash,
+          event.properties,
+          event.context
+        );
+        break;
+      case "track":
+      default:
+        properties = this.generateTrackEvent(
+          event.event,
+          event.properties,
+          event.context
+        );
+        break;
+    }
+    return properties;
   }
 }
 

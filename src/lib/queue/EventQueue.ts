@@ -1,4 +1,4 @@
-import isNetworkError from "is-network-error";
+import { isNetworkError } from "../../validators";
 import { IFormoEvent, IFormoEventPayload } from "../../types";
 import {
   clampNumber,
@@ -105,9 +105,9 @@ export class EventQueue implements IEventQueue {
     event.timestamp = formattedTimestamp;
 
     const eventString = JSON.stringify(event);
-    const eventId = await hash(eventString);
+    const message_id = await hash(eventString);
     // check if the message already exists
-    if (await this.isDuplicate(eventId)) {
+    if (await this.isDuplicate(message_id)) {
       logger.warn(
         `Event already enqueued, try again after ${millisecondsToSecond(
           this.flushIntervalMs
@@ -117,12 +117,12 @@ export class EventQueue implements IEventQueue {
     }
 
     this.queue.push({
-      message: { ...event, timestamp: originTimestamp, id: eventId },
+      message: { ...event, timestamp: originTimestamp, message_id },
       callback,
     });
 
     logger.log(
-      `Event enqueued: ${getActionDescriptor(event.action, event.payload)}`
+      `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
     );
 
     if (!this.flushed) {
