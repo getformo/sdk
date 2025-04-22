@@ -97,15 +97,17 @@ export class EventQueue implements IEventQueue {
   }
 
   //#region Public functions
+  private async generateMessageId(event: IFormoEvent): Promise<string> {
+    const formattedTimestamp = toDateHourMinute(new Date(event.timestamp));
+    const eventForHashing = { ...event, timestamp: formattedTimestamp };
+    const eventString = JSON.stringify(eventForHashing);
+    return hash(eventString);
+  }
+
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
-    const formattedTimestamp = toDateHourMinute(new Date(event.timestamp));
-    const originTimestamp = event.timestamp;
-    event.timestamp = formattedTimestamp;
-
-    const eventString = JSON.stringify(event);
-    const message_id = await hash(eventString);
+    const message_id = await this.generateMessageId(event);
     // check if the message already exists
     if (await this.isDuplicate(message_id)) {
       logger.warn(
@@ -117,7 +119,7 @@ export class EventQueue implements IEventQueue {
     }
 
     this.queue.push({
-      message: { ...event, timestamp: originTimestamp, message_id },
+      message: { ...event, message_id },
       callback,
     });
 
