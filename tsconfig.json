@@ -12,7 +12,7 @@
     "lib": ["es2015", "dom"],
     "moduleResolution": "node",
     "declaration": true,
-    "noImplicitThis": true,
+    "noImplicitThis": false,
     "noImplicitAny": true,
     "noUnusedParameters": true,
     "declarationMap": true,

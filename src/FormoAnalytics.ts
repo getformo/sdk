@@ -1,17 +1,17 @@
-import { UUID } from "crypto";
 import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
-  EventType,
   EVENTS_API_URL,
+  EventType,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
   SESSION_WALLET_DETECTED_KEY,
+  TEventType,
 } from "./constants";
 import {
-  EventFactory,
+  EventManager,
   EventQueue,
-  IEventFactory,
+  IEventManager,
   local,
   logger,
   Logger,
@@ -22,37 +22,75 @@ import {
   ChainID,
   Config,
   EIP1193Provider,
+  IFormoEventContext,
+  IFormoEventProperties,
   Options,
   RequestArguments,
   RPCError,
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { generateNativeUUID } from "./utils";
 import { isAddress, isArray, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
-  page(): void;
+  page(
+    category?: string,
+    name?: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): void;
   reset(): void;
-  connect(params: { chainId: ChainID; address: Address }): Promise<void>;
-  disconnect(params?: { chainId?: ChainID; address?: Address }): Promise<void>;
-  chain(params: { chainId: ChainID; address?: Address }): Promise<void>;
-  signature(params: {
-    status: SignatureStatus;
-    chainId?: ChainID;
-    address: Address;
-    message: string;
-    signatureHash?: string;
-  }): Promise<void>;
-  transaction(params: {
-    status: TransactionStatus;
-    chainId: ChainID;
-    address: Address;
-    data?: string;
-    to?: string;
-    value?: string;
-    transactionHash?: string;
-  }): Promise<void>;
+  detect(
+    params: { rdns: string; providerName: string },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  connect(
+    params: { chainId: ChainID; address: Address },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  disconnect(
+    params?: { chainId?: ChainID; address?: Address },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  chain(
+    params: { chainId: ChainID; address?: Address },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  signature(
+    params: {
+      status: SignatureStatus;
+      chainId?: ChainID;
+      address: Address;
+      message: string;
+      signatureHash?: string;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  transaction(
+    params: {
+      status: TransactionStatus;
+      chainId: ChainID;
+      address: Address;
+      data?: string;
+      to?: string;
+      value?: string;
+      transactionHash?: string;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
   identify(
     params?:
       | {
@@ -61,19 +99,24 @@ interface IFormoAnalytics {
           userId?: string;
           rdns?: string;
         }
-      | readonly EIP6963ProviderDetail[]
+      | readonly EIP6963ProviderDetail[],
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void>;
-  track(event: string, properties: Record<string, any>): Promise<void>;
+  track(
+    event: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
   private session: FormoAnalyticsSession;
-  private eventQueue: EventQueue;
-  private anonymousId: UUID | null = null;
-  private userId: string | null = null;
-  private eventFactory: IEventFactory;
+  private eventManager: IEventManager;
 
   config: Config;
   currentChainId?: ChainID;
@@ -96,18 +139,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       enabledLevels: options.logger?.levels || [],
     });
 
-    this.eventFactory = new EventFactory();
-
-    this.eventQueue = new EventQueue(this.config.writeKey, {
-      url: EVENTS_API_URL,
-      flushAt: options.flushAt,
-      retryCount: options.retryCount,
-      maxQueueSize: options.maxQueueSize,
-      flushInterval: options.flushInterval,
-    });
-
-    this.anonymousId = this.getAnonymousId();
-    this.userId = session.get(SESSION_USER_ID_KEY) as string | null;
+    this.eventManager = new EventManager(
+      new EventQueue(this.config.writeKey, {
+        url: EVENTS_API_URL,
+        flushAt: options.flushAt,
+        retryCount: options.retryCount,
+        maxQueueSize: options.maxQueueSize,
+        flushInterval: options.flushInterval,
+      })
+    );
 
     // TODO: replace with eip6963
     const provider = options.provider || window?.ethereum;
@@ -138,10 +178,19 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits a page visit event with the current URL information, fire on page change.
+   * @param {string} category - The category of the page
+   * @param {string} name - The name of the page
+   * @param {Record<string, any>} properties - Additional properties to include
+   * @param {Record<string, any>} context - Additional context to include
    * @returns {Promise<void>}
    */
-  public async page(): Promise<void> {
-    await this.trackPageHit();
+  public async page(
+    category?: string,
+    name?: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ): Promise<void> {
+    await this.trackPageHit(category, name, properties, context);
   }
 
   /**
@@ -149,8 +198,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {void}
    */
   public reset(): void {
-    this.anonymousId = this.getAnonymousId();
-    this.userId = null;
+    // this.anonymousId = this.getAnonymousId();
+    // this.userId = null;
     local.remove(LOCAL_ANONYMOUS_ID_KEY);
     session.remove(SESSION_USER_ID_KEY);
   }
@@ -159,16 +208,24 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Emits a connect wallet event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @throws {Error} If chainId or address is empty
    * @returns {Promise<void>}
    */
-  async connect({
-    chainId,
-    address,
-  }: {
-    chainId: ChainID;
-    address: Address;
-  }): Promise<void> {
+  async connect(
+    {
+      chainId,
+      address,
+    }: {
+      chainId: ChainID;
+      address: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
     if (!chainId) {
       logger.warn("Connect: Chain ID cannot be empty");
     }
@@ -179,43 +236,71 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
     this.currentConnectedAddress = address;
 
-    await this.trackEvent(EventType.CONNECT, {
-      chainId,
-      address,
-    });
+    await this.trackEvent(
+      EventType.CONNECT,
+      {
+        chainId,
+        address,
+      },
+      properties,
+      context,
+      callback
+    );
   }
 
   /**
    * Emits a wallet disconnect event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    */
-  async disconnect(params?: {
-    chainId?: ChainID;
-    address?: Address;
-  }): Promise<void> {
+  async disconnect(
+    params?: {
+      chainId?: ChainID;
+      address?: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
     const address = params?.address || this.currentConnectedAddress;
     const chainId = params?.chainId || this.currentChainId;
 
-    await this.handleDisconnect(chainId, address);
+    await this.handleDisconnect(
+      chainId,
+      address,
+      properties,
+      context,
+      callback
+    );
   }
 
   /**
    * Emits a chain network change event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @throws {Error} If chainId is empty, zero, or not a valid number
    * @throws {Error} If no address is provided and no previous address is recorded
    * @returns {Promise<void>}
    */
-  async chain({
-    chainId,
-    address,
-  }: {
-    chainId: ChainID;
-    address?: Address;
-  }): Promise<void> {
+  async chain(
+    {
+      chainId,
+      address,
+    }: {
+      chainId: ChainID;
+      address?: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
       throw new Error("FormoAnalytics::chain: chainId cannot be empty or 0");
     }
@@ -232,10 +317,16 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentChainId = chainId;
 
-    await this.trackEvent(EventType.CHAIN, {
-      chainId,
-      address: address || this.currentConnectedAddress,
-    });
+    await this.trackEvent(
+      EventType.CHAIN,
+      {
+        chainId,
+        address: address || this.currentConnectedAddress,
+      },
+      properties,
+      context,
+      callback
+    );
   }
 
   /**
@@ -245,28 +336,42 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {Address} params.address
    * @param {string} params.message
    * @param {string} params.signatureHash - only provided if status is confirmed
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    */
-  async signature({
-    status,
-    chainId,
-    address,
-    message,
-    signatureHash,
-  }: {
-    status: SignatureStatus;
-    chainId?: ChainID;
-    address: Address;
-    message: string;
-    signatureHash?: string;
-  }): Promise<void> {
-    await this.trackEvent(EventType.SIGNATURE, {
+  async signature(
+    {
       status,
       chainId,
       address,
       message,
-      ...(signatureHash && { signatureHash }),
-    });
+      signatureHash,
+    }: {
+      status: SignatureStatus;
+      chainId?: ChainID;
+      address: Address;
+      message: string;
+      signatureHash?: string;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    await this.trackEvent(
+      EventType.SIGNATURE,
+      {
+        status,
+        chainId,
+        address,
+        message,
+        ...(signatureHash && { signatureHash }),
+      },
+      properties,
+      context,
+      callback
+    );
   }
 
   /**
@@ -278,34 +383,48 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} params.to
    * @param {string} params.value
    * @param {string} params.transactionHash - only provided if status is broadcasted
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    */
-  async transaction({
-    status,
-    chainId,
-    address,
-    data,
-    to,
-    value,
-    transactionHash,
-  }: {
-    status: TransactionStatus;
-    chainId: ChainID;
-    address: Address;
-    data?: string;
-    to?: string;
-    value?: string;
-    transactionHash?: string;
-  }): Promise<void> {
-    await this.trackEvent(EventType.TRANSACTION, {
+  async transaction(
+    {
       status,
       chainId,
       address,
       data,
       to,
       value,
-      ...(transactionHash && { transactionHash }),
-    });
+      transactionHash,
+    }: {
+      status: TransactionStatus;
+      chainId: ChainID;
+      address: Address;
+      data?: string;
+      to?: string;
+      value?: string;
+      transactionHash?: string;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    await this.trackEvent(
+      EventType.TRANSACTION,
+      {
+        status,
+        chainId,
+        address,
+        data,
+        to,
+        value,
+        ...(transactionHash && { transactionHash }),
+      },
+      properties,
+      context,
+      callback
+    );
   }
 
   /**
@@ -314,7 +433,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} params.rdns
    * @param {string} params.userId
    * @param {string} params.address
-   *
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    */
   public async identify(
@@ -325,7 +446,10 @@ export class FormoAnalytics implements IFormoAnalytics {
           userId?: string;
           rdns?: string;
         }
-      | readonly EIP6963ProviderDetail[]
+      | readonly EIP6963ProviderDetail[],
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void> {
     if (isArray(params) || !params) {
       const providers = isArray(params) ? params : await this.getProviders();
@@ -338,11 +462,16 @@ export class FormoAnalytics implements IFormoAnalytics {
           // Identify with accounts
           if (accounts && accounts.length > 0) {
             for (const address of accounts) {
-              await this.identify({
-                address,
-                providerName: eip6963ProviderDetail?.info.name,
-                rdns: eip6963ProviderDetail?.info.rdns,
-              });
+              await this.identify(
+                {
+                  address,
+                  providerName: eip6963ProviderDetail?.info.name,
+                  rdns: eip6963ProviderDetail?.info.rdns,
+                },
+                properties,
+                context,
+                callback
+              );
             }
           }
         }
@@ -356,12 +485,18 @@ export class FormoAnalytics implements IFormoAnalytics {
         userId?: string;
         rdns?: string;
       };
-      if (userId) this.userId = userId || null;
-      await this.trackEvent(EventType.IDENTIFY, {
-        address,
-        providerName,
-        rdns,
-      });
+      await this.trackEvent(
+        EventType.IDENTIFY,
+        {
+          address,
+          providerName,
+          userId,
+          rdns,
+        },
+        properties,
+        context,
+        callback
+      );
     }
   }
 
@@ -369,39 +504,62 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Emits a detect wallet event with current wallet provider info.
    * @param {string} params.providerName
    * @param {string} params.rdns
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    */
-  private async detect({
-    providerName,
-    rdns,
-  }: {
-    providerName: string;
-    rdns: string;
-  }): Promise<void> {
-    if (this.session.isWalletDetected(rdns))
-      return logger.warn(
-        `detect: Wallet ${providerName} already detected in this session`
-      );
-
-    this.session.markWalletdetected(rdns);
-    await this.trackEvent(EventType.DETECT, {
+  async detect(
+    {
       providerName,
       rdns,
-    });
+    }: {
+      providerName: string;
+      rdns: string;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    if (this.session.isWalletDetected(rdns))
+      return logger.warn(
+        `Detect: Wallet ${providerName} already detected in this session`
+      );
+
+    this.session.markWalletDetected(rdns);
+    await this.trackEvent(
+      EventType.DETECT,
+      {
+        providerName,
+        rdns,
+      },
+      properties,
+      context,
+      callback
+    );
   }
 
   /**
    * Emits a custom user event with custom properties.
    * @param {string} event The name of the tracked event
-   * @param {Record<string, any>} properties The properties of the tracked event
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    */
   async track(
     event: EventType,
-    properties: Record<string, any>
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    // TODO: P-735
-    await this.trackEvent(EventType.TRACK, { event, ...properties });
+    await this.trackEvent(
+      EventType.TRACK,
+      { event },
+      properties,
+      context,
+      callback
+    );
   }
 
   /*
@@ -594,17 +752,26 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async handleDisconnect(
     chainId?: ChainID,
-    address?: Address
+    address?: Address,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void> {
     const payload = {
-      chain_id: chainId || this.currentChainId,
+      chainId: chainId || this.currentChainId,
       address: address || this.currentConnectedAddress,
     };
     this.currentChainId = undefined;
     this.currentConnectedAddress = undefined;
     session.remove(SESSION_USER_ID_KEY);
 
-    await this.trackEvent(EventType.DISCONNECT, payload);
+    await this.trackEvent(
+      EventType.DISCONNECT,
+      payload,
+      properties,
+      context,
+      callback
+    );
   }
 
   private async onAddressDisconnected(): Promise<void> {
@@ -683,7 +850,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private trackPageHit(): void {
+  private async trackPageHit(
+    category?: string,
+    name?: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
     if (!this.config.trackLocalhost && isLocalhost()) {
       return logger.warn(
         "Track page hit: Ignoring event because website is running locally"
@@ -691,29 +864,33 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     setTimeout(async () => {
-      this.trackEvent(EventType.PAGE);
+      this.trackEvent(
+        EventType.PAGE,
+        {
+          category,
+          name,
+        },
+        properties,
+        context,
+        callback
+      );
     }, 300);
   }
 
-  private async trackEvent(type: string, properties?: any): Promise<void> {
+  private async trackEvent(
+    type: TEventType,
+    payload?: any,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
     try {
-      const address = await this.getAddress();
-      const user_id = this.userId;
-
-      const requestData = this.eventFactory.create(
-        this.anonymousId as UUID,
-        user_id,
-        address,
-        {
-          type,
-          ...properties,
-        }
-      );
-
-      await this.eventQueue.enqueue(requestData, (err, _, data) => {
-        if (err) {
-          logger.error("Error sending events:", err);
-        } else logger.info(`Events sent successfully: ${data.length} events`);
+      this.eventManager.addEvent({
+        type,
+        ...payload,
+        properties,
+        context,
+        callback,
       });
     } catch (error) {
       logger.error("Error tracking event:", error);
@@ -754,15 +931,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
-  }
-
-  private getAnonymousId(): UUID {
-    const storedAnonymousId = local.get(LOCAL_ANONYMOUS_ID_KEY);
-    if (storedAnonymousId && typeof storedAnonymousId === "string")
-      return storedAnonymousId as UUID;
-    const newAnonymousId = generateNativeUUID();
-    local.set(LOCAL_ANONYMOUS_ID_KEY, newAnonymousId);
-    return newAnonymousId;
   }
 
   private async getAddress(): Promise<Address | null> {
@@ -879,7 +1047,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
 interface IFormoAnalyticsSession {
   isWalletDetected(rdns: string): boolean;
-  markWalletdetected(rdns: string): void;
+  markWalletDetected(rdns: string): void;
 }
 
 class FormoAnalyticsSession implements IFormoAnalyticsSession {
@@ -890,7 +1058,7 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
     return rdnses.includes(rdns);
   }
 
-  public markWalletdetected(rdns: string): void {
+  public markWalletDetected(rdns: string): void {
     const rdnses = (session.get(SESSION_WALLET_DETECTED_KEY) as string[]) || [];
     rdnses.push(rdns);
     session.set(SESSION_WALLET_DETECTED_KEY, rdnses);

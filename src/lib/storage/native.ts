@@ -41,6 +41,10 @@ export class NativeStorage {
     }
   }
 
+  public isAvailable(): boolean {
+    return this.isBrowser;
+  }
+
   public set(key: string, value: any): void {
     if (typeof value === "boolean") value = value === true ? "true" : "false";
     if (typeof value === "object")

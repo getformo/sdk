@@ -1,6 +1,7 @@
 import { LogLevel } from "../lib";
 import { EIP1193Provider } from "./provider";
 
+export type Nullable<T> = T | null;
 // Decimal chain ID
 export type ChainID = number;
 

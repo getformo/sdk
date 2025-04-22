@@ -1,17 +1,30 @@
-import { UUID } from "crypto";
-import { COUNTRY_LIST, EventType } from "../../constants";
+import { COUNTRY_LIST } from "../../constants";
 import {
   Address,
   APIEvent,
   ChainID,
   IFormoEvent,
+  IFormoEventContext,
+  IFormoEventProperties,
+  Nullable,
   SignatureStatus,
   TransactionStatus,
+  UTMParameters,
 } from "../../types";
+import {
+  generateNativeUUID,
+  toChecksumAddress,
+  toSnakeCase,
+} from "../../utils";
+import { getCurrentTimeFormatted } from "../../utils/timestamp";
+import { isUndefined } from "../../validators";
 import { logger } from "../logger";
-import { IEventFactory } from "./type";
-import { toChecksumAddress, toSnakeCase } from "../../utils";
+import mergeDeepRight from "../ramda/mergeDeepRight";
+import { local } from "../storage";
 import { version } from "../version";
+import { CHANNEL, VERSION } from "./constants";
+import { IEventFactory } from "./type";
+import { generateAnonymousId } from "./utils";
 
 class EventFactory implements IEventFactory {
   constructor() {}
@@ -54,47 +67,39 @@ class EventFactory implements IEventFactory {
     return version;
   }
 
-  private generateCommonProperties(
-    anonymous_id: UUID,
-    user_id: string | null,
-    address: string | null,
-    type: string
-  ) {
-    // common properties
-    return {
-      anonymous_id,
-      user_id,
-      address: address && toChecksumAddress(address),
-      timestamp: new Date().toISOString(),
-      type,
-      channel: "web",
-      version: "0",
-    };
-  }
+  private extractUTMParameters = (url: string): UTMParameters => {
+    const result: UTMParameters = {};
+    try {
+      const urlObj = new URL(url);
+      const UTM_PREFIX = "utm_";
+      urlObj.searchParams.forEach((value, sParam) => {
+        if (sParam.startsWith(UTM_PREFIX)) {
+          result[sParam] = value.trim() || "";
+        }
+      });
+    } catch (error) {}
+    return result;
+  };
 
   // Contextual fields that are automatically collected and populated by the Formo SDK
-  private generateContext() {
-    const url = new URL(window.location.href);
+  private generateContext(context?: IFormoEventContext): IFormoEventContext {
+    const url = new URL(globalThis.location.href);
     const params = new URLSearchParams(url.search);
-    const path = window.location.pathname;
+    const path = globalThis.location.pathname;
     const language = this.getLanguage();
     const timezone = this.getTimezone();
     const location = this.getLocation();
     const library_version = this.getLibraryVersion();
 
     // contextual properties
-    return {
-      user_agent: window.navigator.userAgent,
+    const defaultContext = {
+      user_agent: globalThis.navigator.userAgent,
       href: url.href,
       locale: language,
       timezone,
       location,
       referrer: document.referrer,
-      utm_source: params.get("utm_source")?.trim() || "",
-      utm_medium: params.get("utm_medium")?.trim() || "",
-      utm_campaign: params.get("utm_campaign")?.trim() || "",
-      utm_content: params.get("utm_content")?.trim() || "",
-      utm_term: params.get("utm_term")?.trim() || "",
+      ...this.extractUTMParameters(globalThis.location.href),
       ref: params.get("ref")?.trim() || "",
       page_path: path,
       page_title: document.title,
@@ -102,62 +107,192 @@ class EventFactory implements IEventFactory {
       library_name: "Formo Web SDK",
       library_version,
     };
+
+    const mergedContext = mergeDeepRight(
+      defaultContext,
+      context || {}
+    ) as IFormoEventContext;
+
+    return mergedContext;
   }
 
-  // TODO: this function should return the full page event with type, context, properties, and common properties
-  // Example: https://github.com/rudderlabs/rudder-sdk-js/blob/develop/packages/analytics-js/src/components/eventManager/RudderEventFactory.ts#L31-L38
-  // TODO: accept category and name as parameters
-  generatePageEvent() {
-    const url = new URL(window.location.href);
-    const path = window.location.pathname;
-    const hash = window.location.hash;
+  /**
+   * Add any missing default page properties using values from options and defaults
+   * @param properties Input page properties
+   * @param options API options
+   */
+  private getPageProperties = (
+    properties: IFormoEventProperties
+  ): IFormoEventProperties => {
+    const pageProps = properties;
 
-    return {
-      path: path || url.pathname,
-      url: url.href,
-      title: document.title,
-      hash: hash || url.hash,
+    if (isUndefined(pageProps.url)) {
+      pageProps.url = new URL(globalThis.location.href).href;
+    }
+
+    if (isUndefined(pageProps.path)) {
+      pageProps.path = globalThis.location.pathname;
+    }
+
+    if (isUndefined(pageProps.hash)) {
+      pageProps.hash = globalThis.location.hash;
+    }
+
+    return pageProps;
+  };
+
+  private getEnrichedEvent = (
+    formoEvent: Partial<IFormoEvent>,
+    context?: IFormoEventContext
+  ): IFormoEvent => {
+    const commonEventData = {
+      context: this.generateContext(context),
+      timestamp: getCurrentTimeFormatted(),
+      user_id: formoEvent.user_id,
+      type: formoEvent.type,
+      channel: CHANNEL,
+      version: VERSION,
+    } as Partial<IFormoEvent>;
+
+    if (!local.isAvailable()) {
+      commonEventData.anonymous_id = generateNativeUUID();
+    } else {
+      commonEventData.anonymous_id = generateAnonymousId();
+    }
+
+    if (formoEvent.address) {
+      commonEventData.address = toChecksumAddress(formoEvent.address);
+    } else {
+      commonEventData.address = formoEvent.address;
+    }
+
+    const processedEvent = mergeDeepRight(
+      formoEvent,
+      commonEventData
+    ) as IFormoEvent;
+
+    if (processedEvent.event === undefined) {
+      processedEvent.event = null;
+    }
+
+    if (processedEvent.properties === undefined) {
+      processedEvent.properties = null;
+    }
+
+    return toSnakeCase(processedEvent);
+  };
+
+  generatePageEvent(
+    category?: string,
+    name?: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ): IFormoEvent {
+    let props = properties ?? {};
+    props.category = category;
+    props.name = name;
+    props = this.getPageProperties(props);
+
+    const pageEvent: Partial<IFormoEvent> = {
+      properties: props,
+      type: "page",
     };
+
+    return this.getEnrichedEvent(pageEvent, context);
   }
 
-  generateConnectEvent(chainId: ChainID, address: Address) {
-    return {
-      chainId,
-      address,
+  generateDetectWalletEvent(
+    providerName: string,
+    rdns: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const detectEvent: Partial<IFormoEvent> = {
+      properties: {
+        providerName,
+        rdns,
+        ...properties,
+      },
+      type: "detect",
     };
-  }
 
-  generateDisconnectEvent(chainId: ChainID, address: Address) {
-    return {
-      chainId,
-      address,
-    };
-  }
-
-  generateDetectWalletEvent(providerName: string, rdns: string) {
-    return {
-      providerName,
-      rdns,
-    };
+    return this.getEnrichedEvent(detectEvent, context);
   }
 
   generateIdentifyEvent(
-    address: Address | null,
     providerName: string,
-    rdns: string
+    rdns: string,
+    address: Nullable<Address>,
+    userId?: Nullable<string>,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
   ) {
-    return {
+    const identifyEvent: Partial<IFormoEvent> = {
+      properties: {
+        providerName,
+        rdns,
+        ...properties,
+      },
+      user_id: userId,
       address,
-      providerName,
-      rdns,
+      type: "identify",
     };
+
+    return this.getEnrichedEvent(identifyEvent, context);
   }
 
-  generateChainChangedEvent(chainId: ChainID, address: Address) {
-    return {
-      chainId,
+  generateConnectEvent(
+    chainId: ChainID,
+    address: Address,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const connectEvent: Partial<IFormoEvent> = {
+      properties: {
+        chainId,
+        ...properties,
+      },
       address,
+      type: "connect",
     };
+
+    return this.getEnrichedEvent(connectEvent, context);
+  }
+
+  generateDisconnectEvent(
+    chainId: ChainID,
+    address: Address,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const disconnectEvent: Partial<IFormoEvent> = {
+      properties: {
+        chainId,
+        ...properties,
+      },
+      address,
+      type: "disconnect",
+    };
+
+    return this.getEnrichedEvent(disconnectEvent, context);
+  }
+
+  generateChainChangedEvent(
+    chainId: ChainID,
+    address: Address,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const chainEvent: Partial<IFormoEvent> = {
+      properties: {
+        chainId,
+        ...properties,
+      },
+      address,
+      type: "chain",
+    };
+
+    return this.getEnrichedEvent(chainEvent, context);
   }
 
   generateSignatureEvent(
@@ -165,15 +300,23 @@ class EventFactory implements IEventFactory {
     chainId: ChainID,
     address: Address,
     message: string,
-    signatureHash: string
+    signatureHash: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
   ) {
-    return {
-      status,
-      chainId,
+    const signatureEvent: Partial<IFormoEvent> = {
+      properties: {
+        status,
+        chainId,
+        message,
+        signatureHash,
+        ...properties,
+      },
       address,
-      message,
-      signatureHash,
+      type: "signature",
     };
+
+    return this.getEnrichedEvent(signatureEvent, context);
   }
 
   generateTransactionEvent(
@@ -183,74 +326,108 @@ class EventFactory implements IEventFactory {
     data: string,
     to: string,
     value: string,
-    transactionHash: string
+    transactionHash: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
   ) {
-    return {
-      status,
-      chainId,
+    const transactionEvent: Partial<IFormoEvent> = {
+      properties: {
+        status,
+        chainId,
+        data,
+        to,
+        value,
+        transactionHash,
+        ...properties,
+      },
       address,
-      data,
-      to,
-      value,
-      transactionHash,
+      type: "transaction",
     };
+
+    return this.getEnrichedEvent(transactionEvent, context);
+  }
+
+  generateTrackEvent(
+    event: string,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ) {
+    const transactionEvent: Partial<IFormoEvent> = {
+      properties,
+      event,
+      type: "track",
+    };
+
+    return this.getEnrichedEvent(transactionEvent, context);
   }
 
   // Returns an event with type, context, properties, and common properties
-  create(
-    anonymous_id: UUID,
-    user_id: string | null,
-    address: string | null,
-    event: APIEvent
-  ): IFormoEvent {
-    const commonProperties = this.generateCommonProperties(
-      anonymous_id,
-      user_id,
-      address,
-      event.type
-    );
-    const context = this.generateContext();
-    let properties;
+  create(event: APIEvent): IFormoEvent {
+    let properties: IFormoEvent;
 
     switch (event.type) {
-      case EventType.PAGE:
-        properties = this.generatePageEvent();
+      case "page":
+        properties = this.generatePageEvent(
+          event.category,
+          event.name,
+          event.properties,
+          event.context
+        );
         break;
-      case EventType.CONNECT:
-        properties = this.generateConnectEvent(event.chainId, event.address);
-        break;
-      case EventType.DISCONNECT:
-        properties = this.generateDisconnectEvent(event.chainId, event.address);
-        break;
-      case EventType.DETECT:
+      case "detect":
         properties = this.generateDetectWalletEvent(
           event.providerName,
-          event.rdns
+          event.rdns,
+          event.properties,
+          event.context
         );
         break;
-      case EventType.IDENTIFY:
+      case "identify":
         properties = this.generateIdentifyEvent(
-          event.address,
           event.providerName,
-          event.rdns
+          event.rdns,
+          event.address,
+          event.userId,
+          event.properties,
+          event.context
         );
         break;
-      case EventType.CHAIN:
+      case "chain":
         properties = this.generateChainChangedEvent(
           event.chainId,
-          event.address
+          event.address,
+          event.properties,
+          event.context
         );
         break;
-      case EventType.SIGNATURE:
+      case "connect":
+        properties = this.generateConnectEvent(
+          event.chainId,
+          event.address,
+          event.properties,
+          event.context
+        );
+        break;
+      case "disconnect":
+        properties = this.generateDisconnectEvent(
+          event.chainId,
+          event.address,
+          event.properties,
+          event.context
+        );
+        break;
+      case "signature":
         properties = this.generateSignatureEvent(
           event.status,
           event.chainId,
           event.address,
           event.message,
-          event.signatureHash
+          event.signatureHash,
+          event.properties,
+          event.context
         );
         break;
-      case EventType.TRANSACTION:
+      case "transaction":
         properties = this.generateTransactionEvent(
           event.status,
           event.chainId,
@@ -258,16 +435,21 @@ class EventFactory implements IEventFactory {
           event.data,
           event.to,
           event.value,
-          event.transactionHash
+          event.transactionHash,
+          event.properties,
+          event.context
+        );
+        break;
+      case "track":
+      default:
+        properties = this.generateTrackEvent(
+          event.event,
+          event.properties,
+          event.context
         );
         break;
     }
-
-    return toSnakeCase({
-      ...commonProperties,
-      context,
-      properties,
-    });
+    return properties;
   }
 }
 
