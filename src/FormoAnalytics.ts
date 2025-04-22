@@ -30,7 +30,6 @@ import {
   SignatureStatus,
   TransactionStatus,
 } from "./types";
-import { generateNativeUUID } from "./utils";
 import { isAddress, isLocalhost } from "./validators";
 
 interface IFormoAnalytics {
@@ -97,6 +96,9 @@ interface IFormoAnalytics {
     providerName?: string;
     userId?: string;
     rdns?: string;
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   }): Promise<void>;
   track(
     event: string,
