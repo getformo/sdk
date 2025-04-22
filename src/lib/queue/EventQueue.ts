@@ -18,6 +18,10 @@ type QueueItem = {
   callback: (...args: any) => any;
 };
 
+type IFormoEventFlushPayload = IFormoEventPayload & {
+  sent_at: string;
+};
+
 type Options = {
   url: string;
   flushAt?: number;
@@ -98,8 +102,8 @@ export class EventQueue implements IEventQueue {
 
   //#region Public functions
   private async generateMessageId(event: IFormoEvent): Promise<string> {
-    const formattedTimestamp = toDateHourMinute(new Date(event.originalTimestamp));
-    const eventForHashing = { ...event, originalTimestamp: formattedTimestamp };
+    const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
+    const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
     return hash(eventString);
   }
@@ -172,7 +176,10 @@ export class EventQueue implements IEventQueue {
 
     const items = this.queue.splice(0, this.flushAt);
     this.payloadHashes.clear();
-    const data = items.map((item) => item.message);
+    const data: IFormoEventFlushPayload[] = items.map((item) => ({
+      ...item.message,
+      sent_at: new Date().toISOString()
+    }));
 
     const done = (err?: Error) => {
       items.forEach(({ message, callback }) => callback(err, message, data));
