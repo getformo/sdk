@@ -1,5 +1,5 @@
 export const EVENTS_API_HOST = "https://events.formo.so";
-export const EVENTS_API_URL = `${EVENTS_API_HOST}/v0/events`;
+export const EVENTS_API_URL = `${EVENTS_API_HOST}/v0/raw_events`;
 export const USER_API_URL = `${EVENTS_API_HOST}/user`;
 
 export const EVENTS_API_REQUEST_HEADER = (writeKey: string) => ({
