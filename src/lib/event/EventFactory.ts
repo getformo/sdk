@@ -147,7 +147,7 @@ class EventFactory implements IEventFactory {
   ): IFormoEvent => {
     const commonEventData = {
       context: this.generateContext(context),
-      timestamp: getCurrentTimeFormatted(),
+      originalTimestamp: getCurrentTimeFormatted(),
       user_id: formoEvent.user_id,
       type: formoEvent.type,
       channel: CHANNEL,

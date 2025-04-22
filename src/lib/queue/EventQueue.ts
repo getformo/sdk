@@ -98,8 +98,8 @@ export class EventQueue implements IEventQueue {
 
   //#region Public functions
   private async generateMessageId(event: IFormoEvent): Promise<string> {
-    const formattedTimestamp = toDateHourMinute(new Date(event.timestamp));
-    const eventForHashing = { ...event, timestamp: formattedTimestamp };
+    const formattedTimestamp = toDateHourMinute(new Date(event.originalTimestamp));
+    const eventForHashing = { ...event, originalTimestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
     return hash(eventString);
   }

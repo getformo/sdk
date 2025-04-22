@@ -11,7 +11,7 @@ export interface ICommonProperties {
   type: TEventType;
   channel: TEventChannel;
   version: string;
-  timestamp: string;
+  originalTimestamp: string;
   event?: Nullable<string>;
 }
 
