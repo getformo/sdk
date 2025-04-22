@@ -434,11 +434,11 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public async identify(
     params?: {
-      address: Address;
+      address: Address | null; 
       providerName?: string;
       userId?: string;
       rdns?: string;
-    }
+    },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
@@ -450,8 +450,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       rdns?: string;
     };
 
-    this.currentAddress = address;
-    if (userId) this.userId = userId || null;
+    // TODO: enable this
+    // this.currentAddress = address;
+    // if (userId) this.userId = userId || null;
+    
     await this.trackEvent(
       EventType.IDENTIFY,
       {
