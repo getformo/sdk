@@ -362,12 +362,15 @@ class EventFactory implements IEventFactory {
   }
 
   // Returns an event with type, context, properties, and common properties
-  create(event: APIEvent): IFormoEvent {
-    let properties: IFormoEvent;
+  create(event: APIEvent, address?: Address, userId?: string): IFormoEvent {
+    let formoEvent: Partial<IFormoEvent> = {};
+
+    formoEvent.address = address || null;
+    formoEvent.user_id = userId || null;
 
     switch (event.type) {
       case "page":
-        properties = this.generatePageEvent(
+        formoEvent = this.generatePageEvent(
           event.category,
           event.name,
           event.properties,
@@ -375,7 +378,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "detect":
-        properties = this.generateDetectWalletEvent(
+        formoEvent = this.generateDetectWalletEvent(
           event.providerName,
           event.rdns,
           event.properties,
@@ -383,7 +386,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "identify":
-        properties = this.generateIdentifyEvent(
+        formoEvent = this.generateIdentifyEvent(
           event.providerName,
           event.rdns,
           event.address,
@@ -393,7 +396,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "chain":
-        properties = this.generateChainChangedEvent(
+        formoEvent = this.generateChainChangedEvent(
           event.chainId,
           event.address,
           event.properties,
@@ -401,7 +404,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "connect":
-        properties = this.generateConnectEvent(
+        formoEvent = this.generateConnectEvent(
           event.chainId,
           event.address,
           event.properties,
@@ -409,7 +412,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "disconnect":
-        properties = this.generateDisconnectEvent(
+        formoEvent = this.generateDisconnectEvent(
           event.chainId,
           event.address,
           event.properties,
@@ -417,7 +420,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "signature":
-        properties = this.generateSignatureEvent(
+        formoEvent = this.generateSignatureEvent(
           event.status,
           event.chainId,
           event.address,
@@ -428,7 +431,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "transaction":
-        properties = this.generateTransactionEvent(
+        formoEvent = this.generateTransactionEvent(
           event.status,
           event.chainId,
           event.address,
@@ -442,14 +445,14 @@ class EventFactory implements IEventFactory {
         break;
       case "track":
       default:
-        properties = this.generateTrackEvent(
+        formoEvent = this.generateTrackEvent(
           event.event,
           event.properties,
           event.context
         );
         break;
     }
-    return properties;
+    return formoEvent as IFormoEvent;
   }
 }
 

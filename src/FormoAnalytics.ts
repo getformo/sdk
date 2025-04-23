@@ -91,15 +91,17 @@ interface IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
-  identify(params?: {
-    address: Address;
-    providerName?: string;
-    userId?: string;
-    rdns?: string;
+  identify(
+    params: {
+      address: Address;
+      providerName?: string;
+      userId?: string;
+      rdns?: string;
+    },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
-  }): Promise<void>;
+  ): Promise<void>;
   track(
     event: string,
     properties?: IFormoEventProperties,
@@ -117,6 +119,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   config: Config;
   currentChainId?: ChainID;
   currentAddress?: Address;
+  currentUserId?: string;
 
   private constructor(
     public readonly writeKey: string,
@@ -128,6 +131,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
 
     this.session = new FormoAnalyticsSession();
+    this.currentUserId =
+      (session.get(SESSION_USER_ID_KEY) as string) || undefined;
 
     // Initialize logger with configuration from options
     Logger.init({
@@ -194,8 +199,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {void}
    */
   public reset(): void {
-    // this.anonymousId = this.getAnonymousId();
-    // this.userId = null;
+    this.currentUserId = undefined;
     local.remove(LOCAL_ANONYMOUS_ID_KEY);
     session.remove(SESSION_USER_ID_KEY);
   }
@@ -435,8 +439,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   public async identify(
-    params?: {
-      address: Address | null; 
+    params: {
+      address?: Address;
       providerName?: string;
       userId?: string;
       rdns?: string;
@@ -445,17 +449,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    const { userId, address, providerName, rdns } = params as {
-      address: Address | null;
-      providerName?: string;
-      userId?: string;
-      rdns?: string;
-    };
+    const { userId, address, providerName, rdns } = params;
 
-    // TODO: enable this
-    // this.currentAddress = address;
-    // if (userId) this.userId = userId || null;
-    
+    this.currentAddress = address;
+    if (userId) {
+      this.currentUserId = userId;
+      session.set(SESSION_USER_ID_KEY, userId);
+    }
+
     await this.trackEvent(
       EventType.IDENTIFY,
       {
@@ -745,10 +746,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onAddressDisconnected(): Promise<void> {
-    await this.handleDisconnect(
-      this.currentChainId,
-      this.currentAddress
-    );
+    await this.handleDisconnect(this.currentChainId, this.currentAddress);
   }
 
   private async onChainChanged(chainIdHex: string): Promise<void> {
@@ -855,13 +853,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
-      this.eventManager.addEvent({
-        type,
-        ...payload,
-        properties,
-        context,
-        callback,
-      });
+      this.eventManager.addEvent(
+        {
+          type,
+          ...payload,
+          properties,
+          context,
+          callback,
+        },
+        this.currentAddress,
+        this.currentUserId
+      );
     } catch (error) {
       logger.error("Error tracking event:", error);
     }

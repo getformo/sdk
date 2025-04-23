@@ -1,9 +1,9 @@
-import { APIEvent, IFormoEvent } from "../../types";
+import { Address, APIEvent, IFormoEvent } from "../../types";
 
 export interface IEventManager {
-  addEvent(event: APIEvent): void;
+  addEvent(event: APIEvent, address?: Address, userId?: string): void;
 }
 
 export interface IEventFactory {
-  create(event: APIEvent): IFormoEvent;
+  create(event: APIEvent, address?: Address, userId?: string): IFormoEvent;
 }

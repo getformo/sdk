@@ -1,4 +1,4 @@
-import { APIEvent } from "../../types";
+import { Address, APIEvent } from "../../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
 import { EventFactory } from "./EventFactory";
@@ -24,9 +24,9 @@ class EventManager implements IEventManager {
    * Consumes a new incoming event
    * @param event Incoming event data
    */
-  addEvent(event: APIEvent): void {
+  addEvent(event: APIEvent, address?: Address, userId?: string): void {
     const { callback, ..._event } = event;
-    const formoEvent = this.eventFactory.create(_event);
+    const formoEvent = this.eventFactory.create(_event, address, userId);
     this.eventQueue.enqueue(formoEvent, (err, _, data) => {
       if (err) {
         logger.error("Error sending events:", err);
