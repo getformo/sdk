@@ -1,4 +1,4 @@
-import isNetworkError from "is-network-error";
+import { isNetworkError } from "../../validators";
 import { IFormoEvent, IFormoEventPayload } from "../../types";
 import {
   clampNumber,
@@ -16,6 +16,10 @@ const noop = () => {};
 type QueueItem = {
   message: IFormoEventPayload;
   callback: (...args: any) => any;
+};
+
+type IFormoEventFlushPayload = IFormoEventPayload & {
+  sent_at: string;
 };
 
 type Options = {
@@ -97,17 +101,19 @@ export class EventQueue implements IEventQueue {
   }
 
   //#region Public functions
+  private async generateMessageId(event: IFormoEvent): Promise<string> {
+    const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
+    const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
+    const eventString = JSON.stringify(eventForHashing);
+    return hash(eventString);
+  }
+
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
-    const formattedTimestamp = toDateHourMinute(new Date(event.timestamp));
-    const originTimestamp = event.timestamp;
-    event.timestamp = formattedTimestamp;
-
-    const eventString = JSON.stringify(event);
-    const eventId = await hash(eventString);
+    const message_id = await this.generateMessageId(event);
     // check if the message already exists
-    if (await this.isDuplicate(eventId)) {
+    if (await this.isDuplicate(message_id)) {
       logger.warn(
         `Event already enqueued, try again after ${millisecondsToSecond(
           this.flushIntervalMs
@@ -117,12 +123,12 @@ export class EventQueue implements IEventQueue {
     }
 
     this.queue.push({
-      message: { ...event, timestamp: originTimestamp, id: eventId },
+      message: { ...event, message_id },
       callback,
     });
 
     logger.log(
-      `Event enqueued: ${getActionDescriptor(event.action, event.payload)}`
+      `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
     );
 
     if (!this.flushed) {
@@ -170,7 +176,13 @@ export class EventQueue implements IEventQueue {
 
     const items = this.queue.splice(0, this.flushAt);
     this.payloadHashes.clear();
-    const data = items.map((item) => item.message);
+    
+    // Generate sent_at once for the entire batch
+    const sentAt = new Date().toISOString();
+    const data: IFormoEventFlushPayload[] = items.map((item) => ({
+      ...item.message,
+      sent_at: sentAt
+    }));
 
     const done = (err?: Error) => {
       items.forEach(({ message, callback }) => callback(err, message, data));
