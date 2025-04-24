@@ -94,7 +94,6 @@ class EventFactory implements IEventFactory {
     // contextual properties
     const defaultContext = {
       user_agent: globalThis.navigator.userAgent,
-      href: url.href,
       locale: language,
       timezone,
       location,
