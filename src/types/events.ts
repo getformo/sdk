@@ -84,7 +84,7 @@ export interface TrackAPIEvent {
   event: string;
   revenue?: number;
   currency?: string;
-  value?: number;
+  points?: number;
 }
 
 export type APIEvent = {

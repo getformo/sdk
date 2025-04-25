@@ -352,14 +352,14 @@ class EventFactory implements IEventFactory {
     context?: IFormoEventContext,
     revenue?: number,
     currency?: string,
-    value?: number
+    points?: number
   ) {
     const trackEvent: Partial<IFormoEvent> = {
       properties: {
         ...properties,
-        revenue: revenue ?? 0,
-        currency: currency ?? "USD",
-        value: value ?? 0,
+        revenue: Number(revenue ?? 0),
+        currency: (currency ?? "USD").toLowerCase(),
+        points: Number(points ?? 0),
       },
       event,
       type: "track",
@@ -458,7 +458,7 @@ class EventFactory implements IEventFactory {
           event.context,
           event.revenue,
           event.currency,
-          event.value
+          event.points
         );
         break;
     }
