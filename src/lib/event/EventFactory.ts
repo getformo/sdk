@@ -349,15 +349,23 @@ class EventFactory implements IEventFactory {
   generateTrackEvent(
     event: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext
+    context?: IFormoEventContext,
+    revenue?: number,
+    currency?: string,
+    value?: number
   ) {
-    const transactionEvent: Partial<IFormoEvent> = {
-      properties,
+    const trackEvent: Partial<IFormoEvent> = {
+      properties: {
+        ...properties,
+        revenue: revenue ?? 0,
+        currency: currency ?? "USD",
+        value: value ?? 0,
+      },
       event,
       type: "track",
     };
 
-    return this.getEnrichedEvent(transactionEvent, context);
+    return this.getEnrichedEvent(trackEvent, context);
   }
 
   // Returns an event with type, context, properties, and common properties
@@ -447,7 +455,10 @@ class EventFactory implements IEventFactory {
         formoEvent = this.generateTrackEvent(
           event.event,
           event.properties,
-          event.context
+          event.context,
+          event.revenue,
+          event.currency,
+          event.value
         );
         break;
     }
