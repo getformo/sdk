@@ -349,17 +349,14 @@ class EventFactory implements IEventFactory {
   generateTrackEvent(
     event: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    revenue?: number,
-    currency?: string,
-    points?: number
+    context?: IFormoEventContext
   ) {
     const trackEvent: Partial<IFormoEvent> = {
       properties: {
         ...properties,
-        revenue: Number(revenue ?? 0),
-        currency: (currency ?? "USD").toLowerCase(),
-        points: Number(points ?? 0),
+        revenue: Number(properties?.revenue ?? 0),
+        currency: ((properties?.currency as string) ?? "USD").toLowerCase(),
+        points: Number(properties?.points ?? 0),
       },
       event,
       type: "track",
@@ -455,10 +452,7 @@ class EventFactory implements IEventFactory {
         formoEvent = this.generateTrackEvent(
           event.event,
           event.properties,
-          event.context,
-          event.revenue,
-          event.currency,
-          event.points
+          event.context
         );
         break;
     }
