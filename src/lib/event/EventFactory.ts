@@ -354,9 +354,11 @@ class EventFactory implements IEventFactory {
     const trackEvent: Partial<IFormoEvent> = {
       properties: {
         ...properties,
-        ...(properties?.revenue !== undefined && { revenue: Number(properties.revenue) }),
-        currency: (typeof properties?.currency === "string" ? properties.currency : "USD").toLowerCase(),
-        points: Number(properties?.points ?? 0),
+        ...(properties?.revenue !== undefined && { 
+          revenue: Number(properties.revenue),
+          currency: (typeof properties?.currency === "string" ? properties.currency : "USD").toLowerCase()
+        }),
+        ...(properties?.points !== undefined && { points: Number(properties.points) }),
       },
       event,
       type: "track",
