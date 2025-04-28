@@ -351,13 +351,20 @@ class EventFactory implements IEventFactory {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ) {
-    const transactionEvent: Partial<IFormoEvent> = {
-      properties,
+    const trackEvent: Partial<IFormoEvent> = {
+      properties: {
+        ...properties,
+        ...(properties?.revenue !== undefined && { 
+          revenue: Number(properties.revenue),
+          currency: (typeof properties?.currency === "string" ? properties.currency : "USD").toLowerCase()
+        }),
+        ...(properties?.points !== undefined && { points: Number(properties.points) }),
+      },
       event,
       type: "track",
     };
 
-    return this.getEnrichedEvent(transactionEvent, context);
+    return this.getEnrichedEvent(trackEvent, context);
   }
 
   // Returns an event with type, context, properties, and common properties
