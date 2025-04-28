@@ -355,7 +355,7 @@ class EventFactory implements IEventFactory {
       properties: {
         ...properties,
         ...(properties?.revenue !== undefined && { revenue: Number(properties.revenue) }),
-        currency: ((properties?.currency as string) ?? "USD").toLowerCase(),
+        currency: (typeof properties?.currency === "string" ? properties.currency : "USD").toLowerCase(),
         points: Number(properties?.points ?? 0),
       },
       event,
