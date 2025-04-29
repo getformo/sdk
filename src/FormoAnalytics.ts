@@ -12,16 +12,19 @@ import {
   EventManager,
   EventQueue,
   IEventManager,
+  IStorageKeyManager,
   local,
   logger,
   Logger,
   session,
+  StorageKey,
 } from "./lib";
 import {
   Address,
   ChainID,
   Config,
   EIP1193Provider,
+  IFormoAnalytics,
   IFormoEventContext,
   IFormoEventProperties,
   Options,
@@ -32,94 +35,17 @@ import {
 } from "./types";
 import { isAddress, isLocalhost } from "./validators";
 
-interface IFormoAnalytics {
-  page(
-    category?: string,
-    name?: string,
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): void;
-  reset(): void;
-  detect(
-    params: { rdns: string; providerName: string },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-  connect(
-    params: { chainId: ChainID; address: Address },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-  disconnect(
-    params?: { chainId?: ChainID; address?: Address },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-  chain(
-    params: { chainId: ChainID; address?: Address },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-  signature(
-    params: {
-      status: SignatureStatus;
-      chainId?: ChainID;
-      address: Address;
-      message: string;
-      signatureHash?: string;
-    },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-  transaction(
-    params: {
-      status: TransactionStatus;
-      chainId: ChainID;
-      address: Address;
-      data?: string;
-      to?: string;
-      value?: string;
-      transactionHash?: string;
-    },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-  identify(
-    params: {
-      address: Address;
-      providerName?: string;
-      userId?: string;
-      rdns?: string;
-    },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-  track(
-    event: string,
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void>;
-}
-
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
+  private storageKeyManager: IStorageKeyManager;
 
   config: Config;
   currentChainId?: ChainID;
-  currentAddress?: Address;
-  currentUserId?: string;
+  currentAddress?: Address = "";
+  currentUserId?: string = "";
 
   private constructor(
     public readonly writeKey: string,
@@ -130,9 +56,22 @@ export class FormoAnalytics implements IFormoAnalytics {
       trackLocalhost: options.trackLocalhost || false,
     };
 
-    this.session = new FormoAnalyticsSession();
+    this.storageKeyManager = new StorageKey(this.config.writeKey);
+
+    this.session = new FormoAnalyticsSession(this.storageKeyManager);
     this.currentUserId =
-      (session.get(SESSION_USER_ID_KEY) as string) || undefined;
+      (session.get(
+        this.storageKeyManager.getKey(SESSION_USER_ID_KEY)
+      ) as string) || undefined;
+
+    this.identify = this.identify.bind(this);
+    this.connect = this.connect.bind(this);
+    this.disconnect = this.disconnect.bind(this);
+    this.chain = this.chain.bind(this);
+    this.signature = this.signature.bind(this);
+    this.transaction = this.transaction.bind(this);
+    this.detect = this.detect.bind(this);
+    this.track = this.track.bind(this);
 
     // Initialize logger with configuration from options
     Logger.init({
@@ -147,7 +86,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         retryCount: options.retryCount,
         maxQueueSize: options.maxQueueSize,
         flushInterval: options.flushInterval,
-      })
+      }),
+      this.storageKeyManager
     );
 
     // TODO: replace with eip6963
@@ -200,8 +140,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public reset(): void {
     this.currentUserId = undefined;
-    local.remove(LOCAL_ANONYMOUS_ID_KEY);
-    session.remove(SESSION_USER_ID_KEY);
+    local.remove(this.storageKeyManager.getKey(LOCAL_ANONYMOUS_ID_KEY));
+    session.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
   }
 
   /**
@@ -429,16 +369,16 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits an identify event with current wallet address and provider info.
-   * @param {string} params.providerName
-   * @param {string} params.rdns
-   * @param {string} params.userId
    * @param {string} params.address
+   * @param {string} params.userId
+   * @param {string} params.rdns
+   * @param {string} params.providerName
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    */
-  public async identify(
+  async identify(
     params: {
       address?: Address;
       providerName?: string;
@@ -449,26 +389,29 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    const { userId, address, providerName, rdns } = params;
+    try {
+      const { userId, address, providerName, rdns } = params;
+      if (address) this.currentAddress = address;
+      if (userId) {
+        this.currentUserId = userId;
+        session.set(this.storageKeyManager.getKey(SESSION_USER_ID_KEY), userId);
+      }
 
-    this.currentAddress = address;
-    if (userId) {
-      this.currentUserId = userId;
-      session.set(SESSION_USER_ID_KEY, userId);
+      await this.trackEvent(
+        EventType.IDENTIFY,
+        {
+          address,
+          providerName,
+          userId,
+          rdns,
+        },
+        properties,
+        context,
+        callback
+      );
+    } catch (e) {
+      console.log("eeeee", e);
     }
-
-    await this.trackEvent(
-      EventType.IDENTIFY,
-      {
-        address,
-        providerName,
-        userId,
-        rdns,
-      },
-      properties,
-      context,
-      callback
-    );
   }
 
   /**
@@ -734,7 +677,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     this.currentChainId = undefined;
     this.currentAddress = undefined;
-    session.remove(SESSION_USER_ID_KEY);
+    session.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
 
     await this.trackEvent(
       EventType.DISCONNECT,
@@ -783,8 +726,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async trackFirstPageHit(): Promise<void> {
-    if (session.get(SESSION_CURRENT_URL_KEY) === null) {
-      session.set(SESSION_CURRENT_URL_KEY, window.location.href);
+    if (
+      session.get(this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY)) ===
+      null
+    ) {
+      session.set(
+        this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY),
+        window.location.href
+      );
     }
 
     return this.trackPageHit();
@@ -810,10 +759,15 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onLocationChange(): Promise<void> {
-    const currentUrl = session.get(SESSION_CURRENT_URL_KEY);
+    const currentUrl = session.get(
+      this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY)
+    );
 
     if (currentUrl !== window.location.href) {
-      session.set(SESSION_CURRENT_URL_KEY, window.location.href);
+      session.set(
+        this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY),
+        window.location.href
+      );
       this.trackPageHit();
     }
   }
@@ -1023,16 +977,28 @@ interface IFormoAnalyticsSession {
 }
 
 class FormoAnalyticsSession implements IFormoAnalyticsSession {
-  constructor() {}
+  private storageKeyManager: IStorageKeyManager;
+  constructor(storageKeyManager: IStorageKeyManager) {
+    this.storageKeyManager = storageKeyManager;
+  }
 
   public isWalletDetected(rdns: string): boolean {
-    const rdnses = (session.get(SESSION_WALLET_DETECTED_KEY) as string[]) || [];
+    const rdnses =
+      (session.get(
+        this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY)
+      ) as string[]) || [];
     return rdnses.includes(rdns);
   }
 
   public markWalletDetected(rdns: string): void {
-    const rdnses = (session.get(SESSION_WALLET_DETECTED_KEY) as string[]) || [];
+    const rdnses =
+      (session.get(
+        this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY)
+      ) as string[]) || [];
     rdnses.push(rdns);
-    session.set(SESSION_WALLET_DETECTED_KEY, rdnses);
+    session.set(
+      this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY),
+      rdnses
+    );
   }
 }

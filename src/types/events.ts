@@ -17,7 +17,17 @@ export interface ICommonProperties {
 
 export type IFormoEventProperties = Record<string, unknown>;
 export type IFormoEventContext = Record<string, unknown>;
-export type UTMParameters = Record<string, string>;
+export type UTMParameters = {
+  utm_source: string;
+  utm_medium: string;
+  utm_campaign: string;
+  utm_term: string;
+  utm_content: string;
+};
+export type ITrafficSource = UTMParameters & {
+  ref: string;
+  referrer: string;
+};
 
 export interface IFormoEvent extends ICommonProperties {
   context: Nullable<IFormoEventContext>;
