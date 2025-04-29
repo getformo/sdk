@@ -1,4 +1,8 @@
-import { COUNTRY_LIST } from "../../constants";
+import {
+  COUNTRY_LIST,
+  LOCAL_ANONYMOUS_ID_KEY,
+  SESSION_TRAFFIC_SOURCE_KEY,
+} from "../../constants";
 import {
   Address,
   APIEvent,
@@ -6,6 +10,7 @@ import {
   IFormoEvent,
   IFormoEventContext,
   IFormoEventProperties,
+  ITrafficSource,
   Nullable,
   SignatureStatus,
   TransactionStatus,
@@ -20,14 +25,17 @@ import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
 import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
-import { local } from "../storage";
+import { IStorageKeyManager, local, session } from "../storage";
 import { version } from "../version";
 import { CHANNEL, VERSION } from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 
 class EventFactory implements IEventFactory {
-  constructor() {}
+  private storageKeyManager: IStorageKeyManager;
+  constructor(storageKeyManager: IStorageKeyManager) {
+    this.storageKeyManager = storageKeyManager;
+  }
 
   private getTimezone(): string {
     try {
@@ -68,23 +76,84 @@ class EventFactory implements IEventFactory {
   }
 
   private extractUTMParameters = (url: string): UTMParameters => {
-    const result: UTMParameters = {};
+    const result: UTMParameters = {
+      utm_campaign: "",
+      utm_content: "",
+      utm_medium: "",
+      utm_source: "",
+      utm_term: "",
+    };
     try {
       const urlObj = new URL(url);
       const UTM_PREFIX = "utm_";
       urlObj.searchParams.forEach((value, sParam) => {
         if (sParam.startsWith(UTM_PREFIX)) {
-          result[sParam] = value.trim() || "";
+          result[sParam as keyof UTMParameters] = value.trim();
         }
       });
     } catch (error) {}
     return result;
   };
 
+  private getTrafficSources = (url: string): ITrafficSource => {
+    const urlObj = new URL(url);
+    const contextTrafficSources: ITrafficSource = {
+      ...this.extractUTMParameters(url),
+      ref: urlObj.searchParams.get("ref")?.trim() || "",
+      referrer: document.referrer,
+    };
+    const storedTrafficSources =
+      (session.get(
+        this.storageKeyManager.getKey(SESSION_TRAFFIC_SOURCE_KEY)
+      ) as ITrafficSource) || {};
+
+    const finalTrafficSources: ITrafficSource = {
+      ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
+      referrer:
+        contextTrafficSources.referrer || storedTrafficSources?.referrer,
+      utm_campaign:
+        contextTrafficSources.utm_campaign ||
+        storedTrafficSources?.utm_campaign ||
+        "",
+      utm_content:
+        contextTrafficSources.utm_content ||
+        storedTrafficSources?.utm_content ||
+        "",
+      utm_medium:
+        contextTrafficSources.utm_medium ||
+        storedTrafficSources?.utm_medium ||
+        "",
+      utm_source:
+        contextTrafficSources.utm_source ||
+        storedTrafficSources?.utm_source ||
+        "",
+      utm_term:
+        contextTrafficSources.utm_term || storedTrafficSources?.utm_term || "",
+    };
+
+    // Store to session
+    const sessionStoredTrafficSources = Object.keys(finalTrafficSources).reduce(
+      (res: any, key: any) => {
+        const value = finalTrafficSources[key as keyof ITrafficSource];
+        if (!isUndefined(value) && value !== "") {
+          res[key as keyof ITrafficSource] = value;
+        }
+        return res;
+      },
+      {}
+    );
+
+    if (Object.keys(sessionStoredTrafficSources).length)
+      session.set(
+        this.storageKeyManager.getKey(SESSION_TRAFFIC_SOURCE_KEY),
+        sessionStoredTrafficSources
+      );
+
+    return finalTrafficSources;
+  };
+
   // Contextual fields that are automatically collected and populated by the Formo SDK
   private generateContext(context?: IFormoEventContext): IFormoEventContext {
-    const url = new URL(globalThis.location.href);
-    const params = new URLSearchParams(url.search);
     const path = globalThis.location.pathname;
     const language = this.getLanguage();
     const timezone = this.getTimezone();
@@ -97,12 +166,10 @@ class EventFactory implements IEventFactory {
       locale: language,
       timezone,
       location,
-      referrer: document.referrer,
-      ...this.extractUTMParameters(globalThis.location.href),
-      ref: params.get("ref")?.trim() || "",
+      ...this.getTrafficSources(globalThis.location.href),
       page_path: path,
       page_title: document.title,
-      page_url: url.href,
+      page_url: globalThis.location.href,
       library_name: "Formo Web SDK",
       library_version,
     };
@@ -156,7 +223,9 @@ class EventFactory implements IEventFactory {
     if (!local.isAvailable()) {
       commonEventData.anonymous_id = generateNativeUUID();
     } else {
-      commonEventData.anonymous_id = generateAnonymousId();
+      commonEventData.anonymous_id = generateAnonymousId(
+        this.storageKeyManager.getKey(LOCAL_ANONYMOUS_ID_KEY)
+      );
     }
 
     if (formoEvent.address) {
@@ -354,11 +423,16 @@ class EventFactory implements IEventFactory {
     const trackEvent: Partial<IFormoEvent> = {
       properties: {
         ...properties,
-        ...(properties?.revenue !== undefined && { 
+        ...(properties?.revenue !== undefined && {
           revenue: Number(properties.revenue),
-          currency: (typeof properties?.currency === "string" ? properties.currency : "USD").toLowerCase()
+          currency: (typeof properties?.currency === "string"
+            ? properties.currency
+            : "USD"
+          ).toLowerCase(),
         }),
-        ...(properties?.points !== undefined && { points: Number(properties.points) }),
+        ...(properties?.points !== undefined && {
+          points: Number(properties.points),
+        }),
       },
       event,
       type: "track",

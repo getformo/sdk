@@ -1,6 +1,7 @@
 import { Address, APIEvent } from "../../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
+import { IStorageKeyManager } from "../storage";
 import { EventFactory } from "./EventFactory";
 import { IEventFactory, IEventManager } from "./type";
 
@@ -15,9 +16,9 @@ class EventManager implements IEventManager {
    *
    * @param eventQueue Event queue instance
    */
-  constructor(eventQueue: IEventQueue) {
+  constructor(eventQueue: IEventQueue, storageKeyManager: IStorageKeyManager) {
     this.eventQueue = eventQueue;
-    this.eventFactory = new EventFactory();
+    this.eventFactory = new EventFactory(storageKeyManager);
   }
 
   /**

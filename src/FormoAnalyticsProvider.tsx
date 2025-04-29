@@ -1,11 +1,23 @@
-import { createContext, useContext, useEffect, useState, useRef } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
-import { FormoAnalyticsProviderProps } from "./types";
 import { logger } from "./lib";
+import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
 
-export const FormoAnalyticsContext = createContext<FormoAnalytics | undefined>(
-  undefined
-);
+const defaultContext: IFormoAnalytics = {
+  chain: () => Promise.resolve(),
+  page: () => Promise.resolve(),
+  reset: () => Promise.resolve(),
+  detect: () => Promise.resolve(),
+  connect: () => Promise.resolve(),
+  disconnect: () => Promise.resolve(),
+  signature: () => Promise.resolve(),
+  transaction: () => Promise.resolve(),
+  identify: () => Promise.resolve(),
+  track: () => Promise.resolve(),
+};
+
+export const FormoAnalyticsContext =
+  createContext<IFormoAnalytics>(defaultContext);
 
 export const FormoAnalyticsProvider = (props: FormoAnalyticsProviderProps) => {
   const { writeKey, disabled = false, children } = props;
@@ -29,7 +41,7 @@ const InitializedAnalytics = ({
   options,
   children,
 }: FormoAnalyticsProviderProps) => {
-  const [sdk, setSdk] = useState<FormoAnalytics | undefined>();
+  const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
   const initializedStartedRef = useRef(false);
 
   const initializeFormoAnalytics = async (writeKey: string, options: any) => {

@@ -60,7 +60,7 @@ export class NativeStorage {
 
     if (value.startsWith(this.json_prefix)) {
       try {
-        return JSON.parse(value.slice(7));
+        return JSON.parse(value.slice(this.json_prefix.length));
       } catch (error) {
         logger.error(
           `[FORMO_ERROR] ${this.storageName} failed to parse JSON`,
