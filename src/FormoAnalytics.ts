@@ -391,15 +391,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
-      if (!params) { // If no params provided, auto-identify providers
+      if (!params) { // If no params provided, auto-identify
         for (const providerDetail of this._providers) {
           const provider = providerDetail.provider;
           if (!provider) continue;
 
           try {
             const address = await this.getAddress(provider);
-            // NOTE: not set currentAddress without explicit connect or identify
             if (address) {
+              // NOTE: do not set this.currentAddress without explicit connect or identify
               await this.identify({
                 address,
                 providerName: providerDetail.info.name,
@@ -413,6 +413,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
+      // Explicit identify
       const { userId, address, providerName, rdns } = params;
       if (address) this.currentAddress = address;
       if (userId) {
@@ -433,7 +434,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         callback
       );
     } catch (e) {
-      console.log("identify error", e);
+      logger.log("identify error", e);
     }
   }
 
