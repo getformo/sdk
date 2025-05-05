@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.16.8",
+  "version": "1.16.9",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/getformo/sdk.git"
@@ -87,7 +87,7 @@
   "size-limit": [
     {
       "path": "dist/index.umd.min.js",
-      "limit": "25 KB"
+      "limit": "26 KB"
     }
   ],
   "peerDependencies": {

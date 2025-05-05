@@ -41,6 +41,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   private storageKeyManager: IStorageKeyManager;
+  private _providers: readonly EIP6963ProviderDetail[] = [];
 
   config: Config;
   currentChainId?: ChainID;
@@ -107,8 +108,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     const analytics = new FormoAnalytics(writeKey, options);
 
     // Auto-detect wallet provider
-    const providers = await analytics.getProviders();
-    await analytics.detectWallets(providers);
+    analytics._providers = await analytics.getProviders();
+    await analytics.detectWallets(analytics._providers);
 
     return analytics;
   }
@@ -379,7 +380,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   async identify(
-    params: {
+    params?: {
       address?: Address;
       providerName?: string;
       userId?: string;
@@ -390,6 +391,29 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
+      if (!params) { // If no params provided, auto-identify
+        for (const providerDetail of this._providers) {
+          const provider = providerDetail.provider;
+          if (!provider) continue;
+
+          try {
+            const address = await this.getAddress(provider);
+            if (address) {
+              // NOTE: do not set this.currentAddress without explicit connect or identify
+              await this.identify({
+                address,
+                providerName: providerDetail.info.name,
+                rdns: providerDetail.info.rdns,
+              }, properties, context, callback);
+            }
+          } catch (err) {
+            logger.error(`Failed to identify provider ${providerDetail.info.name}:`, err);
+          }
+        }
+        return;
+      }
+
+      // Explicit identify
       const { userId, address, providerName, rdns } = params;
       if (address) this.currentAddress = address;
       if (userId) {
@@ -410,7 +434,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         callback
       );
     } catch (e) {
-      console.log("eeeee", e);
+      logger.log("identify error", e);
     }
   }
 
@@ -830,14 +854,22 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
     let providers = store.getProviders();
-    // TODO: consider using store.subscribe to detect changes to providers list
-    store.subscribe((providerDetails) => (providers = providerDetails));
+    store.subscribe((providerDetails) => {
+      providers = providerDetails;
+      this._providers = providers;
+    });
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      return window?.ethereum ? [window.ethereum] : [];
+      this._providers = window?.ethereum ? [window.ethereum] : [];
+      return this._providers;
     }
+    this._providers = providers;
     return providers;
+  }
+
+  get providers(): readonly EIP6963ProviderDetail[] {
+    return this._providers;
   }
 
   private async detectWallets(
@@ -859,15 +891,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._provider;
   }
 
-  private async getAddress(): Promise<Address | null> {
+  private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
     if (this.currentAddress) return this.currentAddress;
-    if (!this?.provider) {
+    const p = provider || this.provider;
+    if (!p) {
       logger.info("The provider is not set");
       return null;
     }
 
     try {
-      const accounts = await this.getAccounts();
+      const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
         if (isAddress(accounts[0])) {
           return accounts[0];
