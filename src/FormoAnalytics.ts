@@ -183,7 +183,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         chainId,
         address,
       },
-      properties,
+      {
+        ...properties,
+        address,
+      },
       context,
       callback
     );
@@ -706,7 +709,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     await this.trackEvent(
       EventType.DISCONNECT,
       payload,
-      properties,
+      {
+        ...properties,
+        address: payload.address,
+      },
       context,
       callback
     );
