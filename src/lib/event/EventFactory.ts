@@ -318,6 +318,7 @@ class EventFactory implements IEventFactory {
     const connectEvent: Partial<IFormoEvent> = {
       properties: {
         chainId,
+        address,
         ...properties,
       },
       address,
@@ -336,6 +337,7 @@ class EventFactory implements IEventFactory {
     const disconnectEvent: Partial<IFormoEvent> = {
       properties: {
         chainId,
+        address,
         ...properties,
       },
       address,
