@@ -486,7 +486,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   async track(
-    event: EventType,
+    event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
