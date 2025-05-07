@@ -377,6 +377,7 @@ class EventFactory implements IEventFactory {
     const signatureEvent: Partial<IFormoEvent> = {
       properties: {
         status,
+        address,
         chainId,
         message,
         signatureHash,
@@ -403,6 +404,7 @@ class EventFactory implements IEventFactory {
     const transactionEvent: Partial<IFormoEvent> = {
       properties: {
         status,
+        address,
         chainId,
         data,
         to,
