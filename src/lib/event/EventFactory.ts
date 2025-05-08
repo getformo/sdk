@@ -25,7 +25,7 @@ import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
 import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
-import { IStorageKeyManager, local, session } from "../storage";
+import { cookie, IStorageKeyManager, local, session } from "../storage";
 import { version } from "../version";
 import { CHANNEL, VERSION } from "./constants";
 import { IEventFactory } from "./type";
@@ -220,7 +220,7 @@ class EventFactory implements IEventFactory {
       version: VERSION,
     } as Partial<IFormoEvent>;
 
-    if (!local.isAvailable()) {
+    if (!cookie.isAvailable()) {
       commonEventData.anonymous_id = generateNativeUUID();
     } else {
       commonEventData.anonymous_id = generateAnonymousId(

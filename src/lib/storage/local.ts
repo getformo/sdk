@@ -1,3 +1,3 @@
-import NativeStorage from "./native";
+import CombinedStorage from "./native";
 
-export default new NativeStorage("localStorage");
+export default new CombinedStorage("localStorage");

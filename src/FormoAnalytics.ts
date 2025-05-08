@@ -9,14 +9,13 @@ import {
   TEventType,
 } from "./constants";
 import {
+  cookie,
   EventManager,
   EventQueue,
   IEventManager,
   IStorageKeyManager,
-  local,
   logger,
   Logger,
-  session,
   StorageKey,
 } from "./lib";
 import {
@@ -61,7 +60,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.session = new FormoAnalyticsSession(this.storageKeyManager);
     this.currentUserId =
-      (session.get(
+      (cookie.get(
         this.storageKeyManager.getKey(SESSION_USER_ID_KEY)
       ) as string) || undefined;
 
@@ -141,8 +140,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public reset(): void {
     this.currentUserId = undefined;
-    local.remove(this.storageKeyManager.getKey(LOCAL_ANONYMOUS_ID_KEY));
-    session.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
+    cookie.remove(this.storageKeyManager.getKey(LOCAL_ANONYMOUS_ID_KEY));
+    cookie.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
   }
 
   /**
@@ -391,7 +390,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
-      if (!params) { // If no params provided, auto-identify
+      if (!params) {
+        // If no params provided, auto-identify
         for (const providerDetail of this._providers) {
           const provider = providerDetail.provider;
           if (!provider) continue;
@@ -400,14 +400,22 @@ export class FormoAnalytics implements IFormoAnalytics {
             const address = await this.getAddress(provider);
             if (address) {
               // NOTE: do not set this.currentAddress without explicit connect or identify
-              await this.identify({
-                address,
-                providerName: providerDetail.info.name,
-                rdns: providerDetail.info.rdns,
-              }, properties, context, callback);
+              await this.identify(
+                {
+                  address,
+                  providerName: providerDetail.info.name,
+                  rdns: providerDetail.info.rdns,
+                },
+                properties,
+                context,
+                callback
+              );
             }
           } catch (err) {
-            logger.error(`Failed to identify provider ${providerDetail.info.name}:`, err);
+            logger.error(
+              `Failed to identify provider ${providerDetail.info.name}:`,
+              err
+            );
           }
         }
         return;
@@ -418,7 +426,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (address) this.currentAddress = address;
       if (userId) {
         this.currentUserId = userId;
-        session.set(this.storageKeyManager.getKey(SESSION_USER_ID_KEY), userId);
+        cookie.set(this.storageKeyManager.getKey(SESSION_USER_ID_KEY), userId);
       }
 
       await this.trackEvent(
@@ -701,7 +709,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     this.currentChainId = undefined;
     this.currentAddress = undefined;
-    session.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
+    cookie.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
 
     await this.trackEvent(
       EventType.DISCONNECT,
@@ -751,10 +759,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async trackFirstPageHit(): Promise<void> {
     if (
-      session.get(this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY)) ===
+      cookie.get(this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY)) ===
       null
     ) {
-      session.set(
+      cookie.set(
         this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY),
         window.location.href
       );
@@ -783,12 +791,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onLocationChange(): Promise<void> {
-    const currentUrl = session.get(
+    const currentUrl = cookie.get(
       this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY)
     );
 
     if (currentUrl !== window.location.href) {
-      session.set(
+      cookie.set(
         this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY),
         window.location.href
       );
@@ -891,7 +899,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._provider;
   }
 
-  private async getAddress(provider?: EIP1193Provider): Promise<Address | null> {
+  private async getAddress(
+    provider?: EIP1193Provider
+  ): Promise<Address | null> {
     if (this.currentAddress) return this.currentAddress;
     const p = provider || this.provider;
     if (!p) {
@@ -1017,21 +1027,25 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
 
   public isWalletDetected(rdns: string): boolean {
     const rdnses =
-      (session.get(
-        this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY)
-      ) as string[]) || [];
+      cookie
+        .get(this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY))
+        ?.split(",") || [];
     return rdnses.includes(rdns);
   }
 
   public markWalletDetected(rdns: string): void {
     const rdnses =
-      (session.get(
-        this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY)
-      ) as string[]) || [];
+      cookie
+        .get(this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY))
+        ?.split(",") || [];
     rdnses.push(rdns);
-    session.set(
+    cookie.set(
       this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY),
-      rdnses
+      rdnses.join(","),
+      {
+        // by the end of the day
+        maxAge: Date.now() + 1000 * 60 * 60 * 24,
+      }
     );
   }
 }
