@@ -13,10 +13,8 @@ import {
   EventManager,
   EventQueue,
   IEventManager,
-  IStorageKeyManager,
   logger,
   Logger,
-  StorageKey,
 } from "./lib";
 import {
   Address,
@@ -39,7 +37,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
-  private storageKeyManager: IStorageKeyManager;
   private _providers: readonly EIP6963ProviderDetail[] = [];
 
   config: Config;
@@ -56,13 +53,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       trackLocalhost: options.trackLocalhost || false,
     };
 
-    this.storageKeyManager = new StorageKey(this.config.writeKey);
-
-    this.session = new FormoAnalyticsSession(this.storageKeyManager);
+    this.session = new FormoAnalyticsSession();
     this.currentUserId =
-      (cookie.get(
-        this.storageKeyManager.getKey(SESSION_USER_ID_KEY)
-      ) as string) || undefined;
+      (cookie().get(SESSION_USER_ID_KEY) as string) || undefined;
 
     this.identify = this.identify.bind(this);
     this.connect = this.connect.bind(this);
@@ -86,8 +79,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         retryCount: options.retryCount,
         maxQueueSize: options.maxQueueSize,
         flushInterval: options.flushInterval,
-      }),
-      this.storageKeyManager
+      })
     );
 
     // TODO: replace with eip6963
@@ -140,8 +132,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public reset(): void {
     this.currentUserId = undefined;
-    cookie.remove(this.storageKeyManager.getKey(LOCAL_ANONYMOUS_ID_KEY));
-    cookie.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
+    cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
+    cookie().remove(SESSION_USER_ID_KEY);
   }
 
   /**
@@ -429,7 +421,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (address) this.currentAddress = address;
       if (userId) {
         this.currentUserId = userId;
-        cookie.set(this.storageKeyManager.getKey(SESSION_USER_ID_KEY), userId);
+        cookie().set(SESSION_USER_ID_KEY, userId);
       }
 
       await this.trackEvent(
@@ -712,7 +704,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     this.currentChainId = undefined;
     this.currentAddress = undefined;
-    cookie.remove(this.storageKeyManager.getKey(SESSION_USER_ID_KEY));
+    cookie().remove(SESSION_USER_ID_KEY);
 
     await this.trackEvent(
       EventType.DISCONNECT,
@@ -761,14 +753,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async trackFirstPageHit(): Promise<void> {
-    if (
-      cookie.get(this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY)) ===
-      null
-    ) {
-      cookie.set(
-        this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY),
-        window.location.href
-      );
+    if (cookie().get(SESSION_CURRENT_URL_KEY) === null) {
+      cookie().set(SESSION_CURRENT_URL_KEY, window.location.href);
     }
 
     return this.trackPageHit();
@@ -794,15 +780,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onLocationChange(): Promise<void> {
-    const currentUrl = cookie.get(
-      this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY)
-    );
+    const currentUrl = cookie().get(SESSION_CURRENT_URL_KEY);
 
     if (currentUrl !== window.location.href) {
-      cookie.set(
-        this.storageKeyManager.getKey(SESSION_CURRENT_URL_KEY),
-        window.location.href
-      );
+      cookie().set(SESSION_CURRENT_URL_KEY, window.location.href);
       this.trackPageHit();
     }
   }
@@ -1023,32 +1004,18 @@ interface IFormoAnalyticsSession {
 }
 
 class FormoAnalyticsSession implements IFormoAnalyticsSession {
-  private storageKeyManager: IStorageKeyManager;
-  constructor(storageKeyManager: IStorageKeyManager) {
-    this.storageKeyManager = storageKeyManager;
-  }
-
   public isWalletDetected(rdns: string): boolean {
-    const rdnses =
-      cookie
-        .get(this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY))
-        ?.split(",") || [];
+    const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
     return rdnses.includes(rdns);
   }
 
   public markWalletDetected(rdns: string): void {
-    const rdnses =
-      cookie
-        .get(this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY))
-        ?.split(",") || [];
+    const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
     rdnses.push(rdns);
-    cookie.set(
-      this.storageKeyManager.getKey(SESSION_WALLET_DETECTED_KEY),
-      rdnses.join(","),
-      {
-        // by the end of the day
-        maxAge: Date.now() + 1000 * 60 * 60 * 24,
-      }
-    );
+    cookie().set(SESSION_WALLET_DETECTED_KEY, rdnses.join(","), {
+      // by the end of the day
+      expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
+      path: "/",
+    });
   }
 }

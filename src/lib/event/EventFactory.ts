@@ -25,18 +25,13 @@ import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
 import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
-import { cookie, IStorageKeyManager, local, session } from "../storage";
+import { cookie, session } from "../storage";
 import { version } from "../version";
 import { CHANNEL, VERSION } from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 
 class EventFactory implements IEventFactory {
-  private storageKeyManager: IStorageKeyManager;
-  constructor(storageKeyManager: IStorageKeyManager) {
-    this.storageKeyManager = storageKeyManager;
-  }
-
   private getTimezone(): string {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -103,9 +98,7 @@ class EventFactory implements IEventFactory {
       referrer: document.referrer,
     };
     const storedTrafficSources =
-      (session.get(
-        this.storageKeyManager.getKey(SESSION_TRAFFIC_SOURCE_KEY)
-      ) as ITrafficSource) || {};
+      (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {};
 
     const finalTrafficSources: ITrafficSource = {
       ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
@@ -144,10 +137,7 @@ class EventFactory implements IEventFactory {
     );
 
     if (Object.keys(sessionStoredTrafficSources).length)
-      session.set(
-        this.storageKeyManager.getKey(SESSION_TRAFFIC_SOURCE_KEY),
-        sessionStoredTrafficSources
-      );
+      session().set(SESSION_TRAFFIC_SOURCE_KEY, sessionStoredTrafficSources);
 
     return finalTrafficSources;
   };
@@ -220,11 +210,11 @@ class EventFactory implements IEventFactory {
       version: VERSION,
     } as Partial<IFormoEvent>;
 
-    if (!cookie.isAvailable()) {
+    if (!cookie().isAvailable()) {
       commonEventData.anonymous_id = generateNativeUUID();
     } else {
       commonEventData.anonymous_id = generateAnonymousId(
-        this.storageKeyManager.getKey(LOCAL_ANONYMOUS_ID_KEY)
+        LOCAL_ANONYMOUS_ID_KEY
       );
     }
 
