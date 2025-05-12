@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
-import { logger } from "./lib";
+import { initStorageManager, logger } from "./lib";
 import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
 
 const defaultContext: IFormoAnalytics = {
@@ -43,6 +43,7 @@ const InitializedAnalytics = ({
 }: FormoAnalyticsProviderProps) => {
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
   const initializedStartedRef = useRef(false);
+  initStorageManager(writeKey);
 
   const initializeFormoAnalytics = async (writeKey: string, options: any) => {
     try {
