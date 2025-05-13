@@ -17,17 +17,17 @@ const generateAnonymousId = (key: string): AnonymousID => {
 
 function getCookieDomain(hostname: string = window.location.hostname): string {
   // Special cases
-  if (hostname === "localhost" || /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) {
+  if (
+    hostname.includes("localhost") ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)
+  ) {
     // Localhost or IP address
     return "";
   }
 
   const parts = hostname.split(".");
-  if (parts.length >= 2) {
-    return `.${parts.slice(-2).join(".")}`; // e.g. example.com
-  }
-
-  return "";
+  if (parts.includes("www")) parts.splice(parts.indexOf("www"), 1);
+  return `.${parts.join(".")}`;
 }
 
 export { generateAnonymousId, getCookieDomain };

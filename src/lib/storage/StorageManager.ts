@@ -30,7 +30,7 @@ export class StorageManager {
       }
 
       // Add to cache
-      this.storages.set(type, this.createStorage(type));
+      this.storages.set(type, storage);
     }
     return this.storages.get(type)!;
   }

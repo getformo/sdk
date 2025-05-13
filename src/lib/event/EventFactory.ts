@@ -16,16 +16,12 @@ import {
   TransactionStatus,
   UTMParameters,
 } from "../../types";
-import {
-  generateNativeUUID,
-  toChecksumAddress,
-  toSnakeCase,
-} from "../../utils";
+import { toChecksumAddress, toSnakeCase } from "../../utils";
 import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
 import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
-import { cookie, session } from "../storage";
+import { session } from "../storage";
 import { version } from "../version";
 import { CHANNEL, VERSION } from "./constants";
 import { IEventFactory } from "./type";
@@ -210,13 +206,7 @@ class EventFactory implements IEventFactory {
       version: VERSION,
     } as Partial<IFormoEvent>;
 
-    if (!cookie().isAvailable()) {
-      commonEventData.anonymous_id = generateNativeUUID();
-    } else {
-      commonEventData.anonymous_id = generateAnonymousId(
-        LOCAL_ANONYMOUS_ID_KEY
-      );
-    }
+    commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     if (formoEvent.address) {
       commonEventData.address = toChecksumAddress(formoEvent.address);
