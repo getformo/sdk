@@ -3,14 +3,9 @@ import { CookieOptions } from "../type";
 
 class CookieStorage extends StorageBlueprint {
   public override isAvailable(): boolean {
-    try {
-      document.cookie = "cookie_test=1";
-      const available = document.cookie.includes("cookie_test=");
-      this.remove("cookie_test");
-      return available;
-    } catch {
-      return false;
-    }
+    return (
+      typeof document !== "undefined" && typeof document.cookie === "string"
+    );
   }
 
   public override set(
@@ -30,8 +25,7 @@ class CookieStorage extends StorageBlueprint {
     )}`;
     if (maxAge) {
       cookie += "; max-age=" + maxAge;
-    }
-    if (expires) {
+    } else if (expires) {
       cookie += "; expires=" + expires;
     }
     if (path) {

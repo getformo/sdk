@@ -1,7 +1,7 @@
 import { KEY_PREFIX } from "../constant";
-import { CookieOptions } from "../type";
+import { CookieOptions, IStorage } from "../type";
 
-abstract class StorageBlueprint {
+abstract class StorageBlueprint implements IStorage {
   constructor(private readonly writeKey: string) {}
 
   abstract isAvailable(): boolean;
