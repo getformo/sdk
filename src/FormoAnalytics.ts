@@ -13,6 +13,7 @@ import {
   EventManager,
   EventQueue,
   IEventManager,
+  initStorageManager,
   logger,
   Logger,
 } from "./lib";
@@ -96,6 +97,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     writeKey: string,
     options?: Options
   ): Promise<FormoAnalytics> {
+    initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
     // Auto-detect wallet provider
@@ -384,7 +386,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       if (!params) {
         // If no params provided, auto-identify
-        logger.info("Auto-identifying with providers:", this._providers.map(p => p.info.name));
+        logger.info(
+          "Auto-identifying with providers:",
+          this._providers.map((p) => p.info.name)
+        );
         for (const providerDetail of this._providers) {
           const provider = providerDetail.provider;
           if (!provider) continue;
@@ -392,7 +397,12 @@ export class FormoAnalytics implements IFormoAnalytics {
           try {
             const address = await this.getAddress(provider);
             if (address) {
-              logger.info("Auto-identifying", address, providerDetail.info.name, providerDetail.info.rdns);
+              logger.info(
+                "Auto-identifying",
+                address,
+                providerDetail.info.name,
+                providerDetail.info.rdns
+              );
               // NOTE: do not set this.currentAddress without explicit connect or identify
               await this.identify(
                 {
