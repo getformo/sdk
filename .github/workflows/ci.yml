@@ -2,6 +2,7 @@ name: Formo SDK CI Check
 
 on:
   push:
+    branches-ignore: [main]
   pull_request:
     branches:
       - main
