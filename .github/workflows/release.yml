@@ -1,14 +1,10 @@
 name: Release package
 
+# Runs when a PR to main is merged, main branch is protected, so that only PRs to main are merged
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
-    types:
-      - closed
 
 jobs:
   release:
