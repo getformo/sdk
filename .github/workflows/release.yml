@@ -1,22 +1,23 @@
-name: Formo SDK CI Check
+name: Release package
 
 on:
   push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+    types:
+      - closed
 
 jobs:
-  build:
+  release:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,3 +48,8 @@ jobs:
         run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
       - name: Build SDK
         run: ${{ steps.detect-package-manager.outputs.runner }} build
+      - name: Release
+        run: ${{ steps.detect-package-manager.outputs.runner }} semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
