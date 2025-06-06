@@ -3,7 +3,8 @@
 
 echo "Running pre-commit process..."
 
-# Example: fix formatting using Prettier
+npm run build
+
 npx genversion --esm --semi src/lib/version.ts
 
 # Add modified files to Git staging
