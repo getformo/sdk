@@ -81,31 +81,3 @@ The table below shows which commit message gets you which release type when `sem
 | `fix(pencil): stop graphite breaking when too much pressure applied`                                                                                                                             | ~~Patch~~ Fix Release                                                                                           |
 | `feat(pencil): add 'graphiteWidth' option`                                                                                                                                                       | ~~Minor~~ Feature Release                                                                                       |
 | `perf(pencil): remove graphiteWidth option`<br><br>`BREAKING CHANGE: The graphiteWidth option has been removed.`<br>`The default graphite width of 10mm is always used for performance reasons.` | ~~Major~~ Breaking Release <br /> (Note that the `BREAKING CHANGE: ` token must be in the footer of the commit) |
-
-# Publishing
-
-1. Authenticate with NPM
-
-To publish a new version of the package, log in to your NPM account:
-
-```jsx
-npm login
-```
-
-or:
-
-```jsx
-npm adduser
-```
-
-2. Publish the Package
-
-Run the following command to publish the package to NPM:
-
-```jsx
-// Increment the version number in package.json and create git tag https://docs.npmjs.com/cli/v8/commands/npm-version
-npm version <major/minor/patch>
-
-// Publish the package to NPM
-npm pub
-```
