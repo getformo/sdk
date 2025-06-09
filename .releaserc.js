@@ -3,7 +3,13 @@ const fs = require("fs");
 module.exports = {
   branches: ["main"],
   plugins: [
-    "@semantic-release/commit-analyzer",
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        preset: "conventionalcommits",
+        releaseRules: [],
+      },
+    ],
     "@semantic-release/release-notes-generator",
     "@semantic-release/npm",
     [
@@ -16,6 +22,7 @@ module.exports = {
       "@semantic-release/github",
       {
         assets: ["dist/**/*"],
+        addReleases: "bottom",
       },
     ],
   ],
