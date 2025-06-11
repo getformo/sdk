@@ -9,6 +9,9 @@
   "types": "dist/esm/src/index.d.ts",
   "module": "dist/esm/src/index.js",
   "unpkg": "dist/index.umd.min.js",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "import": "./dist/esm/src/index.js",
