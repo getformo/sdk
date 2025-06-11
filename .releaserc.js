@@ -20,8 +20,9 @@ module.exports = {
     [
       "@semantic-release/github",
       {
-        assets: ["dist"],
         addReleases: "bottom",
+        successComment:
+          "🎉 This PR is included in version ${nextRelease.version} 🎉 ",
       },
     ],
     [
