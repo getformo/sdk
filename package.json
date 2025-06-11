@@ -20,9 +20,6 @@
     "access": "public"
   },
   "license": "MIT",
-  "files": [
-    "dist"
-  ],
   "dependencies": {
     "ethereum-cryptography": "3.2.0",
     "fetch-retry": "6.0.0",
