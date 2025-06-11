@@ -9,11 +9,13 @@ PACKAGE_NAME="@formo/analytics"
 # Get the tarball from unpkg and compute SRI
 URL="https://unpkg.com/${PACKAGE_NAME}@${VERSION}/${FILE}"
 echo "Fetching: $URL"
-HASH=$(curl -sSL --compressed "$URL" | openssl dgst -sha384 -binary | openssl base64 -A)
+HASH=$(curl -sSL --compressed $URL | openssl dgst -sha384 -binary | openssl base64 -A)
+
+echo "Hash: $HASH"
 
 SNIPPET=$(cat <<EOF
 <script 
-  src="https://unpkg.com/${PACKAGE_NAME}@${VERSION}/${FILE}"
+  src="${URL}"
   integrity="sha384-${HASH}"
   crossorigin="anonymous"
 ></script>
