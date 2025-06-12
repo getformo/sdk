@@ -15,3 +15,5 @@ export function formofy(writeKey: string) {
     console.warn("FormoAnalytics not found");
   }
 }
+
+(window as any).formofy = formofy;
