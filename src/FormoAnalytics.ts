@@ -646,22 +646,31 @@ export class FormoAnalytics implements IFormoAnalytics {
         method === "eth_sendTransaction" &&
         params[0]
       ) {
-        // Track transaction start
-        const payload = await this.buildTransactionEventPayload(params);
-        this.transaction({ status: TransactionStatus.STARTED, ...payload });
+        let payload;
+        try {
+          // Track transaction start with enhanced error handling
+          payload = await this.buildTransactionEventPayload(params);
+          this.transaction({ status: TransactionStatus.STARTED, ...payload });
+        } catch (payloadError) {
+          logger.error("Error building transaction payload:", payloadError);
+          // Continue with the original request even if tracking fails
+          return request({ method, params });
+        }
 
         try {
           // Wait for the transaction hash
           const transactionHash = (await request({ method, params })) as string;
 
-          // Track transaction broadcast
-          this.transaction({
-            status: TransactionStatus.BROADCASTED,
-            ...payload,
-            transactionHash,
-          });
+          // Track transaction broadcast only if we have a valid transaction hash
+          if (transactionHash && typeof transactionHash === 'string') {
+            this.transaction({
+              status: TransactionStatus.BROADCASTED,
+              ...payload,
+              transactionHash,
+            });
+          }
 
-          return;
+          return transactionHash as T;
         } catch (error) {
           logger.error("Transaction error:", error);
           const rpcError = error as RPCError;
@@ -992,15 +1001,32 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async buildTransactionEventPayload(params: unknown[]) {
-    const { data, from, to, value } = params[0] as {
-      data: string;
-      from: string;
-      to: string;
-      value: string;
+    // Validate that params[0] exists and is an object
+    if (!params || !params[0] || typeof params[0] !== 'object') {
+      throw new Error("FormoAnalytics::buildTransactionEventPayload: Invalid transaction parameters");
+    }
+
+    const transactionParams = params[0] as {
+      data?: string | null;
+      from?: string;
+      to?: string;
+      value?: string;
     };
+
+    // Extract and validate transaction fields with proper null handling
+    const data = transactionParams.data || undefined; // Convert null to undefined for compatibility
+    const from = transactionParams.from;
+    const to = transactionParams.to;
+    const value = transactionParams.value || "0x0"; // Default to zero value if not provided
+
+    // Validate required fields
+    if (!from) {
+      throw new Error("FormoAnalytics::buildTransactionEventPayload: 'from' address is required");
+    }
+
     return {
       chainId: this.currentChainId || (await this.getCurrentChainId()),
-      data,
+      data, // Now properly handles null/undefined
       address: from,
       to,
       value,
