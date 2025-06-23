@@ -641,6 +641,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
+      // TODO: Add support for other transaction methods (eip5792.xyz)
+
       if (
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
@@ -661,7 +663,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             transactionHash,
           });
 
-          return;
+          return transactionHash as T;
         } catch (error) {
           logger.error("Transaction error:", error);
           const rpcError = error as RPCError;
