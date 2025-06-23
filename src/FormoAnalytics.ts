@@ -663,7 +663,23 @@ export class FormoAnalytics implements IFormoAnalytics {
             transactionHash,
           });
 
-          return transactionHash as T;
+          // Wait for transaction confirmation
+          const receipt = await this.provider?.request({
+            method: "eth_getTransactionReceipt",
+            params: [transactionHash],
+          });
+
+          // Track transaction confirmation
+          this.transaction(
+            {
+              status: TransactionStatus.CONFIRMED,
+              ...payload,
+              transactionHash,
+            },
+            receipt as IFormoEventProperties
+          );
+
+          return transactionHash as unknown as T;
         } catch (error) {
           logger.error("Transaction error:", error);
           const rpcError = error as RPCError;

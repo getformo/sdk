@@ -123,4 +123,5 @@ export enum TransactionStatus {
   STARTED = "started",
   REJECTED = "rejected",
   BROADCASTED = "broadcasted",
+  CONFIRMED = "confirmed",
 }
