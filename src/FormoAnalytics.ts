@@ -1037,7 +1037,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     transactionHash: string,
     payload: any,
     maxAttempts = 10,
-    intervalMs = 2000
+    intervalMs = 3000
   ) {
     let attempts = 0;
     const provider = this.provider;
