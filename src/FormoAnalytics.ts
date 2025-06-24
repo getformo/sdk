@@ -427,7 +427,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
-      logger.debug("Identify", address, userId, providerName, rdns);      
+      logger.debug("Identify", address, userId, providerName, rdns);
       if (address) this.currentAddress = address;
       if (userId) {
         this.currentUserId = userId;
@@ -569,7 +569,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private registerRequestListeners(): void {
-    console.debug("registerRequestListeners");
+    logger.debug("registerRequestListeners");
     if (!this.provider) {
       logger.error("Provider not found for request (signature, transaction) tracking");
       return;
