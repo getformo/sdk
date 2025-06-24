@@ -543,13 +543,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Register listeners for web3 provider events
       this.registerAddressChangedListener();
       this.registerChainChangedListener();
-      this._registerRequestListeners();
+      this.registerRequestListeners();
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
   }
 
-  private _registerRequestListeners(): void {
+  private registerRequestListeners(): void {
     if (!this.provider) {
       logger.error("Provider not found for request tracking");
       return;
@@ -562,7 +562,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    const originalRequest = this.provider.request.bind(this.provider);
+    const request = this.provider.request.bind(this.provider);
 
     this.provider.request = async <T>({
       method,
@@ -586,7 +586,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         })();
 
         try {
-          const response = (await originalRequest({ method, params })) as T;
+          const response = (await request({ method, params })) as T;
           (async () => {
             try {
               if (response) {
@@ -634,7 +634,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         })();
 
         try {
-          const transactionHash = (await originalRequest({
+          const transactionHash = (await request({
             method,
             params,
           })) as string;
@@ -677,7 +677,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       }
 
-      return originalRequest({ method, params });
+      return request({ method, params });
     };
   }
 
