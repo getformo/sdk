@@ -49,9 +49,9 @@ const InitializedAnalytics = ({
     try {
       const sdkInstance = await FormoAnalytics.init(writeKey, options);
       setSdk(sdkInstance);
-      console.log("FormoAnalytics SDK initialized successfully");
+      console.log("Formo SDK initialized :)");
     } catch (error) {
-      console.error("Failed to initialize FormoAnalytics SDK", error);
+      console.error("Failed to initialize Formo SDK :(", error);
     }
   };
 

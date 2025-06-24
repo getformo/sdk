@@ -426,9 +426,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Explicit identify
-      const { userId, address, providerName, rdns } = params;
-      logger.info("Identify", address, userId, providerName, rdns);
+      let { userId, address, providerName, rdns } = params;
       if (address) this.currentAddress = address;
+      logger.debug("Identify", address, userId, providerName, rdns);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -549,9 +549,29 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
+  private registerAddressChangedListener(): void {
+    const listener = (...args: unknown[]) =>
+      this.onAddressChanged(args[0] as string[]);
+
+    this._provider?.on("accountsChanged", listener);
+    this._providerListeners["accountsChanged"] = listener;
+
+    const onAddressDisconnected = this.onAddressDisconnected.bind(this);
+    this._provider?.on("disconnect", onAddressDisconnected);
+    this._providerListeners["disconnect"] = onAddressDisconnected;
+  }
+
+  private registerChainChangedListener(): void {
+    const listener = (...args: unknown[]) =>
+      this.onChainChanged(args[0] as string);
+    this.provider?.on("chainChanged", listener);
+    this._providerListeners["chainChanged"] = listener;
+  }  
+
   private registerRequestListeners(): void {
+    console.debug("registerRequestListeners");
     if (!this.provider) {
-      logger.error("Provider not found for request tracking");
+      logger.error("Provider not found for request (signature, transaction) tracking");
       return;
     }
     if (
@@ -679,25 +699,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       return request({ method, params });
     };
-  }
-
-  private registerAddressChangedListener(): void {
-    const listener = (...args: unknown[]) =>
-      this.onAddressChanged(args[0] as string[]);
-
-    this._provider?.on("accountsChanged", listener);
-    this._providerListeners["accountsChanged"] = listener;
-
-    const onAddressDisconnected = this.onAddressDisconnected.bind(this);
-    this._provider?.on("disconnect", onAddressDisconnected);
-    this._providerListeners["disconnect"] = onAddressDisconnected;
-  }
-
-  private registerChainChangedListener(): void {
-    const listener = (...args: unknown[]) =>
-      this.onChainChanged(args[0] as string);
-    this.provider?.on("chainChanged", listener);
-    this._providerListeners["chainChanged"] = listener;
   }
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
