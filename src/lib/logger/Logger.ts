@@ -73,7 +73,7 @@ export class Logger implements ILogger {
       second: "2-digit",
       hour12: false,
     });
-    return `[Formo Analytics][${timestamp}] ${message}`;
+    return `[Formo SDK][${timestamp}] ${message}`;
   }
 
   public debug(message: string, ...args: any[]): void {

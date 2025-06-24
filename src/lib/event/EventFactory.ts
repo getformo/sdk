@@ -348,7 +348,7 @@ class EventFactory implements IEventFactory {
     chainId: ChainID,
     address: Address,
     message: string,
-    signatureHash: string,
+    signatureHash?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ) {
@@ -357,7 +357,7 @@ class EventFactory implements IEventFactory {
         status,
         chainId,
         message,
-        signatureHash,
+        ...(signatureHash && { signatureHash }),
         ...properties,
       },
       address,
@@ -374,7 +374,7 @@ class EventFactory implements IEventFactory {
     data: string,
     to: string,
     value: string,
-    transactionHash: string,
+    transactionHash?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ) {
@@ -385,7 +385,7 @@ class EventFactory implements IEventFactory {
         data,
         to,
         value,
-        transactionHash,
+        ...(transactionHash && { transactionHash }),
         ...properties,
       },
       address,

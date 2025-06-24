@@ -427,7 +427,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
-      logger.info("Identify", address, userId, providerName, rdns);
+      logger.debug("Identify", address, userId, providerName, rdns);
       if (address) this.currentAddress = address;
       if (userId) {
         this.currentUserId = userId;
@@ -543,8 +543,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Register listeners for web3 provider events
       this.registerAddressChangedListener();
       this.registerChainChangedListener();
-      this.registerSignatureListener();
-      this.registerTransactionListener();
+      this.registerRequestListeners();
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
@@ -569,9 +568,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListeners["chainChanged"] = listener;
   }
 
-  private registerSignatureListener(): void {
+  private registerRequestListeners(): void {
+    logger.debug("registerRequestListeners");
     if (!this.provider) {
-      logger.error("Provider not found for signature tracking");
+      logger.error("Provider not found for request (signature, transaction) tracking");
       return;
     }
     if (
@@ -583,103 +583,126 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const request = this.provider.request.bind(this.provider);
+
     this.provider.request = async <T>({
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
+      // Handle Signatures
       if (
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
-        // Emit signature request event
-        this.signature({
-          status: SignatureStatus.REQUESTED,
-          ...this.buildSignatureEventPayload(method, params),
-        });
+        // Fire-and-forget tracking
+        (async () => {
+          try {
+            this.signature({
+              status: SignatureStatus.REQUESTED,
+              ...this.buildSignatureEventPayload(method, params),
+            });
+          } catch (e) {
+            logger.error("Formo: Failed to track signature request", e);
+          }
+        })();
 
         try {
           const response = (await request({ method, params })) as T;
-          if (response) {
-            // Emit signature confirmed event
-            this.signature({
-              status: SignatureStatus.CONFIRMED,
-              ...this.buildSignatureEventPayload(method, params, response),
-            });
-          }
+          (async () => {
+            try {
+              if (response) {
+                this.signature({
+                  status: SignatureStatus.CONFIRMED,
+                  ...this.buildSignatureEventPayload(method, params, response),
+                });
+              }
+            } catch (e) {
+              logger.error("Formo: Failed to track signature confirmation", e);
+            }
+          })();
           return response;
         } catch (error) {
-          const rpcError = error as RPCError;
-          if (rpcError && rpcError?.code === 4001) {
-            // Emit signature rejected event
-            this.signature({
-              status: SignatureStatus.REJECTED,
-              ...this.buildSignatureEventPayload(method, params),
-            });
-          }
+          (async () => {
+            try {
+              const rpcError = error as RPCError;
+              if (rpcError && rpcError?.code === 4001) {
+                this.signature({
+                  status: SignatureStatus.REJECTED,
+                  ...this.buildSignatureEventPayload(method, params),
+                });
+              }
+            } catch (e) {
+              logger.error("Formo: Failed to track signature rejection", e);
+            }
+          })();
           throw error;
         }
       }
-      return request({ method, params });
-    };
-    return;
-  }
 
-  private registerTransactionListener(): void {
-    if (!this.provider) {
-      logger.error("Provider not found for transaction tracking");
-      return;
-    }
-    if (
-      Object.getOwnPropertyDescriptor(this.provider, "request")?.writable ===
-      false
-    ) {
-      logger.warn("Provider.request is not writable");
-      return;
-    }
-    const request = this.provider.request.bind(this.provider);
-    this.provider.request = async <T>({
-      method,
-      params,
-    }: RequestArguments): Promise<T | null | undefined> => {
+      // Handle Transactions
+      // TODO: Support eip5792.xyz calls
       if (
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
         params[0]
       ) {
-        // Track transaction start
-        const payload = await this.buildTransactionEventPayload(params);
-        this.transaction({ status: TransactionStatus.STARTED, ...payload });
+        (async () => {
+          try {
+            const payload = await this.buildTransactionEventPayload(params);
+            this.transaction({ status: TransactionStatus.STARTED, ...payload });
+          } catch (e) {
+            logger.error("Formo: Failed to track transaction start", e);
+          }
+        })();
 
         try {
-          // Wait for the transaction hash
-          const transactionHash = (await request({ method, params })) as string;
+          const transactionHash = (await request({
+            method,
+            params,
+          })) as string;
 
-          // Track transaction broadcast
-          this.transaction({
-            status: TransactionStatus.BROADCASTED,
-            ...payload,
-            transactionHash,
-          });
+          (async () => {
+            try {
+              const payload = await this.buildTransactionEventPayload(params);
+              this.transaction({
+                status: TransactionStatus.BROADCASTED,
+                ...payload,
+                transactionHash,
+              });
 
-          return;
+              // Start async polling for transaction receipt
+              this.pollTransactionReceipt(transactionHash, payload);
+            } catch (e) {
+              logger.error(
+                "Formo: Failed to track transaction broadcast",
+                e
+              );
+            }
+          })();
+
+          return transactionHash as unknown as T;
         } catch (error) {
-          logger.error("Transaction error:", error);
-          const rpcError = error as RPCError;
-          if (rpcError && rpcError?.code === 4001) {
-            // Emit transaction rejected event
-            this.transaction({
-              status: TransactionStatus.REJECTED,
-              ...payload,
-            });
-          }
+          (async () => {
+            try {
+              const rpcError = error as RPCError;
+              if (rpcError && rpcError?.code === 4001) {
+                const payload = await this.buildTransactionEventPayload(
+                  params
+                );
+                this.transaction({
+                  status: TransactionStatus.REJECTED,
+                  ...payload,
+                });
+              }
+            } catch (e) {
+              logger.error("Formo: Failed to track transaction rejection", e);
+            }
+          })();
           throw error;
         }
       }
 
       return request({ method, params });
     };
-
-    return;
   }
 
   private async onAddressChanged(addresses: Address[]): Promise<void> {
@@ -1005,6 +1028,54 @@ export class FormoAnalytics implements IFormoAnalytics {
       to,
       value,
     };
+  }
+
+  /**
+   * Polls for transaction receipt and emits tx.status = CONFIRMED or REVERTED.
+   */
+  private async pollTransactionReceipt(
+    transactionHash: string,
+    payload: any,
+    maxAttempts = 10,
+    intervalMs = 3000
+  ) {
+    let attempts = 0;
+    const provider = this.provider;
+    if (!provider) return;
+    type Receipt = { status: string | number } | null;
+    const poll = async () => {
+      try {
+        const receipt = (await provider.request({
+          method: "eth_getTransactionReceipt",
+          params: [transactionHash],
+        })) as Receipt;
+        if (receipt) {
+          // status: 1 = success, 0 = reverted
+          if (receipt.status === "0x1" || receipt.status === 1) {
+            this.transaction({
+              status: TransactionStatus.CONFIRMED,
+              ...payload,
+              transactionHash,
+            });
+            return;
+          } else if (receipt.status === "0x0" || receipt.status === 0) {
+            this.transaction({
+              status: TransactionStatus.REVERTED,
+              ...payload,
+              transactionHash,
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        logger.error("Error polling transaction receipt", e);
+      }
+      attempts++;
+      if (attempts < maxAttempts) {
+        setTimeout(poll, intervalMs);
+      }
+    };
+    poll();
   }
 }
 

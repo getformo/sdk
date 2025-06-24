@@ -24,12 +24,12 @@ export const FormoAnalyticsProvider = (props: FormoAnalyticsProviderProps) => {
 
   // Keep the app running without analytics if no Write Key is provided or disabled
   if (!writeKey) {
-    console.error("FormoAnalyticsProvider: No Write Key provided");
+    logger.error("FormoAnalyticsProvider: No Write Key provided");
     return children;
   }
 
   if (disabled) {
-    console.warn("FormoAnalytics is disabled");
+    logger.warn("FormoAnalytics is disabled");
     return children;
   }
 
@@ -49,9 +49,9 @@ const InitializedAnalytics = ({
     try {
       const sdkInstance = await FormoAnalytics.init(writeKey, options);
       setSdk(sdkInstance);
-      console.log("FormoAnalytics SDK initialized successfully");
+      logger.log("Successfully initialized :)");
     } catch (error) {
-      console.error("Failed to initialize FormoAnalytics SDK", error);
+      logger.error("Failed to initialize :(", error);
     }
   };
 

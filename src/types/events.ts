@@ -69,7 +69,7 @@ export interface TransactionAPIEvent {
   data: string;
   to: string;
   value: string;
-  transactionHash: string;
+  transactionHash?: string;
 }
 export interface SignatureAPIEvent {
   type: "signature";
@@ -77,7 +77,7 @@ export interface SignatureAPIEvent {
   chainId: ChainID;
   address: Address;
   message: string;
-  signatureHash: string;
+  signatureHash?: string;
 }
 export interface ConnectAPIEvent {
   type: "connect";
@@ -123,4 +123,6 @@ export enum TransactionStatus {
   STARTED = "started",
   REJECTED = "rejected",
   BROADCASTED = "broadcasted",
+  CONFIRMED = "confirmed",
+  REVERTED = "reverted",
 }
