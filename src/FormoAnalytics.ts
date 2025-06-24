@@ -426,9 +426,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Explicit identify
-      let { userId, address, providerName, rdns } = params;
+      const { userId, address, providerName, rdns } = params;
+      logger.debug("Identify", address, userId, providerName, rdns);      
       if (address) this.currentAddress = address;
-      logger.debug("Identify", address, userId, providerName, rdns);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -566,7 +566,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.onChainChanged(args[0] as string);
     this.provider?.on("chainChanged", listener);
     this._providerListeners["chainChanged"] = listener;
-  }  
+  }
 
   private registerRequestListeners(): void {
     console.debug("registerRequestListeners");
@@ -639,6 +639,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Handle Transactions
+      // TODO: Support eip5792.xyz calls
       if (
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
@@ -667,6 +668,9 @@ export class FormoAnalytics implements IFormoAnalytics {
                 ...payload,
                 transactionHash,
               });
+
+              // Start async polling for transaction receipt
+              this.pollTransactionReceipt(transactionHash, payload);
             } catch (e) {
               logger.error(
                 "Formo: Failed to track transaction broadcast",
@@ -1024,6 +1028,54 @@ export class FormoAnalytics implements IFormoAnalytics {
       to,
       value,
     };
+  }
+
+  /**
+   * Polls for transaction receipt and emits tx.status = CONFIRMED or REVERTED.
+   */
+  private async pollTransactionReceipt(
+    transactionHash: string,
+    payload: any,
+    maxAttempts = 10,
+    intervalMs = 2000
+  ) {
+    let attempts = 0;
+    const provider = this.provider;
+    if (!provider) return;
+    type Receipt = { status: string | number } | null;
+    const poll = async () => {
+      try {
+        const receipt = (await provider.request({
+          method: "eth_getTransactionReceipt",
+          params: [transactionHash],
+        })) as Receipt;
+        if (receipt) {
+          // status: 1 = success, 0 = reverted
+          if (receipt.status === "0x1" || receipt.status === 1) {
+            this.transaction({
+              status: TransactionStatus.CONFIRMED,
+              ...payload,
+              transactionHash,
+            });
+            return;
+          } else if (receipt.status === "0x0" || receipt.status === 0) {
+            this.transaction({
+              status: TransactionStatus.REVERTED,
+              ...payload,
+              transactionHash,
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        logger.error("Error polling transaction receipt", e);
+      }
+      attempts++;
+      if (attempts < maxAttempts) {
+        setTimeout(poll, intervalMs);
+      }
+    };
+    poll();
   }
 }
 
