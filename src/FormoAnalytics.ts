@@ -62,7 +62,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.identify = this.identify.bind(this);
     this.connect = this.connect.bind(this);
-    this.disconnect = this.disconnect.bind(this);
     this.chain = this.chain.bind(this);
     this.signature = this.signature.bind(this);
     this.transaction = this.transaction.bind(this);
@@ -91,7 +90,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.trackProvider(provider);
     }
 
-    this.trackFirstPageHit();
+    this.trackPageHit();
     this.trackPageHits();
   }
 
@@ -178,36 +177,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         chainId,
         address,
       },
-      properties,
-      context,
-      callback
-    );
-  }
-
-  /**
-   * Emits a wallet disconnect event.
-   * @param {ChainID} params.chainId
-   * @param {Address} params.address
-   * @param {IFormoEventProperties} properties
-   * @param {IFormoEventContext} context
-   * @param {(...args: unknown[]) => void} callback
-   * @returns {Promise<void>}
-   */
-  async disconnect(
-    params?: {
-      chainId?: ChainID;
-      address?: Address;
-    },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void> {
-    const address = params?.address || this.currentAddress;
-    const chainId = params?.chainId || this.currentChainId;
-
-    await this.handleDisconnect(
-      chainId,
-      address,
       properties,
       context,
       callback
@@ -543,46 +512,34 @@ export class FormoAnalytics implements IFormoAnalytics {
       this._provider = provider;
 
       // Register listeners for web3 provider events
-      this.registerConnectListener();
-      this.registerAddressChangedListener();
+      this.registerAccountsChangedListener();
       this.registerChainChangedListener();
+      this.registerConnectListener();
       this.registerRequestListeners();
-      this.registerDisconnectListener();
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
   }
 
-  private registerAddressChangedListener(): void {
+  private registerAccountsChangedListener(): void {
     const listener = (...args: unknown[]) =>
-      this.onAddressChanged(args[0] as string[]);
+      this.onAccountsChanged(args[0] as string[]);
 
     this._provider?.on("accountsChanged", listener);
     this._providerListeners["accountsChanged"] = listener;
   }
 
-  private registerConnectListener(): void {
-    const onAddressConnected = async (...args: unknown[]) => {
-      try {
-        const connection: ConnectInfo = args[0] as ConnectInfo;
-        if (!connection || typeof connection.chainId !== 'string') return;
-        const chainId = parseChainId(connection.chainId);
-        const address = await this.getAddress();
-        if (chainId && address) {
-          this.connect({ chainId, address });
-        }
-      } catch (e) {
-        logger.error("Error handling Phantom connect event", e);
+  private async onAccountsChanged(addresses: Address[]): Promise<void> {
+    if (addresses.length > 0) {
+      const address = addresses[0];
+      if (address === this.currentAddress) {
+        // We have already reported this address
+        return;
       }
-    };
-    this._provider?.on("connect", onAddressConnected);
-    this._providerListeners["connect"] = onAddressConnected;
-  }
-
-  private registerDisconnectListener(): void {
-    const onAddressDisconnected = this.onAddressDisconnected.bind(this);
-    this._provider?.on("disconnect", onAddressDisconnected);
-    this._providerListeners["disconnect"] = onAddressDisconnected;
+      this.currentAddress = address;
+      this.currentChainId = await this.getCurrentChainId();
+      this.connect({ chainId: this.currentChainId, address });
+    }
   }
 
   private registerChainChangedListener(): void {
@@ -590,6 +547,61 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.onChainChanged(args[0] as string);
     this.provider?.on("chainChanged", listener);
     this._providerListeners["chainChanged"] = listener;
+  }
+
+  private async onChainChanged(chainIdHex: string): Promise<void> {
+    this.currentChainId = parseChainId(chainIdHex);
+    if (!this.currentAddress) {
+      if (!this.provider) {
+        logger.info(
+          "OnChainChanged: Provider not found. CHAIN_CHANGED not reported"
+        );
+        return Promise.resolve();
+      }
+
+      const address = await this.getAddress();
+      if (!address) {
+        logger.info(
+          "OnChainChanged: Unable to fetch or store connected address"
+        );
+        return Promise.resolve();
+      }
+      this.currentAddress = address;
+    }
+
+    // Proceed only if the address exists
+    if (this.currentAddress) {
+      return this.chain({
+        chainId: this.currentChainId,
+        address: this.currentAddress,
+      });
+    } else {
+      logger.info(
+        "OnChainChanged: Current connected address is null despite fetch attempt"
+      );
+    }
+  }
+
+  private registerConnectListener(): void {
+    const listener = (...args: unknown[]) => {
+      const connection: ConnectInfo = args[0] as ConnectInfo;
+      this.onConnected(connection);
+    };
+    this._provider?.on("connect", listener);
+    this._providerListeners["connect"] = listener;
+  }
+
+  private async onConnected(connection: ConnectInfo): Promise<void> {
+    try {
+      if (!connection || typeof connection.chainId !== 'string') return;
+      const chainId = parseChainId(connection.chainId);
+      const address = await this.getAddress();
+      if (chainId && address) {
+        this.connect({ chainId, address });
+      }
+    } catch (e) {
+      logger.error("Error handling connect event", e);
+    }
   }
 
   private registerRequestListeners(): void {
@@ -729,92 +741,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  private async onAddressChanged(addresses: Address[]): Promise<void> {
-    if (addresses.length > 0) {
-      this.onAddressConnected(addresses[0]);
-    } else {
-      this.onAddressDisconnected();
-    }
-  }
+  private async onLocationChange(): Promise<void> {
+    const currentUrl = cookie().get(SESSION_CURRENT_URL_KEY);
 
-  private async onAddressConnected(address: Address): Promise<void> {
-    if (address === this.currentAddress)
-      // We have already reported this address
-      return;
-
-    this.currentAddress = address;
-
-    this.currentChainId = await this.getCurrentChainId();
-    this.connect({ chainId: this.currentChainId, address });
-  }
-
-  private async handleDisconnect(
-    chainId?: ChainID,
-    address?: Address,
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void> {
-    const payload = {
-      chainId: chainId || this.currentChainId,
-      address: address || this.currentAddress,
-    };
-    this.currentChainId = undefined;
-    this.currentAddress = undefined;
-    cookie().remove(SESSION_USER_ID_KEY);
-
-    await this.trackEvent(
-      EventType.DISCONNECT,
-      payload,
-      properties,
-      context,
-      callback
-    );
-  }
-
-  private async onAddressDisconnected(): Promise<void> {
-    await this.handleDisconnect(this.currentChainId, this.currentAddress);
-  }
-
-  private async onChainChanged(chainIdHex: string): Promise<void> {
-    this.currentChainId = parseChainId(chainIdHex);
-    if (!this.currentAddress) {
-      if (!this.provider) {
-        logger.info(
-          "OnChainChanged: Provider not found. CHAIN_CHANGED not reported"
-        );
-        return Promise.resolve();
-      }
-
-      const address = await this.getAddress();
-      if (!address) {
-        logger.info(
-          "OnChainChanged: Unable to fetch or store connected address"
-        );
-        return Promise.resolve();
-      }
-      this.currentAddress = address;
-    }
-
-    // Proceed only if the address exists
-    if (this.currentAddress) {
-      return this.chain({
-        chainId: this.currentChainId,
-        address: this.currentAddress,
-      });
-    } else {
-      logger.info(
-        "OnChainChanged: Current connected address is null despite fetch attempt"
-      );
-    }
-  }
-
-  private async trackFirstPageHit(): Promise<void> {
-    if (cookie().get(SESSION_CURRENT_URL_KEY) === null) {
+    if (currentUrl !== window.location.href) {
       cookie().set(SESSION_CURRENT_URL_KEY, window.location.href);
+      this.trackPageHit();
     }
-
-    return this.trackPageHit();
   }
 
   private async trackPageHits(): Promise<void> {
@@ -834,15 +767,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     window.addEventListener("popstate", () => this.onLocationChange());
     window.addEventListener("locationchange", () => this.onLocationChange());
-  }
-
-  private async onLocationChange(): Promise<void> {
-    const currentUrl = cookie().get(SESSION_CURRENT_URL_KEY);
-
-    if (currentUrl !== window.location.href) {
-      cookie().set(SESSION_CURRENT_URL_KEY, window.location.href);
-      this.trackPageHit();
-    }
   }
 
   private async trackPageHit(
