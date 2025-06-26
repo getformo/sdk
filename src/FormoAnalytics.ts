@@ -85,7 +85,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
 
     // TODO: replace with eip6963
-    const provider = options.provider || window?.ethereum;
+    const provider = options.provider || window?.ethereum
     if (provider) {
       this.trackProvider(provider);
     }
@@ -398,7 +398,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
-      logger.debug("Identify", address, userId, providerName, rdns);
+      logger.info("Identify", address, userId, providerName, rdns);
       if (address) this.currentAddress = address;
       if (userId) {
         this.currentUserId = userId;
@@ -489,6 +489,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   private trackProvider(provider: EIP1193Provider): void {
+    logger.info("trackProvider", provider);
     try {
       if (provider === this._provider) {
         logger.warn("TrackProvider: Provider already tracked.");
@@ -522,6 +523,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private registerAccountsChangedListener(): void {
+    logger.info("registerAccountsChangedListener");
     const listener = (...args: unknown[]) =>
       this.onAccountsChanged(args[0] as string[]);
 
@@ -529,9 +531,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListeners["accountsChanged"] = listener;
   }
 
-  private async onAccountsChanged(addresses: Address[]): Promise<void> {
-    if (addresses.length > 0) {
-      const address = addresses[0];
+  private async onAccountsChanged(accounts: Address[]): Promise<void> {
+    logger.info("onAccountsChanged", accounts);
+    if (accounts.length > 0) {
+      const address = accounts[0];
       if (address === this.currentAddress) {
         // We have already reported this address
         return;
@@ -543,6 +546,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private registerChainChangedListener(): void {
+    logger.info("registerChainChangedListener");
     const listener = (...args: unknown[]) =>
       this.onChainChanged(args[0] as string);
     this.provider?.on("chainChanged", listener);
@@ -550,6 +554,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onChainChanged(chainIdHex: string): Promise<void> {
+    logger.info("onChainChanged", chainIdHex);
     this.currentChainId = parseChainId(chainIdHex);
     if (!this.currentAddress) {
       if (!this.provider) {
@@ -583,6 +588,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private registerConnectListener(): void {
+    logger.info("registerConnectListener");
     const listener = (...args: unknown[]) => {
       const connection: ConnectInfo = args[0] as ConnectInfo;
       this.onConnected(connection);
@@ -592,6 +598,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onConnected(connection: ConnectInfo): Promise<void> {
+    logger.info("onConnected", connection);
     try {
       if (!connection || typeof connection.chainId !== 'string') return;
       const chainId = parseChainId(connection.chainId);
@@ -605,7 +612,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private registerRequestListeners(): void {
-    logger.debug("registerRequestListeners");
+    logger.info("registerRequestListeners");
     if (!this.provider) {
       logger.error("Provider not found for request (signature, transaction) tracking");
       return;
