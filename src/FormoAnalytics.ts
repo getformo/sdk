@@ -646,7 +646,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (!connection || typeof connection.chainId !== 'string') return;
       const chainId = parseChainId(connection.chainId);
       const address = await this.getAddress();
-      if (chainId && address) {
+      if (chainId !== null && chainId !== undefined && address) {
         this.connect({ chainId, address });
       }
     } catch (e) {
