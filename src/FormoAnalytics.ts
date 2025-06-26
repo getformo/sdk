@@ -30,8 +30,10 @@ import {
   RPCError,
   SignatureStatus,
   TransactionStatus,
+  ConnectInfo,
 } from "./types";
 import { isAddress, isLocalhost } from "./validators";
+import { parseChainId } from "./utils/chain";
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
@@ -541,9 +543,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       this._provider = provider;
 
       // Register listeners for web3 provider events
+      this.registerConnectListener();
       this.registerAddressChangedListener();
       this.registerChainChangedListener();
       this.registerRequestListeners();
+      this.registerDisconnectListener();
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
@@ -555,7 +559,27 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this._provider?.on("accountsChanged", listener);
     this._providerListeners["accountsChanged"] = listener;
+  }
 
+  private registerConnectListener(): void {
+    const onAddressConnected = async (...args: unknown[]) => {
+      try {
+        const connection: ConnectInfo = args[0] as ConnectInfo;
+        if (!connection || typeof connection.chainId !== 'string') return;
+        const chainId = parseChainId(connection.chainId);
+        const address = await this.getAddress();
+        if (chainId && address) {
+          this.connect({ chainId, address });
+        }
+      } catch (e) {
+        logger.error("Error handling Phantom connect event", e);
+      }
+    };
+    this._provider?.on("connect", onAddressConnected);
+    this._providerListeners["connect"] = onAddressConnected;
+  }
+
+  private registerDisconnectListener(): void {
     const onAddressDisconnected = this.onAddressDisconnected.bind(this);
     this._provider?.on("disconnect", onAddressDisconnected);
     this._providerListeners["disconnect"] = onAddressDisconnected;
@@ -753,7 +777,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onChainChanged(chainIdHex: string): Promise<void> {
-    this.currentChainId = parseInt(chainIdHex);
+    this.currentChainId = parseChainId(chainIdHex);
     if (!this.currentAddress) {
       if (!this.provider) {
         logger.info(
@@ -975,7 +999,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.info("Chain id not found");
         return 0;
       }
-      return parseInt(chainIdHex as string, 16);
+      return parseChainId(chainIdHex);
     } catch (err) {
       logger.error("eth_chainId threw an error:", err);
       return 0;
