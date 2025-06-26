@@ -62,6 +62,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.identify = this.identify.bind(this);
     this.connect = this.connect.bind(this);
+    this.disconnect = this.disconnect.bind(this);
     this.chain = this.chain.bind(this);
     this.signature = this.signature.bind(this);
     this.transaction = this.transaction.bind(this);
@@ -85,7 +86,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
 
     // TODO: replace with eip6963
-    const provider = options.provider || window?.ethereum
+    const provider = options.provider || window?.ethereum;
     if (provider) {
       this.trackProvider(provider);
     }
@@ -193,10 +194,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {Promise<void>}
    */
   async disconnect(
-    {
-      chainId,
-      address,
-    }: {
+    params?: {
       chainId?: ChainID;
       address?: Address;
     },
@@ -204,6 +202,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    const chainId = params?.chainId || this.currentChainId;
+    const address = params?.address || this.currentAddress;
+
     await this.trackEvent(
       EventType.DISCONNECT,
       {
@@ -214,6 +215,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       context,
       callback
     );
+
+    this.currentAddress = undefined;
+    this.currentChainId = undefined;
+    logger.info("Wallet disconnected: Cleared currentAddress and currentChainId");    
   }
 
   /**
@@ -568,13 +573,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onAccountsChanged", accounts);
     if (accounts.length === 0) {
       // Handle wallet disconnect
-      await this.disconnect({
-        chainId: this.currentChainId,
-        address: this.currentAddress,
-      });
-      this.currentAddress = undefined;
-      this.currentChainId = undefined;
-      logger.info("Wallet disconnected: Cleared currentAddress and currentChainId");
+      await this.disconnect();
       return;
     }
     const address = accounts[0];
