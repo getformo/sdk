@@ -30,8 +30,10 @@ import {
   RPCError,
   SignatureStatus,
   TransactionStatus,
+  ConnectInfo,
 } from "./types";
 import { isAddress, isLocalhost } from "./validators";
+import { parseChainId } from "./utils/chain";
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
@@ -89,7 +91,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.trackProvider(provider);
     }
 
-    this.trackFirstPageHit();
+    this.trackPageHit();
     this.trackPageHits();
   }
 
@@ -183,9 +185,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits a wallet disconnect event.
-   * @param {ChainID} params.chainId
-   * @param {Address} params.address
+   * Emits a disconnect wallet event.
+   * @param {ChainID} [params.chainId]
+   * @param {Address} [params.address]
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
@@ -200,16 +202,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    const address = params?.address || this.currentAddress;
     const chainId = params?.chainId || this.currentChainId;
+    const address = params?.address || this.currentAddress;
 
-    await this.handleDisconnect(
-      chainId,
-      address,
+    await this.trackEvent(
+      EventType.DISCONNECT,
+      {
+        chainId,
+        address,
+      },
       properties,
       context,
       callback
     );
+
+    this.currentAddress = undefined;
+    this.currentChainId = undefined;
+    logger.info("Wallet disconnected: Cleared currentAddress and currentChainId");    
   }
 
   /**
@@ -427,7 +436,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
-      logger.debug("Identify", address, userId, providerName, rdns);
+      logger.info("Identify", address, userId, providerName, rdns);
       if (address) this.currentAddress = address;
       if (userId) {
         this.currentUserId = userId;
@@ -518,6 +527,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   private trackProvider(provider: EIP1193Provider): void {
+    logger.info("trackProvider", provider);
     try {
       if (provider === this._provider) {
         logger.warn("TrackProvider: Provider already tracked.");
@@ -541,35 +551,110 @@ export class FormoAnalytics implements IFormoAnalytics {
       this._provider = provider;
 
       // Register listeners for web3 provider events
-      this.registerAddressChangedListener();
+      this.registerAccountsChangedListener();
       this.registerChainChangedListener();
+      this.registerConnectListener();
       this.registerRequestListeners();
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
   }
 
-  private registerAddressChangedListener(): void {
+  private registerAccountsChangedListener(): void {
+    logger.info("registerAccountsChangedListener");
     const listener = (...args: unknown[]) =>
-      this.onAddressChanged(args[0] as string[]);
+      this.onAccountsChanged(args[0] as string[]);
 
     this._provider?.on("accountsChanged", listener);
     this._providerListeners["accountsChanged"] = listener;
+  }
 
-    const onAddressDisconnected = this.onAddressDisconnected.bind(this);
-    this._provider?.on("disconnect", onAddressDisconnected);
-    this._providerListeners["disconnect"] = onAddressDisconnected;
+  private async onAccountsChanged(accounts: Address[]): Promise<void> {
+    logger.info("onAccountsChanged", accounts);
+    if (accounts.length === 0) {
+      // Handle wallet disconnect
+      await this.disconnect();
+      return;
+    }
+    const address = accounts[0];
+    if (address === this.currentAddress) {
+      // We have already reported this address
+      return;
+    }
+    // Handle wallet connect
+    this.currentAddress = address;
+    this.currentChainId = await this.getCurrentChainId();
+    this.connect({ chainId: this.currentChainId, address });
   }
 
   private registerChainChangedListener(): void {
+    logger.info("registerChainChangedListener");
     const listener = (...args: unknown[]) =>
       this.onChainChanged(args[0] as string);
     this.provider?.on("chainChanged", listener);
     this._providerListeners["chainChanged"] = listener;
   }
 
+  private async onChainChanged(chainIdHex: string): Promise<void> {
+    logger.info("onChainChanged", chainIdHex);
+    this.currentChainId = parseChainId(chainIdHex);
+    if (!this.currentAddress) {
+      if (!this.provider) {
+        logger.info(
+          "OnChainChanged: Provider not found. CHAIN_CHANGED not reported"
+        );
+        return Promise.resolve();
+      }
+
+      const address = await this.getAddress();
+      if (!address) {
+        logger.info(
+          "OnChainChanged: Unable to fetch or store connected address"
+        );
+        return Promise.resolve();
+      }
+      this.currentAddress = address;
+    }
+
+    // Proceed only if the address exists
+    if (this.currentAddress) {
+      return this.chain({
+        chainId: this.currentChainId,
+        address: this.currentAddress,
+      });
+    } else {
+      logger.info(
+        "OnChainChanged: Current connected address is null despite fetch attempt"
+      );
+    }
+  }
+
+  private registerConnectListener(): void {
+    logger.info("registerConnectListener");
+    const listener = (...args: unknown[]) => {
+      const connection: ConnectInfo = args[0] as ConnectInfo;
+      this.onConnected(connection);
+    };
+    this._provider?.on("connect", listener);
+    this._providerListeners["connect"] = listener;
+  }
+
+  private async onConnected(connection: ConnectInfo): Promise<void> {
+    logger.info("onConnected", connection);
+    try {
+      if (!connection || typeof connection.chainId !== 'string') return;
+      const chainId = parseChainId(connection.chainId);
+      const address = await this.getAddress();
+      if (chainId !== null && chainId !== undefined && address) {
+        this.connect({ chainId, address });
+      }
+    } catch (e) {
+      logger.error("Error handling connect event", e);
+    }
+  }
+
   private registerRequestListeners(): void {
-    logger.debug("registerRequestListeners");
+    logger.info("registerRequestListeners");
     if (!this.provider) {
       logger.error("Provider not found for request (signature, transaction) tracking");
       return;
@@ -705,92 +790,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  private async onAddressChanged(addresses: Address[]): Promise<void> {
-    if (addresses.length > 0) {
-      this.onAddressConnected(addresses[0]);
-    } else {
-      this.onAddressDisconnected();
-    }
-  }
+  private async onLocationChange(): Promise<void> {
+    const currentUrl = cookie().get(SESSION_CURRENT_URL_KEY);
 
-  private async onAddressConnected(address: Address): Promise<void> {
-    if (address === this.currentAddress)
-      // We have already reported this address
-      return;
-
-    this.currentAddress = address;
-
-    this.currentChainId = await this.getCurrentChainId();
-    this.connect({ chainId: this.currentChainId, address });
-  }
-
-  private async handleDisconnect(
-    chainId?: ChainID,
-    address?: Address,
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void> {
-    const payload = {
-      chainId: chainId || this.currentChainId,
-      address: address || this.currentAddress,
-    };
-    this.currentChainId = undefined;
-    this.currentAddress = undefined;
-    cookie().remove(SESSION_USER_ID_KEY);
-
-    await this.trackEvent(
-      EventType.DISCONNECT,
-      payload,
-      properties,
-      context,
-      callback
-    );
-  }
-
-  private async onAddressDisconnected(): Promise<void> {
-    await this.handleDisconnect(this.currentChainId, this.currentAddress);
-  }
-
-  private async onChainChanged(chainIdHex: string): Promise<void> {
-    this.currentChainId = parseInt(chainIdHex);
-    if (!this.currentAddress) {
-      if (!this.provider) {
-        logger.info(
-          "OnChainChanged: Provider not found. CHAIN_CHANGED not reported"
-        );
-        return Promise.resolve();
-      }
-
-      const address = await this.getAddress();
-      if (!address) {
-        logger.info(
-          "OnChainChanged: Unable to fetch or store connected address"
-        );
-        return Promise.resolve();
-      }
-      this.currentAddress = address;
-    }
-
-    // Proceed only if the address exists
-    if (this.currentAddress) {
-      return this.chain({
-        chainId: this.currentChainId,
-        address: this.currentAddress,
-      });
-    } else {
-      logger.info(
-        "OnChainChanged: Current connected address is null despite fetch attempt"
-      );
-    }
-  }
-
-  private async trackFirstPageHit(): Promise<void> {
-    if (cookie().get(SESSION_CURRENT_URL_KEY) === null) {
+    if (currentUrl !== window.location.href) {
       cookie().set(SESSION_CURRENT_URL_KEY, window.location.href);
+      this.trackPageHit();
     }
-
-    return this.trackPageHit();
   }
 
   private async trackPageHits(): Promise<void> {
@@ -810,15 +816,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     window.addEventListener("popstate", () => this.onLocationChange());
     window.addEventListener("locationchange", () => this.onLocationChange());
-  }
-
-  private async onLocationChange(): Promise<void> {
-    const currentUrl = cookie().get(SESSION_CURRENT_URL_KEY);
-
-    if (currentUrl !== window.location.href) {
-      cookie().set(SESSION_CURRENT_URL_KEY, window.location.href);
-      this.trackPageHit();
-    }
   }
 
   private async trackPageHit(
@@ -975,7 +972,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.info("Chain id not found");
         return 0;
       }
-      return parseInt(chainIdHex as string, 16);
+      return parseChainId(chainIdHex);
     } catch (err) {
       logger.error("eth_chainId threw an error:", err);
       return 0;
