@@ -184,6 +184,39 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Emits a disconnect wallet event.
+   * @param {ChainID} [params.chainId]
+   * @param {Address} [params.address]
+   * @param {IFormoEventProperties} properties
+   * @param {IFormoEventContext} context
+   * @param {(...args: unknown[]) => void} callback
+   * @returns {Promise<void>}
+   */
+  async disconnect(
+    {
+      chainId,
+      address,
+    }: {
+      chainId?: ChainID;
+      address?: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    await this.trackEvent(
+      EventType.DISCONNECT,
+      {
+        chainId,
+        address,
+      },
+      properties,
+      context,
+      callback
+    );
+  }
+
+  /**
    * Emits a chain network change event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
@@ -533,16 +566,26 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async onAccountsChanged(accounts: Address[]): Promise<void> {
     logger.info("onAccountsChanged", accounts);
-    if (accounts.length > 0) {
-      const address = accounts[0];
-      if (address === this.currentAddress) {
-        // We have already reported this address
-        return;
-      }
-      this.currentAddress = address;
-      this.currentChainId = await this.getCurrentChainId();
-      this.connect({ chainId: this.currentChainId, address });
+    if (accounts.length === 0) {
+      // Handle wallet disconnect
+      await this.disconnect({
+        chainId: this.currentChainId,
+        address: this.currentAddress,
+      });
+      this.currentAddress = undefined;
+      this.currentChainId = undefined;
+      logger.info("Wallet disconnected: Cleared currentAddress and currentChainId");
+      return;
     }
+    const address = accounts[0];
+    if (address === this.currentAddress) {
+      // We have already reported this address
+      return;
+    }
+    // Handle wallet connect
+    this.currentAddress = address;
+    this.currentChainId = await this.getCurrentChainId();
+    this.connect({ chainId: this.currentChainId, address });
   }
 
   private registerChainChangedListener(): void {

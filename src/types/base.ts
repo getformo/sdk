@@ -36,6 +36,12 @@ export interface IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
+  disconnect(
+    params: { chainId?: ChainID; address?: Address },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void>;
   chain(
     params: { chainId: ChainID; address?: Address },
     properties?: IFormoEventProperties,
