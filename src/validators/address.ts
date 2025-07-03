@@ -4,7 +4,7 @@ import { utf8ToBytes } from "ethereum-cryptography/utils.js";
 import { ValidInputTypes } from "../types";
 import { isHexStrict } from "./string";
 
-export const isAddress = (value: ValidInputTypes, checkChecksum = true) => {
+export const isAddress = (value: ValidInputTypes, checksum = true) => {
   if (typeof value !== "string" && !isUint8Array(value)) {
     return false;
   }
@@ -31,10 +31,10 @@ export const isAddress = (value: ValidInputTypes, checkChecksum = true) => {
     return true;
     // Otherwise check each case
   }
-  return checkChecksum ? checkAddressCheckSum(valueToCheck) : true;
+  return checksum ? checkAddressChecksum(valueToCheck) : true;
 };
 
-export const checkAddressCheckSum = (data: string): boolean => {
+export const checkAddressChecksum = (data: string): boolean => {
   if (!/^(0x)?[0-9a-f]{40}$/i.test(data)) return false;
   const address = data.slice(2);
   const updatedData = utf8ToBytes(address.toLowerCase());

@@ -15,3 +15,7 @@ export interface RPCError extends Error {
   code: number;
   data?: unknown;
 }
+
+export interface ConnectInfo {
+  chainId: string;
+}
