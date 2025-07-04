@@ -413,6 +413,9 @@ class EventFactory implements IEventFactory {
         ...(properties?.points !== undefined && {
           points: Number(properties.points),
         }),
+        ...(properties?.volume !== undefined && {
+          volume: Number(properties.volume),
+        }),
       },
       event,
       type: "track",
