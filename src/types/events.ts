@@ -92,6 +92,7 @@ export interface DisconnectAPIEvent {
 export interface TrackAPIEvent {
   type: "track";
   event: string;
+  volume?: number;
   revenue?: number;
   currency?: string;
   points?: number;
