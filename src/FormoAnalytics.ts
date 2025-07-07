@@ -69,15 +69,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Default: all enabled
       autocaptureOptions = defaultAutocaptureOptions;
     } else if (options.autocapture === false) {
-      // All disabled
-      autocaptureOptions = {
-        page: false,
-        detect: false,
-        connect: false,
-        chain: false,
-        signature: false,
-        transaction: false,
-      };
+      // All disabled - convert all keys from default options to false
+      autocaptureOptions = Object.fromEntries(
+        Object.keys(defaultAutocaptureOptions).map(key => [key, false])
+      ) as AutocaptureOptions;
     } else {
       // Merge with user provided options
       autocaptureOptions = {
@@ -141,9 +136,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Auto-detect wallet provider if tracking is enabled
+    // Always fetch providers for identify() functionality
+    analytics._providers = await analytics.getProviders();
+    
+    // Auto-detect wallet provider only if tracking is enabled
     if (analytics.config.autocapture.detect) {
-      analytics._providers = await analytics.getProviders();
       await analytics.detectWallets(analytics._providers);
     }
 
@@ -168,7 +165,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ): Promise<void> {
-    await this.trackPageHit(category, name, properties, context);
+    await this.trackPageHit(category, name, properties, context, undefined, true);
   }
 
   /**
@@ -877,9 +874,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     name?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: (...args: unknown[]) => void,
+    isManualTracking: boolean = false
   ): Promise<void> {
-    if (!this.config.autocapture.page) return;
+    // Skip auto-tracking if page autocapture is disabled, but allow manual tracking
+    if (!this.config.autocapture.page && !isManualTracking) return;
     
     if (!this.config.trackLocalhost && isLocalhost()) {
       return logger.warn(
