@@ -90,7 +90,7 @@ class EventFactory implements IEventFactory {
     const urlObj = new URL(url);
     const contextTrafficSources: ITrafficSource = {
       ...this.extractUTMParameters(url),
-      ref: urlObj.searchParams.get("ref")?.trim() || "",
+      ref: urlObj.searchParams.get("ref")?.trim() || urlObj.searchParams.get("referral")?.trim() || urlObj.searchParams.get("refcode")?.trim() || "",
       referrer: document.referrer,
     };
     const storedTrafficSources =
