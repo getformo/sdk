@@ -53,7 +53,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   ) {
     this.config = {
       writeKey,
-      trackLocalhost: options.trackLocalhost || false,
     };
 
     this.session = new FormoAnalyticsSession();
@@ -825,9 +824,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    if (!this.config.trackLocalhost && isLocalhost()) {
+    if (!this.shouldTrack()) {
       return logger.warn(
-        "Track page hit: Ignoring event because website is running locally"
+        "Track page hit: Skipping event due to shouldTrack configuration"
       );
     }
 
@@ -853,6 +852,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
+      if (!this.shouldTrack()) {
+        logger.info(`Skipping ${type} event due to shouldTrack configuration`);
+        if (callback) callback();
+        return;
+      }
+
       this.eventManager.addEvent(
         {
           type,
@@ -867,6 +872,33 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch (error) {
       logger.error("Error tracking event:", error);
     }
+  }
+
+  /**
+   * Determines if tracking should be enabled based on configuration
+   * @returns {boolean} True if tracking should be enabled
+   */
+  private shouldTrack(): boolean {
+    // Check if shouldTrack is explicitly provided
+    if (typeof this.options.shouldTrack === 'function') {
+      return this.options.shouldTrack({
+        hostname: window.location.hostname,
+        pathname: window.location.pathname,
+        chainId: this.currentChainId,
+        isLocalhost: isLocalhost()
+      });
+    }
+    
+    if (typeof this.options.shouldTrack === 'boolean') {
+      return this.options.shouldTrack;
+    }
+    
+    // Default behavior: track everywhere except localhost
+    if (isLocalhost()) {
+      return false;
+    }
+    
+    return true;
   }
 
   /*
