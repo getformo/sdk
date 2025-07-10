@@ -93,6 +93,44 @@ export interface IFormoAnalytics {
   ): Promise<void>;
 }
 
+export interface AutocaptureOptions {
+  /**
+   * Enable/disable automatic page tracking
+   * @default true
+   */
+  page?: boolean;
+  
+  /**
+   * Enable/disable automatic wallet detection
+   * @default true
+   */
+  detect?: boolean;
+  
+  /**
+   * Enable/disable automatic connect/disconnect tracking
+   * @default true
+   */
+  connect?: boolean;
+  
+  /**
+   * Enable/disable automatic chain change tracking
+   * @default true
+   */
+  chain?: boolean;
+  
+  /**
+   * Enable/disable automatic signature tracking
+   * @default true
+   */
+  signature?: boolean;
+  
+  /**
+   * Enable/disable automatic transaction tracking
+   * @default true
+   */
+  transaction?: boolean;
+}
+
 export interface Options {
   provider?: EIP1193Provider;
   trackLocalhost?: boolean;
@@ -105,6 +143,14 @@ export interface Options {
     enabled: boolean;
     levels?: LogLevel[];
   };
+  
+  /**
+   * Configure automatic event tracking
+   * Set to true to enable all autocapture features with default settings
+   * Set to false to disable all autocapture features
+   * Or provide an object to customize individual autocapture settings
+   */
+  autocapture?: boolean | AutocaptureOptions;
 }
 
 export interface FormoAnalyticsProviderProps {
@@ -117,4 +163,5 @@ export interface FormoAnalyticsProviderProps {
 export interface Config {
   writeKey: string;
   trackLocalhost?: boolean;
+  autocapture: AutocaptureOptions;
 }

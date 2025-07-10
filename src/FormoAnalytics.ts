@@ -19,6 +19,7 @@ import {
 } from "./lib";
 import {
   Address,
+  AutocaptureOptions,
   ChainID,
   Config,
   EIP1193Provider,
@@ -51,9 +52,39 @@ export class FormoAnalytics implements IFormoAnalytics {
     public readonly writeKey: string,
     public options: Options = {}
   ) {
+    // Set default autocapture options
+    const defaultAutocaptureOptions: AutocaptureOptions = {
+      page: true,
+      detect: true,
+      connect: true,
+      chain: true,
+      signature: true,
+      transaction: true,
+    };
+
+    // Process autocapture options
+    let autocaptureOptions: AutocaptureOptions;
+    
+    if (options.autocapture === undefined || options.autocapture === true) {
+      // Default: all enabled
+      autocaptureOptions = defaultAutocaptureOptions;
+    } else if (options.autocapture === false) {
+      // All disabled - convert all keys from default options to false
+      autocaptureOptions = Object.fromEntries(
+        Object.keys(defaultAutocaptureOptions).map(key => [key, false])
+      ) as AutocaptureOptions;
+    } else {
+      // Merge with user provided options
+      autocaptureOptions = {
+        ...defaultAutocaptureOptions,
+        ...options.autocapture,
+      };
+    }
+
     this.config = {
       writeKey,
       trackLocalhost: options.trackLocalhost || false,
+      autocapture: autocaptureOptions,
     };
 
     this.session = new FormoAnalyticsSession();
@@ -91,8 +122,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.trackProvider(provider);
     }
 
-    this.trackPageHit();
-    this.trackPageHits();
+    // Only track page hits if enabled
+    if (this.config.autocapture.page) {
+      this.trackPageHit();
+      this.trackPageHits();
+    }
   }
 
   static async init(
@@ -102,9 +136,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Auto-detect wallet provider
+    // Always fetch providers for identify() functionality
     analytics._providers = await analytics.getProviders();
-    await analytics.detectWallets(analytics._providers);
+    
+    // Auto-detect wallet provider only if tracking is enabled
+    if (analytics.config.autocapture.detect) {
+      await analytics.detectWallets(analytics._providers);
+    }
 
     return analytics;
   }
@@ -127,7 +165,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ): Promise<void> {
-    await this.trackPageHit(category, name, properties, context);
+    await this.trackPageHit(category, name, properties, context, undefined, true);
   }
 
   /**
@@ -550,11 +588,19 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       this._provider = provider;
 
-      // Register listeners for web3 provider events
-      this.registerAccountsChangedListener();
-      this.registerChainChangedListener();
-      this.registerConnectListener();
-      this.registerRequestListeners();
+      // Register listeners for web3 provider events based on tracking configuration
+      if (this.config.autocapture.connect) {
+        this.registerAccountsChangedListener();
+        this.registerConnectListener();
+      }
+      
+      if (this.config.autocapture.chain) {
+        this.registerChainChangedListener();
+      }
+      
+      if (this.config.autocapture.signature || this.config.autocapture.transaction) {
+        this.registerRequestListeners();
+      }
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
@@ -673,8 +719,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
-      // Handle Signatures
+      // Handle Signatures if tracking is enabled
       if (
+        this.config.autocapture.signature &&
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
@@ -723,9 +770,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       }
 
-      // Handle Transactions
-      // TODO: Support eip5792.xyz calls
+      // Handle Transactions if tracking is enabled
       if (
+        this.config.autocapture.transaction &&
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
         params[0]
@@ -791,6 +838,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onLocationChange(): Promise<void> {
+    if (!this.config.autocapture.page) return;
+    
     const currentUrl = cookie().get(SESSION_CURRENT_URL_KEY);
 
     if (currentUrl !== window.location.href) {
@@ -800,6 +849,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async trackPageHits(): Promise<void> {
+    if (!this.config.autocapture.page) return;
+    
     const oldPushState = history.pushState;
     history.pushState = function pushState(...args) {
       const ret = oldPushState.apply(this, args);
@@ -823,8 +874,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     name?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: (...args: unknown[]) => void,
+    isManualTracking: boolean = false
   ): Promise<void> {
+    // Skip auto-tracking if page autocapture is disabled, but allow manual tracking
+    if (!this.config.autocapture.page && !isManualTracking) return;
+    
     if (!this.config.trackLocalhost && isLocalhost()) {
       return logger.warn(
         "Track page hit: Ignoring event because website is running locally"
