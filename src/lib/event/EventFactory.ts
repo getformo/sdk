@@ -86,11 +86,22 @@ class EventFactory implements IEventFactory {
     return result;
   };
 
+  private extractReferralParameter = (urlObj: URL): string => {
+    const referralParams = ['ref', 'referral', 'refcode'];
+    
+    for (const param of referralParams) {
+      const value = urlObj.searchParams.get(param)?.trim();
+      if (value) return value;
+    }
+    
+    return "";
+  };
+
   private getTrafficSources = (url: string): ITrafficSource => {
     const urlObj = new URL(url);
     const contextTrafficSources: ITrafficSource = {
       ...this.extractUTMParameters(url),
-      ref: urlObj.searchParams.get("ref")?.trim() || urlObj.searchParams.get("referral")?.trim() || urlObj.searchParams.get("refcode")?.trim() || "",
+      ref: this.extractReferralParameter(urlObj),
       referrer: document.referrer,
     };
     const storedTrafficSources =
