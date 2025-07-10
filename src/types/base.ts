@@ -93,16 +93,34 @@ export interface IFormoAnalytics {
   ): Promise<void>;
 }
 
+export interface Config {
+  writeKey: string;
+}
+
+/**
+ * Context object passed to shouldTrack function
+ */
+export interface TrackingContext {
+  hostname: string;
+  pathname: string;
+  chainId?: ChainID;
+  isLocalhost: boolean;
+}
+
 export interface Options {
   provider?: EIP1193Provider;
-  trackLocalhost?: boolean;
-
+  /**
+   * Control whether tracking is enabled
+   * - boolean: simple on/off switch
+   * - function: dynamic decision based on context
+   */
+  shouldTrack?: boolean | ((context: TrackingContext) => boolean);
   flushAt?: number;
   flushInterval?: number;
-  retryCount?: number;
   maxQueueSize?: number;
+  retryCount?: number;
   logger?: {
-    enabled: boolean;
+    enabled?: boolean;
     levels?: LogLevel[];
   };
 }
@@ -112,9 +130,4 @@ export interface FormoAnalyticsProviderProps {
   options?: Options;
   disabled?: boolean;
   children: React.ReactNode;
-}
-
-export interface Config {
-  writeKey: string;
-  trackLocalhost?: boolean;
 }
