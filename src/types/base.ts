@@ -108,7 +108,7 @@ export interface TrackingOptions {
 
 export interface Options {
   provider?: EIP1193Provider;
-  shouldTrack?: boolean | TrackingOptions;
+  tracking?: boolean | TrackingOptions;
   flushAt?: number;
   flushInterval?: number;
   maxQueueSize?: number;

@@ -830,7 +830,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     if (!this.shouldTrack()) {
       logger.warn(
-        "Track page hit: Skipping event due to shouldTrack configuration"
+        "Track page hit: Skipping event due to tracking configuration"
       );
       if (callback) callback();
       return;
@@ -859,7 +859,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     try {
       if (!this.shouldTrack()) {
-        logger.info(`Skipping ${type} event due to shouldTrack configuration`);
+        logger.info(`Skipping ${type} event due to tracking configuration`);
         if (callback) callback();
         return;
       }
@@ -885,18 +885,20 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {boolean} True if tracking should be enabled
    */
   private shouldTrack(): boolean {
-    // Check if shouldTrack is explicitly provided as a boolean
-    if (typeof this.options.shouldTrack === 'boolean') {
-      return this.options.shouldTrack;
+    // Check if tracking is explicitly provided as a boolean
+    if (typeof this.options.tracking === 'boolean') {
+      return this.options.tracking;
     }
     
     // Handle object configuration with exclusion rules
-    if (this.options.shouldTrack !== null && typeof this.options.shouldTrack === 'object') {
+    if (this.options.tracking !== null && 
+        typeof this.options.tracking === 'object' && 
+        !Array.isArray(this.options.tracking)) {
       const { 
         excludeHosts = [],
         excludePaths = [], 
         excludeChains = [] 
-      } = this.options.shouldTrack as TrackingOptions;
+      } = this.options.tracking as TrackingOptions;
       
       // Check hostname exclusions - use exact matching
       if (excludeHosts.length > 0) {
