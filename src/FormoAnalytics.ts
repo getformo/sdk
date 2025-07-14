@@ -832,7 +832,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info(
         "Track page hit: Skipping event due to tracking configuration"
       );
-      if (callback) callback();
       return;
     }
 
@@ -860,7 +859,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       if (!this.shouldTrack()) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
-        if (callback) callback();
         return;
       }
 
