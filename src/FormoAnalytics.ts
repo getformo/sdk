@@ -899,7 +899,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       } = this.options.tracking as TrackingOptions;
       
       // Check hostname exclusions - use exact matching
-      if (excludeHosts.length > 0) {
+      if (excludeHosts.length > 0  && typeof window !== 'undefined') {
         const hostname = window.location.hostname;
         if (excludeHosts.includes(hostname)) {
           return false;
@@ -907,7 +907,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       
       // Check path exclusions - use exact matching
-      if (excludePaths.length > 0) {
+      if (excludePaths.length > 0 && typeof window !== 'undefined') {
         const pathname = window.location.pathname;
         if (excludePaths.includes(pathname)) {
           return false;
