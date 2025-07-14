@@ -22,7 +22,7 @@ export interface IFormoAnalytics {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
-  ): void;
+  ): Promise<void>;
   reset(): void;
   detect(
     params: { rdns: string; providerName: string },
@@ -93,16 +93,28 @@ export interface IFormoAnalytics {
   ): Promise<void>;
 }
 
+export interface Config {
+  writeKey: string;
+}
+
+/**
+ * Configuration options for controlling tracking exclusions
+ */
+export interface TrackingOptions {
+  excludeHosts?: string[];
+  excludePaths?: string[];
+  excludeChains?: ChainID[];
+}
+
 export interface Options {
   provider?: EIP1193Provider;
-  trackLocalhost?: boolean;
-
+  tracking?: boolean | TrackingOptions;
   flushAt?: number;
   flushInterval?: number;
   retryCount?: number;
   maxQueueSize?: number;
   logger?: {
-    enabled: boolean;
+    enabled?: boolean;
     levels?: LogLevel[];
   };
 }
@@ -112,9 +124,4 @@ export interface FormoAnalyticsProviderProps {
   options?: Options;
   disabled?: boolean;
   children: React.ReactNode;
-}
-
-export interface Config {
-  writeKey: string;
-  trackLocalhost?: boolean;
 }

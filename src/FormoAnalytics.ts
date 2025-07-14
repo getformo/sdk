@@ -29,6 +29,7 @@ import {
   RequestArguments,
   RPCError,
   SignatureStatus,
+  TrackingOptions,
   TransactionStatus,
   ConnectInfo,
 } from "./types";
@@ -53,8 +54,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   ) {
     this.config = {
       writeKey,
-      trackLocalhost: options.trackLocalhost || false,
     };
+    this.options = options;
 
     this.session = new FormoAnalyticsSession();
     this.currentUserId =
@@ -119,15 +120,17 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} name - The name of the page
    * @param {Record<string, any>} properties - Additional properties to include
    * @param {Record<string, any>} context - Additional context to include
+   * @param {(...args: unknown[]) => void} callback - Optional callback function
    * @returns {Promise<void>}
    */
   public async page(
     category?: string,
     name?: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    await this.trackPageHit(category, name, properties, context);
+    await this.trackPageHit(category, name, properties, context, callback);
   }
 
   /**
@@ -825,10 +828,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    if (!this.config.trackLocalhost && isLocalhost()) {
-      return logger.warn(
-        "Track page hit: Ignoring event because website is running locally"
+    if (!this.shouldTrack()) {
+      logger.info(
+        "Track page hit: Skipping event due to tracking configuration"
       );
+      return;
     }
 
     setTimeout(async () => {
@@ -853,6 +857,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
+      if (!this.shouldTrack()) {
+        logger.info(`Skipping ${type} event due to tracking configuration`);
+        return;
+      }
+
       this.eventManager.addEvent(
         {
           type,
@@ -867,6 +876,57 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch (error) {
       logger.error("Error tracking event:", error);
     }
+  }
+
+  /**
+   * Determines if tracking should be enabled based on configuration
+   * @returns {boolean} True if tracking should be enabled
+   */
+  private shouldTrack(): boolean {
+    // Check if tracking is explicitly provided as a boolean
+    if (typeof this.options.tracking === 'boolean') {
+      return this.options.tracking;
+    }
+    
+    // Handle object configuration with exclusion rules
+    if (this.options.tracking !== null && 
+        typeof this.options.tracking === 'object' && 
+        !Array.isArray(this.options.tracking)) {
+      const { 
+        excludeHosts = [],
+        excludePaths = [], 
+        excludeChains = [] 
+      } = this.options.tracking as TrackingOptions;
+      
+      // Check hostname exclusions - use exact matching
+      if (excludeHosts.length > 0  && typeof window !== 'undefined') {
+        const hostname = window.location.hostname;
+        if (excludeHosts.includes(hostname)) {
+          return false;
+        }
+      }
+      
+      // Check path exclusions - use exact matching
+      if (excludePaths.length > 0 && typeof window !== 'undefined') {
+        const pathname = window.location.pathname;
+        if (excludePaths.includes(pathname)) {
+          return false;
+        }
+      }
+      
+      // Check chainId exclusions
+      if (excludeChains.length > 0 && 
+          this.currentChainId && 
+          excludeChains.includes(this.currentChainId)) {
+        return false;
+      }
+      
+      // If nothing is excluded, tracking is enabled
+      return true;
+    }
+    
+    // Default behavior: track everywhere except localhost
+    return !isLocalhost();
   }
 
   /*
