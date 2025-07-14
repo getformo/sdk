@@ -87,13 +87,13 @@ class EventFactory implements IEventFactory {
   };
 
   private extractReferralParameter = (urlObj: URL): string => {
-    const referralParams = ['ref', 'referral', 'refcode'];
-    
+    const referralParams = ["ref", "referral", "refcode"];
+
     for (const param of referralParams) {
       const value = urlObj.searchParams.get(param)?.trim();
       if (value) return value;
     }
-    
+
     return "";
   };
 
@@ -439,9 +439,6 @@ class EventFactory implements IEventFactory {
   create(event: APIEvent, address?: Address, userId?: string): IFormoEvent {
     let formoEvent: Partial<IFormoEvent> = {};
 
-    formoEvent.address = address || null;
-    formoEvent.user_id = userId || null;
-
     switch (event.type) {
       case "page":
         formoEvent = this.generatePageEvent(
@@ -526,6 +523,10 @@ class EventFactory implements IEventFactory {
         );
         break;
     }
+
+    !formoEvent.address && (formoEvent.address = address || null);
+    formoEvent.user_id = userId || null;
+
     return formoEvent as IFormoEvent;
   }
 }
