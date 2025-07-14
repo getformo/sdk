@@ -98,16 +98,6 @@ export interface Config {
 }
 
 /**
- * Context object passed to shouldTrack function
- */
-export interface TrackingContext {
-  hostname: string;
-  pathname: string;
-  chainId?: ChainID;
-  isLocalhost: boolean;
-}
-
-/**
  * Configuration options for controlling tracking exclusions
  */
 export interface TrackingOptions {
@@ -118,11 +108,6 @@ export interface TrackingOptions {
 
 export interface Options {
   provider?: EIP1193Provider;
-  /**
-   * Control whether tracking is enabled
-   * - boolean: simple on/off switch
-   * - object: configuration with exclusion rules
-   */
   shouldTrack?: boolean | TrackingOptions;
   flushAt?: number;
   flushInterval?: number;
