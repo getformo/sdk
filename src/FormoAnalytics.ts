@@ -29,6 +29,7 @@ import {
   RequestArguments,
   RPCError,
   SignatureStatus,
+  TrackingOptions,
   TransactionStatus,
   ConnectInfo,
 } from "./types";
@@ -884,17 +885,39 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private shouldTrack(): boolean {
     // Check if shouldTrack is explicitly provided
-    if (typeof this.options.shouldTrack === 'function') {
-      return this.options.shouldTrack({
-        hostname: window.location.hostname,
-        pathname: window.location.pathname,
-        chainId: this.currentChainId,
-        isLocalhost: isLocalhost()
-      });
-    }
-    
     if (typeof this.options.shouldTrack === 'boolean') {
       return this.options.shouldTrack;
+    }
+    
+    // Handle object configuration with exclusion rules
+    if (typeof this.options.shouldTrack === 'object') {
+      const { 
+        excludeHosts = [], 
+        excludePaths = [], 
+        excludeChains = [] 
+      } = this.options.shouldTrack as TrackingOptions;
+      
+      // Check hostname exclusions
+      if (excludeHosts.length > 0 && 
+          excludeHosts.some(host => window.location.hostname.includes(host))) {
+        return false;
+      }
+      
+      // Check path exclusions
+      if (excludePaths.length > 0 && 
+          excludePaths.some(path => window.location.pathname.includes(path))) {
+        return false;
+      }
+      
+      // Check chainId exclusions
+      if (excludeChains.length > 0 && 
+          this.currentChainId && 
+          excludeChains.includes(this.currentChainId)) {
+        return false;
+      }
+      
+      // If nothing is excluded, tracking is enabled
+      return true;
     }
     
     // Default behavior: track everywhere except localhost

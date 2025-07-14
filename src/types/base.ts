@@ -107,14 +107,23 @@ export interface TrackingContext {
   isLocalhost: boolean;
 }
 
+/**
+ * Configuration options for controlling tracking exclusions
+ */
+export interface TrackingOptions {
+  excludeHosts?: string[];
+  excludePaths?: string[];
+  excludeChains?: ChainID[];
+}
+
 export interface Options {
   provider?: EIP1193Provider;
   /**
    * Control whether tracking is enabled
    * - boolean: simple on/off switch
-   * - function: dynamic decision based on context
+   * - object: configuration with exclusion rules
    */
-  shouldTrack?: boolean | ((context: TrackingContext) => boolean);
+  shouldTrack?: boolean | TrackingOptions;
   flushAt?: number;
   flushInterval?: number;
   maxQueueSize?: number;
