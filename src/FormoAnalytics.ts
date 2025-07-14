@@ -829,7 +829,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     if (!this.shouldTrack()) {
-      logger.warn(
+      logger.info(
         "Track page hit: Skipping event due to tracking configuration"
       );
       if (callback) callback();
