@@ -111,8 +111,8 @@ export interface Options {
   tracking?: boolean | TrackingOptions;
   flushAt?: number;
   flushInterval?: number;
-  maxQueueSize?: number;
   retryCount?: number;
+  maxQueueSize?: number;
   logger?: {
     enabled?: boolean;
     levels?: LogLevel[];
