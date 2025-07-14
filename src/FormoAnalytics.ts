@@ -55,6 +55,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.config = {
       writeKey,
     };
+    this.options = options;
 
     this.session = new FormoAnalyticsSession();
     this.currentUserId =
@@ -884,7 +885,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {boolean} True if tracking should be enabled
    */
   private shouldTrack(): boolean {
-    // Check if shouldTrack is explicitly provided
+    // Check if shouldTrack is explicitly provided as a boolean
     if (typeof this.options.shouldTrack === 'boolean') {
       return this.options.shouldTrack;
     }
@@ -892,7 +893,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Handle object configuration with exclusion rules
     if (this.options.shouldTrack !== null && typeof this.options.shouldTrack === 'object') {
       const { 
-        excludeHosts = [], 
+        excludeHosts = [],
         excludePaths = [], 
         excludeChains = [] 
       } = this.options.shouldTrack as TrackingOptions;
@@ -925,11 +926,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     // Default behavior: track everywhere except localhost
-    if (isLocalhost()) {
-      return false;
-    }
-    
-    return true;
+    return !isLocalhost();
   }
 
   /*
