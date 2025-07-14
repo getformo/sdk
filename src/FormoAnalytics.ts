@@ -118,15 +118,17 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} name - The name of the page
    * @param {Record<string, any>} properties - Additional properties to include
    * @param {Record<string, any>} context - Additional context to include
+   * @param {(...args: unknown[]) => void} callback - Optional callback function
    * @returns {Promise<void>}
    */
   public async page(
     category?: string,
     name?: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    await this.trackPageHit(category, name, properties, context);
+    await this.trackPageHit(category, name, properties, context, callback);
   }
 
   /**
@@ -825,9 +827,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     if (!this.shouldTrack()) {
-      return logger.warn(
+      logger.warn(
         "Track page hit: Skipping event due to shouldTrack configuration"
       );
+      if (callback) callback();
+      return;
     }
 
     setTimeout(async () => {
