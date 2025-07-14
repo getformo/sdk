@@ -22,7 +22,7 @@ export interface IFormoAnalytics {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
-  ): void;
+  ): Promise<void>;
   reset(): void;
   detect(
     params: { rdns: string; providerName: string },
