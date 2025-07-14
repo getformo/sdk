@@ -890,23 +890,27 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     // Handle object configuration with exclusion rules
-    if (typeof this.options.shouldTrack === 'object') {
+    if (this.options.shouldTrack !== null && typeof this.options.shouldTrack === 'object') {
       const { 
         excludeHosts = [], 
         excludePaths = [], 
         excludeChains = [] 
       } = this.options.shouldTrack as TrackingOptions;
       
-      // Check hostname exclusions
-      if (excludeHosts.length > 0 && 
-          excludeHosts.some(host => window.location.hostname.includes(host))) {
-        return false;
+      // Check hostname exclusions - use exact matching
+      if (excludeHosts.length > 0) {
+        const hostname = window.location.hostname;
+        if (excludeHosts.includes(hostname)) {
+          return false;
+        }
       }
       
-      // Check path exclusions
-      if (excludePaths.length > 0 && 
-          excludePaths.some(path => window.location.pathname.includes(path))) {
-        return false;
+      // Check path exclusions - use exact matching
+      if (excludePaths.length > 0) {
+        const pathname = window.location.pathname;
+        if (excludePaths.includes(pathname)) {
+          return false;
+        }
       }
       
       // Check chainId exclusions
