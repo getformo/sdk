@@ -51,7 +51,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
       initializedStartedRef.current = true;
 
       try {
-        const sdkInstance = await FormoAnalytics.init(writeKey!, options);
+        const sdkInstance = await FormoAnalytics.init(writeKey, options);
         setSdk(sdkInstance);
         logger.log("Successfully initialized");
       } catch (error) {
