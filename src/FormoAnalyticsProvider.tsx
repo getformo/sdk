@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, ReactNode, FC } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { initStorageManager, logger } from "./lib";
 import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
@@ -19,48 +19,44 @@ const defaultContext: IFormoAnalytics = {
 export const FormoAnalyticsContext =
   createContext<IFormoAnalytics>(defaultContext);
 
-export const FormoAnalyticsProvider = (props: FormoAnalyticsProviderProps) => {
+export const FormoAnalyticsProvider: FC<FormoAnalyticsProviderProps> = (props) => {
   const { writeKey, disabled = false, children } = props;
 
   // Keep the app running without analytics if no Write Key is provided or disabled
   if (!writeKey) {
     logger.error("FormoAnalyticsProvider: No Write Key provided");
-    return children;
+    return <>{children}</>;
   }
 
   if (disabled) {
     logger.warn("FormoAnalytics is disabled");
-    return children;
+    return <>{children}</>;
   }
 
   return <InitializedAnalytics {...props} />;
 };
 
-const InitializedAnalytics = ({
+const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
   writeKey,
   options,
   children,
-}: FormoAnalyticsProviderProps) => {
+}) => {
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
   const initializedStartedRef = useRef(false);
   initStorageManager(writeKey);
-
-  const initializeFormoAnalytics = async (writeKey: string, options: any) => {
-    try {
-      const sdkInstance = await FormoAnalytics.init(writeKey, options);
-      setSdk(sdkInstance);
-      logger.log("Successfully initialized :)");
-    } catch (error) {
-      logger.error("Failed to initialize :(", error);
-    }
-  };
 
   useEffect(() => {
     const initialize = async () => {
       if (initializedStartedRef.current) return;
       initializedStartedRef.current = true;
 
-      await initializeFormoAnalytics(writeKey!, options);
+      try {
+        const sdkInstance = await FormoAnalytics.init(writeKey, options);
+        setSdk(sdkInstance);
+        logger.log("Successfully initialized :)");
+      } catch (error) {
+        logger.error("Failed to initialize :(", error);
+      }
     };
 
     initialize();
