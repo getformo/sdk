@@ -3,4 +3,4 @@ export * from "./FormoAnalyticsProvider";
 export * from "./FormoAnalytics";
 export * from "./types";
 
-(window as any).formofy = formofy;
+if (typeof window !== "undefined") (window as any).formofy = formofy;
