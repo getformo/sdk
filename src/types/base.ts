@@ -6,6 +6,7 @@ import {
   TransactionStatus,
 } from "./events";
 import { EIP1193Provider } from "./provider";
+import { ReactNode } from "react";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID
@@ -123,5 +124,5 @@ export interface FormoAnalyticsProviderProps {
   writeKey: string;
   options?: Options;
   disabled?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }
