@@ -32,4 +32,4 @@ Learn how Formo handles [onchain attribution](https://docs.formo.so/data/attribu
 
 ## Contributing
 
-[Contributions](https://github.com/getformo/sdk/blob/main/CONTRIBUTING.md) are welcome! Feel free to open 
+[Contributions](https://github.com/getformo/sdk/blob/main/CONTRIBUTING.md) are welcome! Feel free to open fixes and feature suggestions.
