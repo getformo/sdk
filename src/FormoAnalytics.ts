@@ -180,7 +180,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       EventType.CONNECT,
       {
         chainId,
-        address: this.currentAddress,
+        address: toChecksumAddress(address),
       },
       properties,
       context,
