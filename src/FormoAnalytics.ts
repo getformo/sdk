@@ -174,13 +174,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = address ? toChecksumAddress(address) : undefined;
+    if (address) this.currentAddress = toChecksumAddress(address);
 
     await this.trackEvent(
       EventType.CONNECT,
       {
         chainId,
-        address: address ? toChecksumAddress(address) : undefined,
+        address: address ? toChecksumAddress(address) : this.currentAddress,
       },
       properties,
       context,
@@ -450,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: address ? toChecksumAddress(address) : undefined,
+          address: address ? toChecksumAddress(address) : this.currentAddress,
           providerName,
           userId,
           rdns,
