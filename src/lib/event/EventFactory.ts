@@ -524,7 +524,7 @@ class EventFactory implements IEventFactory {
         break;
     }
 
-    !formoEvent.address && (formoEvent.address = address || null);
+    !formoEvent.address && (formoEvent.address = address ? toChecksumAddress(address) : null);
     formoEvent.user_id = userId || null;
 
     return formoEvent as IFormoEvent;
