@@ -168,9 +168,11 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     if (!chainId) {
       logger.warn("Connect: Chain ID cannot be empty");
+      return;
     }
     if (!address) {
       logger.warn("Connect: Address cannot be empty");
+      return;
     }
 
     this.currentChainId = chainId;
