@@ -168,21 +168,19 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     if (!chainId) {
       logger.warn("Connect: Chain ID cannot be empty");
-      return;
     }
     if (!address) {
       logger.warn("Connect: Address cannot be empty");
-      return;
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = toChecksumAddress(address);
+    this.currentAddress = address ? toChecksumAddress(address) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
       {
         chainId,
-        address: toChecksumAddress(address),
+        address: address ? toChecksumAddress(address) : undefined,
       },
       properties,
       context,
