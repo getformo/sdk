@@ -33,6 +33,7 @@ import {
   TransactionStatus,
   ConnectInfo,
 } from "./types";
+import { toChecksumAddress } from "./utils";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
@@ -173,13 +174,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = address;
+    this.currentAddress = address ? toChecksumAddress(address) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
       {
         chainId,
-        address,
+        address: this.currentAddress,
       },
       properties,
       context,
@@ -440,7 +441,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      if (address) this.currentAddress = address;
+      if (address) this.currentAddress = toChecksumAddress(address);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -449,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address,
+          address: address ? toChecksumAddress(address) : undefined,
           providerName,
           userId,
           rdns,
@@ -579,7 +580,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.disconnect();
       return;
     }
-    const address = accounts[0];
+    
+    // Validate the first account is a valid address before processing
+    if (!isAddress(accounts[0])) {
+      logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
+      return;
+    }
+    
+    const address = toChecksumAddress(accounts[0]);
     if (address === this.currentAddress) {
       // We have already reported this address
       return;
@@ -616,7 +624,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
         return Promise.resolve();
       }
-      this.currentAddress = address;
+      this.currentAddress = toChecksumAddress(address);
     }
 
     // Proceed only if the address exists
@@ -987,7 +995,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
         if (isAddress(accounts[0])) {
-          return accounts[0];
+          return toChecksumAddress(accounts[0]);
         }
       }
     } catch (err) {
@@ -1006,7 +1014,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_accounts",
       });
       if (!res || res.length === 0) return null;
-      return res.filter((e) => isAddress(e));
+      return res.filter((e) => isAddress(e)).map(toChecksumAddress);
     } catch (err) {
       if ((err as any).code !== 4001) {
         logger.error(
