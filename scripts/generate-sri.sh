@@ -6,8 +6,8 @@ REPO="getformo/sdk"
 FILE="dist/index.umd.min.js"
 PACKAGE_NAME="@formo/analytics"
 
-# Get the tarball from unpkg and compute SRI
-URL="https://unpkg.com/${PACKAGE_NAME}@${VERSION}/${FILE}"
+# Get the tarball from CDN and compute SRI
+URL="https://cdn.formo.so/analytics@${VERSION}"
 echo "Fetching: $URL"
 HASH=$(curl -sSL --compressed $URL | openssl dgst -sha384 -binary | openssl base64 -A)
 
