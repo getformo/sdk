@@ -180,7 +180,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       EventType.CONNECT,
       {
         chainId,
-        address: address ? toChecksumAddress(address) : this.currentAddress,
+        address: this.currentAddress,
       },
       properties,
       context,
@@ -441,7 +441,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      this.currentAddress = address ? toChecksumAddress(address) : undefined;
+      if (address) this.currentAddress = toChecksumAddress(address);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -450,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: address ? toChecksumAddress(address) : this.currentAddress,
+          address: this.currentAddress,
           providerName,
           userId,
           rdns,
