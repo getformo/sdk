@@ -32,7 +32,6 @@ import {
   TrackingOptions,
   TransactionStatus,
   ConnectInfo,
-  Nullable,
 } from "./types";
 import { toChecksumAddress } from "./utils";
 import { isAddress, isLocalhost } from "./validators";
@@ -181,7 +180,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       EventType.CONNECT,
       {
         chainId,
-        address,
+        address: this.currentAddress,
       },
       properties,
       context,
@@ -451,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address,
+          address: address ? toChecksumAddress(address) : undefined,
           providerName,
           userId,
           rdns,
@@ -651,7 +650,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const chainId = parseChainId(connection.chainId);
       const address = await this.getAddress();
       if (chainId !== null && chainId !== undefined && address) {
-        this.connect({ chainId, address: toChecksumAddress(address) });
+        this.connect({ chainId, address });
       }
     } catch (e) {
       logger.error("Error handling connect event", e);
