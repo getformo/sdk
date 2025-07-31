@@ -174,7 +174,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    if (address) this.currentAddress = toChecksumAddress(address);
+    this.currentAddress = address ? toChecksumAddress(address) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -441,7 +441,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      if (address) this.currentAddress = toChecksumAddress(address);
+      this.currentAddress = address ? toChecksumAddress(address) : undefined;
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -580,6 +580,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.disconnect();
       return;
     }
+    
+    // Validate the first account is a valid address before processing
+    if (!isAddress(accounts[0])) {
+      logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
+      return;
+    }
+    
     const address = toChecksumAddress(accounts[0]);
     if (address === this.currentAddress) {
       // We have already reported this address
