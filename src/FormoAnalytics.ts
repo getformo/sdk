@@ -450,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: this.currentAddress,
+          address: address ? toChecksumAddress(address) : undefined,
           providerName,
           userId,
           rdns,
