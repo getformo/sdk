@@ -219,10 +219,11 @@ class EventFactory implements IEventFactory {
 
     commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
-    if (formoEvent.address) {
+    // Handle address - convert undefined to null for consistency
+    if (formoEvent.address !== undefined && formoEvent.address !== null) {
       commonEventData.address = toChecksumAddress(formoEvent.address);
     } else {
-      commonEventData.address = formoEvent.address;
+      commonEventData.address = null;
     }
 
     const processedEvent = mergeDeepRight(
@@ -524,7 +525,10 @@ class EventFactory implements IEventFactory {
         break;
     }
 
-    !formoEvent.address && (formoEvent.address = address ? toChecksumAddress(address) : null);
+    // Set address if not already set by the specific event generator
+    if (formoEvent.address === undefined || formoEvent.address === null) {
+      formoEvent.address = address ? toChecksumAddress(address) : null;
+    }
     formoEvent.user_id = userId || null;
 
     return formoEvent as IFormoEvent;
