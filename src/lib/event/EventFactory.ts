@@ -221,9 +221,9 @@ class EventFactory implements IEventFactory {
     commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     // Handle address - convert undefined to null for consistency
-    const validAddress = getValidAddress(formoEvent.address);
-    if (validAddress) {
-      commonEventData.address = toChecksumAddress(validAddress);
+    const trimmedValidAddress = getValidAddress(formoEvent.address);
+    if (trimmedValidAddress) {
+      commonEventData.address = toChecksumAddress(trimmedValidAddress);
     } else {
       commonEventData.address = null;
     }

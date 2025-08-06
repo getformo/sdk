@@ -9,12 +9,26 @@ import {
 import { isNullish } from "../validators/object";
 
 /**
- * Validates if an address is valid and non-empty
+ * Private helper function to validate and trim an address
+ * @param address The address to validate and trim
+ * @returns The trimmed address if valid, null otherwise
+ */
+const _validateAndTrimAddress = (address: Address | null | undefined): string | null => {
+  if (typeof address === "string" && address.trim() !== "" && isAddress(address.trim())) {
+    return address.trim();
+  }
+  return null;
+};
+
+/**
+ * Validates if an address is valid and non-empty.
+ * Note: This type guard checks the trimmed value of the address, but does not guarantee that the returned address is trimmed.
+ * Consumers should trim the address themselves if a trimmed value is required.
  * @param address The address to validate
- * @returns true if the address is valid and non-empty, false otherwise
+ * @returns true if the trimmed address is valid and non-empty, false otherwise
  */
 export const isValidAddress = (address: Address | null | undefined): address is Address => {
-  return typeof address === "string" && address.trim() !== "" && isAddress(address.trim());
+  return _validateAndTrimAddress(address) !== null;
 };
 
 /**
@@ -23,10 +37,7 @@ export const isValidAddress = (address: Address | null | undefined): address is 
  * @returns The trimmed address if valid, null otherwise
  */
 export const getValidAddress = (address: Address | null | undefined): string | null => {
-  if (typeof address === "string" && address.trim() !== "" && isAddress(address.trim())) {
-    return address.trim();
-  }
-  return null;
+  return _validateAndTrimAddress(address);
 };
 
 export const toChecksumAddress = (address: Address): string => {

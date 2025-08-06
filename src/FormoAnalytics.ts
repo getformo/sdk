@@ -175,7 +175,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = isValidAddress(address) ? toChecksumAddress(address) : undefined;
+    const trimmedValidAddress = getValidAddress(address);
+    this.currentAddress = trimmedValidAddress ? toChecksumAddress(trimmedValidAddress) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -442,7 +443,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      if (isValidAddress(address)) this.currentAddress = toChecksumAddress(address);
+      const trimmedValidAddress = getValidAddress(address);
+      if (trimmedValidAddress) this.currentAddress = toChecksumAddress(trimmedValidAddress);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -451,7 +453,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: isValidAddress(address) ? toChecksumAddress(address) : undefined,
+          address: trimmedValidAddress ? toChecksumAddress(trimmedValidAddress) : undefined,
           providerName,
           userId,
           rdns,
