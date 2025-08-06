@@ -33,7 +33,7 @@ import {
   TransactionStatus,
   ConnectInfo,
 } from "./types";
-import { toChecksumAddress } from "./utils";
+import { toChecksumAddress, isValidAddress } from "./utils";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
@@ -174,7 +174,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = address && address !== "" ? toChecksumAddress(address) : undefined;
+    this.currentAddress = isValidAddress(address) ? toChecksumAddress(address as string) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -441,7 +441,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      if (address && address !== "") this.currentAddress = toChecksumAddress(address);
+      if (isValidAddress(address)) this.currentAddress = toChecksumAddress(address as string);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -450,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: address && address !== "" ? toChecksumAddress(address) : undefined,
+          address: isValidAddress(address) ? toChecksumAddress(address as string) : undefined,
           providerName,
           userId,
           rdns,
@@ -582,7 +582,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     // Validate the first account is a valid address before processing
-    if (!isAddress(accounts[0])) {
+    if (!isValidAddress(accounts[0])) {
       logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
       return;
     }
@@ -994,7 +994,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        if (isAddress(accounts[0])) {
+        if (isValidAddress(accounts[0])) {
           return toChecksumAddress(accounts[0]);
         }
       }
@@ -1014,7 +1014,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_accounts",
       });
       if (!res || res.length === 0) return null;
-      return res.filter((e) => isAddress(e)).map(toChecksumAddress);
+      return res.filter((e) => isValidAddress(e)).map(toChecksumAddress);
     } catch (err) {
       if ((err as any).code !== 4001) {
         logger.error(

@@ -8,6 +8,15 @@ import {
 } from "../validators";
 import { isNullish } from "../validators/object";
 
+/**
+ * Validates if an address is valid and non-empty
+ * @param address The address to validate
+ * @returns true if the address is valid and non-empty, false otherwise
+ */
+export const isValidAddress = (address: Address | null | undefined): boolean => {
+  return typeof address === "string" && address.trim() !== "" && isAddress(address.trim());
+};
+
 export const toChecksumAddress = (address: Address): string => {
   if (!isAddress(address, false)) {
     throw new Error("Invalid address " + address);
