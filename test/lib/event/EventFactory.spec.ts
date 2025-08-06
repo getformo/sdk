@@ -1,6 +1,6 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import { toChecksumAddress, isValidAddress } from "../../../src/utils";
+import { toChecksumAddress, isValidAddress, getValidAddress } from "../../../src/utils";
 import { isAddress } from "../../../src/validators";
 
 describe("Address handling bug fix", () => {
@@ -60,6 +60,32 @@ describe("Address handling bug fix", () => {
     });
   });
 
+  describe("getValidAddress function", () => {
+    it("should return trimmed valid address", () => {
+      const testAddress = "  0x1095bBe769fDab716A823d0f7149CAD713d20A13  ";
+      const result = getValidAddress(testAddress);
+      expect(result).to.equal("0x1095bBe769fDab716A823d0f7149CAD713d20A13");
+    });
+
+    it("should return null for invalid addresses", () => {
+      const testAddress = "invalid-address";
+      const result = getValidAddress(testAddress);
+      expect(result).to.be.null;
+    });
+
+    it("should return null for empty strings", () => {
+      const testAddress = "";
+      const result = getValidAddress(testAddress);
+      expect(result).to.be.null;
+    });
+
+    it("should return null for whitespace-only strings", () => {
+      const testAddress = "   ";
+      const result = getValidAddress(testAddress);
+      expect(result).to.be.null;
+    });
+  });
+
   describe("Comparison between isValidAddress and isAddress", () => {
     it("should handle invalid addresses differently", () => {
       const invalidAddresses = [
@@ -94,6 +120,28 @@ describe("Address handling bug fix", () => {
         // isAddress should return true for valid addresses (after trimming)
         expect(isAddress(address.trim())).to.be.true;
       });
+    });
+  });
+
+  describe("Whitespace handling bug fix", () => {
+    it("should handle addresses with whitespace without throwing errors", () => {
+      const addressWithWhitespace = "  0x1095bBe769fDab716A823d0f7149CAD713d20A13  ";
+      
+      // This should not throw an error
+      expect(() => {
+        const validAddress = getValidAddress(addressWithWhitespace);
+        if (validAddress) {
+          toChecksumAddress(validAddress);
+        }
+      }).to.not.throw();
+    });
+
+    it("should properly trim addresses before validation", () => {
+      const addressWithWhitespace = "  0x1095bBe769fDab716A823d0f7149CAD713d20A13  ";
+      const trimmedAddress = "0x1095bBe769fDab716A823d0f7149CAD713d20A13";
+      
+      expect(isValidAddress(addressWithWhitespace)).to.be.true;
+      expect(getValidAddress(addressWithWhitespace)).to.equal(trimmedAddress);
     });
   });
 }); 

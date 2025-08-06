@@ -33,7 +33,7 @@ import {
   TransactionStatus,
   ConnectInfo,
 } from "./types";
-import { toChecksumAddress, isValidAddress } from "./utils";
+import { toChecksumAddress, isValidAddress, getValidAddress } from "./utils";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
@@ -174,7 +174,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = isValidAddress(address) ? toChecksumAddress(address as string) : undefined;
+    this.currentAddress = isValidAddress(address) ? toChecksumAddress(address) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -441,7 +441,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      if (isValidAddress(address)) this.currentAddress = toChecksumAddress(address as string);
+      if (isValidAddress(address)) this.currentAddress = toChecksumAddress(address);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -450,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: isValidAddress(address) ? toChecksumAddress(address as string) : undefined,
+          address: isValidAddress(address) ? toChecksumAddress(address) : undefined,
           providerName,
           userId,
           rdns,

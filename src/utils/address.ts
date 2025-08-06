@@ -13,8 +13,20 @@ import { isNullish } from "../validators/object";
  * @param address The address to validate
  * @returns true if the address is valid and non-empty, false otherwise
  */
-export const isValidAddress = (address: Address | null | undefined): boolean => {
+export const isValidAddress = (address: Address | null | undefined): address is string => {
   return typeof address === "string" && address.trim() !== "" && isAddress(address.trim());
+};
+
+/**
+ * Validates and returns a trimmed valid address
+ * @param address The address to validate and trim
+ * @returns The trimmed address if valid, null otherwise
+ */
+export const getValidAddress = (address: Address | null | undefined): string | null => {
+  if (typeof address === "string" && address.trim() !== "" && isAddress(address.trim())) {
+    return address.trim();
+  }
+  return null;
 };
 
 export const toChecksumAddress = (address: Address): string => {

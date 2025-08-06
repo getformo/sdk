@@ -16,7 +16,7 @@ import {
   TransactionStatus,
   UTMParameters,
 } from "../../types";
-import { toChecksumAddress, toSnakeCase, isValidAddress } from "../../utils";
+import { toChecksumAddress, toSnakeCase, isValidAddress, getValidAddress } from "../../utils";
 import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
 import { logger } from "../logger";
@@ -221,7 +221,7 @@ class EventFactory implements IEventFactory {
 
     // Handle address - convert undefined to null for consistency
     if (isValidAddress(formoEvent.address)) {
-      commonEventData.address = toChecksumAddress(formoEvent.address as string);
+      commonEventData.address = toChecksumAddress(formoEvent.address);
     } else {
       commonEventData.address = null;
     }
@@ -527,7 +527,8 @@ class EventFactory implements IEventFactory {
 
     // Set address if not already set by the specific event generator
     if (formoEvent.address === undefined || formoEvent.address === null) {
-      formoEvent.address = isValidAddress(address) ? toChecksumAddress(address as string) : null;
+      const validAddress = getValidAddress(address);
+      formoEvent.address = validAddress ? toChecksumAddress(validAddress) : null;
     }
     formoEvent.user_id = userId || null;
 
