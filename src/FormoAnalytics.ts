@@ -984,7 +984,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async getAddress(
     provider?: EIP1193Provider
   ): Promise<Address | null> {
-    if (this.currentAddress && this.currentAddress !== "") return this.currentAddress;
+    if (this.currentAddress) return this.currentAddress;
     const p = provider || this.provider;
     if (!p) {
       logger.info("The provider is not set");
@@ -994,8 +994,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        if (isValidAddress(accounts[0])) {
-          return toChecksumAddress(accounts[0]);
+        const validAddress = getValidAddress(accounts[0]);
+        if (validAddress) {
+          return toChecksumAddress(validAddress);
         }
       }
     } catch (err) {

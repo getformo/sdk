@@ -13,7 +13,7 @@ import { isNullish } from "../validators/object";
  * @param address The address to validate
  * @returns true if the address is valid and non-empty, false otherwise
  */
-export const isValidAddress = (address: Address | null | undefined): address is string => {
+export const isValidAddress = (address: Address | null | undefined): address is Address => {
   return typeof address === "string" && address.trim() !== "" && isAddress(address.trim());
 };
 
