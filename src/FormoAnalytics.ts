@@ -33,7 +33,8 @@ import {
   TransactionStatus,
   ConnectInfo,
 } from "./types";
-import { toChecksumAddress, isValidAddress, getValidAddress } from "./utils";
+import { toChecksumAddress } from "./utils";
+import { isValidAddress, getValidAddress } from "./utils/address";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
@@ -46,7 +47,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   config: Config;
   currentChainId?: ChainID;
-  currentAddress?: Address = undefined;
+  currentAddress?: Address;
   currentUserId?: string = "";
 
   private constructor(

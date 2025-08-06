@@ -1,6 +1,7 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import { toChecksumAddress, isValidAddress, getValidAddress } from "../../../src/utils";
+import { toChecksumAddress } from "../../../src/utils";
+import { isValidAddress, getValidAddress } from "../../../src/utils/address";
 import { isAddress } from "../../../src/validators";
 
 describe("Address handling bug fix", () => {

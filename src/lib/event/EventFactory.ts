@@ -16,7 +16,8 @@ import {
   TransactionStatus,
   UTMParameters,
 } from "../../types";
-import { toChecksumAddress, toSnakeCase, isValidAddress, getValidAddress } from "../../utils";
+import { toChecksumAddress, toSnakeCase } from "../../utils";
+import { isValidAddress, getValidAddress } from "../../utils/address";
 import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
 import { logger } from "../logger";
@@ -220,8 +221,9 @@ class EventFactory implements IEventFactory {
     commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     // Handle address - convert undefined to null for consistency
-    if (isValidAddress(formoEvent.address)) {
-      commonEventData.address = toChecksumAddress(formoEvent.address);
+    const validAddress = getValidAddress(formoEvent.address);
+    if (validAddress) {
+      commonEventData.address = toChecksumAddress(validAddress);
     } else {
       commonEventData.address = null;
     }
