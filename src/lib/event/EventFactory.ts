@@ -220,7 +220,7 @@ class EventFactory implements IEventFactory {
     commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     // Handle address - convert undefined to null for consistency
-    if (formoEvent.address !== undefined && formoEvent.address !== null) {
+    if (formoEvent.address !== undefined && formoEvent.address !== null && formoEvent.address !== "") {
       commonEventData.address = toChecksumAddress(formoEvent.address);
     } else {
       commonEventData.address = null;
@@ -527,7 +527,7 @@ class EventFactory implements IEventFactory {
 
     // Set address if not already set by the specific event generator
     if (formoEvent.address === undefined || formoEvent.address === null) {
-      formoEvent.address = address ? toChecksumAddress(address) : null;
+      formoEvent.address = address && address !== "" ? toChecksumAddress(address) : null;
     }
     formoEvent.user_id = userId || null;
 

@@ -46,7 +46,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   config: Config;
   currentChainId?: ChainID;
-  currentAddress?: Address = "";
+  currentAddress?: Address = undefined;
   currentUserId?: string = "";
 
   private constructor(
@@ -174,7 +174,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = address ? toChecksumAddress(address) : undefined;
+    this.currentAddress = address && address !== "" ? toChecksumAddress(address) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -441,7 +441,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      if (address) this.currentAddress = toChecksumAddress(address);
+      if (address && address !== "") this.currentAddress = toChecksumAddress(address);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -450,7 +450,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: address ? toChecksumAddress(address) : undefined,
+          address: address && address !== "" ? toChecksumAddress(address) : undefined,
           providerName,
           userId,
           rdns,
@@ -984,7 +984,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async getAddress(
     provider?: EIP1193Provider
   ): Promise<Address | null> {
-    if (this.currentAddress) return this.currentAddress;
+    if (this.currentAddress && this.currentAddress !== "") return this.currentAddress;
     const p = provider || this.provider;
     if (!p) {
       logger.info("The provider is not set");
