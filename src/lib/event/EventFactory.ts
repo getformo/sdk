@@ -38,7 +38,7 @@ class EventFactory implements IEventFactory {
     }
   }
 
-  private getLocation(): string | undefined {
+  private getLocation(): string {
     try {
       const timezone = this.getTimezone();
       if (timezone in COUNTRY_LIST)
