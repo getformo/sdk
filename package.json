@@ -86,7 +86,7 @@
     "build-cjs": "yarn tsc --build",
     "build-esm": "yarn tsc -m es6 --outdir dist/esm",
     "clean": "rm -rf dist",
-    "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} +",
+    "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\;",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
     "test": "mocha --require ts-node/register --project tsconfig.test.json test/**/*.ts",
     "test-watch": "nodemon --config test.nodemon.json",
