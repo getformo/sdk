@@ -30,6 +30,11 @@ Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides and in
 
 Learn how Formo handles [onchain attribution](https://docs.formo.so/data/attribution) and [data collection](https://docs.formo.so/data/what-we-collect).
 
+## Support
+
+Join the [Formo community Slack channel](https://formo.so/slack) for help and questions.
+
 ## Contributing
 
 [Contributions](https://github.com/getformo/sdk/blob/main/CONTRIBUTING.md) are welcome! Feel free to open fixes and feature suggestions.
+
