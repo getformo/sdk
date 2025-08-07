@@ -17,7 +17,7 @@ import {
   UTMParameters,
 } from "../../types";
 import { toChecksumAddress, toSnakeCase } from "../../utils";
-import { isValidAddress, getValidAddress } from "../../utils/address";
+import { getValidAddress } from "../../utils/address";
 import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
 import { logger } from "../logger";
