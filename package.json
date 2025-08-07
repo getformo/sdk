@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.19.2",
+  "version": "1.19.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/getformo/sdk.git"
@@ -10,7 +10,10 @@
   "module": "dist/esm/src/index.js",
   "unpkg": "dist/index.umd.min.js",
   "files": [
-    "dist"
+    "dist/cjs/src",
+    "dist/esm/src",
+    "dist/index.umd.min.js",
+    "dist/index.umd.min.js.LICENSE.txt"
   ],
   "exports": {
     ".": {
@@ -79,12 +82,13 @@
   },
   "scripts": {
     "prebuild": "yarn clean",
-    "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production",
+    "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production && yarn clean-build",
     "build-cjs": "yarn tsc --build",
     "build-esm": "yarn tsc -m es6 --outdir dist/esm",
     "clean": "rm -rf dist",
+    "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\;",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
-    "test": "mocha --require ts-node/register test/**/*.ts",
+    "test": "mocha --require ts-node/register --project tsconfig.test.json test/**/*.ts",
     "test-watch": "nodemon --config test.nodemon.json",
     "prepare": "husky install",
     "commit": "git add . && cz",
