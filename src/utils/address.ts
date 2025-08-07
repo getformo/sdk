@@ -8,6 +8,43 @@ import {
 } from "../validators";
 import { isNullish } from "../validators/object";
 
+/**
+ * Private helper function to validate and trim an address
+ * @param address The address to validate and trim
+ * @returns The trimmed address if valid, null otherwise
+ */
+const _validateAndTrimAddress = (address: Address | null | undefined): string | null => {
+  if (typeof address === "string" && address.trim() !== "" && isAddress(address.trim())) {
+    return address.trim();
+  }
+  return null;
+};
+
+/**
+ * Type guard to check if an address is valid and non-empty after trimming.
+ * Note: This function checks if the trimmed value of the address is valid, but does not guarantee that the input address itself is trimmed.
+ * If you require a trimmed address, use `getValidAddress(address)` to obtain the trimmed value.
+ * @param address The address to validate
+ * @returns true if the trimmed address is valid and non-empty, false otherwise.
+ * @remarks
+ * This type guard only ensures that the trimmed value is a valid Address. The original input may still contain leading or trailing whitespace.
+ */
+export const isValidAddress = (address: Address | null | undefined): address is Address => {
+  return _validateAndTrimAddress(address) !== null;
+};
+
+/**
+ * Validates and returns a trimmed valid address.
+ * This function trims the input address and validates it, returning the trimmed value if valid.
+ * @param address The address to validate and trim
+ * @returns The trimmed address if valid, null otherwise
+ * @remarks
+ * This function is the preferred way to get a validated, trimmed address for use in your application.
+ */
+export const getValidAddress = (address: Address | null | undefined): string | null => {
+  return _validateAndTrimAddress(address);
+};
+
 export const toChecksumAddress = (address: Address): string => {
   if (!isAddress(address, false)) {
     throw new Error("Invalid address " + address);

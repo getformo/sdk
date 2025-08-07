@@ -34,6 +34,7 @@ import {
   ConnectInfo,
 } from "./types";
 import { toChecksumAddress } from "./utils";
+import { isValidAddress, getValidAddress } from "./utils/address";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
@@ -46,7 +47,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   config: Config;
   currentChainId?: ChainID;
-  currentAddress?: Address = "";
+  currentAddress?: Address;
   currentUserId?: string = "";
 
   private constructor(
@@ -174,7 +175,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = address ? toChecksumAddress(address) : undefined;
+    const validAddress = getValidAddress(address);
+    this.currentAddress = validAddress ? toChecksumAddress(validAddress) : undefined;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -441,7 +443,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      if (address) this.currentAddress = toChecksumAddress(address);
+      const validAddress = getValidAddress(address);
+      if (validAddress) this.currentAddress = toChecksumAddress(validAddress);
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -450,7 +453,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: address ? toChecksumAddress(address) : undefined,
+          address: validAddress ? toChecksumAddress(validAddress) : undefined,
           providerName,
           userId,
           rdns,
@@ -582,12 +585,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     // Validate the first account is a valid address before processing
-    if (!isAddress(accounts[0])) {
+    const validAddress = getValidAddress(accounts[0]);
+    if (!validAddress) {
       logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
       return;
     }
     
-    const address = toChecksumAddress(accounts[0]);
+    const address = toChecksumAddress(validAddress);
     if (address === this.currentAddress) {
       // We have already reported this address
       return;
@@ -624,7 +628,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
         return Promise.resolve();
       }
-      this.currentAddress = toChecksumAddress(address);
+      const validAddress = getValidAddress(address);
+      this.currentAddress = validAddress ? toChecksumAddress(validAddress) : undefined;
     }
 
     // Proceed only if the address exists
@@ -994,8 +999,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        if (isAddress(accounts[0])) {
-          return toChecksumAddress(accounts[0]);
+        const validAddress = getValidAddress(accounts[0]);
+        if (validAddress) {
+          return toChecksumAddress(validAddress);
         }
       }
     } catch (err) {
@@ -1014,7 +1020,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         method: "eth_accounts",
       });
       if (!res || res.length === 0) return null;
-      return res.filter((e) => isAddress(e)).map(toChecksumAddress);
+      return res
+        .map((e) => getValidAddress(e))
+        .filter((e): e is string => e !== null)
+        .map(toChecksumAddress);
     } catch (err) {
       if ((err as any).code !== 4001) {
         logger.error(
@@ -1052,12 +1061,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     params: unknown[],
     response?: unknown
   ) {
+    const rawAddress = method === "personal_sign"
+      ? (params[1] as Address)
+      : (params[0] as Address);
+    
+    const validAddress = getValidAddress(rawAddress);
+    if (!validAddress) {
+      throw new Error(`Invalid address in signature payload: ${rawAddress}`);
+    }
+    
     const basePayload = {
       chainId: this.currentChainId,
-      address:
-        method === "personal_sign"
-          ? (params[1] as Address)
-          : (params[0] as Address),
+      address: toChecksumAddress(validAddress),
     };
 
     if (method === "personal_sign") {
@@ -1086,10 +1101,16 @@ export class FormoAnalytics implements IFormoAnalytics {
       to: string;
       value: string;
     };
+    
+    const validAddress = getValidAddress(from);
+    if (!validAddress) {
+      throw new Error(`Invalid address in transaction payload: ${from}`);
+    }
+    
     return {
       chainId: this.currentChainId || (await this.getCurrentChainId()),
       data,
-      address: from,
+      address: toChecksumAddress(validAddress),
       to,
       value,
     };
