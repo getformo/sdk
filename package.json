@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.19.2",
+  "version": "1.19.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/getformo/sdk.git"
