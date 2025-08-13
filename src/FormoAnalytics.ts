@@ -91,7 +91,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
 
     // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
-    const provider = (options.provider as EIP1193Provider | undefined) || (window?.ethereum as EIP1193Provider | undefined);
+    const provider = (options.provider as EIP1193Provider | undefined) || (typeof window !== 'undefined' ? window.ethereum : undefined);
     if (provider) {
       this.trackProvider(provider);
     }
@@ -680,13 +680,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private registerDisconnectListener(provider: EIP1193Provider): void {
     logger.info("registerDisconnectListener");
-    const listener = () => {
+    const listener = (_error?: unknown) => {
       if (!this._provider || this._provider === provider) {
         this.disconnect();
         this._provider = undefined;
       }
     };
-    provider.on("disconnect", listener as any);
+    provider.on("disconnect", listener);
     this.addProviderListener(provider, "disconnect", listener);
   }
 
@@ -720,6 +720,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
     if (descriptor && descriptor.writable === false) {
       logger.warn("Provider.request is not writable");
+      return;
+    }
+    if (descriptor && descriptor.get && !descriptor.set) {
+      logger.warn("Provider.request is an accessor without a setter; skipping wrap");
       return;
     }
 
@@ -1005,7 +1009,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
       this._providers = [];
-      const injected = (window as any)?.ethereum as EIP1193Provider | undefined;
+      const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
       if (injected) {
         this.trackProvider(injected);
       }
@@ -1077,7 +1081,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         .filter((e): e is string => e !== null)
         .map(toChecksumAddress);
     } catch (err) {
-      if ((err as any).code !== 4001) {
+      const code = (err as { code?: number } | undefined)?.code;
+      if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
           err
