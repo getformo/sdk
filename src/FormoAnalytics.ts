@@ -40,7 +40,9 @@ import { parseChainId } from "./utils/chain";
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
+  private _trackedProviders: Set<EIP1193Provider> = new Set();
+  private _providerListenersMap: WeakMap<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new WeakMap();
+  private _wrappedRequestProviders: WeakSet<EIP1193Provider> = new WeakSet();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   private _providers: readonly EIP6963ProviderDetail[] = [];
@@ -88,8 +90,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       })
     );
 
-    // TODO: replace with eip6963
-    const provider = options.provider || window?.ethereum;
+    // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
+    const provider = (options.provider as EIP1193Provider | undefined) || (window?.ethereum as EIP1193Provider | undefined);
     if (provider) {
       this.trackProvider(provider);
     }
@@ -108,6 +110,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Auto-detect wallet provider
     analytics._providers = await analytics.getProviders();
     await analytics.detectWallets(analytics._providers);
+    analytics.trackProviders(analytics._providers);
 
     return analytics;
   }
@@ -536,51 +539,65 @@ export class FormoAnalytics implements IFormoAnalytics {
   private trackProvider(provider: EIP1193Provider): void {
     logger.info("trackProvider", provider);
     try {
-      if (provider === this._provider) {
+      if (!provider) return;
+      if (this._trackedProviders.has(provider)) {
         logger.warn("TrackProvider: Provider already tracked.");
         return;
       }
 
-      this.currentChainId = undefined;
-      this.currentAddress = undefined;
+      this._trackedProviders.add(provider);
 
-      if (this._provider) {
-        const actions = Object.keys(this._providerListeners);
-        for (const action of actions) {
-          this._provider.removeListener(
-            action,
-            this._providerListeners[action]
-          );
-          delete this._providerListeners[action];
-        }
-      }
-
-      this._provider = provider;
-
-      // Register listeners for web3 provider events
-      this.registerAccountsChangedListener();
-      this.registerChainChangedListener();
-      this.registerConnectListener();
-      this.registerRequestListeners();
+      // Register listeners for this provider
+      this.registerAccountsChangedListener(provider);
+      this.registerChainChangedListener(provider);
+      this.registerConnectListener(provider);
+      this.registerRequestListeners(provider);
+      this.registerDisconnectListener(provider);
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
   }
 
-  private registerAccountsChangedListener(): void {
-    logger.info("registerAccountsChangedListener");
-    const listener = (...args: unknown[]) =>
-      this.onAccountsChanged(args[0] as string[]);
-
-    this._provider?.on("accountsChanged", listener);
-    this._providerListeners["accountsChanged"] = listener;
+  private trackProviders(providers: readonly EIP6963ProviderDetail[]): void {
+    try {
+      for (const eip6963ProviderDetail of providers) {
+        const provider = eip6963ProviderDetail?.provider as EIP1193Provider | undefined;
+        if (provider) {
+          this.trackProvider(provider);
+        }
+      }
+    } catch (error) {
+      logger.error("Error tracking providers:", error);
+    }
   }
 
-  private async onAccountsChanged(accounts: Address[]): Promise<void> {
+  private addProviderListener(
+    provider: EIP1193Provider,
+    event: string,
+    listener: (...args: unknown[]) => void
+  ): void {
+    const map = this._providerListenersMap.get(provider) || {};
+    map[event] = listener;
+    this._providerListenersMap.set(provider, map);
+  }
+
+  private registerAccountsChangedListener(provider: EIP1193Provider): void {
+    logger.info("registerAccountsChangedListener");
+    const listener = (...args: unknown[]) =>
+      this.onAccountsChanged(provider, args[0] as string[]);
+
+    provider.on("accountsChanged", listener);
+    this.addProviderListener(provider, "accountsChanged", listener);
+  }
+
+  private async onAccountsChanged(provider: EIP1193Provider, accounts: Address[]): Promise<void> {
     logger.info("onAccountsChanged", accounts);
     if (accounts.length === 0) {
-      // Handle wallet disconnect
-      await this.disconnect();
+      // Handle wallet disconnect for active provider only
+      if (!this._provider || this._provider === provider) {
+        await this.disconnect();
+        this._provider = undefined;
+      }
       return;
     }
     
@@ -592,36 +609,42 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     const address = toChecksumAddress(validAddress);
-    if (address === this.currentAddress) {
+    if (address === this.currentAddress && this._provider === provider) {
       // We have already reported this address
       return;
     }
-    // Handle wallet connect
+
+    // Switch active provider to the one that emitted the event
+    this._provider = provider;
     this.currentAddress = address;
-    this.currentChainId = await this.getCurrentChainId();
+    this.currentChainId = await this.getCurrentChainId(provider);
     this.connect({ chainId: this.currentChainId, address });
   }
 
-  private registerChainChangedListener(): void {
+  private registerChainChangedListener(provider: EIP1193Provider): void {
     logger.info("registerChainChangedListener");
     const listener = (...args: unknown[]) =>
-      this.onChainChanged(args[0] as string);
-    this.provider?.on("chainChanged", listener);
-    this._providerListeners["chainChanged"] = listener;
+      this.onChainChanged(provider, args[0] as string);
+    provider.on("chainChanged", listener);
+    this.addProviderListener(provider, "chainChanged", listener);
   }
 
-  private async onChainChanged(chainIdHex: string): Promise<void> {
+  private async onChainChanged(provider: EIP1193Provider, chainIdHex: string): Promise<void> {
     logger.info("onChainChanged", chainIdHex);
     this.currentChainId = parseChainId(chainIdHex);
-    if (!this.currentAddress) {
-      if (!this.provider) {
-        logger.info(
-          "OnChainChanged: Provider not found. CHAIN_CHANGED not reported"
-        );
-        return Promise.resolve();
-      }
 
-      const address = await this.getAddress();
+    if (!this._provider) {
+      // Select provider if none is active yet
+      this._provider = provider;
+    }
+
+    // Only handle chain changes for the active provider
+    if (this._provider !== provider) {
+      return;
+    }
+
+    if (!this.currentAddress) {
+      const address = await this.getAddress(provider);
       if (!address) {
         logger.info(
           "OnChainChanged: Unable to fetch or store connected address"
@@ -645,23 +668,37 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private registerConnectListener(): void {
+  private registerConnectListener(provider: EIP1193Provider): void {
     logger.info("registerConnectListener");
     const listener = (...args: unknown[]) => {
       const connection: ConnectInfo = args[0] as ConnectInfo;
-      this.onConnected(connection);
+      this.onConnected(provider, connection);
     };
-    this._provider?.on("connect", listener);
-    this._providerListeners["connect"] = listener;
+    provider.on("connect", listener);
+    this.addProviderListener(provider, "connect", listener);
   }
 
-  private async onConnected(connection: ConnectInfo): Promise<void> {
+  private registerDisconnectListener(provider: EIP1193Provider): void {
+    logger.info("registerDisconnectListener");
+    const listener = () => {
+      if (!this._provider || this._provider === provider) {
+        this.disconnect();
+        this._provider = undefined;
+      }
+    };
+    provider.on("disconnect", listener as any);
+    this.addProviderListener(provider, "disconnect", listener);
+  }
+
+  private async onConnected(provider: EIP1193Provider, connection: ConnectInfo): Promise<void> {
     logger.info("onConnected", connection);
     try {
       if (!connection || typeof connection.chainId !== 'string') return;
       const chainId = parseChainId(connection.chainId);
-      const address = await this.getAddress();
+      const address = await this.getAddress(provider);
       if (chainId !== null && chainId !== undefined && address) {
+        this._provider = provider;
+        this.currentChainId = chainId;
         this.connect({ chainId, address });
       }
     } catch (e) {
@@ -669,23 +706,26 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private registerRequestListeners(): void {
+  private registerRequestListeners(provider: EIP1193Provider): void {
     logger.info("registerRequestListeners");
-    if (!this.provider) {
+    if (!provider) {
       logger.error("Provider not found for request (signature, transaction) tracking");
       return;
     }
-    if (
-      Object.getOwnPropertyDescriptor(this.provider, "request")?.writable ===
-      false
-    ) {
+
+    if (this._wrappedRequestProviders.has(provider)) {
+      return;
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
+    if (descriptor && descriptor.writable === false) {
       logger.warn("Provider.request is not writable");
       return;
     }
 
-    const request = this.provider.request.bind(this.provider);
+    const request = provider.request.bind(provider);
 
-    this.provider.request = async <T>({
+    provider.request = async <T>({
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
@@ -694,12 +734,13 @@ export class FormoAnalytics implements IFormoAnalytics {
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
+        const chainId = this.currentChainId || (await this.getCurrentChainId(provider));
         // Fire-and-forget tracking
         (async () => {
           try {
             this.signature({
               status: SignatureStatus.REQUESTED,
-              ...this.buildSignatureEventPayload(method, params),
+              ...this.buildSignatureEventPayload(method, params, undefined, chainId),
             });
           } catch (e) {
             logger.error("Formo: Failed to track signature request", e);
@@ -713,7 +754,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               if (response) {
                 this.signature({
                   status: SignatureStatus.CONFIRMED,
-                  ...this.buildSignatureEventPayload(method, params, response),
+                  ...this.buildSignatureEventPayload(method, params, response, chainId),
                 });
               }
             } catch (e) {
@@ -728,7 +769,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               if (rpcError && rpcError?.code === 4001) {
                 this.signature({
                   status: SignatureStatus.REJECTED,
-                  ...this.buildSignatureEventPayload(method, params),
+                  ...this.buildSignatureEventPayload(method, params, undefined, chainId),
                 });
               }
             } catch (e) {
@@ -748,7 +789,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       ) {
         (async () => {
           try {
-            const payload = await this.buildTransactionEventPayload(params);
+            const payload = await this.buildTransactionEventPayload(params, provider);
             this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
@@ -763,7 +804,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
           (async () => {
             try {
-              const payload = await this.buildTransactionEventPayload(params);
+              const payload = await this.buildTransactionEventPayload(params, provider);
               this.transaction({
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
@@ -771,7 +812,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               });
 
               // Start async polling for transaction receipt
-              this.pollTransactionReceipt(transactionHash, payload);
+              this.pollTransactionReceipt(provider, transactionHash, payload);
             } catch (e) {
               logger.error(
                 "Formo: Failed to track transaction broadcast",
@@ -787,7 +828,8 @@ export class FormoAnalytics implements IFormoAnalytics {
               const rpcError = error as RPCError;
               if (rpcError && rpcError?.code === 4001) {
                 const payload = await this.buildTransactionEventPayload(
-                  params
+                  params,
+                  provider
                 );
                 this.transaction({
                   status: TransactionStatus.REJECTED,
@@ -804,6 +846,8 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       return request({ method, params });
     };
+
+    this._wrappedRequestProviders.add(provider);
   }
 
   private async onLocationChange(): Promise<void> {
@@ -952,11 +996,19 @@ export class FormoAnalytics implements IFormoAnalytics {
     store.subscribe((providerDetails) => {
       providers = providerDetails;
       this._providers = providers;
+      // Track listeners for newly discovered providers
+      this.trackProviders(providerDetails);
+      // Detect newly discovered wallets (session de-dupes)
+      this.detectWallets(providerDetails);
     });
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      this._providers = window?.ethereum ? [window.ethereum] : [];
+      this._providers = [];
+      const injected = (window as any)?.ethereum as EIP1193Provider | undefined;
+      if (injected) {
+        this.trackProvider(injected);
+      }
       return this._providers;
     }
     this._providers = providers;
@@ -1035,14 +1087,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private async getCurrentChainId(): Promise<number> {
-    if (!this.provider) {
+  private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {
+    const p = provider || this.provider;
+    if (!p) {
       logger.error("Provider not set for chain ID");
     }
 
     let chainIdHex;
     try {
-      chainIdHex = await this.provider?.request<string>({
+      chainIdHex = await p?.request<string>({
         method: "eth_chainId",
       });
       if (!chainIdHex) {
@@ -1059,7 +1112,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   private buildSignatureEventPayload(
     method: string,
     params: unknown[],
-    response?: unknown
+    response?: unknown,
+    chainId?: number
   ) {
     const rawAddress = method === "personal_sign"
       ? (params[1] as Address)
@@ -1071,7 +1125,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     const basePayload = {
-      chainId: this.currentChainId,
+      chainId: chainId ?? this.currentChainId,
       address: toChecksumAddress(validAddress),
     };
 
@@ -1094,7 +1148,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  private async buildTransactionEventPayload(params: unknown[]) {
+  private async buildTransactionEventPayload(params: unknown[], provider?: EIP1193Provider) {
     const { data, from, to, value } = params[0] as {
       data: string;
       from: string;
@@ -1108,7 +1162,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     return {
-      chainId: this.currentChainId || (await this.getCurrentChainId()),
+      chainId: this.currentChainId || (await this.getCurrentChainId(provider)),
       data,
       address: toChecksumAddress(validAddress),
       to,
@@ -1120,13 +1174,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Polls for transaction receipt and emits tx.status = CONFIRMED or REVERTED.
    */
   private async pollTransactionReceipt(
+    provider: EIP1193Provider,
     transactionHash: string,
     payload: any,
     maxAttempts = 10,
     intervalMs = 3000
   ) {
     let attempts = 0;
-    const provider = this.provider;
     if (!provider) return;
     type Receipt = { status: string | number } | null;
     const poll = async () => {
