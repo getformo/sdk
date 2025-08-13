@@ -118,6 +118,7 @@ export interface Options {
     enabled?: boolean;
     levels?: LogLevel[];
   };
+  onReady?: (formo: IFormoAnalytics) => void;
 }
 
 export interface FormoAnalyticsProviderProps {

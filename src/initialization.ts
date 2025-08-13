@@ -6,6 +6,10 @@ export function formofy(writeKey: string, options?: Options) {
     FormoAnalytics.init(writeKey, options)
       .then((f) => {
         (window as any).formo = f;
+        // Call onReady callback if provided
+        if (options?.onReady) {
+          options.onReady(f);
+        }
       })
       .catch((e) => console.error("Error initializing FormoAnalytics:", e));
   } else {
