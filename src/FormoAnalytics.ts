@@ -613,7 +613,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     const address = toChecksumAddress(validAddress);
-    // If the same provider emits the same address, no-op. Allow provider switches even if address is equal.
+    // If the same provider emits the same address, no-op. Allow provider switches even if address is the same.
     if (address === this.currentAddress && this._provider === provider) {
       return;
     }
@@ -720,11 +720,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    if (this._wrappedRequestProviders.has(provider)) {
-      logger.debug("Provider already wrapped; skipping request wrapping.");
-      return;
-    }
-
     const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
     if (descriptor && descriptor.writable === false) {
       logger.warn("Provider.request is not writable");
@@ -735,7 +730,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    // If already wrapped but request has been replaced externally, allow re-wrap
+    // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
     const currentRequest = provider.request as any;
     if (
       this._wrappedRequestProviders.has(provider) &&
@@ -1282,10 +1277,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListenersMap.delete(provider);
   }
 
-  private isFunction(value: unknown): value is (...args: any[]) => any {
-    return typeof value === "function";
-  }
-
   private isMutableEIP1193Provider(provider: EIP1193Provider): provider is EIP1193Provider & { request: typeof provider.request } {
     try {
       const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
@@ -1295,7 +1286,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch {
       return false;
     }
-    return this.isFunction((provider as any).request);
+    return typeof (provider as any).request === "function";
   }
 }
 
