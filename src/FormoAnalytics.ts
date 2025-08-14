@@ -38,6 +38,8 @@ import { isValidAddress, getValidAddress } from "./utils/address";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
+const WRAPPED_REQUEST_SYMBOL = Symbol("formoWrappedRequest");
+
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _trackedProviders: Set<EIP1193Provider> = new Set();
@@ -594,7 +596,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onAccountsChanged", accounts);
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
-      if (!this._provider || this._provider === provider) {
+      if (this.isCurrentOrNoProvider(provider)) {
         await this.disconnect();
         if (this._provider === provider) {
           this._provider = undefined;
@@ -684,7 +686,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private registerDisconnectListener(provider: EIP1193Provider): void {
     logger.info("registerDisconnectListener");
     const listener = (_error?: unknown) => {
-      if (!this._provider || this._provider === provider) {
+      if (this.isCurrentOrNoProvider(provider)) {
         this.disconnect();
         if (this._provider === provider) {
           this._provider = undefined;
@@ -731,6 +733,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (descriptor && descriptor.get && !descriptor.set) {
       logger.warn("Provider.request is an accessor without a setter; skipping wrap");
       return;
+    }
+
+    // If already wrapped but request has been replaced externally, allow re-wrap
+    const currentRequest = provider.request as any;
+    if (
+      this._wrappedRequestProviders.has(provider) &&
+      currentRequest && currentRequest[WRAPPED_REQUEST_SYMBOL]
+    ) {
+      logger.debug("Provider already wrapped; skipping request wrapping.");
+      return;
+    }
+    if (
+      this._wrappedRequestProviders.has(provider) &&
+      (!currentRequest || !currentRequest[WRAPPED_REQUEST_SYMBOL])
+    ) {
+      this._wrappedRequestProviders.delete(provider);
     }
 
     const request = provider.request.bind(provider);
@@ -856,11 +874,17 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       return request({ method, params });
     };
+    // Mark the wrapper so we can detect if request is replaced externally
+    (wrappedRequest as any)[WRAPPED_REQUEST_SYMBOL] = true;
 
     try {
-      // Some providers use setters; assign via Reflect to avoid TS narrowing issues
-      (provider as { request: typeof wrappedRequest }).request = wrappedRequest;
-      this._wrappedRequestProviders.add(provider);
+      // Prefer a type-safe assignment when possible
+      if (this.isMutableEIP1193Provider(provider)) {
+        provider.request = wrappedRequest as typeof provider.request;
+        this._wrappedRequestProviders.add(provider);
+      } else {
+        logger.warn("Provider.request is not writable or not a function; skipping wrap");
+      }
     } catch (e) {
       logger.warn("Failed to wrap provider.request; skipping", e);
     }
@@ -1239,6 +1263,40 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     };
     poll();
+  }
+
+  private isCurrentOrNoProvider(provider: EIP1193Provider | undefined): boolean {
+    return !this._provider || this._provider === provider;
+  }
+
+  private removeProviderListeners(provider: EIP1193Provider): void {
+    const listeners = this._providerListenersMap.get(provider);
+    if (!listeners) return;
+    for (const [event, fn] of Object.entries(listeners)) {
+      try {
+        provider.removeListener(event, fn);
+      } catch (e) {
+        logger.warn(`Failed to remove listener for ${String(event)}`, e);
+      }
+    }
+    this._providerListenersMap.delete(provider);
+    this._trackedProviders.delete(provider);
+  }
+
+  private isFunction(value: unknown): value is (...args: any[]) => any {
+    return typeof value === "function";
+  }
+
+  private isMutableEIP1193Provider(provider: EIP1193Provider): provider is EIP1193Provider & { request: typeof provider.request } {
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
+      if (descriptor && (descriptor.writable === false || (descriptor.get && !descriptor.set))) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return this.isFunction((provider as any).request);
   }
 }
 
