@@ -596,7 +596,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Handle wallet disconnect for active provider only
       if (!this._provider || this._provider === provider) {
         await this.disconnect();
-        this._provider = undefined;
+        if (this._provider === provider) {
+          this._provider = undefined;
+        }
       }
       return;
     }
@@ -631,7 +633,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async onChainChanged(provider: EIP1193Provider, chainIdHex: string): Promise<void> {
     logger.info("onChainChanged", chainIdHex);
-    this.currentChainId = parseChainId(chainIdHex);
+    const nextChainId = parseChainId(chainIdHex);
 
     if (!this._provider) {
       // Select provider if none is active yet
@@ -642,6 +644,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (this._provider !== provider) {
       return;
     }
+
+    this.currentChainId = nextChainId;
 
     if (!this.currentAddress) {
       const address = await this.getAddress(provider);
@@ -683,7 +687,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     const listener = (_error?: unknown) => {
       if (!this._provider || this._provider === provider) {
         this.disconnect();
-        this._provider = undefined;
+        if (this._provider === provider) {
+          this._provider = undefined;
+        }
       }
     };
     provider.on("disconnect", listener);
@@ -729,7 +735,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const request = provider.request.bind(provider);
 
-    provider.request = async <T>({
+    const wrappedRequest = async <T>({
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
@@ -851,7 +857,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       return request({ method, params });
     };
 
-    this._wrappedRequestProviders.add(provider);
+    try {
+      // Some providers use setters; assign via Reflect to avoid TS narrowing issues
+      (provider as { request: typeof wrappedRequest }).request = wrappedRequest;
+      this._wrappedRequestProviders.add(provider);
+    } catch (e) {
+      logger.warn("Failed to wrap provider.request; skipping", e);
+    }
   }
 
   private async onLocationChange(): Promise<void> {
