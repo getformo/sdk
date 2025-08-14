@@ -601,6 +601,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         if (this._provider === provider) {
           this._provider = undefined;
         }
+        // Proactively remove listeners to avoid leaks
+        this.removeProviderListeners(provider);
       }
       return;
     }
@@ -691,6 +693,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         if (this._provider === provider) {
           this._provider = undefined;
         }
+        // Proactively remove listeners to avoid leaks
+        this.removeProviderListeners(provider);
       }
     };
     provider.on("disconnect", listener);
@@ -1287,6 +1291,20 @@ export class FormoAnalytics implements IFormoAnalytics {
       return false;
     }
     return typeof (provider as any).request === "function";
+  }
+
+  // Explicitly untrack a provider: remove listeners, clear wrapper flag and tracking
+  public untrackProvider(provider: EIP1193Provider): void {
+    try {
+      this.removeProviderListeners(provider);
+      this._wrappedRequestProviders.delete(provider);
+      this._trackedProviders.delete(provider);
+      if (this._provider === provider) {
+        this._provider = undefined;
+      }
+    } catch (e) {
+      logger.warn("Failed to untrack provider", e);
+    }
   }
 }
 
