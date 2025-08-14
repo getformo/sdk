@@ -611,8 +611,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     const address = toChecksumAddress(validAddress);
+    // If the same provider emits the same address, no-op. Allow provider switches even if address is equal.
     if (address === this.currentAddress && this._provider === provider) {
-      // We have already reported this address
       return;
     }
 
@@ -635,14 +635,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onChainChanged", chainIdHex);
     const nextChainId = parseChainId(chainIdHex);
 
+    // Only handle chain changes for the active provider (or if none is set yet)
+    if (this._provider && this._provider !== provider) {
+      return;
+    }
     if (!this._provider) {
       // Select provider if none is active yet
       this._provider = provider;
-    }
-
-    // Only handle chain changes for the active provider
-    if (this._provider !== provider) {
-      return;
     }
 
     this.currentChainId = nextChainId;
@@ -720,6 +719,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     if (this._wrappedRequestProviders.has(provider)) {
+      logger.debug("Provider already wrapped; skipping request wrapping.");
       return;
     }
 
@@ -1012,8 +1012,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     store.subscribe((providerDetails) => {
       providers = providerDetails;
       this._providers = providers;
-      // Track listeners for newly discovered providers
-      this.trackProviders(providerDetails);
+      // Track listeners for newly discovered providers only
+      const newDetails = providerDetails.filter((detail) => {
+        const p = detail?.provider as EIP1193Provider | undefined;
+        return !!p && !this._trackedProviders.has(p);
+      });
+      if (newDetails.length > 0) {
+        this.trackProviders(newDetails);
+      }
       // Detect newly discovered wallets (session de-dupes)
       this.detectWallets(providerDetails);
     });
