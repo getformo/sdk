@@ -1280,7 +1280,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
     this._providerListenersMap.delete(provider);
-    this._trackedProviders.delete(provider);
   }
 
   private isFunction(value: unknown): value is (...args: any[]) => any {
