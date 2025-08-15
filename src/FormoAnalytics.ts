@@ -45,11 +45,25 @@ import { parseChainId } from "./utils/chain";
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _trackedProviders: Set<EIP1193Provider> = new Set();
   private _providerListenersMap: WeakMap<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new WeakMap();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
+  /**
+   * EIP-6963 provider details discovered through the browser
+   * This array contains all available providers with their metadata
+   */
   private _providers: readonly EIP6963ProviderDetail[] = [];
+  
+  /**
+   * Set of providers that have been tracked with event listeners
+   * This is separate from _providers because:
+   * - _providers contains all discovered providers (EIP-6963)
+   * - _trackedProviders contains only providers that have been set up with listeners
+   * - A provider can be discovered but not yet tracked (e.g., during initialization)
+   * - A provider can be tracked but later removed from discovery
+   */
+  private _trackedProviders: Set<EIP1193Provider> = new Set();
+  
   // Remove global tokens and replace with provider-specific tracking
   private _providerOperationMap: WeakMap<EIP1193Provider, {
     accountsChanged: Symbol;
@@ -74,6 +88,21 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Only consider it a mismatch if we have an active provider AND the provider is different
     // This allows legitimate provider switching while preventing race conditions
     return !!(this._provider && this._provider !== provider);
+  }
+
+  /**
+   * Check if a provider is in a valid state for switching
+   * @param provider The provider to validate
+   * @returns true if the provider is in a valid state
+   */
+  private isProviderInValidState(provider: EIP1193Provider): boolean {
+    // Basic validation: ensure provider exists and has required methods
+    return !!(
+      provider &&
+      typeof provider.request === 'function' &&
+      typeof provider.on === 'function' &&
+      typeof provider.removeListener === 'function'
+    );
   }
 
   /**
@@ -711,8 +740,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Allow provider switching - remove the restrictive provider mismatch check
     // Only prevent switching if we're in the middle of another operation with the same provider
     if (this._provider && this._provider !== provider) {
-      // If we have a different active provider, allow the switch but invalidate the old provider's tokens
-      this.invalidateProviderOperationTokens(this._provider);
+      // Validate that the new provider is in a valid state before switching
+      if (this.isProviderInValidState(provider)) {
+        // If we have a different active provider, allow the switch but invalidate the old provider's tokens
+        this.invalidateProviderOperationTokens(this._provider);
+      } else {
+        logger.warn("Provider switching blocked: new provider is not in a valid state");
+        return;
+      }
     }
 
     // Commit new active provider and state
@@ -893,7 +928,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Capture chainId once to avoid race conditions
         let capturedChainId: number | undefined = undefined;
         // Only use cached chainId if it's for the same provider instance
-        if (this.currentChainId != null && this._chainIdProvider === provider) {
+        if (this.currentChainId !== null && this.currentChainId !== undefined && this._chainIdProvider === provider) {
           capturedChainId = this.currentChainId;
         } else {
           capturedChainId = await this.getCurrentChainId(provider);
@@ -1258,16 +1293,20 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
+      // Refetch window.ethereum and re-check tracking immediately before tracking
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
-      if (injected && !this._trackedProviders.has(injected)) {
-        this.trackProvider(injected);
-        // Create a mock EIP6963ProviderDetail for the injected provider
-        const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
-        const injectedDetail: EIP6963ProviderDetail = {
-          provider: injected,
-          info: injectedProviderInfo
-        };
-        this._providers = [injectedDetail];
+      if (injected) {
+        // Re-check if the injected provider is already tracked just before tracking
+        if (!this._trackedProviders.has(injected)) {
+          this.trackProvider(injected);
+          // Create a mock EIP6963ProviderDetail for the injected provider
+          const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
+          const injectedDetail: EIP6963ProviderDetail = {
+            provider: injected,
+            info: injectedProviderInfo
+          };
+          this._providers = [injectedDetail];
+        }
       }
       return this._providers;
     }
