@@ -111,7 +111,7 @@ class EventFactory implements IEventFactory {
     const finalTrafficSources: ITrafficSource = {
       ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
       referrer:
-        contextTrafficSources.referrer || storedTrafficSources?.referrer,
+        contextTrafficSources.referrer || storedTrafficSources?.referrer || "",
       utm_campaign:
         contextTrafficSources.utm_campaign ||
         storedTrafficSources?.utm_campaign ||
