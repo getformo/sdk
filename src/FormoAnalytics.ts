@@ -47,7 +47,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _trackedProviders: Set<EIP1193Provider> = new Set();
   private _providerListenersMap: WeakMap<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new WeakMap();
-  private _wrappedRequestProviders: WeakSet<EIP1193Provider> = new WeakSet();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   private _providers: readonly EIP6963ProviderDetail[] = [];
@@ -599,13 +598,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onAccountsChanged", accounts);
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
-      if (this.isCurrentOrNoProvider(provider)) {
-        await this.disconnect();
-        if (this._provider === provider) {
+      if (this._provider === provider) {
+        try {
+          await this.disconnect();
+        } finally {
           this._provider = undefined;
+          // Proactively remove listeners to avoid leaks
+          this.removeProviderListeners(provider);
         }
-        // Proactively remove listeners to avoid leaks
-        this.removeProviderListeners(provider);
       }
       return;
     }
@@ -618,8 +618,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     const address = toChecksumAddress(validAddress);
-    // If the same provider emits the same address, no-op. Allow provider switches even if address is the same.
-    if (address === this.currentAddress && this._provider === provider) {
+    // If both the provider and address are the same, no-op. Allow provider switches even if address is the same.
+    if (this._provider === provider && address === this.currentAddress) {
       return;
     }
 
@@ -690,13 +690,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private registerDisconnectListener(provider: EIP1193Provider): void {
     logger.info("registerDisconnectListener");
-    const listener = (_error?: unknown) => {
-      if (this.isCurrentOrNoProvider(provider)) {
-        this.disconnect();
-        if (this._provider === provider) {
-          this._provider = undefined;
-        }
-        // Proactively remove listeners to avoid leaks
+    const listener = async (_error?: unknown) => {
+      if (this._provider !== provider) return;
+      try {
+        await this.disconnect();
+      } finally {
+        this._provider = undefined;
         this.removeProviderListeners(provider);
       }
     };
@@ -739,18 +738,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
     const currentRequest = provider.request as WrappedRequestFunction;
-    if (
-      this._wrappedRequestProviders.has(provider) &&
-      currentRequest && currentRequest[WRAPPED_REQUEST_SYMBOL]
-    ) {
+    if (currentRequest && currentRequest[WRAPPED_REQUEST_SYMBOL]) {
       logger.debug("Provider already wrapped; skipping request wrapping.");
       return;
-    }
-    if (
-      this._wrappedRequestProviders.has(provider) &&
-      (!currentRequest || !currentRequest[WRAPPED_REQUEST_SYMBOL])
-    ) {
-      this._wrappedRequestProviders.delete(provider);
     }
 
     const request = provider.request.bind(provider);
@@ -883,7 +873,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Prefer a type-safe assignment when possible
       if (this.isMutableEIP1193Provider(provider)) {
         provider.request = wrappedRequest;
-        this._wrappedRequestProviders.add(provider);
       } else {
         logger.warn("Provider.request is not writable or not a function; skipping wrap");
       }
@@ -1045,9 +1034,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       });
       if (newDetails.length > 0) {
         this.trackProviders(newDetails);
+        // Detect newly discovered wallets (session de-dupes)
+        this.detectWallets(newDetails);
       }
-      // Detect newly discovered wallets (session de-dupes)
-      this.detectWallets(providerDetails);
     });
 
     // Fallback to injected provider if no providers are found
@@ -1267,9 +1256,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     poll();
   }
 
-  private isCurrentOrNoProvider(provider: EIP1193Provider | undefined): boolean {
-    return !this._provider || this._provider === provider;
-  }
+
 
   private removeProviderListeners(provider: EIP1193Provider): void {
     const listeners = this._providerListenersMap.get(provider);
@@ -1300,7 +1287,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   public untrackProvider(provider: EIP1193Provider): void {
     try {
       this.removeProviderListeners(provider);
-      this._wrappedRequestProviders.delete(provider);
       this._trackedProviders.delete(provider);
       if (this._provider === provider) {
         this._provider = undefined;
