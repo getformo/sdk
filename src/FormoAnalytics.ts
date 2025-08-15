@@ -56,6 +56,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     chainChanged: Symbol;
     connected: Symbol;
   }> = new WeakMap();
+  
+  // Track which provider the cached chainId belongs to to avoid unnecessary network requests
+  private _chainIdProvider?: EIP1193Provider;
 
   config: Config;
   currentChainId?: ChainID;
@@ -248,8 +251,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    const validAddress = getValidAddress(address);
-    this.currentAddress = validAddress ? toChecksumAddress(validAddress) : undefined;
+          this.currentAddress = this.validateAndChecksumAddress(address);
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -516,8 +518,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      const validAddress = getValidAddress(address);
-      if (validAddress) this.currentAddress = toChecksumAddress(validAddress);
+      this.currentAddress = address ? this.validateAndChecksumAddress(address) : undefined;
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -526,7 +527,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: validAddress ? toChecksumAddress(validAddress) : undefined,
+          address: address ? this.validateAndChecksumAddress(address) : undefined,
           providerName,
           userId,
           rdns,
@@ -689,7 +690,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
     
-    const address = toChecksumAddress(validAddress);
+    const address = validAddress ? toChecksumAddress(validAddress) : undefined;
+    
+    // If no valid address, skip processing
+    if (!address) {
+      logger.warn("onAccountsChanged: No valid address found");
+      return;
+    }
+    
     // If both the provider and address are the same, no-op. Allow provider switches even if address is the same.
     if (this._provider === provider && address === this.currentAddress) {
       return;
@@ -711,7 +719,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._provider = provider;
     this.currentAddress = address;
     this.currentChainId = nextChainId;
-    this.connect({ chainId: this.currentChainId, address });
+    // Fire-and-forget analytics tracking - don't block the critical path
+    this.connect({ chainId: this.currentChainId, address }).catch(error => {
+      logger.error("Failed to track connect event in onAccountsChanged:", error);
+    });
   }
 
   private registerChainChangedListener(provider: EIP1193Provider): void {
@@ -753,8 +764,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
         return Promise.resolve();
       }
-      const validAddress = getValidAddress(fetched);
-      addressToUse = validAddress ? toChecksumAddress(validAddress) : undefined;
+      addressToUse = this.validateAndChecksumAddress(fetched);
     }
 
     // If another provider became active while awaiting, abort
@@ -864,6 +874,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const currentRequest = provider.request as WrappedRequestFunction;
     if (
       currentRequest &&
+      typeof currentRequest === 'function' &&
       currentRequest[WRAPPED_REQUEST_SYMBOL] &&
       (provider as any)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
     ) {
@@ -883,9 +894,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
         // Capture chainId once to avoid race conditions
-        let capturedChainId = this.currentChainId;
-        if (capturedChainId == null) {
+        let capturedChainId: number | undefined = undefined;
+        // Only use cached chainId if it's for the same provider instance
+        if (this.currentChainId != null && this._chainIdProvider === provider) {
+          capturedChainId = this.currentChainId;
+        } else {
           capturedChainId = await this.getCurrentChainId(provider);
+          this.currentChainId = capturedChainId;
+          this._chainIdProvider = provider;
         }
         // Fire-and-forget tracking
         (async () => {
@@ -1246,7 +1262,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
-      if (injected && this._trackedProviders && !this._trackedProviders.has(injected)) {
+      if (injected && !this._trackedProviders.has(injected)) {
         this.trackProvider(injected);
         // Create a mock EIP6963ProviderDetail for the injected provider
         const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
@@ -1298,10 +1314,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        const validAddress = getValidAddress(accounts[0]);
-        if (validAddress) {
-          return toChecksumAddress(validAddress);
-        }
+        const validAddress = this.validateAndChecksumAddress(accounts[0]);
+        return validAddress || null;
       }
     } catch (err) {
       const code = (err as RPCError)?.code;
@@ -1326,9 +1340,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       });
       if (!res || res.length === 0) return null;
       return res
-        .map((e) => getValidAddress(e))
-        .filter((e): e is string => e !== null)
-        .map(toChecksumAddress);
+        .map((e) => this.validateAndChecksumAddress(e))
+        .filter((e): e is string => e !== undefined);
     } catch (err) {
       const code = (err as RPCError)?.code;
       if (code !== 4001) {
@@ -1373,14 +1386,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       ? (params[1] as Address)
       : (params[0] as Address);
     
-    const validAddress = getValidAddress(rawAddress);
+    const validAddress = this.validateAndChecksumAddress(rawAddress);
     if (!validAddress) {
       throw new Error(`Invalid address in signature payload: ${rawAddress}`);
     }
     
     const basePayload = {
-      chainId: chainId ?? this.currentChainId,
-      address: toChecksumAddress(validAddress),
+      chainId: chainId ?? this.currentChainId ?? 0,
+      address: validAddress,
     };
 
     if (method === "personal_sign") {
@@ -1410,7 +1423,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       value: string;
     };
     
-    const validAddress = getValidAddress(from);
+    const validAddress = this.validateAndChecksumAddress(from);
     if (!validAddress) {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
@@ -1418,7 +1431,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     return {
       chainId: this.currentChainId ?? (await this.getCurrentChainId(provider)),
       data,
-      address: toChecksumAddress(validAddress),
+      address: validAddress,
       to,
       value,
     };
@@ -1504,6 +1517,16 @@ export class FormoAnalytics implements IFormoAnalytics {
   // Debug/monitoring helpers
   public getTrackedProvidersCount(): number {
     return this._trackedProviders.size;
+  }
+  
+  /**
+   * Helper method to validate and checksum an address
+   * @param address The address to validate and checksum
+   * @returns The checksummed address or undefined if invalid
+   */
+  private validateAndChecksumAddress(address: string): Address | undefined {
+    const validAddress = getValidAddress(address);
+    return validAddress ? toChecksumAddress(validAddress) : undefined;
   }
 }
 
