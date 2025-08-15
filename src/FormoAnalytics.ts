@@ -251,7 +251,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-          this.currentAddress = this.validateAndChecksumAddress(address);
+    this.currentAddress = this.validateAndChecksumAddress(address);
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -865,10 +865,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const isMutable = this.isMutableEIP1193Provider(provider);
-    if (!isMutable) {
-      logger.warn("Cannot wrap provider.request: property is not writable or is a read-only accessor without setter");
-      return;
-    }
+    // Removed redundant mutability check; rely on try-catch below for assignment errors.
 
     // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
     const currentRequest = provider.request as WrappedRequestFunction;
@@ -1314,8 +1311,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        const validAddress = this.validateAndChecksumAddress(accounts[0]);
-        return validAddress || null;
+        return this.validateAndChecksumAddress(accounts[0]) || null;
       }
     } catch (err) {
       const code = (err as RPCError)?.code;
