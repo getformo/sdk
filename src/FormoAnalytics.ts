@@ -32,17 +32,15 @@ import {
   TrackingOptions,
   TransactionStatus,
   ConnectInfo,
+  WrappedEIP1193Provider,
+  WrappedRequestFunction,
+  WRAPPED_REQUEST_SYMBOL,
+  WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { toChecksumAddress } from "./utils";
 import { isValidAddress, getValidAddress } from "./utils/address";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
-
-const WRAPPED_REQUEST_SYMBOL = Symbol("formoWrappedRequest");
-const WRAPPED_REQUEST_REF_SYMBOL = Symbol("formoWrappedRequestRef");
-type WrappedRequestFunction = (<T>(args: RequestArguments) => Promise<T | null | undefined>) & {
-  [key in typeof WRAPPED_REQUEST_SYMBOL]?: boolean;
-};
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
@@ -51,6 +49,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   private _providers: readonly EIP6963ProviderDetail[] = [];
+  private _accountsChangedToken: Symbol | undefined;
+  private _chainChangedToken: Symbol | undefined;
+  private _connectedToken: Symbol | undefined;
 
   config: Config;
   currentChainId?: ChainID;
@@ -595,15 +596,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.addProviderListener(provider, "accountsChanged", listener);
   }
 
-  private async onAccountsChanged(provider: EIP1193Provider, accounts: Address[]): Promise<void> {
+  private async onAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
     logger.info("onAccountsChanged", accounts);
+    
+    // Generate a unique token for this operation to prevent race conditions
+    const token = Symbol();
+    this._accountsChangedToken = token;
+
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
       if (this._provider === provider) {
         try {
           await this.disconnect();
-        } finally {
+          // Only untrack if disconnect succeeded
           this.untrackProvider(provider);
+        } catch (error) {
+          logger.error("Failed to disconnect provider on accountsChanged", error);
+          // Don't untrack if disconnect failed to maintain state consistency
         }
       }
       return;
@@ -624,7 +633,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Prepare new chainId first to avoid race; do not mutate state yet
     const nextChainId = await this.getCurrentChainId(provider);
-    // If another provider became active while awaiting, abort
+    // If another provider became active while awaiting, abort (token check)
+    if (token !== this._accountsChangedToken) return;
+
+    // Final atomic check and commit
     if (this._provider && this._provider !== provider) return;
 
     // Commit new active provider and state
@@ -644,6 +656,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async onChainChanged(provider: EIP1193Provider, chainIdHex: string): Promise<void> {
     logger.info("onChainChanged", chainIdHex);
+    
+    // Generate a unique token for this operation to prevent race conditions
+    const token = Symbol();
+    this._chainChangedToken = token;
+    
     const nextChainId = parseChainId(chainIdHex);
 
     // Only handle chain changes for the active provider (or if none is set yet)
@@ -656,6 +673,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (!addressToUse) {
       const fetched = await this.getAddress(provider);
+      // Check token after async operation
+      if (token !== this._chainChangedToken) return;
+      
       if (!fetched) {
         logger.info(
           "OnChainChanged: Unable to fetch or store connected address"
@@ -667,10 +687,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // If another provider became active while awaiting, abort
+    if (token !== this._chainChangedToken) return;
     if (this._provider && this._provider !== provider) return;
 
-    // Commit
-    this._provider = this._provider || provider;
+    // Final atomic check and commit
+    // Use a block to ensure all mutations are guarded
+    if (!this._provider) {
+      this._provider = provider;
+    }
+    if (this._provider !== provider) {
+      return;
+    }
+    
     this.currentChainId = nextChainId;
 
     // Proceed only if the address exists
@@ -703,8 +731,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (this._provider !== provider) return;
       try {
         await this.disconnect();
-      } finally {
+        // Only untrack if disconnect succeeded
         this.untrackProvider(provider);
+      } catch (e) {
+        logger.error("Error during disconnect in disconnect listener", e);
+        // Don't untrack if disconnect failed to maintain state consistency
       }
     };
     provider.on("disconnect", listener);
@@ -713,14 +744,31 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async onConnected(provider: EIP1193Provider, connection: ConnectInfo): Promise<void> {
     logger.info("onConnected", connection);
+    
+    // Generate a unique token for this operation to prevent race conditions
+    const token = Symbol();
+    this._connectedToken = token;
+    
     try {
       if (!connection || typeof connection.chainId !== 'string') return;
       const chainId = parseChainId(connection.chainId);
       const address = await this.getAddress(provider);
+      
+      // Check token after async operation
+      if (token !== this._connectedToken) return;
+      
       // If another provider became active while awaiting, abort
       if (this._provider && this._provider !== provider) return;
+      
       if (chainId !== null && chainId !== undefined && address) {
-        this._provider = provider;
+        // Final atomic check and commit
+        if (!this._provider) {
+          this._provider = provider;
+        }
+        if (this._provider !== provider) {
+          return;
+        }
+        
         this.currentChainId = chainId;
         this.connect({ chainId, address });
       }
@@ -768,6 +816,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
+        // Capture chainId once to avoid race conditions
         const chainId = this.currentChainId || (await this.getCurrentChainId(provider));
         // Fire-and-forget tracking
         (async () => {
@@ -882,7 +931,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
     wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
-    (provider as any)[WRAPPED_REQUEST_REF_SYMBOL] = wrappedRequest;
+    (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] = wrappedRequest;
 
     try {
       // Prefer a type-safe assignment when possible
@@ -1060,6 +1109,17 @@ export class FormoAnalytics implements IFormoAnalytics {
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
       if (injected) {
         this.trackProvider(injected);
+        // Create a mock EIP6963ProviderDetail for the injected provider
+        const injectedDetail: EIP6963ProviderDetail = {
+          provider: injected,
+          info: {
+            name: 'Injected Provider',
+            rdns: 'io.metamask',
+            uuid: 'injected-provider',
+            icon: 'data:image/svg+xml;base64,'
+          }
+        };
+        this._providers = [injectedDetail];
       }
       return this._providers;
     }
@@ -1286,7 +1346,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListenersMap.delete(provider);
   }
 
-  private isMutableEIP1193Provider(provider: EIP1193Provider): provider is EIP1193Provider & { request: typeof provider.request } {
+  private isMutableEIP1193Provider(provider: EIP1193Provider): boolean {
     try {
       const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
       if (descriptor && (descriptor.writable === false || (descriptor.get && !descriptor.set))) {
