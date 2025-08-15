@@ -877,7 +877,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
         // Capture chainId once to avoid race conditions
-        const chainId = this.currentChainId || (await this.getCurrentChainId(provider));
+        const chainId = this.currentChainId ?? (await this.getCurrentChainId(provider));
         // Fire-and-forget tracking
         (async () => {
           try {
@@ -1295,7 +1295,13 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       }
     } catch (err) {
-      logger.error("Failed to fetch accounts from provider:", err);
+      const code = (err as RPCError)?.code;
+      if (code !== 4001) {
+        logger.error(
+          "FormoAnalytics::getAccounts: eth_accounts threw an error",
+          err
+        );
+      }
       return null;
     }
     return null;
@@ -1315,7 +1321,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         .filter((e): e is string => e !== null)
         .map(toChecksumAddress);
     } catch (err) {
-      const code = (err as RPCError | undefined)?.code;
+      const code = (err as RPCError)?.code;
       if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
@@ -1401,7 +1407,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     return {
-      chainId: this.currentChainId || (await this.getCurrentChainId(provider)),
+      chainId: this.currentChainId ?? (await this.getCurrentChainId(provider)),
       data,
       address: toChecksumAddress(validAddress),
       to,
