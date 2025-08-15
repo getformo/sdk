@@ -154,7 +154,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
 
     // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
-    const provider = (options.provider as EIP1193Provider | undefined) || (typeof window !== 'undefined' ? window.ethereum : undefined);
+    let provider: EIP1193Provider | undefined = undefined;
+    const optProvider = options.provider as EIP1193Provider | undefined;
+    if (optProvider) {
+      provider = optProvider;
+    } else if (typeof window !== 'undefined' && window.ethereum) {
+      provider = window.ethereum;
+    }
+    
     if (provider) {
       this.trackProvider(provider);
     }
@@ -847,7 +854,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    if (!this.isMutableEIP1193Provider(provider)) {
+    const isMutable = this.isMutableEIP1193Provider(provider);
+    if (!isMutable) {
       logger.warn("Cannot wrap provider.request: property is not writable or is a read-only accessor without setter");
       return;
     }
@@ -875,16 +883,16 @@ export class FormoAnalytics implements IFormoAnalytics {
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
         // Capture chainId once to avoid race conditions
-        let chainId = this.currentChainId;
-        if (chainId == null) {
-          chainId = await this.getCurrentChainId(provider);
+        let capturedChainId = this.currentChainId;
+        if (capturedChainId == null) {
+          capturedChainId = await this.getCurrentChainId(provider);
         }
         // Fire-and-forget tracking
         (async () => {
           try {
             this.signature({
               status: SignatureStatus.REQUESTED,
-              ...this.buildSignatureEventPayload(method, params, undefined, chainId),
+              ...this.buildSignatureEventPayload(method, params, undefined, capturedChainId),
             });
           } catch (e) {
             logger.error("Formo: Failed to track signature request", e);
@@ -894,16 +902,16 @@ export class FormoAnalytics implements IFormoAnalytics {
         try {
           const response = (await request({ method, params })) as T;
           (async () => {
-            try {
-              if (response) {
-                this.signature({
-                  status: SignatureStatus.CONFIRMED,
-                  ...this.buildSignatureEventPayload(method, params, response, chainId),
-                });
-              }
-            } catch (e) {
-              logger.error("Formo: Failed to track signature confirmation", e);
+                      try {
+            if (response) {
+              this.signature({
+                status: SignatureStatus.CONFIRMED,
+                ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
+              });
             }
+          } catch (e) {
+            logger.error("Formo: Failed to track signature confirmation", e);
+          }
           })();
           return response;
         } catch (error) {
@@ -913,7 +921,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               if (rpcError && rpcError?.code === 4001) {
                 this.signature({
                   status: SignatureStatus.REJECTED,
-                  ...this.buildSignatureEventPayload(method, params, undefined, chainId),
+                  ...this.buildSignatureEventPayload(method, params, undefined, capturedChainId),
                 });
               }
             } catch (e) {
@@ -996,7 +1004,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     try {
       // Prefer a type-safe assignment when possible
-      if (this.isMutableEIP1193Provider(provider)) {
+      if (isMutable) {
         provider.request = wrappedRequest;
       } else {
         logger.warn("Cannot wrap provider.request: property is not writable");
@@ -1238,7 +1246,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
-      if (injected && !this._trackedProviders.has(injected)) {
+      if (injected && this._trackedProviders && !this._trackedProviders.has(injected)) {
         this.trackProvider(injected);
         // Create a mock EIP6963ProviderDetail for the injected provider
         const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
