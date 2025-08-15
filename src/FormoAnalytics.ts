@@ -571,7 +571,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       }
     } catch (error) {
-      logger.error("Error tracking providers:", error);
+      logger.error("Failed to track EIP-6963 providers during initialization:", error);
     }
   }
 
@@ -732,7 +732,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
     if (descriptor && descriptor.get && !descriptor.set) {
-      logger.warn("Provider.request is an accessor without a setter; skipping wrap");
+      logger.warn("Cannot wrap provider.request: property is read-only accessor without setter");
       return;
     }
 
@@ -874,7 +874,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (this.isMutableEIP1193Provider(provider)) {
         provider.request = wrappedRequest;
       } else {
-        logger.warn("Provider.request is not writable or not a function; skipping wrap");
+        logger.warn("Cannot wrap provider.request: property is not writable");
       }
     } catch (e) {
       logger.warn("Failed to wrap provider.request; skipping", e);
@@ -1114,7 +1114,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         .filter((e): e is string => e !== null)
         .map(toChecksumAddress);
     } catch (err) {
-      const code = (err as { code?: number } | undefined)?.code;
+      const code = (err as RPCError | undefined)?.code;
       if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
