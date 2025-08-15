@@ -39,6 +39,9 @@ import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
 const WRAPPED_REQUEST_SYMBOL = Symbol("formoWrappedRequest");
+type WrappedRequestFunction = (<T>(args: RequestArguments) => Promise<T | null | undefined>) & {
+  [key in typeof WRAPPED_REQUEST_SYMBOL]?: boolean;
+};
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
@@ -735,7 +738,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
-    const currentRequest = provider.request as any;
+    const currentRequest = provider.request as WrappedRequestFunction;
     if (
       this._wrappedRequestProviders.has(provider) &&
       currentRequest && currentRequest[WRAPPED_REQUEST_SYMBOL]
@@ -752,7 +755,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const request = provider.request.bind(provider);
 
-    const wrappedRequest = async <T>({
+    const wrappedRequest: WrappedRequestFunction = async <T>({
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
@@ -874,12 +877,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       return request({ method, params });
     };
     // Mark the wrapper so we can detect if request is replaced externally
-    (wrappedRequest as any)[WRAPPED_REQUEST_SYMBOL] = true;
+    wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
 
     try {
       // Prefer a type-safe assignment when possible
       if (this.isMutableEIP1193Provider(provider)) {
-        provider.request = wrappedRequest as typeof provider.request;
+        provider.request = wrappedRequest;
         this._wrappedRequestProviders.add(provider);
       } else {
         logger.warn("Provider.request is not writable or not a function; skipping wrap");
@@ -1290,7 +1293,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch {
       return false;
     }
-    return typeof (provider as any).request === "function";
+    return typeof provider.request === "function";
   }
 
   // Explicitly untrack a provider: remove listeners, clear wrapper flag and tracking
