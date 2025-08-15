@@ -67,11 +67,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param provider The provider to check
    * @returns true if there's a provider mismatch, false otherwise
    */
-  private isProviderMismatch(): boolean {
+  private isProviderMismatch(provider: EIP1193Provider): boolean {
     // Only consider it a mismatch if we have an active provider AND the provider is different
-    // AND we're not in the process of switching to this provider
-    // This method is now less restrictive to allow legitimate provider switching
-    return false; // Allow all provider operations to proceed
+    // This allows legitimate provider switching while preventing race conditions
+    return !!(this._provider && this._provider !== provider);
   }
 
   /**
@@ -667,8 +666,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (this._provider === provider) {
         try {
           await this.disconnect();
-          // Do not untrack provider here to avoid interfering with reconnection scenarios
-          // this.untrackProvider(provider);
+          // Provider remains tracked to allow for reconnection scenarios
         } catch (error) {
           logger.error("Failed to disconnect provider on accountsChanged", error);
           // Don't untrack if disconnect failed to maintain state consistency
@@ -728,8 +726,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     const nextChainId = parseChainId(chainIdHex);
 
     // Only handle chain changes for the active provider (or if none is set yet)
-    if (this.isProviderMismatch()) {
-      return;
+    if (this.isProviderMismatch(provider)) {
+      // If this is a different provider, allow the switch but invalidate old provider tokens
+      this.invalidateProviderOperationTokens(this._provider!);
+      this._provider = provider;
     }
 
     // Avoid mutating provider until we have required data
@@ -752,13 +752,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // If another provider became active while awaiting, abort
     if (!this.isOperationTokenValid(provider, 'chainChanged', token)) return;
-    
-    // Allow provider switching - remove the restrictive provider mismatch check
-    // Only prevent switching if we're in the middle of another operation with the same provider
-    if (this._provider && this._provider !== provider) {
-      // If we have a different active provider, allow the switch but invalidate the old provider's tokens
-      this.invalidateProviderOperationTokens(this._provider);
-    }
     
     // Set provider if none exists
     if (!this._provider) {
@@ -797,8 +790,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (this._provider !== provider) return;
       try {
         await this.disconnect();
-        // Do not untrack provider here to avoid interfering with reconnection scenarios
-        // this.untrackProvider(provider);
+        // Provider remains tracked to allow for reconnection scenarios
       } catch (e) {
         logger.error("Error during disconnect in disconnect listener", e);
         // Don't untrack if disconnect failed to maintain state consistency
@@ -1154,6 +1146,23 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   /**
+   * Check if a provider's request method can be wrapped/modified
+   * @param provider The provider to check
+   * @returns true if the provider's request method is mutable
+   */
+  private isMutableEIP1193Provider(provider: EIP1193Provider): boolean {
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
+      if (descriptor && (descriptor.writable === false || (descriptor.get && !descriptor.set))) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return typeof provider.request === "function";
+  }
+
+  /**
    * Attempts to detect information about an injected provider
    * @param provider The injected provider to analyze
    * @returns Provider information with fallback values
@@ -1461,18 +1470,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
     this._providerListenersMap.delete(provider);
-  }
-
-  private isMutableEIP1193Provider(provider: EIP1193Provider): boolean {
-    try {
-      const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
-      if (descriptor && (descriptor.writable === false || (descriptor.get && !descriptor.set))) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-    return typeof provider.request === "function";
   }
 
   // Explicitly untrack a provider: remove listeners, clear wrapper flag and tracking
