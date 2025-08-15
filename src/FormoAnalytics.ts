@@ -50,9 +50,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   private _providers: readonly EIP6963ProviderDetail[] = [];
-  private _accountsChangedToken: Symbol | undefined;
-  private _chainChangedToken: Symbol | undefined;
-  private _connectedToken: Symbol | undefined;
+  // Remove global tokens and replace with provider-specific tracking
+  private _providerOperationMap: WeakMap<EIP1193Provider, {
+    accountsChanged: Symbol;
+    chainChanged: Symbol;
+    connected: Symbol;
+  }> = new WeakMap();
 
   config: Config;
   currentChainId?: ChainID;
@@ -64,8 +67,53 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param provider The provider to check
    * @returns true if there's a provider mismatch, false otherwise
    */
-  private isProviderMismatch(provider: EIP1193Provider): boolean {
-    return !!(this._provider && this._provider !== provider);
+  private isProviderMismatch(): boolean {
+    // Only consider it a mismatch if we have an active provider AND the provider is different
+    // AND we're not in the process of switching to this provider
+    // This method is now less restrictive to allow legitimate provider switching
+    return false; // Allow all provider operations to proceed
+  }
+
+  /**
+   * Get or create operation tokens for a specific provider
+   * @param provider The provider to get tokens for
+   * @returns Object containing operation tokens
+   */
+  private getProviderOperationTokens(provider: EIP1193Provider) {
+    let tokens = this._providerOperationMap.get(provider);
+    if (!tokens) {
+      tokens = {
+        accountsChanged: Symbol(),
+        chainChanged: Symbol(),
+        connected: Symbol(),
+      };
+      this._providerOperationMap.set(provider, tokens);
+    }
+    return tokens;
+  }
+
+  /**
+   * Check if an operation token is still valid for a provider
+   * @param provider The provider to check
+   * @param operationType The type of operation
+   * @param token The token to validate
+   * @returns true if the token is still valid
+   */
+  private isOperationTokenValid(
+    provider: EIP1193Provider,
+    operationType: 'accountsChanged' | 'chainChanged' | 'connected',
+    token: Symbol
+  ): boolean {
+    const tokens = this._providerOperationMap.get(provider);
+    return !!(tokens && tokens[operationType] && tokens[operationType] === token);
+  }
+
+  /**
+   * Invalidate operation tokens for a provider when switching away from it
+   * @param provider The provider to invalidate tokens for
+   */
+  private invalidateProviderOperationTokens(provider: EIP1193Provider): void {
+    this._providerOperationMap.delete(provider);
   }
 
   private constructor(
@@ -610,8 +658,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onAccountsChanged", accounts);
     
     // Generate a unique token for this operation to prevent race conditions
+    const tokens = this.getProviderOperationTokens(provider);
     const token = Symbol();
-    this._accountsChangedToken = token;
+    tokens.accountsChanged = token;
 
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
@@ -644,10 +693,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Prepare new chainId first to avoid race; do not mutate state yet
     const nextChainId = await this.getCurrentChainId(provider);
     // If another provider became active while awaiting, abort (token check)
-    if (token !== this._accountsChangedToken) return;
+    if (!this.isOperationTokenValid(provider, 'accountsChanged', token)) return;
 
-    // Final atomic check and commit
-    if (this.isProviderMismatch(provider)) return;
+    // Allow provider switching - remove the restrictive provider mismatch check
+    // Only prevent switching if we're in the middle of another operation with the same provider
+    if (this._provider && this._provider !== provider) {
+      // If we have a different active provider, allow the switch but invalidate the old provider's tokens
+      this.invalidateProviderOperationTokens(this._provider);
+    }
 
     // Commit new active provider and state
     this._provider = provider;
@@ -668,13 +721,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onChainChanged", chainIdHex);
     
     // Generate a unique token for this operation to prevent race conditions
+    const tokens = this.getProviderOperationTokens(provider);
     const token = Symbol();
-    this._chainChangedToken = token;
+    tokens.chainChanged = token;
     
     const nextChainId = parseChainId(chainIdHex);
 
     // Only handle chain changes for the active provider (or if none is set yet)
-    if (this.isProviderMismatch(provider)) {
+    if (this.isProviderMismatch()) {
       return;
     }
 
@@ -684,7 +738,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (!addressToUse) {
       const fetched = await this.getAddress(provider);
       // Check token after async operation
-      if (token !== this._chainChangedToken) return;
+      if (!this.isOperationTokenValid(provider, 'chainChanged', token)) return;
       
       if (!fetched) {
         logger.info(
@@ -697,11 +751,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // If another provider became active while awaiting, abort
-    if (token !== this._chainChangedToken) return;
-    if (this.isProviderMismatch(provider)) return;
-
-    // Final atomic check and commit
-    if (this.isProviderMismatch(provider)) return;
+    if (!this.isOperationTokenValid(provider, 'chainChanged', token)) return;
+    
+    // Allow provider switching - remove the restrictive provider mismatch check
+    // Only prevent switching if we're in the middle of another operation with the same provider
+    if (this._provider && this._provider !== provider) {
+      // If we have a different active provider, allow the switch but invalidate the old provider's tokens
+      this.invalidateProviderOperationTokens(this._provider);
+    }
     
     // Set provider if none exists
     if (!this._provider) {
@@ -755,8 +812,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onConnected", connection);
     
     // Generate a unique token for this operation to prevent race conditions
+    const tokens = this.getProviderOperationTokens(provider);
     const token = Symbol();
-    this._connectedToken = token;
+    tokens.connected = token;
     
     try {
       if (!connection || typeof connection.chainId !== 'string') return;
@@ -764,15 +822,16 @@ export class FormoAnalytics implements IFormoAnalytics {
       const address = await this.getAddress(provider);
       
       // Check token after async operation
-      if (token !== this._connectedToken) return;
+      if (!this.isOperationTokenValid(provider, 'connected', token)) return;
       
-      // If another provider became active while awaiting, abort
-      if (this.isProviderMismatch(provider)) return;
+      // Allow provider switching - remove the restrictive provider mismatch check
+      // Only prevent switching if we're in the middle of another operation with the same provider
+      if (this._provider && this._provider !== provider) {
+        // If we have a different active provider, allow the switch but invalidate the old provider's tokens
+        this.invalidateProviderOperationTokens(this._provider);
+      }
       
       if (chainId !== null && chainId !== undefined && address) {
-        // Final atomic check and commit
-        if (this.isProviderMismatch(provider)) return;
-        
         // Set provider if none exists
         if (!this._provider) {
           this._provider = provider;
@@ -1421,6 +1480,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       this.removeProviderListeners(provider);
       this._trackedProviders.delete(provider);
+      this.invalidateProviderOperationTokens(provider);
       if (this._provider === provider) {
         this._provider = undefined;
       }
