@@ -602,9 +602,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         try {
           await this.disconnect();
         } finally {
-          this._provider = undefined;
-          // Proactively remove listeners to avoid leaks
-          this.removeProviderListeners(provider);
+          this.untrackProvider(provider);
         }
       }
       return;
@@ -625,8 +623,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Switch active provider to the one that emitted the event
     this._provider = provider;
+    const nextChainId = await this.getCurrentChainId(provider);
+    // If another provider became active while awaiting, abort without mutating state
+    if (this._provider !== provider) return;
+
     this.currentAddress = address;
-    this.currentChainId = await this.getCurrentChainId(provider);
+    this.currentChainId = nextChainId;
     this.connect({ chainId: this.currentChainId, address });
   }
 
@@ -695,8 +697,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       try {
         await this.disconnect();
       } finally {
-        this._provider = undefined;
-        this.removeProviderListeners(provider);
+        this.untrackProvider(provider);
       }
     };
     provider.on("disconnect", listener);
