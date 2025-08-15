@@ -899,7 +899,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    const isMutable = this.isMutableEIP1193Provider(provider);
     // Removed redundant mutability check; rely on try-catch below for assignment errors.
 
     // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
@@ -928,7 +927,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Capture chainId once to avoid race conditions
         let capturedChainId: number | undefined = undefined;
         // Only use cached chainId if it's for the same provider instance
-        if (this.currentChainId !== null && this.currentChainId !== undefined && this._chainIdProvider === provider) {
+        if (this.currentChainId != null && this._chainIdProvider === provider) {
           capturedChainId = this.currentChainId;
         } else {
           capturedChainId = await this.getCurrentChainId(provider);
@@ -1051,12 +1050,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] = wrappedRequest;
 
     try {
-      // Prefer a type-safe assignment when possible
-      if (isMutable) {
-        provider.request = wrappedRequest;
-      } else {
-        logger.warn("Cannot wrap provider.request: property is not writable");
-      }
+      // Attempt to assign the wrapped request function
+      provider.request = wrappedRequest;
     } catch (e) {
       logger.warn("Failed to wrap provider.request; skipping", e);
     }
@@ -1427,7 +1422,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     const basePayload = {
-      chainId: chainId ?? this.currentChainId ?? 0,
+      chainId: chainId ?? this.currentChainId ?? undefined,
       address: validAddress,
     };
 
@@ -1464,7 +1459,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     return {
-      chainId: this.currentChainId ?? (await this.getCurrentChainId(provider)),
+      chainId: this.currentChainId || (await this.getCurrentChainId(provider)),
       data,
       address: validAddress,
       to,
