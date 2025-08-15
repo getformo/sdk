@@ -691,12 +691,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (this._provider && this._provider !== provider) return;
 
     // Final atomic check and commit
-    // Use a block to ensure all mutations are guarded
+    if (this._provider && this._provider !== provider) return;
+    
+    // Set provider if none exists
     if (!this._provider) {
       this._provider = provider;
-    }
-    if (this._provider !== provider) {
-      return;
     }
     
     this.currentChainId = nextChainId;
@@ -762,11 +761,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       
       if (chainId !== null && chainId !== undefined && address) {
         // Final atomic check and commit
+        if (this._provider && this._provider !== provider) return;
+        
+        // Set provider if none exists
         if (!this._provider) {
           this._provider = provider;
-        }
-        if (this._provider !== provider) {
-          return;
         }
         
         this.currentChainId = chainId;
@@ -1085,6 +1084,60 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
+  /**
+   * Attempts to detect information about an injected provider
+   * @param provider The injected provider to analyze
+   * @returns Provider information with fallback values
+   */
+  private detectInjectedProviderInfo(provider: EIP1193Provider): {
+    name: string;
+    rdns: string;
+    uuid: string;
+    icon: `data:image/${string}`;
+  } {
+    // Try to detect provider type from common properties
+    let name = 'Injected Provider';
+    let rdns = 'io.injected.provider';
+    
+    // Check if it's MetaMask
+    if ((provider as any).isMetaMask) {
+      name = 'MetaMask';
+      rdns = 'io.metamask';
+    }
+    // Check if it's Coinbase Wallet
+    else if ((provider as any).isCoinbaseWallet) {
+      name = 'Coinbase Wallet';
+      rdns = 'com.coinbase.wallet';
+    }
+    // Check if it's WalletConnect
+    else if ((provider as any).isWalletConnect) {
+      name = 'WalletConnect';
+      rdns = 'com.walletconnect';
+    }
+    // Check if it's Trust Wallet
+    else if ((provider as any).isTrust) {
+      name = 'Trust Wallet';
+      rdns = 'com.trustwallet';
+    }
+    // Check if it's Brave Wallet
+    else if ((provider as any).isBraveWallet) {
+      name = 'Brave Wallet';
+      rdns = 'com.brave.wallet';
+    }
+    // Check if it's Phantom
+    else if ((provider as any).isPhantom) {
+      name = 'Phantom';
+      rdns = 'app.phantom';
+    }
+    
+    return {
+      name,
+      rdns,
+      uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, '-')}`,
+      icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDJMMiA3VjIwTDEyIDIyTDIyIDIwVjdMMTIgMloiIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPHBhdGggZD0iTTIgN0wxMiAxMkwyMiA3IiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+'
+    };
+  }
+
   private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
     let providers = store.getProviders();
@@ -1110,14 +1163,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (injected) {
         this.trackProvider(injected);
         // Create a mock EIP6963ProviderDetail for the injected provider
+        const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
         const injectedDetail: EIP6963ProviderDetail = {
           provider: injected,
-          info: {
-            name: 'Injected Provider',
-            rdns: 'io.metamask',
-            uuid: 'injected-provider',
-            icon: 'data:image/svg+xml;base64,'
-          }
+          info: injectedProviderInfo
         };
         this._providers = [injectedDetail];
       }
