@@ -830,7 +830,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
         
         this.currentChainId = chainId;
-        this.connect({ chainId, address });
+        // Fire-and-forget analytics tracking - don't block the critical path
+        this.connect({ chainId, address }).catch(error => {
+          logger.error("Failed to track connect event in onConnected:", error);
+        });
       }
     } catch (e) {
       logger.error("Error handling connect event", e);
@@ -844,13 +847,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
-    if (descriptor && descriptor.writable === false) {
-      logger.warn("Provider.request is not writable");
-      return;
-    }
-    if (descriptor && descriptor.get && !descriptor.set) {
-      logger.warn("Cannot wrap provider.request: property is read-only accessor without setter");
+    if (!this.isMutableEIP1193Provider(provider)) {
+      logger.warn("Cannot wrap provider.request: property is not writable or is a read-only accessor without setter");
       return;
     }
 
@@ -877,7 +875,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
         // Capture chainId once to avoid race conditions
-        const chainId = this.currentChainId ?? (await this.getCurrentChainId(provider));
+        let chainId = this.currentChainId;
+        if (chainId == null) {
+          chainId = await this.getCurrentChainId(provider);
+        }
         // Fire-and-forget tracking
         (async () => {
           try {
@@ -1237,7 +1238,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
-      if (injected) {
+      if (injected && !this._trackedProviders.has(injected)) {
         this.trackProvider(injected);
         // Create a mock EIP6963ProviderDetail for the injected provider
         const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
