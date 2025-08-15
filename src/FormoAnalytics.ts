@@ -39,6 +39,7 @@ import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
 const WRAPPED_REQUEST_SYMBOL = Symbol("formoWrappedRequest");
+const WRAPPED_REQUEST_REF_SYMBOL = Symbol("formoWrappedRequestRef");
 type WrappedRequestFunction = (<T>(args: RequestArguments) => Promise<T | null | undefined>) & {
   [key in typeof WRAPPED_REQUEST_SYMBOL]?: boolean;
 };
@@ -621,12 +622,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    // Switch active provider to the one that emitted the event
-    this._provider = provider;
+    // Prepare new chainId first to avoid race; do not mutate state yet
     const nextChainId = await this.getCurrentChainId(provider);
-    // If another provider became active while awaiting, abort without mutating state
-    if (this._provider !== provider) return;
+    // If another provider became active while awaiting, abort
+    if (this._provider && this._provider !== provider) return;
 
+    // Commit new active provider and state
+    this._provider = provider;
     this.currentAddress = address;
     this.currentChainId = nextChainId;
     this.connect({ chainId: this.currentChainId, address });
@@ -648,27 +650,32 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (this._provider && this._provider !== provider) {
       return;
     }
-    if (!this._provider) {
-      // Select provider if none is active yet
-      this._provider = provider;
-    }
 
-    this.currentChainId = nextChainId;
+    // Avoid mutating provider until we have required data
+    let addressToUse: Address | undefined = this.currentAddress;
 
-    if (!this.currentAddress) {
-      const address = await this.getAddress(provider);
-      if (!address) {
+    if (!addressToUse) {
+      const fetched = await this.getAddress(provider);
+      if (!fetched) {
         logger.info(
           "OnChainChanged: Unable to fetch or store connected address"
         );
         return Promise.resolve();
       }
-      const validAddress = getValidAddress(address);
-      this.currentAddress = validAddress ? toChecksumAddress(validAddress) : undefined;
+      const validAddress = getValidAddress(fetched);
+      addressToUse = validAddress ? toChecksumAddress(validAddress) : undefined;
     }
 
+    // If another provider became active while awaiting, abort
+    if (this._provider && this._provider !== provider) return;
+
+    // Commit
+    this._provider = this._provider || provider;
+    this.currentChainId = nextChainId;
+
     // Proceed only if the address exists
-    if (this.currentAddress) {
+    if (addressToUse) {
+      this.currentAddress = addressToUse;
       return this.chain({
         chainId: this.currentChainId,
         address: this.currentAddress,
@@ -710,6 +717,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (!connection || typeof connection.chainId !== 'string') return;
       const chainId = parseChainId(connection.chainId);
       const address = await this.getAddress(provider);
+      // If another provider became active while awaiting, abort
+      if (this._provider && this._provider !== provider) return;
       if (chainId !== null && chainId !== undefined && address) {
         this._provider = provider;
         this.currentChainId = chainId;
@@ -739,7 +748,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
     const currentRequest = provider.request as WrappedRequestFunction;
-    if (currentRequest && currentRequest[WRAPPED_REQUEST_SYMBOL]) {
+    if (
+      currentRequest &&
+      currentRequest[WRAPPED_REQUEST_SYMBOL] &&
+      (provider as any)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
+    ) {
       logger.debug("Provider already wrapped; skipping request wrapping.");
       return;
     }
@@ -867,8 +880,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       return request({ method, params });
     };
-    // Mark the wrapper so we can detect if request is replaced externally
+    // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
     wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
+    (provider as any)[WRAPPED_REQUEST_REF_SYMBOL] = wrappedRequest;
 
     try {
       // Prefer a type-safe assignment when possible
@@ -1285,7 +1299,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   // Explicitly untrack a provider: remove listeners, clear wrapper flag and tracking
-  public untrackProvider(provider: EIP1193Provider): void {
+  private untrackProvider(provider: EIP1193Provider): void {
     try {
       this.removeProviderListeners(provider);
       this._trackedProviders.delete(provider);
@@ -1295,6 +1309,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch (e) {
       logger.warn("Failed to untrack provider", e);
     }
+  }
+
+  // Debug/monitoring helpers
+  public getTrackedProvidersCount(): number {
+    return this._trackedProviders.size;
   }
 }
 
