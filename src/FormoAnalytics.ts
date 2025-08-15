@@ -7,6 +7,7 @@ import {
   SESSION_USER_ID_KEY,
   SESSION_WALLET_DETECTED_KEY,
   TEventType,
+  DEFAULT_PROVIDER_ICON,
 } from "./constants";
 import {
   cookie,
@@ -57,6 +58,15 @@ export class FormoAnalytics implements IFormoAnalytics {
   currentChainId?: ChainID;
   currentAddress?: Address;
   currentUserId?: string = "";
+
+  /**
+   * Helper method to check if a provider is different from the currently active one
+   * @param provider The provider to check
+   * @returns true if there's a provider mismatch, false otherwise
+   */
+  private isProviderMismatch(provider: EIP1193Provider): boolean {
+    return !!(this._provider && this._provider !== provider);
+  }
 
   private constructor(
     public readonly writeKey: string,
@@ -608,8 +618,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (this._provider === provider) {
         try {
           await this.disconnect();
-          // Only untrack if disconnect succeeded
-          this.untrackProvider(provider);
+          // Do not untrack provider here to avoid interfering with reconnection scenarios
+          // this.untrackProvider(provider);
         } catch (error) {
           logger.error("Failed to disconnect provider on accountsChanged", error);
           // Don't untrack if disconnect failed to maintain state consistency
@@ -637,7 +647,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (token !== this._accountsChangedToken) return;
 
     // Final atomic check and commit
-    if (this._provider && this._provider !== provider) return;
+    if (this.isProviderMismatch(provider)) return;
 
     // Commit new active provider and state
     this._provider = provider;
@@ -664,7 +674,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const nextChainId = parseChainId(chainIdHex);
 
     // Only handle chain changes for the active provider (or if none is set yet)
-    if (this._provider && this._provider !== provider) {
+    if (this.isProviderMismatch(provider)) {
       return;
     }
 
@@ -688,10 +698,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // If another provider became active while awaiting, abort
     if (token !== this._chainChangedToken) return;
-    if (this._provider && this._provider !== provider) return;
+    if (this.isProviderMismatch(provider)) return;
 
     // Final atomic check and commit
-    if (this._provider && this._provider !== provider) return;
+    if (this.isProviderMismatch(provider)) return;
     
     // Set provider if none exists
     if (!this._provider) {
@@ -730,8 +740,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (this._provider !== provider) return;
       try {
         await this.disconnect();
-        // Only untrack if disconnect succeeded
-        this.untrackProvider(provider);
+        // Do not untrack provider here to avoid interfering with reconnection scenarios
+        // this.untrackProvider(provider);
       } catch (e) {
         logger.error("Error during disconnect in disconnect listener", e);
         // Don't untrack if disconnect failed to maintain state consistency
@@ -757,11 +767,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (token !== this._connectedToken) return;
       
       // If another provider became active while awaiting, abort
-      if (this._provider && this._provider !== provider) return;
+      if (this.isProviderMismatch(provider)) return;
       
       if (chainId !== null && chainId !== undefined && address) {
         // Final atomic check and commit
-        if (this._provider && this._provider !== provider) return;
+        if (this.isProviderMismatch(provider)) return;
         
         // Set provider if none exists
         if (!this._provider) {
@@ -1134,7 +1144,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       name,
       rdns,
       uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, '-')}`,
-      icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDJMMiA3VjIwTDEyIDIyTDIyIDIwVjdMMTIgMloiIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPHBhdGggZD0iTTIgN0wxMiAxMkwyMiA3IiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+'
+      icon: DEFAULT_PROVIDER_ICON
     };
   }
 
@@ -1158,7 +1168,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      this._providers = [];
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
       if (injected) {
         this.trackProvider(injected);
