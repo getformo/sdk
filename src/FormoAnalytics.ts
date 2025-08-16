@@ -7,6 +7,7 @@ import {
   SESSION_USER_ID_KEY,
   SESSION_WALLET_DETECTED_KEY,
   TEventType,
+  DEFAULT_PROVIDER_ICON,
 } from "./constants";
 import {
   cookie,
@@ -32,6 +33,10 @@ import {
   TrackingOptions,
   TransactionStatus,
   ConnectInfo,
+  WrappedEIP1193Provider,
+  WrappedRequestFunction,
+  WRAPPED_REQUEST_SYMBOL,
+  WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { toChecksumAddress } from "./utils";
 import { isValidAddress, getValidAddress } from "./utils/address";
@@ -40,15 +45,107 @@ import { parseChainId } from "./utils/chain";
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _providerListeners: Record<string, (...args: unknown[]) => void> = {};
+  private _providerListenersMap: WeakMap<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new WeakMap();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
+  /**
+   * EIP-6963 provider details discovered through the browser
+   * This array contains all available providers with their metadata
+   */
   private _providers: readonly EIP6963ProviderDetail[] = [];
+  
+  /**
+   * Set of providers that have been tracked with event listeners
+   * This is separate from _providers because:
+   * - _providers contains all discovered providers (EIP-6963)
+   * - _trackedProviders contains only providers that have been set up with listeners
+   * - A provider can be discovered but not yet tracked (e.g., during initialization)
+   * - A provider can be tracked but later removed from discovery
+   */
+  private _trackedProviders: Set<EIP1193Provider> = new Set();
+  
+  // Remove global tokens and replace with provider-specific tracking
+  private _providerOperationMap: WeakMap<EIP1193Provider, {
+    accountsChanged: Symbol;
+    chainChanged: Symbol;
+    connected: Symbol;
+  }> = new WeakMap();
+  
+  // Track which provider the cached chainId belongs to to avoid unnecessary network requests
+  private _chainIdProvider?: EIP1193Provider;
 
   config: Config;
   currentChainId?: ChainID;
   currentAddress?: Address;
   currentUserId?: string = "";
+
+  /**
+   * Helper method to check if a provider is different from the currently active one
+   * @param provider The provider to check
+   * @returns true if there's a provider mismatch, false otherwise
+   */
+  private isProviderMismatch(provider: EIP1193Provider): boolean {
+    // Only consider it a mismatch if we have an active provider AND the provider is different
+    // This allows legitimate provider switching while preventing race conditions
+    return this._provider != null && this._provider !== provider;
+  }
+
+  /**
+   * Check if a provider is in a valid state for switching
+   * @param provider The provider to validate
+   * @returns true if the provider is in a valid state
+   */
+  private isProviderInValidState(provider: EIP1193Provider): boolean {
+    // Basic validation: ensure provider exists and has required methods
+    return (
+      provider &&
+      typeof provider.request === 'function' &&
+      typeof provider.on === 'function' &&
+      typeof provider.removeListener === 'function'
+    );
+  }
+
+  /**
+   * Get or create operation tokens for a specific provider
+   * @param provider The provider to get tokens for
+   * @returns Object containing operation tokens
+   */
+  private getProviderOperationTokens(provider: EIP1193Provider) {
+    let tokens = this._providerOperationMap.get(provider);
+    if (!tokens) {
+      tokens = {
+        accountsChanged: Symbol(),
+        chainChanged: Symbol(),
+        connected: Symbol(),
+      };
+      this._providerOperationMap.set(provider, tokens);
+    }
+    return tokens;
+  }
+
+  /**
+   * Check if an operation token is still valid for a provider
+   * @param provider The provider to check
+   * @param operationType The type of operation
+   * @param token The token to validate
+   * @returns true if the token is still valid
+   */
+  private isOperationTokenValid(
+    provider: EIP1193Provider,
+    operationType: 'accountsChanged' | 'chainChanged' | 'connected',
+    token: Symbol
+  ): boolean {
+    const tokens = this._providerOperationMap.get(provider);
+    return tokens != null && tokens[operationType] === token;
+  }
+
+  /**
+   * Invalidate operation tokens for a provider when switching away from it
+   * @param provider The provider to invalidate tokens for
+   */
+  private invalidateProviderOperationTokens(provider: EIP1193Provider): void {
+    this._providerOperationMap.delete(provider);
+  }
 
   private constructor(
     public readonly writeKey: string,
@@ -88,8 +185,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       })
     );
 
-    // TODO: replace with eip6963
-    const provider = options.provider || window?.ethereum;
+    // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
+    let provider: EIP1193Provider | undefined = undefined;
+    const optProvider = options.provider as EIP1193Provider | undefined;
+    if (optProvider) {
+      provider = optProvider;
+    } else if (typeof window !== 'undefined' && window.ethereum) {
+      provider = window.ethereum;
+    }
+    
     if (provider) {
       this.trackProvider(provider);
     }
@@ -108,6 +212,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Auto-detect wallet provider
     analytics._providers = await analytics.getProviders();
     await analytics.detectWallets(analytics._providers);
+    analytics.trackProviders(analytics._providers);
 
     return analytics;
   }
@@ -175,8 +280,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    const validAddress = getValidAddress(address);
-    this.currentAddress = validAddress ? toChecksumAddress(validAddress) : undefined;
+    this.currentAddress = this.validateAndChecksumAddress(address);
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -443,8 +547,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      const validAddress = getValidAddress(address);
-      if (validAddress) this.currentAddress = toChecksumAddress(validAddress);
+      this.currentAddress = address ? this.validateAndChecksumAddress(address) : undefined;
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -453,7 +556,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: validAddress ? toChecksumAddress(validAddress) : undefined,
+          address: address ? this.validateAndChecksumAddress(address) : undefined,
           providerName,
           userId,
           rdns,
@@ -536,51 +639,76 @@ export class FormoAnalytics implements IFormoAnalytics {
   private trackProvider(provider: EIP1193Provider): void {
     logger.info("trackProvider", provider);
     try {
-      if (provider === this._provider) {
+      if (!provider) return;
+      if (this._trackedProviders.has(provider)) {
         logger.warn("TrackProvider: Provider already tracked.");
         return;
       }
 
-      this.currentChainId = undefined;
-      this.currentAddress = undefined;
+      this._trackedProviders.add(provider);
 
-      if (this._provider) {
-        const actions = Object.keys(this._providerListeners);
-        for (const action of actions) {
-          this._provider.removeListener(
-            action,
-            this._providerListeners[action]
-          );
-          delete this._providerListeners[action];
-        }
-      }
-
-      this._provider = provider;
-
-      // Register listeners for web3 provider events
-      this.registerAccountsChangedListener();
-      this.registerChainChangedListener();
-      this.registerConnectListener();
-      this.registerRequestListeners();
+      // Register listeners for this provider
+      this.registerAccountsChangedListener(provider);
+      this.registerChainChangedListener(provider);
+      this.registerConnectListener(provider);
+      this.registerRequestListeners(provider);
+      this.registerDisconnectListener(provider);
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
   }
 
-  private registerAccountsChangedListener(): void {
-    logger.info("registerAccountsChangedListener");
-    const listener = (...args: unknown[]) =>
-      this.onAccountsChanged(args[0] as string[]);
-
-    this._provider?.on("accountsChanged", listener);
-    this._providerListeners["accountsChanged"] = listener;
+  private trackProviders(providers: readonly EIP6963ProviderDetail[]): void {
+    try {
+      for (const eip6963ProviderDetail of providers) {
+        const provider = eip6963ProviderDetail?.provider as EIP1193Provider | undefined;
+        if (provider) {
+          this.trackProvider(provider);
+        }
+      }
+    } catch (error) {
+      logger.error("Failed to track EIP-6963 providers during initialization:", error);
+    }
   }
 
-  private async onAccountsChanged(accounts: Address[]): Promise<void> {
+  private addProviderListener(
+    provider: EIP1193Provider,
+    event: string,
+    listener: (...args: unknown[]) => void
+  ): void {
+    const map = this._providerListenersMap.get(provider) || {};
+    map[event] = listener;
+    this._providerListenersMap.set(provider, map);
+  }
+
+  private registerAccountsChangedListener(provider: EIP1193Provider): void {
+    logger.info("registerAccountsChangedListener");
+    const listener = (...args: unknown[]) =>
+      this.onAccountsChanged(provider, args[0] as string[]);
+
+    provider.on("accountsChanged", listener);
+    this.addProviderListener(provider, "accountsChanged", listener);
+  }
+
+  private async onAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
     logger.info("onAccountsChanged", accounts);
+    
+    // Generate a unique token for this operation to prevent race conditions
+    const tokens = this.getProviderOperationTokens(provider);
+    const token = Symbol();
+    tokens.accountsChanged = token;
+
     if (accounts.length === 0) {
-      // Handle wallet disconnect
-      await this.disconnect();
+      // Handle wallet disconnect for active provider only
+      if (this._provider === provider) {
+        try {
+          await this.disconnect();
+          // Provider remains tracked to allow for reconnection scenarios
+        } catch (error) {
+          logger.error("Failed to disconnect provider on accountsChanged", error);
+          // Don't untrack if disconnect failed to maintain state consistency
+        }
+      }
       return;
     }
     
@@ -591,49 +719,102 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
     
-    const address = toChecksumAddress(validAddress);
-    if (address === this.currentAddress) {
-      // We have already reported this address
+    const address = validAddress ? toChecksumAddress(validAddress) : undefined;
+    
+    // If no valid address, skip processing
+    if (!address) {
+      logger.warn("onAccountsChanged: No valid address found");
       return;
     }
-    // Handle wallet connect
+    
+    // If both the provider and address are the same, no-op. Allow provider switches even if address is the same.
+    if (this._provider === provider && address === this.currentAddress) {
+      return;
+    }
+
+    // Prepare new chainId first to avoid race; do not mutate state yet
+    const nextChainId = await this.getCurrentChainId(provider);
+    // If another provider became active while awaiting, abort (token check)
+    if (!this.isOperationTokenValid(provider, 'accountsChanged', token)) return;
+
+    // Allow provider switching - remove the restrictive provider mismatch check
+    // Only prevent switching if we're in the middle of another operation with the same provider
+    if (this._provider && this._provider !== provider) {
+      // Validate that the new provider is in a valid state before switching
+      if (this.isProviderInValidState(provider)) {
+        // If we have a different active provider, allow the switch but invalidate the old provider's tokens
+        this.invalidateProviderOperationTokens(this._provider);
+      } else {
+        logger.warn("Provider switching blocked: new provider is not in a valid state");
+        return;
+      }
+    }
+
+    // Commit new active provider and state
+    this._provider = provider;
     this.currentAddress = address;
-    this.currentChainId = await this.getCurrentChainId();
-    this.connect({ chainId: this.currentChainId, address });
+    this.currentChainId = nextChainId;
+    // Fire-and-forget analytics tracking - don't block the critical path
+    this.connect({ chainId: this.currentChainId, address }).catch(error => {
+      logger.error("Failed to track connect event in onAccountsChanged:", error);
+    });
   }
 
-  private registerChainChangedListener(): void {
+  private registerChainChangedListener(provider: EIP1193Provider): void {
     logger.info("registerChainChangedListener");
     const listener = (...args: unknown[]) =>
-      this.onChainChanged(args[0] as string);
-    this.provider?.on("chainChanged", listener);
-    this._providerListeners["chainChanged"] = listener;
+      this.onChainChanged(provider, args[0] as string);
+    provider.on("chainChanged", listener);
+    this.addProviderListener(provider, "chainChanged", listener);
   }
 
-  private async onChainChanged(chainIdHex: string): Promise<void> {
+  private async onChainChanged(provider: EIP1193Provider, chainIdHex: string): Promise<void> {
     logger.info("onChainChanged", chainIdHex);
-    this.currentChainId = parseChainId(chainIdHex);
-    if (!this.currentAddress) {
-      if (!this.provider) {
-        logger.info(
-          "OnChainChanged: Provider not found. CHAIN_CHANGED not reported"
-        );
-        return Promise.resolve();
-      }
+    
+    // Generate a unique token for this operation to prevent race conditions
+    const tokens = this.getProviderOperationTokens(provider);
+    const token = Symbol();
+    tokens.chainChanged = token;
+    
+    const nextChainId = parseChainId(chainIdHex);
 
-      const address = await this.getAddress();
-      if (!address) {
+    // Only handle chain changes for the active provider (or if none is set yet)
+    if (this.isProviderMismatch(provider)) {
+      // If this is a different provider, allow the switch but invalidate old provider tokens
+      this.invalidateProviderOperationTokens(this._provider!);
+      this._provider = provider;
+    }
+
+    // Avoid mutating provider until we have required data
+    let addressToUse: Address | undefined = this.currentAddress;
+
+    if (!addressToUse) {
+      const fetched = await this.getAddress(provider);
+      // Check token after async operation
+      if (!this.isOperationTokenValid(provider, 'chainChanged', token)) return;
+      
+      if (!fetched) {
         logger.info(
           "OnChainChanged: Unable to fetch or store connected address"
         );
         return Promise.resolve();
       }
-      const validAddress = getValidAddress(address);
-      this.currentAddress = validAddress ? toChecksumAddress(validAddress) : undefined;
+      addressToUse = this.validateAndChecksumAddress(fetched);
     }
 
+    // If another provider became active while awaiting, abort
+    if (!this.isOperationTokenValid(provider, 'chainChanged', token)) return;
+    
+    // Set provider if none exists
+    if (!this._provider) {
+      this._provider = provider;
+    }
+    
+    this.currentChainId = nextChainId;
+
     // Proceed only if the address exists
-    if (this.currentAddress) {
+    if (addressToUse) {
+      this.currentAddress = addressToUse;
       return this.chain({
         chainId: this.currentChainId,
         address: this.currentAddress,
@@ -645,47 +826,96 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private registerConnectListener(): void {
+  private registerConnectListener(provider: EIP1193Provider): void {
     logger.info("registerConnectListener");
     const listener = (...args: unknown[]) => {
       const connection: ConnectInfo = args[0] as ConnectInfo;
-      this.onConnected(connection);
+      this.onConnected(provider, connection);
     };
-    this._provider?.on("connect", listener);
-    this._providerListeners["connect"] = listener;
+    provider.on("connect", listener);
+    this.addProviderListener(provider, "connect", listener);
   }
 
-  private async onConnected(connection: ConnectInfo): Promise<void> {
+  private registerDisconnectListener(provider: EIP1193Provider): void {
+    logger.info("registerDisconnectListener");
+    const listener = async (_error?: unknown) => {
+      if (this._provider !== provider) return;
+      try {
+        await this.disconnect();
+        // Provider remains tracked to allow for reconnection scenarios
+      } catch (e) {
+        logger.error("Error during disconnect in disconnect listener", e);
+        // Don't untrack if disconnect failed to maintain state consistency
+      }
+    };
+    provider.on("disconnect", listener);
+    this.addProviderListener(provider, "disconnect", listener);
+  }
+
+  private async onConnected(provider: EIP1193Provider, connection: ConnectInfo): Promise<void> {
     logger.info("onConnected", connection);
+    
+    // Generate a unique token for this operation to prevent race conditions
+    const tokens = this.getProviderOperationTokens(provider);
+    const token = Symbol();
+    tokens.connected = token;
+    
     try {
       if (!connection || typeof connection.chainId !== 'string') return;
       const chainId = parseChainId(connection.chainId);
-      const address = await this.getAddress();
+      const address = await this.getAddress(provider);
+      
+      // Check token after async operation
+      if (!this.isOperationTokenValid(provider, 'connected', token)) return;
+      
+      // Allow provider switching - remove the restrictive provider mismatch check
+      // Only prevent switching if we're in the middle of another operation with the same provider
+      if (this._provider && this._provider !== provider) {
+        // If we have a different active provider, allow the switch but invalidate the old provider's tokens
+        this.invalidateProviderOperationTokens(this._provider);
+      }
+      
       if (chainId !== null && chainId !== undefined && address) {
-        this.connect({ chainId, address });
+        // Set provider if none exists
+        if (!this._provider) {
+          this._provider = provider;
+        }
+        
+        this.currentChainId = chainId;
+        // Fire-and-forget analytics tracking - don't block the critical path
+        this.connect({ chainId, address }).catch(error => {
+          logger.error("Failed to track connect event in onConnected:", error);
+        });
       }
     } catch (e) {
       logger.error("Error handling connect event", e);
     }
   }
 
-  private registerRequestListeners(): void {
+  private registerRequestListeners(provider: EIP1193Provider): void {
     logger.info("registerRequestListeners");
-    if (!this.provider) {
+    if (!provider) {
       logger.error("Provider not found for request (signature, transaction) tracking");
       return;
     }
+
+    // Removed redundant mutability check; rely on try-catch below for assignment errors.
+
+    // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
+    const currentRequest = provider.request as WrappedRequestFunction;
     if (
-      Object.getOwnPropertyDescriptor(this.provider, "request")?.writable ===
-      false
+      currentRequest &&
+      typeof currentRequest === 'function' &&
+      currentRequest[WRAPPED_REQUEST_SYMBOL] &&
+      (provider as any)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
     ) {
-      logger.warn("Provider.request is not writable");
+      logger.debug("Provider already wrapped; skipping request wrapping.");
       return;
     }
 
-    const request = this.provider.request.bind(this.provider);
+    const request = provider.request.bind(provider);
 
-    this.provider.request = async <T>({
+    const wrappedRequest: WrappedRequestFunction = async <T>({
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
@@ -694,12 +924,22 @@ export class FormoAnalytics implements IFormoAnalytics {
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
+        // Capture chainId once to avoid race conditions
+        let capturedChainId: number | undefined = undefined;
+        // Only use cached chainId if it's for the same provider instance
+        if (this.currentChainId != null && this._chainIdProvider === provider) {
+          capturedChainId = this.currentChainId;
+        } else {
+          capturedChainId = await this.getCurrentChainId(provider);
+          this.currentChainId = capturedChainId;
+          this._chainIdProvider = provider;
+        }
         // Fire-and-forget tracking
         (async () => {
           try {
             this.signature({
               status: SignatureStatus.REQUESTED,
-              ...this.buildSignatureEventPayload(method, params),
+              ...this.buildSignatureEventPayload(method, params, undefined, capturedChainId),
             });
           } catch (e) {
             logger.error("Formo: Failed to track signature request", e);
@@ -709,16 +949,16 @@ export class FormoAnalytics implements IFormoAnalytics {
         try {
           const response = (await request({ method, params })) as T;
           (async () => {
-            try {
-              if (response) {
-                this.signature({
-                  status: SignatureStatus.CONFIRMED,
-                  ...this.buildSignatureEventPayload(method, params, response),
-                });
-              }
-            } catch (e) {
-              logger.error("Formo: Failed to track signature confirmation", e);
+                      try {
+            if (response) {
+              this.signature({
+                status: SignatureStatus.CONFIRMED,
+                ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
+              });
             }
+          } catch (e) {
+            logger.error("Formo: Failed to track signature confirmation", e);
+          }
           })();
           return response;
         } catch (error) {
@@ -728,7 +968,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               if (rpcError && rpcError?.code === 4001) {
                 this.signature({
                   status: SignatureStatus.REJECTED,
-                  ...this.buildSignatureEventPayload(method, params),
+                  ...this.buildSignatureEventPayload(method, params, undefined, capturedChainId),
                 });
               }
             } catch (e) {
@@ -748,7 +988,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       ) {
         (async () => {
           try {
-            const payload = await this.buildTransactionEventPayload(params);
+            const payload = await this.buildTransactionEventPayload(params, provider);
             this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
@@ -763,7 +1003,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
           (async () => {
             try {
-              const payload = await this.buildTransactionEventPayload(params);
+              const payload = await this.buildTransactionEventPayload(params, provider);
               this.transaction({
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
@@ -771,7 +1011,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               });
 
               // Start async polling for transaction receipt
-              this.pollTransactionReceipt(transactionHash, payload);
+              this.pollTransactionReceipt(provider, transactionHash, payload);
             } catch (e) {
               logger.error(
                 "Formo: Failed to track transaction broadcast",
@@ -787,7 +1027,8 @@ export class FormoAnalytics implements IFormoAnalytics {
               const rpcError = error as RPCError;
               if (rpcError && rpcError?.code === 4001) {
                 const payload = await this.buildTransactionEventPayload(
-                  params
+                  params,
+                  provider
                 );
                 this.transaction({
                   status: TransactionStatus.REJECTED,
@@ -804,6 +1045,16 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       return request({ method, params });
     };
+    // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
+    wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
+    (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] = wrappedRequest;
+
+    try {
+      // Attempt to assign the wrapped request function
+      provider.request = wrappedRequest;
+    } catch (e) {
+      logger.warn("Failed to wrap provider.request; skipping", e);
+    }
   }
 
   private async onLocationChange(): Promise<void> {
@@ -946,17 +1197,119 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
+  /**
+   * Check if a provider's request method can be wrapped/modified
+   * @param provider The provider to check
+   * @returns true if the provider's request method is mutable
+   */
+  private isMutableEIP1193Provider(provider: EIP1193Provider): boolean {
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
+      if (descriptor && (descriptor.writable === false || (descriptor.get && !descriptor.set))) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return typeof provider.request === "function";
+  }
+
+  /**
+   * Attempts to detect information about an injected provider
+   * @param provider The injected provider to analyze
+   * @returns Provider information with fallback values
+   */
+  private detectInjectedProviderInfo(provider: EIP1193Provider): {
+    name: string;
+    rdns: string;
+    uuid: string;
+    icon: `data:image/${string}`;
+  } {
+    // Try to detect provider type from common properties
+    let name = 'Injected Provider';
+    let rdns = 'io.injected.provider';
+    
+    // Check if it's MetaMask
+    if ((provider as any).isMetaMask) {
+      name = 'MetaMask';
+      rdns = 'io.metamask';
+    }
+    // Check if it's Coinbase Wallet
+    else if ((provider as any).isCoinbaseWallet) {
+      name = 'Coinbase Wallet';
+      rdns = 'com.coinbase.wallet';
+    }
+    // Check if it's WalletConnect
+    else if ((provider as any).isWalletConnect) {
+      name = 'WalletConnect';
+      rdns = 'com.walletconnect';
+    }
+    // Check if it's Trust Wallet
+    else if ((provider as any).isTrust) {
+      name = 'Trust Wallet';
+      rdns = 'com.trustwallet';
+    }
+    // Check if it's Brave Wallet
+    else if ((provider as any).isBraveWallet) {
+      name = 'Brave Wallet';
+      rdns = 'com.brave.wallet';
+    }
+    // Check if it's Phantom
+    else if ((provider as any).isPhantom) {
+      name = 'Phantom';
+      rdns = 'app.phantom';
+    }
+    
+    return {
+      name,
+      rdns,
+      uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, '-')}`,
+      icon: DEFAULT_PROVIDER_ICON
+    };
+  }
+
   private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
     let providers = store.getProviders();
     store.subscribe((providerDetails) => {
       providers = providerDetails;
-      this._providers = providers;
+      // Merge with existing providers instead of overwriting
+      this._providers = [...this._providers, ...providerDetails.filter(detail => 
+        !this._providers.some(existing => existing.provider === detail?.provider)
+      )];
+      
+      // Track listeners for newly discovered providers only
+      const newDetails = providerDetails.filter((detail) => {
+        const p = detail?.provider as EIP1193Provider | undefined;
+        return !!p && !this._trackedProviders.has(p);
+      });
+      if (newDetails.length > 0) {
+        this.trackProviders(newDetails);
+        // Detect newly discovered wallets (session de-dupes) with error handling
+        this.detectWallets(newDetails).catch(error => {
+          logger.error("Failed to detect wallets during EIP-6963 subscription:", error);
+        });
+      }
     });
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      this._providers = window?.ethereum ? [window.ethereum] : [];
+      // Refetch window.ethereum and re-check tracking immediately before tracking
+      const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
+      if (injected) {
+        // Re-check if the injected provider is already tracked just before tracking
+        if (!this._trackedProviders.has(injected)) {
+          this.trackProvider(injected);
+          // Create a mock EIP6963ProviderDetail for the injected provider
+          const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
+          const injectedDetail: EIP6963ProviderDetail = {
+            provider: injected,
+            info: injectedProviderInfo
+          };
+          // Merge with existing providers instead of overwriting
+          this._providers = [...this._providers, injectedDetail];
+        }
+      }
       return this._providers;
     }
     this._providers = providers;
@@ -999,13 +1352,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        const validAddress = getValidAddress(accounts[0]);
-        if (validAddress) {
-          return toChecksumAddress(validAddress);
-        }
+        return this.validateAndChecksumAddress(accounts[0]) || null;
       }
     } catch (err) {
-      logger.error("Failed to fetch accounts from provider:", err);
+      const code = (err as RPCError)?.code;
+      if (code !== 4001) {
+        logger.error(
+          "FormoAnalytics::getAccounts: eth_accounts threw an error",
+          err
+        );
+      }
       return null;
     }
     return null;
@@ -1021,11 +1377,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       });
       if (!res || res.length === 0) return null;
       return res
-        .map((e) => getValidAddress(e))
-        .filter((e): e is string => e !== null)
-        .map(toChecksumAddress);
+        .map((e) => this.validateAndChecksumAddress(e))
+        .filter((e): e is string => e !== undefined);
     } catch (err) {
-      if ((err as any).code !== 4001) {
+      const code = (err as RPCError)?.code;
+      if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
           err
@@ -1035,14 +1391,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private async getCurrentChainId(): Promise<number> {
-    if (!this.provider) {
+  private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {
+    const p = provider || this.provider;
+    if (!p) {
       logger.error("Provider not set for chain ID");
     }
 
     let chainIdHex;
     try {
-      chainIdHex = await this.provider?.request<string>({
+      chainIdHex = await p?.request<string>({
         method: "eth_chainId",
       });
       if (!chainIdHex) {
@@ -1059,20 +1416,21 @@ export class FormoAnalytics implements IFormoAnalytics {
   private buildSignatureEventPayload(
     method: string,
     params: unknown[],
-    response?: unknown
+    response?: unknown,
+    chainId?: number
   ) {
     const rawAddress = method === "personal_sign"
       ? (params[1] as Address)
       : (params[0] as Address);
     
-    const validAddress = getValidAddress(rawAddress);
+    const validAddress = this.validateAndChecksumAddress(rawAddress);
     if (!validAddress) {
       throw new Error(`Invalid address in signature payload: ${rawAddress}`);
     }
     
     const basePayload = {
-      chainId: this.currentChainId,
-      address: toChecksumAddress(validAddress),
+      chainId: chainId ?? this.currentChainId ?? undefined,
+      address: validAddress,
     };
 
     if (method === "personal_sign") {
@@ -1094,7 +1452,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  private async buildTransactionEventPayload(params: unknown[]) {
+  private async buildTransactionEventPayload(params: unknown[], provider?: EIP1193Provider) {
     const { data, from, to, value } = params[0] as {
       data: string;
       from: string;
@@ -1102,15 +1460,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       value: string;
     };
     
-    const validAddress = getValidAddress(from);
+    const validAddress = this.validateAndChecksumAddress(from);
     if (!validAddress) {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
     
     return {
-      chainId: this.currentChainId || (await this.getCurrentChainId()),
+      chainId: this.currentChainId || (await this.getCurrentChainId(provider)),
       data,
-      address: toChecksumAddress(validAddress),
+      address: validAddress,
       to,
       value,
     };
@@ -1120,13 +1478,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Polls for transaction receipt and emits tx.status = CONFIRMED or REVERTED.
    */
   private async pollTransactionReceipt(
+    provider: EIP1193Provider,
     transactionHash: string,
     payload: any,
     maxAttempts = 10,
     intervalMs = 3000
   ) {
     let attempts = 0;
-    const provider = this.provider;
     if (!provider) return;
     type Receipt = { status: string | number } | null;
     const poll = async () => {
@@ -1162,6 +1520,50 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     };
     poll();
+  }
+
+
+
+  private removeProviderListeners(provider: EIP1193Provider): void {
+    const listeners = this._providerListenersMap.get(provider);
+    if (!listeners) return;
+    for (const [event, fn] of Object.entries(listeners)) {
+      try {
+        provider.removeListener(event, fn);
+      } catch (e) {
+        logger.warn(`Failed to remove listener for ${String(event)}`, e);
+      }
+    }
+    this._providerListenersMap.delete(provider);
+  }
+
+  // Explicitly untrack a provider: remove listeners, clear wrapper flag and tracking
+  private untrackProvider(provider: EIP1193Provider): void {
+    try {
+      this.removeProviderListeners(provider);
+      this._trackedProviders.delete(provider);
+      this.invalidateProviderOperationTokens(provider);
+      if (this._provider === provider) {
+        this._provider = undefined;
+      }
+    } catch (e) {
+      logger.warn("Failed to untrack provider", e);
+    }
+  }
+
+  // Debug/monitoring helpers
+  public getTrackedProvidersCount(): number {
+    return this._trackedProviders.size;
+  }
+  
+  /**
+   * Helper method to validate and checksum an address
+   * @param address The address to validate and checksum
+   * @returns The checksummed address or undefined if invalid
+   */
+  private validateAndChecksumAddress(address: string): Address | undefined {
+    const validAddress = getValidAddress(address);
+    return validAddress ? toChecksumAddress(validAddress) : undefined;
   }
 }
 
