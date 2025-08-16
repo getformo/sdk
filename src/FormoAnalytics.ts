@@ -87,7 +87,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private isProviderMismatch(provider: EIP1193Provider): boolean {
     // Only consider it a mismatch if we have an active provider AND the provider is different
     // This allows legitimate provider switching while preventing race conditions
-    return !!(this._provider && this._provider !== provider);
+    return this._provider != null && this._provider !== provider;
   }
 
   /**
@@ -97,7 +97,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private isProviderInValidState(provider: EIP1193Provider): boolean {
     // Basic validation: ensure provider exists and has required methods
-    return !!(
+    return (
       provider &&
       typeof provider.request === 'function' &&
       typeof provider.on === 'function' &&
@@ -136,7 +136,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     token: Symbol
   ): boolean {
     const tokens = this._providerOperationMap.get(provider);
-    return !!(tokens && tokens[operationType] && tokens[operationType] === token);
+    return tokens != null && tokens[operationType] === token;
   }
 
   /**
