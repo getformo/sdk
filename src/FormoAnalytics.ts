@@ -1273,7 +1273,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     let providers = store.getProviders();
     store.subscribe((providerDetails) => {
       providers = providerDetails;
-      this._providers = providers;
+      // Merge with existing providers instead of overwriting
+      this._providers = [...this._providers, ...providerDetails.filter(detail => 
+        !this._providers.some(existing => existing.provider === detail?.provider)
+      )];
+      
       // Track listeners for newly discovered providers only
       const newDetails = providerDetails.filter((detail) => {
         const p = detail?.provider as EIP1193Provider | undefined;
@@ -1281,8 +1285,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       });
       if (newDetails.length > 0) {
         this.trackProviders(newDetails);
-        // Detect newly discovered wallets (session de-dupes)
-        this.detectWallets(newDetails);
+        // Detect newly discovered wallets (session de-dupes) with error handling
+        this.detectWallets(newDetails).catch(error => {
+          logger.error("Failed to detect wallets during EIP-6963 subscription:", error);
+        });
       }
     });
 
@@ -1300,7 +1306,8 @@ export class FormoAnalytics implements IFormoAnalytics {
             provider: injected,
             info: injectedProviderInfo
           };
-          this._providers = [injectedDetail];
+          // Merge with existing providers instead of overwriting
+          this._providers = [...this._providers, injectedDetail];
         }
       }
       return this._providers;
