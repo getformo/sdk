@@ -64,7 +64,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * EIP-6963 provider details discovered through the browser
    * This array contains all available providers with their metadata
    */
-  private _providers: EIP6963ProviderDetail[] = [];
+  private _providers: readonly EIP6963ProviderDetail[] = [];
   
   /**
    * Set of providers that have been tracked with event listeners
@@ -91,6 +91,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   
   // Set to efficiently track seen providers for deduplication
   private _seenProviders: Set<EIP1193Provider> = new Set();
+  
+  // Set to efficiently track provider instances for O(1) lookup
+  private _providerInstances: Set<EIP1193Provider> = new Set();
 
   config: Config;
   currentChainId?: ChainID;
@@ -228,7 +231,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const analytics = new FormoAnalytics(writeKey, options);
 
     // Auto-detect wallet provider
-    analytics._providers = [...(await analytics.getProviders())];
+    analytics._providers = await analytics.getProviders();
     await analytics.detectWallets(analytics._providers);
     analytics.trackProviders(analytics._providers);
 
@@ -300,7 +303,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
     const checksummedAddress = this.validateAndChecksumAddress(address);
     if (!checksummedAddress) {
-      throw new Error("Connect: Invalid address provided");
+      throw new Error(
+        `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`
+      );
     }
     this.currentAddress = checksummedAddress;
 
@@ -936,12 +941,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
     const currentRequest = provider.request as WrappedRequestFunction;
-    if (
-      currentRequest &&
-      typeof currentRequest === 'function' &&
-      currentRequest[WRAPPED_REQUEST_SYMBOL] &&
-      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
-    ) {
+    if (this.isProviderAlreadyWrapped(provider, currentRequest)) {
       logger.info("Provider already wrapped; skipping request wrapping.");
       return;
     }
@@ -1311,13 +1311,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     let providers = store.getProviders();
     store.subscribe((providerDetails) => {
       providers = providerDetails;
-      // Efficiently deduplicate providers using an instance Set
-      for (const detail of providerDetails) {
+      // Only process newly added providers for deduplication
+      const newlyAddedDetails = providerDetails.filter((detail) => {
         const provider = detail?.provider;
-        if (provider && !this._seenProviders.has(provider)) {
-          this._seenProviders.add(provider);
-          this._providers.push(detail);
-        }
+        return provider && !this._seenProviders.has(provider);
+      });
+      for (const detail of newlyAddedDetails) {
+        const provider = detail.provider;
+        this._seenProviders.add(provider);
+        this._providers = [...this._providers, detail];
       }
       
       // Track listeners for newly discovered providers only
@@ -1366,14 +1368,17 @@ export class FormoAnalytics implements IFormoAnalytics {
         };
         // Cache the detected injected provider detail
         this._injectedProviderDetail = injectedDetail;
-        // Merge with existing providers instead of overwriting
-        if (!this._providers.some(existing => existing.provider === injected)) {
-          this._providers = [...this._providers, injectedDetail];
-        }
+                  // Merge with existing providers instead of overwriting
+          if (!this._providerInstances.has(injected)) {
+            this._providers = [...this._providers, injectedDetail];
+            this._providerInstances.add(injected);
+          }
       }
       return this._providers;
     }
     this._providers = [...providers];
+    // Keep _providerInstances in sync with _providers
+    this._providerInstances = new Set(this._providers.map(detail => detail.provider));
     return providers;
   }
 
@@ -1617,6 +1622,24 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._trackedProviders.size;
   }
   
+  /**
+   * Helper method to check if a provider is already wrapped
+   * @param provider The provider to check
+   * @param currentRequest The current request function
+   * @returns true if the provider is already wrapped
+   */
+  private isProviderAlreadyWrapped(
+    provider: EIP1193Provider,
+    currentRequest: WrappedRequestFunction | undefined
+  ): boolean {
+    return !!(
+      currentRequest &&
+      typeof currentRequest === 'function' &&
+      currentRequest[WRAPPED_REQUEST_SYMBOL] &&
+      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
+    );
+  }
+
   /**
    * Helper method to validate and checksum an address
    * @param address The address to validate and checksum
