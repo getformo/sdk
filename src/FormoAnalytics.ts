@@ -43,6 +43,18 @@ import { isValidAddress, getValidAddress } from "./utils/address";
 import { isAddress, isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
+/**
+ * Interface for wallet provider flags to avoid multiple any type assertions
+ */
+interface WalletProviderFlags {
+  isMetaMask?: boolean;
+  isCoinbaseWallet?: boolean;
+  isWalletConnect?: boolean;
+  isTrust?: boolean;
+  isBraveWallet?: boolean;
+  isPhantom?: boolean;
+}
+
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListenersMap: WeakMap<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new WeakMap();
@@ -928,7 +940,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       currentRequest &&
       typeof currentRequest === 'function' &&
       currentRequest[WRAPPED_REQUEST_SYMBOL] &&
-      (provider as any)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
+      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
     ) {
       logger.info("Provider already wrapped; skipping request wrapping.");
       return;
@@ -946,7 +958,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
         // Capture chainId once to avoid race conditions
-        let capturedChainId: number | undefined = undefined;
+        let capturedChainId: number | undefined;
         // Only use cached chainId if it's for the same provider instance
         if (this.currentChainId != null && this._chainIdProvider === provider) {
           capturedChainId = this.currentChainId;
@@ -1235,6 +1247,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     return typeof provider.request === "function";
   }
 
+
+
   /**
    * Attempts to detect information about an injected provider
    * @param provider The injected provider to analyze
@@ -1250,33 +1264,36 @@ export class FormoAnalytics implements IFormoAnalytics {
     let name = 'Injected Provider';
     let rdns = 'io.injected.provider';
     
+    // Use WalletProviderFlags interface for type safety
+    const flags = provider as WalletProviderFlags;
+    
     // Check if it's MetaMask
-    if ((provider as any).isMetaMask) {
+    if (flags.isMetaMask) {
       name = 'MetaMask';
       rdns = 'io.metamask';
     }
     // Check if it's Coinbase Wallet
-    else if ((provider as any).isCoinbaseWallet) {
+    else if (flags.isCoinbaseWallet) {
       name = 'Coinbase Wallet';
       rdns = 'com.coinbase.wallet';
     }
     // Check if it's WalletConnect
-    else if ((provider as any).isWalletConnect) {
+    else if (flags.isWalletConnect) {
       name = 'WalletConnect';
       rdns = 'com.walletconnect';
     }
     // Check if it's Trust Wallet
-    else if ((provider as any).isTrust) {
+    else if (flags.isTrust) {
       name = 'Trust Wallet';
       rdns = 'com.trustwallet';
     }
     // Check if it's Brave Wallet
-    else if ((provider as any).isBraveWallet) {
+    else if (flags.isBraveWallet) {
       name = 'Brave Wallet';
       rdns = 'com.brave.wallet';
     }
     // Check if it's Phantom
-    else if ((provider as any).isPhantom) {
+    else if (flags.isPhantom) {
       name = 'Phantom';
       rdns = 'app.phantom';
     }
