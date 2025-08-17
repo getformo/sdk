@@ -73,6 +73,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   
   // Track which provider the cached chainId belongs to to avoid unnecessary network requests
   private _chainIdProvider?: EIP1193Provider;
+  
+  // Cache for injected provider detection to avoid redundant operations
+  private _injectedProviderDetail?: EIP6963ProviderDetail;
 
   config: Config;
   currentChainId?: ChainID;
@@ -756,7 +759,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = nextChainId;
     // Fire-and-forget analytics tracking - don't block the critical path
     this.connect({ chainId: this.currentChainId, address }).catch(error => {
-      logger.error("Failed to track connect event in onAccountsChanged:", error);
+      logger.error("Failed to track connect event during account change:", error);
     });
   }
 
@@ -884,7 +887,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         this.currentChainId = chainId;
         // Fire-and-forget analytics tracking - don't block the critical path
         this.connect({ chainId, address }).catch(error => {
-          logger.error("Failed to track connect event in onConnected:", error);
+          logger.error("Failed to track connect event during provider connection:", error);
         });
       }
     } catch (e) {
@@ -909,7 +912,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       currentRequest[WRAPPED_REQUEST_SYMBOL] &&
       (provider as any)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
     ) {
-      logger.debug("Provider already wrapped; skipping request wrapping.");
+      logger.info("Provider already wrapped; skipping request wrapping.");
       return;
     }
 
@@ -1273,10 +1276,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     let providers = store.getProviders();
     store.subscribe((providerDetails) => {
       providers = providerDetails;
-      // Merge with existing providers instead of overwriting
-      this._providers = [...this._providers, ...providerDetails.filter(detail => 
-        !this._providers.some(existing => existing.provider === detail?.provider)
-      )];
+      // Merge with existing providers instead of overwriting, atomically deduplicating by provider reference
+      const allProviders = [...this._providers, ...providerDetails];
+      const seen = new Set();
+      this._providers = allProviders.filter(detail => {
+        if (!detail?.provider || seen.has(detail.provider)) return false;
+        seen.add(detail.provider);
+        return true;
+      });
       
       // Track listeners for newly discovered providers only
       const newDetails = providerDetails.filter((detail) => {
@@ -1297,16 +1304,35 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Refetch window.ethereum and re-check tracking immediately before tracking
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
       if (injected) {
+        // If we have already detected and cached the injected provider, and it's the same instance, return the cached result
+        if (
+          this._injectedProviderDetail &&
+          this._injectedProviderDetail.provider === injected
+        ) {
+          // Ensure it's tracked
+          if (!this._trackedProviders.has(injected)) {
+            this.trackProvider(injected);
+          }
+          // Merge with existing providers instead of overwriting
+          if (!this._providers.some(existing => existing.provider === injected)) {
+            this._providers = [...this._providers, this._injectedProviderDetail];
+          }
+          return this._providers;
+        }
         // Re-check if the injected provider is already tracked just before tracking
         if (!this._trackedProviders.has(injected)) {
           this.trackProvider(injected);
-          // Create a mock EIP6963ProviderDetail for the injected provider
-          const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
-          const injectedDetail: EIP6963ProviderDetail = {
-            provider: injected,
-            info: injectedProviderInfo
-          };
-          // Merge with existing providers instead of overwriting
+        }
+        // Create a mock EIP6963ProviderDetail for the injected provider
+        const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
+        const injectedDetail: EIP6963ProviderDetail = {
+          provider: injected,
+          info: injectedProviderInfo
+        };
+        // Cache the detected injected provider detail
+        this._injectedProviderDetail = injectedDetail;
+        // Merge with existing providers instead of overwriting
+        if (!this._providers.some(existing => existing.provider === injected)) {
           this._providers = [...this._providers, injectedDetail];
         }
       }
