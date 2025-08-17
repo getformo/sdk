@@ -7,7 +7,6 @@ import {
   SESSION_USER_ID_KEY,
   SESSION_WALLET_DETECTED_KEY,
   TEventType,
-  DEFAULT_PROVIDER_ICON,
 } from "./constants";
 import {
   cookie,
@@ -57,7 +56,7 @@ interface WalletProviderFlags {
 
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _providerListenersMap: WeakMap<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new WeakMap();
+  private _providerListenersMap: Map<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new Map();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   /**
@@ -75,13 +74,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    * - A provider can be tracked but later removed from discovery
    */
   private _trackedProviders: Set<EIP1193Provider> = new Set();
-  
-  // Remove global tokens and replace with provider-specific tracking
-  private _providerOperationMap: WeakMap<EIP1193Provider, {
-    accountsChanged: Symbol;
-    chainChanged: Symbol;
-    connected: Symbol;
-  }> = new WeakMap();
   
   // Track which provider the cached chainId belongs to to avoid unnecessary network requests
   private _chainIdProvider?: EIP1193Provider;
@@ -126,47 +118,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
   }
 
-  /**
-   * Get or create operation tokens for a specific provider
-   * @param provider The provider to get tokens for
-   * @returns Object containing operation tokens
-   */
-  private getProviderOperationTokens(provider: EIP1193Provider) {
-    let tokens = this._providerOperationMap.get(provider);
-    if (!tokens) {
-      tokens = {
-        accountsChanged: Symbol(),
-        chainChanged: Symbol(),
-        connected: Symbol(),
-      };
-      this._providerOperationMap.set(provider, tokens);
-    }
-    return tokens;
-  }
 
-  /**
-   * Check if an operation token is still valid for a provider
-   * @param provider The provider to check
-   * @param operationType The type of operation
-   * @param token The token to validate
-   * @returns true if the token is still valid
-   */
-  private isOperationTokenValid(
-    provider: EIP1193Provider,
-    operationType: 'accountsChanged' | 'chainChanged' | 'connected',
-    token: Symbol
-  ): boolean {
-    const tokens = this._providerOperationMap.get(provider);
-    return tokens != null && tokens[operationType] === token;
-  }
-
-  /**
-   * Invalidate operation tokens for a provider when switching away from it
-   * @param provider The provider to invalidate tokens for
-   */
-  private invalidateProviderOperationTokens(provider: EIP1193Provider): void {
-    this._providerOperationMap.delete(provider);
-  }
 
   private constructor(
     public readonly writeKey: string,
@@ -734,11 +686,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async onAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
     logger.info("onAccountsChanged", accounts);
-    
-    // Generate a unique token for this operation to prevent race conditions
-    const tokens = this.getProviderOperationTokens(provider);
-    const token = Symbol();
-    tokens.accountsChanged = token;
 
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
@@ -776,8 +723,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Prepare new chainId first to avoid race; do not mutate state yet
     const nextChainId = await this.getCurrentChainId(provider);
-    // If another provider became active while awaiting, abort (token check)
-    if (!this.isOperationTokenValid(provider, 'accountsChanged', token)) return;
 
     // Allow provider switching - remove the restrictive provider mismatch check
     // Only prevent switching if we're in the middle of another operation with the same provider
@@ -812,11 +757,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async onChainChanged(provider: EIP1193Provider, chainIdHex: string): Promise<void> {
     logger.info("onChainChanged", chainIdHex);
     
-    // Generate a unique token for this operation to prevent race conditions
-    const tokens = this.getProviderOperationTokens(provider);
-    const token = Symbol();
-    tokens.chainChanged = token;
-    
     const nextChainId = parseChainId(chainIdHex);
 
     // Only handle chain changes for the active provider (or if none is set yet)
@@ -829,8 +769,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (!addressToUse) {
       const fetched = await this.getAddress(provider);
-      // Check token after async operation
-      if (!this.isOperationTokenValid(provider, 'chainChanged', token)) return;
       
       if (!fetched) {
         logger.info(
@@ -841,8 +779,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       addressToUse = this.validateAndChecksumAddress(fetched);
     }
 
-    // If another provider became active while awaiting, abort
-    if (!this.isOperationTokenValid(provider, 'chainChanged', token)) return;
+
     
     // Set provider if none exists
     if (!this._provider) {
@@ -894,24 +831,15 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async onConnected(provider: EIP1193Provider, connection: ConnectInfo): Promise<void> {
     logger.info("onConnected", connection);
     
-    // Generate a unique token for this operation to prevent race conditions
-    const tokens = this.getProviderOperationTokens(provider);
-    const token = Symbol();
-    tokens.connected = token;
-    
     try {
       if (!connection || typeof connection.chainId !== 'string') return;
       const chainId = parseChainId(connection.chainId);
       const address = await this.getAddress(provider);
       
-      // Check token after async operation
-      if (!this.isOperationTokenValid(provider, 'connected', token)) return;
-      
       // Allow provider switching - remove the restrictive provider mismatch check
       // Only prevent switching if we're in the middle of another operation with the same provider
       if (this._provider && this._provider !== provider) {
-        // If we have a different active provider, allow the switch but invalidate the old provider's tokens
-        this.invalidateProviderOperationTokens(this._provider);
+        // If we have a different active provider, allow the switch
       }
       
       if (chainId !== null && chainId !== undefined && address) {
@@ -1232,22 +1160,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
-  /**
-   * Check if a provider's request method can be wrapped/modified
-   * @param provider The provider to check
-   * @returns true if the provider's request method is mutable
-   */
-  private isMutableEIP1193Provider(provider: EIP1193Provider): boolean {
-    try {
-      const descriptor = Object.getOwnPropertyDescriptor(provider, "request");
-      if (descriptor && (descriptor.writable === false || (descriptor.get && !descriptor.set))) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-    return typeof provider.request === "function";
-  }
+
 
 
 
@@ -1304,7 +1217,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       name,
       rdns,
       uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, '-')}`,
-      icon: DEFAULT_PROVIDER_ICON
+      icon: "data:image/svg+xml;base64,"
     };
   }
 
@@ -1610,7 +1523,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       this.removeProviderListeners(provider);
       this._trackedProviders.delete(provider);
-      this.invalidateProviderOperationTokens(provider);
+      
       if (this._provider === provider) {
         this._provider = undefined;
       }
@@ -1649,7 +1562,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private handleProviderMismatch(provider: EIP1193Provider): void {
     // If this is a different provider, allow the switch but invalidate old provider tokens
     if (this._provider) {
-      this.invalidateProviderOperationTokens(this._provider);
+
     }
     this._provider = provider;
   }
