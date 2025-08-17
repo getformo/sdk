@@ -52,7 +52,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * EIP-6963 provider details discovered through the browser
    * This array contains all available providers with their metadata
    */
-  private _providers: readonly EIP6963ProviderDetail[] = [];
+  private _providers: EIP6963ProviderDetail[] = [];
   
   /**
    * Set of providers that have been tracked with event listeners
@@ -76,6 +76,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   
   // Cache for injected provider detection to avoid redundant operations
   private _injectedProviderDetail?: EIP6963ProviderDetail;
+  
+  // Set to efficiently track seen providers for deduplication
+  private _seenProviders: Set<EIP1193Provider> = new Set();
 
   config: Config;
   currentChainId?: ChainID;
@@ -213,7 +216,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     const analytics = new FormoAnalytics(writeKey, options);
 
     // Auto-detect wallet provider
-    analytics._providers = await analytics.getProviders();
+    analytics._providers = [...(await analytics.getProviders())];
     await analytics.detectWallets(analytics._providers);
     analytics.trackProviders(analytics._providers);
 
@@ -283,7 +286,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    this.currentAddress = this.validateAndChecksumAddress(address);
+    const checksummedAddress = this.validateAndChecksumAddress(address);
+    if (!checksummedAddress) {
+      throw new Error("Connect: Invalid address provided");
+    }
+    this.currentAddress = checksummedAddress;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -550,7 +557,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      this.currentAddress = address ? this.validateAndChecksumAddress(address) : undefined;
+      let validAddress: Address | undefined = undefined;
+      if (address) {
+        validAddress = this.validateAndChecksumAddress(address);
+        if (validAddress) {
+          this.currentAddress = validAddress;
+        } else {
+          logger.warn?.("Invalid address provided to identify:", address);
+          // Optionally, you could clear currentAddress or leave it unchanged
+        }
+      } else {
+        this.currentAddress = undefined;
+      }
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
@@ -902,7 +920,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    // Removed redundant mutability check; rely on try-catch below for assignment errors.
+
 
     // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
     const currentRequest = provider.request as WrappedRequestFunction;
@@ -1053,7 +1071,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] = wrappedRequest;
 
     try {
-      // Attempt to assign the wrapped request function
+      // Attempt to assign the wrapped request function (rely on try-catch for mutability errors)
       provider.request = wrappedRequest;
     } catch (e) {
       logger.warn("Failed to wrap provider.request; skipping", e);
@@ -1276,14 +1294,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     let providers = store.getProviders();
     store.subscribe((providerDetails) => {
       providers = providerDetails;
-      // Merge with existing providers instead of overwriting, atomically deduplicating by provider reference
-      const allProviders = [...this._providers, ...providerDetails];
-      const seen = new Set();
-      this._providers = allProviders.filter(detail => {
-        if (!detail?.provider || seen.has(detail.provider)) return false;
-        seen.add(detail.provider);
-        return true;
-      });
+      // Efficiently deduplicate providers using an instance Set
+      for (const detail of providerDetails) {
+        const provider = detail?.provider;
+        if (provider && !this._seenProviders.has(provider)) {
+          this._seenProviders.add(provider);
+          this._providers.push(detail);
+        }
+      }
       
       // Track listeners for newly discovered providers only
       const newDetails = providerDetails.filter((detail) => {
@@ -1338,7 +1356,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       return this._providers;
     }
-    this._providers = providers;
+    this._providers = [...providers];
     return providers;
   }
 
