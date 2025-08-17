@@ -303,6 +303,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
     const checksummedAddress = this.validateAndChecksumAddress(address);
     if (!checksummedAddress) {
+      logger.warn(
+        `Deprecation Warning: The connect method now throws an error for invalid addresses, which is a breaking change from previous behavior that would silently accept invalid addresses. Please update your code to handle this exception.`
+      );
       throw new Error(
         `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`
       );
@@ -683,14 +686,15 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      this._trackedProviders.add(provider);
-
-      // Register listeners for this provider
+      // Register listeners for this provider first
       this.registerAccountsChangedListener(provider);
       this.registerChainChangedListener(provider);
       this.registerConnectListener(provider);
       this.registerRequestListeners(provider);
       this.registerDisconnectListener(provider);
+      
+      // Only add to tracked providers after all listeners are successfully registered
+      this._trackedProviders.add(provider);
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
@@ -780,8 +784,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (this._provider && this._provider !== provider) {
       // Validate that the new provider is in a valid state before switching
       if (this.isProviderInValidState(provider)) {
-        // If we have a different active provider, allow the switch but invalidate the old provider's tokens
-        this.invalidateProviderOperationTokens(this._provider);
+        this.handleProviderMismatch(provider);
       } else {
         logger.warn("Provider switching blocked: new provider is not in a valid state");
         return;
@@ -818,9 +821,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Only handle chain changes for the active provider (or if none is set yet)
     if (this.isProviderMismatch(provider)) {
-      // If this is a different provider, allow the switch but invalidate old provider tokens
-      this.invalidateProviderOperationTokens(this._provider!);
-      this._provider = provider;
+      this.handleProviderMismatch(provider);
     }
 
     // Avoid mutating provider until we have required data
@@ -939,9 +940,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
 
 
-    // If already wrapped and request is still our wrapped version, skip wrapping. If replaced, allow re-wrap.
+    // If already wrapped and request is still our wrapped version, skip wrapping. If replaced externally, re-wrap.
     const currentRequest = provider.request as WrappedRequestFunction;
-    if (this.isProviderAlreadyWrapped(provider, currentRequest)) {
+    // Only skip wrapping if the current request function is our wrapped version
+    if (currentRequest && currentRequest[WRAPPED_REQUEST_SYMBOL]) {
       logger.info("Provider already wrapped; skipping request wrapping.");
       return;
     }
@@ -1368,7 +1370,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         };
         // Cache the detected injected provider detail
         this._injectedProviderDetail = injectedDetail;
-                  // Merge with existing providers instead of overwriting
+        // Merge with existing providers instead of overwriting
           if (!this._providerInstances.has(injected)) {
             this._providers = [...this._providers, injectedDetail];
             this._providerInstances.add(injected);
@@ -1638,6 +1640,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       currentRequest[WRAPPED_REQUEST_SYMBOL] &&
       (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
     );
+  }
+
+  /**
+   * Handle provider mismatch by switching to the new provider and invalidating old tokens
+   * @param provider The new provider to switch to
+   */
+  private handleProviderMismatch(provider: EIP1193Provider): void {
+    // If this is a different provider, allow the switch but invalidate old provider tokens
+    if (this._provider) {
+      this.invalidateProviderOperationTokens(this._provider);
+    }
+    this._provider = provider;
   }
 
   /**
