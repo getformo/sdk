@@ -972,22 +972,22 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         try {
           const response = (await request({ method, params })) as T;
-          if (response) {
-            (async () => {
-              try {
-                this.signature({
-                  status: SignatureStatus.CONFIRMED,
-                  ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
-                });
-              } catch (e) {
-                logger.error("Formo: Failed to track signature confirmation", e);
-              }
-            })();
-          }
+          // Track signature confirmation for any successful response (including falsy values)
+          (async () => {
+            try {
+              this.signature({
+                status: SignatureStatus.CONFIRMED,
+                ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
+              });
+            } catch (e) {
+              logger.error("Formo: Failed to track signature confirmation", e);
+            }
+          })();
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
           if (rpcError?.code === 4001) {
+            // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
                 this.signature({
@@ -1045,6 +1045,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         } catch (error) {
           const rpcError = error as RPCError;
           if (rpcError?.code === 4001) {
+            // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
                 const payload = await this.buildTransactionEventPayload(
