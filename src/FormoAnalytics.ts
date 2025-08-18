@@ -1297,12 +1297,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       
       // Add new providers to the array without overwriting existing ones
       for (const detail of newlyAddedDetails) {
-        const provider = detail.provider;
-        if (provider) {
-          this._seenProviders.add(provider);
-          this._providers = [...this._providers, detail];
-          this._providerInstances.add(provider);
-        }
+        this.safeAddProviderDetail(detail);
       }
       
       // Track listeners for newly discovered providers only
@@ -1363,10 +1358,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         this._injectedProviderDetail = injectedDetail;
         
         // Merge with existing providers instead of overwriting
-        if (!this._providerInstances.has(injected)) {
-          this._providers = [...this._providers, injectedDetail];
-          this._providerInstances.add(injected);
-        }
+        this.safeAddProviderDetail(injectedDetail);
       }
       return this._providers;
     }
@@ -1377,17 +1369,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       return provider && !this._seenProviders.has(provider);
     });
     
-    // Add to seen providers and instances
+    // Add to seen providers and instances, ensuring no duplicates in _providers
     for (const detail of uniqueProviders) {
-      const provider = detail.provider;
-      if (provider) {
-        this._seenProviders.add(provider);
-        this._providerInstances.add(provider);
-      }
+      this.safeAddProviderDetail(detail);
     }
-    
-    // Merge with existing providers instead of overwriting
-    this._providers = [...this._providers, ...uniqueProviders];
     
     return this._providers;
   }
@@ -1709,6 +1694,32 @@ export class FormoAnalytics implements IFormoAnalytics {
   private validateAndChecksumAddress(address: string): Address | undefined {
     const validAddress = getValidAddress(address);
     return validAddress ? toChecksumAddress(validAddress) : undefined;
+  }
+
+  /**
+   * Helper method to safely add a provider detail to _providers array, ensuring no duplicates
+   * @param detail The provider detail to add
+   * @returns true if the provider was added, false if it was already present
+   */
+  private safeAddProviderDetail(detail: EIP6963ProviderDetail): boolean {
+    const provider = detail?.provider;
+    if (!provider) return false;
+
+    // Check if provider already exists in _providers array
+    const alreadyExists = this._providers.some(existing => existing.provider === provider);
+    
+    if (!alreadyExists) {
+      // Add to all tracking structures
+      this._providers = [...this._providers, detail];
+      this._seenProviders.add(provider);
+      this._providerInstances.add(provider);
+      return true;
+    } else {
+      // Ensure tracking structures are in sync even if provider already exists
+      this._seenProviders.add(provider);
+      this._providerInstances.add(provider);
+      return false;
+    }
   }
 }
 
