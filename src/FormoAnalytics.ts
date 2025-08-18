@@ -53,7 +53,6 @@ interface WalletProviderFlags {
   isTrust?: boolean;
   isBraveWallet?: boolean;
   isPhantom?: boolean;
-  isRainbow?: boolean;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -120,17 +119,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
   }
 
-  /**
-   * Check if an error is related to Rainbow wallet's chrome extension communication issues
-   * @param error The error to check
-   * @returns true if the error is a Rainbow wallet chrome extension error
-   */
-  private isRainbowWalletChromeError(error: unknown): boolean {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return errorMessage.includes('chrome.runtime.sendMessage') || 
-           errorMessage.includes('Extension ID') ||
-           errorMessage.includes('chrome extension');
-  }
+
 
 
 
@@ -309,16 +298,28 @@ export class FormoAnalytics implements IFormoAnalytics {
     const chainId = params?.chainId || this.currentChainId;
     const address = params?.address || this.currentAddress;
 
-    await this.trackEvent(
-      EventType.DISCONNECT,
-      {
+    logger.info("Disconnect: Emitting disconnect event with:", { chainId, address });
+
+    // Only emit disconnect event if we have both chainId and address
+    if (chainId && address) {
+      await this.trackEvent(
+        EventType.DISCONNECT,
+        {
+          chainId,
+          address,
+        },
+        properties,
+        context,
+        callback
+      );
+    } else {
+      logger.warn("Disconnect: Skipping disconnect event due to missing chainId or address", {
         chainId,
         address,
-      },
-      properties,
-      context,
-      callback
-    );
+        currentChainId: this.currentChainId,
+        currentAddress: this.currentAddress
+      });
+    }
 
     this.currentAddress = undefined;
     this.currentChainId = undefined;
@@ -701,13 +702,24 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
       if (this._provider === provider) {
+        logger.info("OnAccountsChanged: Detecting disconnect, current state:", {
+          currentAddress: this.currentAddress,
+          currentChainId: this.currentChainId,
+          providerMatch: this._provider === provider
+        });
         try {
-          await this.disconnect();
+          // Pass current state explicitly to ensure we have the data for the disconnect event
+          await this.disconnect({
+            chainId: this.currentChainId,
+            address: this.currentAddress
+          });
           // Provider remains tracked to allow for reconnection scenarios
         } catch (error) {
           logger.error("Failed to disconnect provider on accountsChanged", error);
           // Don't untrack if disconnect failed to maintain state consistency
         }
+      } else {
+        logger.info("OnAccountsChanged: Ignoring disconnect for non-active provider");
       }
       return;
     }
@@ -795,7 +807,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       } catch (error) {
         logger.warn("OnChainChanged: Error fetching address, using cached address:", error);
-        // Fallback to cached address for Rainbow wallet errors
+        // Fallback to cached address if available
         addressToUse = this.currentAddress;
         if (!addressToUse) {
           logger.info("OnChainChanged: No cached address available, skipping chain event");
@@ -857,8 +869,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("registerDisconnectListener");
     const listener = async (_error?: unknown) => {
       if (this._provider !== provider) return;
+      logger.info("OnDisconnect: Wallet disconnect event received, current state:", {
+        currentAddress: this.currentAddress,
+        currentChainId: this.currentChainId
+      });
       try {
-        await this.disconnect();
+        // Pass current state explicitly to ensure we have the data for the disconnect event
+        await this.disconnect({
+          chainId: this.currentChainId,
+          address: this.currentAddress
+        });
         // Provider remains tracked to allow for reconnection scenarios
       } catch (e) {
         logger.error("Error during disconnect in disconnect listener", e);
@@ -967,13 +987,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          
-          // Handle both standard user rejection (4001) and Rainbow wallet specific errors
-          if (rpcError?.code === 4001 || 
-              errorMessage.includes('User rejected the request') ||
-              errorMessage.includes('User denied') ||
-              this.isRainbowWalletChromeError(error)) {
+          if (rpcError?.code === 4001) {
             (async () => {
               try {
                 this.signature({
@@ -1030,13 +1044,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           return transactionHash as unknown as T;
         } catch (error) {
           const rpcError = error as RPCError;
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          
-          // Handle both standard user rejection (4001) and Rainbow wallet specific errors
-          if (rpcError?.code === 4001 || 
-              errorMessage.includes('User rejected the request') ||
-              errorMessage.includes('User denied') ||
-              this.isRainbowWalletChromeError(error)) {
+          if (rpcError?.code === 4001) {
             (async () => {
               try {
                 const payload = await this.buildTransactionEventPayload(
@@ -1264,11 +1272,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       name = 'Phantom';
       rdns = 'app.phantom';
     }
-    // Check if it's Rainbow
-    else if (flags.isRainbow) {
-      name = 'Rainbow';
-      rdns = 'me.rainbow';
-    }
     
     return {
       name,
@@ -1428,14 +1431,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     } catch (err) {
       const code = (err as RPCError)?.code;
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      
-      // Handle Rainbow wallet chrome.runtime.sendMessage errors
-      if (this.isRainbowWalletChromeError(err)) {
-        logger.warn("Provider request failed due to chrome extension communication error (likely Rainbow wallet):", errorMessage);
-        return this.currentAddress || null; // Return cached address if available
-      }
-      
       if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
@@ -1461,15 +1456,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         .filter((e): e is string => e !== undefined);
     } catch (err) {
       const code = (err as RPCError)?.code;
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      
-      // Handle Rainbow wallet chrome.runtime.sendMessage errors
-      if (this.isRainbowWalletChromeError(err)) {
-        logger.warn("Provider request failed due to chrome extension communication error (likely Rainbow wallet):", errorMessage);
-        // Return cached address as array if available
-        return this.currentAddress ? [this.currentAddress] : null;
-      }
-      
       if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
@@ -1498,14 +1484,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       return parseChainId(chainIdHex);
     } catch (err) {
-      // Handle Rainbow wallet chrome.runtime.sendMessage errors gracefully
-      if (this.isRainbowWalletChromeError(err)) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        logger.warn("Provider request failed due to chrome extension communication error (likely Rainbow wallet):", errorMessage);
-        // For Rainbow wallet chrome.runtime errors, return current cached chainId if available
-        return this.currentChainId || 0;
-      }
-      
       logger.error("eth_chainId threw an error:", err);
       return 0;
     }
