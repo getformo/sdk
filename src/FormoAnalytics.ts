@@ -532,11 +532,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       let validAddress: Address | undefined = undefined;
       if (address) {
         validAddress = this.validateAndChecksumAddress(address);
-        if (validAddress) {
-          this.currentAddress = validAddress;
-        } else {
+        this.currentAddress = validAddress || undefined;
+        if (!validAddress) {
           logger.warn?.("Invalid address provided to identify:", address);
-          // Optionally, you could clear currentAddress or leave it unchanged
         }
       } else {
         this.currentAddress = undefined;
@@ -716,7 +714,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Prepare new chainId first to avoid race; do not mutate state yet
     const nextChainId = await this.getCurrentChainId(provider);
 
-    // Allow provider switching - remove the restrictive provider mismatch check
     // Only prevent switching if we're in the middle of another operation with the same provider
     if (this._provider && this._provider !== provider) {
       // Validate that the new provider is in a valid state before switching
@@ -732,7 +729,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._provider = provider;
     this.currentAddress = address;
     this.currentChainId = nextChainId;
-    // Fire-and-forget analytics tracking - don't block the critical path
     if (nextChainId) {
       this.connect({ chainId: nextChainId, address }).catch(error => {
         logger.error("Failed to track connect event during account change:", error);
@@ -838,7 +834,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
         
         this.currentChainId = chainId;
-        // Fire-and-forget analytics tracking - don't block the critical path
         this.connect({ chainId, address }).catch(error => {
           logger.error("Failed to track connect event during provider connection:", error);
         });
