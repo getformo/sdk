@@ -4,3 +4,6 @@ export const SESSION_CURRENT_URL_KEY = "analytics-current-url";
 export const SESSION_USER_ID_KEY = "user-id";
 
 export const LOCAL_ANONYMOUS_ID_KEY = "anonymous-id";
+
+// Default provider icon (empty data URL)
+export const DEFAULT_PROVIDER_ICON = 'data:image/svg+xml;base64,';

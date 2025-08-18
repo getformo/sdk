@@ -5,7 +5,7 @@ export function formofy(writeKey: string, options?: Options) {
   if (writeKey && typeof window !== "undefined") {
     FormoAnalytics.init(writeKey, options)
       .then((f) => {
-        (window as any).formo = f;
+        window.formo = f;
         // Call ready callback if provided with proper error handling
         if (options?.ready) {
           // Wrap the callback execution in a try-catch to handle synchronous errors

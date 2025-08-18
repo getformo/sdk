@@ -86,8 +86,8 @@ export interface ConnectAPIEvent {
 }
 export interface DisconnectAPIEvent {
   type: "disconnect";
-  chainId: ChainID;
-  address: Address;
+  chainId?: ChainID;
+  address?: Address;
 }
 export interface TrackAPIEvent {
   type: "track";

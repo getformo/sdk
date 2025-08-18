@@ -322,8 +322,8 @@ class EventFactory implements IEventFactory {
   }
 
   generateDisconnectEvent(
-    chainId: ChainID,
-    address: Address,
+    chainId?: ChainID,
+    address?: Address,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ) {
