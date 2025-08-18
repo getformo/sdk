@@ -222,6 +222,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentUserId = undefined;
     cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
     cookie().remove(SESSION_USER_ID_KEY);
+    cookie().remove(SESSION_WALLET_DETECTED_KEY);
   }
 
   /**
