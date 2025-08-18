@@ -554,7 +554,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       await this.trackEvent(
         EventType.IDENTIFY,
         {
-          address: address ? this.validateAndChecksumAddress(address) : undefined,
+          address: validAddress,
           providerName,
           userId,
           rdns,
@@ -871,13 +871,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-
-
-    // If already wrapped and request is still our wrapped version, skip wrapping. If replaced externally, re-wrap.
+    // Check if the provider is already wrapped with our SDK's wrapper
     const currentRequest = provider.request as WrappedRequestFunction;
-    // Only skip wrapping if the current request function is our wrapped version
-    if (currentRequest && currentRequest[WRAPPED_REQUEST_SYMBOL]) {
-      logger.info("Provider already wrapped; skipping request wrapping.");
+    if (this.isProviderAlreadyWrapped(provider, currentRequest)) {
+      logger.info("Provider already wrapped with our SDK; skipping request wrapping.");
       return;
     }
 
