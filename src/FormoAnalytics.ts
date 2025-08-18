@@ -654,7 +654,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       for (const eip6963ProviderDetail of providers) {
         const provider = eip6963ProviderDetail?.provider as EIP1193Provider | undefined;
-        if (provider) {
+        if (provider && !this._trackedProviders.has(provider)) {
           this.trackProvider(provider);
         }
       }
@@ -1204,17 +1204,24 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
     let providers = store.getProviders();
+    
     store.subscribe((providerDetails) => {
       providers = providerDetails;
-      // Only process newly added providers for deduplication
+      
+      // Process newly added providers with proper deduplication
       const newlyAddedDetails = providerDetails.filter((detail) => {
         const provider = detail?.provider;
         return provider && !this._seenProviders.has(provider);
       });
+      
+      // Add new providers to the array without overwriting existing ones
       for (const detail of newlyAddedDetails) {
         const provider = detail.provider;
-        this._seenProviders.add(provider);
-        this._providers = [...this._providers, detail];
+        if (provider) {
+          this._seenProviders.add(provider);
+          this._providers = [...this._providers, detail];
+          this._providerInstances.add(provider);
+        }
       }
       
       // Track listeners for newly discovered providers only
@@ -1222,6 +1229,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const p = detail?.provider as EIP1193Provider | undefined;
         return !!p && !this._trackedProviders.has(p);
       });
+      
       if (newDetails.length > 0) {
         this.trackProviders(newDetails);
         // Detect newly discovered wallets (session de-dupes) with error handling
@@ -1233,11 +1241,13 @@ export class FormoAnalytics implements IFormoAnalytics {
           }
         })();
       }
+      
+      // Clean up providers that are no longer available
+      this.cleanupUnavailableProviders();
     });
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      // Refetch window.ethereum and re-check tracking immediately before tracking
       const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
       if (injected) {
         // If we have already detected and cached the injected provider, and it's the same instance, return the cached result
@@ -1255,30 +1265,50 @@ export class FormoAnalytics implements IFormoAnalytics {
           }
           return this._providers;
         }
+        
         // Re-check if the injected provider is already tracked just before tracking
         if (!this._trackedProviders.has(injected)) {
           this.trackProvider(injected);
         }
+        
         // Create a mock EIP6963ProviderDetail for the injected provider
         const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
         const injectedDetail: EIP6963ProviderDetail = {
           provider: injected,
           info: injectedProviderInfo
         };
+        
         // Cache the detected injected provider detail
         this._injectedProviderDetail = injectedDetail;
+        
         // Merge with existing providers instead of overwriting
-          if (!this._providerInstances.has(injected)) {
-            this._providers = [...this._providers, injectedDetail];
-            this._providerInstances.add(injected);
-          }
+        if (!this._providerInstances.has(injected)) {
+          this._providers = [...this._providers, injectedDetail];
+          this._providerInstances.add(injected);
+        }
       }
       return this._providers;
     }
-    this._providers = [...providers];
-    // Keep _providerInstances in sync with _providers
-    this._providerInstances = new Set(this._providers.map(detail => detail.provider));
-    return providers;
+    
+    // Initialize providers array with discovered providers, avoiding duplicates
+    const uniqueProviders = providers.filter((detail: EIP6963ProviderDetail) => {
+      const provider = detail?.provider;
+      return provider && !this._seenProviders.has(provider);
+    });
+    
+    // Add to seen providers and instances
+    for (const detail of uniqueProviders) {
+      const provider = detail.provider;
+      if (provider) {
+        this._seenProviders.add(provider);
+        this._providerInstances.add(provider);
+      }
+    }
+    
+    // Merge with existing providers instead of overwriting
+    this._providers = [...this._providers, ...uniqueProviders];
+    
+    return this._providers;
   }
 
   get providers(): readonly EIP6963ProviderDetail[] {
@@ -1517,6 +1547,42 @@ export class FormoAnalytics implements IFormoAnalytics {
   // Debug/monitoring helpers
   public getTrackedProvidersCount(): number {
     return this._trackedProviders.size;
+  }
+  
+  /**
+   * Get current provider state for debugging
+   * @returns Object containing current provider state information
+   */
+  public getProviderState(): {
+    totalProviders: number;
+    trackedProviders: number;
+    seenProviders: number;
+    providerInstances: number;
+    activeProvider: boolean;
+  } {
+    return {
+      totalProviders: this._providers.length,
+      trackedProviders: this._trackedProviders.size,
+      seenProviders: this._seenProviders.size,
+      providerInstances: this._providerInstances.size,
+      activeProvider: !!this._provider,
+    };
+  }
+  
+  /**
+   * Clean up providers that are no longer available
+   * This helps maintain consistent state and prevents memory leaks
+   */
+  private cleanupUnavailableProviders(): void {
+    // Remove providers that are no longer in the current providers list
+    const currentProviderInstances = new Set(this._providers.map(detail => detail.provider));
+    
+    for (const provider of Array.from(this._trackedProviders)) {
+      if (!currentProviderInstances.has(provider)) {
+        logger.info(`Cleaning up unavailable provider: ${provider.constructor.name}`);
+        this.untrackProvider(provider);
+      }
+    }
   }
   
   /**
