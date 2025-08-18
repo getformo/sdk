@@ -39,8 +39,8 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { toChecksumAddress } from "./utils";
-import { isValidAddress, getValidAddress } from "./utils/address";
-import { isAddress, isLocalhost } from "./validators";
+import { getValidAddress } from "./utils/address";
+import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
 /**
@@ -245,8 +245,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    if (!chainId) {
-      logger.warn("Connect: Chain ID cannot be empty");
+    if (chainId === null || chainId === undefined) {
+      logger.warn("Connect: Chain ID cannot be null or undefined");
       return;
     }
     if (!address) {
@@ -295,17 +295,33 @@ export class FormoAnalytics implements IFormoAnalytics {
     const chainId = params?.chainId || this.currentChainId;
     const address = params?.address || this.currentAddress;
 
-    logger.info("Disconnect: Emitting disconnect event with:", { chainId, address });
+    // Get provider info for the disconnect event
+    const providerInfo = this._provider ? this.getProviderInfo(this._provider) : null;
+    
+    logger.info("Disconnect: Emitting disconnect event with:", { 
+      chainId, 
+      address, 
+      providerName: providerInfo?.name,
+      rdns: providerInfo?.rdns 
+    });
 
     // Always emit disconnect event, even if chainId or address are missing
     // This ensures we track all disconnection attempts for analytics completeness
+    const disconnectProperties = {
+      ...(providerInfo && {
+        providerName: providerInfo.name,
+        rdns: providerInfo.rdns
+      }),
+      ...properties
+    };
+    
     await this.trackEvent(
       EventType.DISCONNECT,
       {
         ...(chainId && { chainId }),
         ...(address && { address }),
       },
-      properties,
+      disconnectProperties,
       context,
       callback
     );
@@ -728,10 +744,41 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Prepare new chainId first to avoid race; do not mutate state yet
     const nextChainId = await this.getCurrentChainId(provider);
 
-    // Only prevent switching if we're in the middle of another operation with the same provider
-    if (this._provider && this._provider !== provider) {
+    // Check if this is a connection event (transition from no address to having an address)
+    // Must check BEFORE handling provider mismatch which clears state
+    const wasDisconnected = !this.currentAddress;
+    const isProviderSwitch = this._provider && this._provider !== provider;
+    
+    logger.info("OnAccountsChanged: Provider switching analysis:", {
+      currentProvider: this._provider?.constructor?.name || 'none',
+      newProvider: provider?.constructor?.name || 'unknown',
+      currentAddress: this.currentAddress,
+      wasDisconnected,
+      isProviderMismatch: isProviderSwitch
+    });
+
+    // Handle provider switching scenario
+    if (isProviderSwitch) {
+      // If we were connected to a different provider and now connecting to a new one,
+      // this is actually a disconnect from the old provider followed by connect to new provider
+      const hadPreviousConnection = !!this.currentAddress;
+      
+      if (hadPreviousConnection) {
+        logger.info("OnAccountsChanged: Detected provider switch with existing connection - emitting disconnect for previous provider");
+        // Emit disconnect event for the previous provider before switching
+        try {
+          await this.disconnect({
+            chainId: this.currentChainId,
+            address: this.currentAddress
+          });
+        } catch (error) {
+          logger.error("Failed to emit disconnect during provider switch:", error);
+        }
+      }
+      
       // Validate that the new provider is in a valid state before switching
       if (this.isProviderInValidState(provider)) {
+        logger.info("OnAccountsChanged: Handling provider mismatch - switching providers");
         this.handleProviderMismatch(provider);
       } else {
         logger.warn("Provider switching blocked: new provider is not in a valid state");
@@ -739,21 +786,39 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
-    // Check if this is a connection event (transition from no address to having an address)
-    const wasDisconnected = !this.currentAddress;
-
     // Commit new active provider and state
     this._provider = provider;
     this.currentAddress = address;
     this.currentChainId = nextChainId;
     
-    // Only emit connect event if we have chainId and this is a new connection
-    if (nextChainId && wasDisconnected) {
-      logger.info("OnAccountsChanged: Detected wallet connection, emitting connect event");
-      this.connect({ chainId: nextChainId, address }).catch(error => {
-        logger.error("Failed to track connect event during account change:", error);
-      });
+    // Always emit connect event for better analytics capture
+    // This ensures we track all wallet connection attempts regardless of chainId availability
+    const providerInfo = this.getProviderInfo(provider);
+    
+    logger.info("OnAccountsChanged: Detected wallet connection, emitting connect event", {
+      chainId: nextChainId,
+      address,
+      wasDisconnected,
+      isProviderSwitch,
+      providerName: providerInfo.name,
+      rdns: providerInfo.rdns,
+      hasChainId: !!nextChainId
+    });
+    
+    const effectiveChainId = nextChainId || 0;
+    if (effectiveChainId === 0) {
+      logger.info("OnAccountsChanged: Using fallback chainId 0 for connect event");
     }
+    
+    this.connect({ 
+      chainId: effectiveChainId,
+      address 
+    }, {
+      providerName: providerInfo.name,
+      rdns: providerInfo.rdns
+    }).catch(error => {
+      logger.error("Failed to track connect event during account change:", error);
+    });
   }
 
   private registerChainChangedListener(provider: EIP1193Provider): void {
@@ -822,10 +887,19 @@ export class FormoAnalytics implements IFormoAnalytics {
       try {
         // If we were previously disconnected and now have an address, this is a connect event
         if (wasDisconnected && this.currentAddress && this.currentChainId) {
-          logger.info("OnChainChanged: Detected wallet connection, emitting connect event");
+          const providerInfo = this.getProviderInfo(provider);
+          
+          logger.info("OnChainChanged: Detected wallet connection, emitting connect event", {
+            providerName: providerInfo.name,
+            rdns: providerInfo.rdns
+          });
+          
           await this.connect({
             chainId: this.currentChainId,
             address: this.currentAddress,
+          }, {
+            providerName: providerInfo.name,
+            rdns: providerInfo.rdns
           });
         } else {
           // Otherwise, this is just a chain change
@@ -899,10 +973,30 @@ export class FormoAnalytics implements IFormoAnalytics {
         this.currentChainId = chainId;
         this.currentAddress = this.validateAndChecksumAddress(address) || undefined;
         
-        // Only emit connect event for new connections
-        if (wasDisconnected && this.currentAddress) {
-          logger.info("OnConnected: Detected wallet connection, emitting connect event");
-          this.connect({ chainId, address }).catch(error => {
+        // Always emit connect event for better analytics capture
+        if (this.currentAddress) {
+          const providerInfo = this.getProviderInfo(provider);
+          
+          logger.info("OnConnected: Detected wallet connection, emitting connect event", {
+            chainId,
+            wasDisconnected,
+            providerName: providerInfo.name,
+            rdns: providerInfo.rdns,
+            hasChainId: !!chainId
+          });
+          
+          const effectiveChainId = chainId || 0;
+          if (effectiveChainId === 0) {
+            logger.info("OnConnected: Using fallback chainId 0 for connect event");
+          }
+          
+          this.connect({ 
+            chainId: effectiveChainId,
+            address 
+          }, {
+            providerName: providerInfo.name,
+            rdns: providerInfo.rdns
+          }).catch(error => {
             logger.error("Failed to track connect event during provider connection:", error);
           });
         }
@@ -1215,6 +1309,29 @@ export class FormoAnalytics implements IFormoAnalytics {
   /*
     Utility functions
   */
+
+  /**
+   * Get provider information for a given provider
+   * @param provider The provider to get info for
+   * @returns Provider information
+   */
+  private getProviderInfo(provider: EIP1193Provider): { name: string; rdns: string } {
+    // First check if provider is in our EIP-6963 providers list
+    const eip6963Provider = this._providers.find(p => p.provider === provider);
+    if (eip6963Provider) {
+      return {
+        name: eip6963Provider.info.name,
+        rdns: eip6963Provider.info.rdns
+      };
+    }
+    
+    // Fallback to injected provider detection
+    const injectedInfo = this.detectInjectedProviderInfo(provider);
+    return {
+      name: injectedInfo.name,
+      rdns: injectedInfo.rdns
+    };
+  }
 
   /**
    * Attempts to detect information about an injected provider

@@ -329,10 +329,10 @@ class EventFactory implements IEventFactory {
   ) {
     const disconnectEvent: Partial<IFormoEvent> = {
       properties: {
-        ...(chainId && { chainId }),
+        chainId,
         ...properties,
       },
-      ...(address && { address }),
+      address,
       type: "disconnect",
     };
 
