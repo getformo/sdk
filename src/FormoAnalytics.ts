@@ -972,17 +972,19 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         try {
           const response = (await request({ method, params })) as T;
-          // Track signature confirmation for any successful response (including falsy values)
-          (async () => {
-            try {
-              this.signature({
-                status: SignatureStatus.CONFIRMED,
-                ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
-              });
-            } catch (e) {
-              logger.error("Formo: Failed to track signature confirmation", e);
-            }
-          })();
+          // Track signature confirmation only for truthy responses
+          if (response) {
+            (async () => {
+              try {
+                this.signature({
+                  status: SignatureStatus.CONFIRMED,
+                  ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
+                });
+              } catch (e) {
+                logger.error("Formo: Failed to track signature confirmation", e);
+              }
+            })();
+          }
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
