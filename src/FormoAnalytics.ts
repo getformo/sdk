@@ -7,6 +7,7 @@ import {
   SESSION_USER_ID_KEY,
   SESSION_WALLET_DETECTED_KEY,
   TEventType,
+  DEFAULT_PROVIDER_ICON,
 } from "./constants";
 import {
   cookie,
@@ -255,12 +256,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
     const checksummedAddress = this.validateAndChecksumAddress(address);
     if (!checksummedAddress) {
-      logger.warn(
-        `Deprecation Warning: The connect method now throws an error for invalid addresses, which is a breaking change from previous behavior that would silently accept invalid addresses. Please update your code to handle this exception.`
-      );
-      throw new Error(
-        `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`
-      );
+      const errorMessage = `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`;
+      
+      if (this.options.strictAddressValidation) {
+        throw new Error(errorMessage);
+      } else {
+        logger.warn(errorMessage);
+        // For backward compatibility, don't throw error but also don't set invalid address
+        return;
+      }
     }
     this.currentAddress = checksummedAddress;
 
@@ -1160,10 +1164,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
-
-
-
-
   /**
    * Attempts to detect information about an injected provider
    * @param provider The injected provider to analyze
@@ -1217,7 +1217,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       name,
       rdns,
       uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, '-')}`,
-      icon: "data:image/svg+xml;base64,"
+      icon: DEFAULT_PROVIDER_ICON
     };
   }
 
@@ -1503,8 +1503,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     poll();
   }
 
-
-
   private removeProviderListeners(provider: EIP1193Provider): void {
     const listeners = this._providerListenersMap.get(provider);
     if (!listeners) return;
@@ -1560,9 +1558,11 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param provider The new provider to switch to
    */
   private handleProviderMismatch(provider: EIP1193Provider): void {
-    // If this is a different provider, allow the switch but invalidate old provider tokens
+    // If this is a different provider, allow the switch
     if (this._provider) {
-
+      // Clear any provider-specific state when switching
+      this.currentChainId = undefined;
+      this.currentAddress = undefined;
     }
     this._provider = provider;
   }

@@ -114,6 +114,7 @@ export interface Options {
   flushInterval?: number;
   retryCount?: number;
   maxQueueSize?: number;
+  strictAddressValidation?: boolean; // Controls whether invalid addresses throw errors or just log warnings
   logger?: {
     enabled?: boolean;
     levels?: LogLevel[];

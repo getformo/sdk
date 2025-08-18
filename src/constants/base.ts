@@ -5,5 +5,5 @@ export const SESSION_USER_ID_KEY = "user-id";
 
 export const LOCAL_ANONYMOUS_ID_KEY = "anonymous-id";
 
-// Default provider icon as base64 SVG
-export const DEFAULT_PROVIDER_ICON = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDJMMiA3VjIwTDEyIDIyTDIyIDIwVjdMMTIgMloiIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPHBhdGggZD0iTTIgN0wxMiAxMkwyMiA3IiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+';
+// Default provider icon (empty data URL)
+export const DEFAULT_PROVIDER_ICON = 'data:image/svg+xml;base64,';
