@@ -53,6 +53,7 @@ interface WalletProviderFlags {
   isTrust?: boolean;
   isBraveWallet?: boolean;
   isPhantom?: boolean;
+  isRainbow?: boolean;
 }
 
 export class FormoAnalytics implements IFormoAnalytics {
@@ -117,6 +118,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       typeof provider.on === 'function' &&
       typeof provider.removeListener === 'function'
     );
+  }
+
+  /**
+   * Check if an error is related to Rainbow wallet's chrome extension communication issues
+   * @param error The error to check
+   * @returns true if the error is a Rainbow wallet chrome extension error
+   */
+  private isRainbowWalletChromeError(error: unknown): boolean {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return errorMessage.includes('chrome.runtime.sendMessage') || 
+           errorMessage.includes('Extension ID') ||
+           errorMessage.includes('chrome extension');
   }
 
 
@@ -725,11 +738,17 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
+    // Check if this is a connection event (transition from no address to having an address)
+    const wasDisconnected = !this.currentAddress;
+
     // Commit new active provider and state
     this._provider = provider;
     this.currentAddress = address;
     this.currentChainId = nextChainId;
-    if (nextChainId) {
+    
+    // Only emit connect event if we have chainId and this is a new connection
+    if (nextChainId && wasDisconnected) {
+      logger.info("OnAccountsChanged: Detected wallet connection, emitting connect event");
       this.connect({ chainId: nextChainId, address }).catch(error => {
         logger.error("Failed to track connect event during account change:", error);
       });
@@ -758,19 +777,33 @@ export class FormoAnalytics implements IFormoAnalytics {
     let addressToUse: Address | undefined = this.currentAddress;
 
     if (!addressToUse) {
-      const fetched = await this.getAddress(provider);
-      
-      if (!fetched) {
-        logger.info(
-          "OnChainChanged: Unable to fetch or store connected address"
-        );
-        return Promise.resolve();
+      try {
+        const fetched = await this.getAddress(provider);
+        
+        if (!fetched) {
+          logger.info(
+            "OnChainChanged: Unable to fetch or store connected address"
+          );
+          // Still try to emit chain event with cached address if we have chainId
+          if (nextChainId && this.currentAddress) {
+            addressToUse = this.currentAddress;
+          } else {
+            return Promise.resolve();
+          }
+        } else {
+          addressToUse = this.validateAndChecksumAddress(fetched);
+        }
+      } catch (error) {
+        logger.warn("OnChainChanged: Error fetching address, using cached address:", error);
+        // Fallback to cached address for Rainbow wallet errors
+        addressToUse = this.currentAddress;
+        if (!addressToUse) {
+          logger.info("OnChainChanged: No cached address available, skipping chain event");
+          return Promise.resolve();
+        }
       }
-      addressToUse = this.validateAndChecksumAddress(fetched);
     }
 
-
-    
     // Set provider if none exists
     if (!this._provider) {
       this._provider = provider;
@@ -780,11 +813,29 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Proceed only if the address exists
     if (addressToUse) {
+      // Check if this is actually a connection event (transition from no address to having an address)
+      const wasDisconnected = !this.currentAddress;
+      
       this.currentAddress = addressToUse;
-      return this.chain({
-        chainId: this.currentChainId,
-        address: this.currentAddress,
-      });
+      
+      try {
+        // If we were previously disconnected and now have an address, this is a connect event
+        if (wasDisconnected && this.currentAddress && this.currentChainId) {
+          logger.info("OnChainChanged: Detected wallet connection, emitting connect event");
+          await this.connect({
+            chainId: this.currentChainId,
+            address: this.currentAddress,
+          });
+        } else {
+          // Otherwise, this is just a chain change
+          return this.chain({
+            chainId: this.currentChainId,
+            address: this.currentAddress,
+          });
+        }
+      } catch (error) {
+        logger.error("OnChainChanged: Failed to emit chain/connect event:", error);
+      }
     } else {
       logger.info(
         "OnChainChanged: Current connected address is null despite fetch attempt"
@@ -828,15 +879,24 @@ export class FormoAnalytics implements IFormoAnalytics {
       const address = await this.getAddress(provider);
       
       if (chainId && address) {
+        // Check if this is a connection event (transition from no address to having an address)
+        const wasDisconnected = !this.currentAddress;
+        
         // Set provider if none exists
         if (!this._provider) {
           this._provider = provider;
         }
         
         this.currentChainId = chainId;
-        this.connect({ chainId, address }).catch(error => {
-          logger.error("Failed to track connect event during provider connection:", error);
-        });
+        this.currentAddress = this.validateAndChecksumAddress(address) || undefined;
+        
+        // Only emit connect event for new connections
+        if (wasDisconnected && this.currentAddress) {
+          logger.info("OnConnected: Detected wallet connection, emitting connect event");
+          this.connect({ chainId, address }).catch(error => {
+            logger.error("Failed to track connect event during provider connection:", error);
+          });
+        }
       }
     } catch (e) {
       logger.error("Error handling connect event", e);
@@ -907,7 +967,13 @@ export class FormoAnalytics implements IFormoAnalytics {
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
-          if (rpcError?.code === 4001) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          
+          // Handle both standard user rejection (4001) and Rainbow wallet specific errors
+          if (rpcError?.code === 4001 || 
+              errorMessage.includes('User rejected the request') ||
+              errorMessage.includes('User denied') ||
+              this.isRainbowWalletChromeError(error)) {
             (async () => {
               try {
                 this.signature({
@@ -964,7 +1030,13 @@ export class FormoAnalytics implements IFormoAnalytics {
           return transactionHash as unknown as T;
         } catch (error) {
           const rpcError = error as RPCError;
-          if (rpcError?.code === 4001) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          
+          // Handle both standard user rejection (4001) and Rainbow wallet specific errors
+          if (rpcError?.code === 4001 || 
+              errorMessage.includes('User rejected the request') ||
+              errorMessage.includes('User denied') ||
+              this.isRainbowWalletChromeError(error)) {
             (async () => {
               try {
                 const payload = await this.buildTransactionEventPayload(
@@ -1192,6 +1264,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       name = 'Phantom';
       rdns = 'app.phantom';
     }
+    // Check if it's Rainbow
+    else if (flags.isRainbow) {
+      name = 'Rainbow';
+      rdns = 'me.rainbow';
+    }
     
     return {
       name,
@@ -1351,6 +1428,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     } catch (err) {
       const code = (err as RPCError)?.code;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      // Handle Rainbow wallet chrome.runtime.sendMessage errors
+      if (this.isRainbowWalletChromeError(err)) {
+        logger.warn("Provider request failed due to chrome extension communication error (likely Rainbow wallet):", errorMessage);
+        return this.currentAddress || null; // Return cached address if available
+      }
+      
       if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
@@ -1376,6 +1461,15 @@ export class FormoAnalytics implements IFormoAnalytics {
         .filter((e): e is string => e !== undefined);
     } catch (err) {
       const code = (err as RPCError)?.code;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      // Handle Rainbow wallet chrome.runtime.sendMessage errors
+      if (this.isRainbowWalletChromeError(err)) {
+        logger.warn("Provider request failed due to chrome extension communication error (likely Rainbow wallet):", errorMessage);
+        // Return cached address as array if available
+        return this.currentAddress ? [this.currentAddress] : null;
+      }
+      
       if (code !== 4001) {
         logger.error(
           "FormoAnalytics::getAccounts: eth_accounts threw an error",
@@ -1390,11 +1484,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     const p = provider || this.provider;
     if (!p) {
       logger.error("Provider not set for chain ID");
+      return 0;
     }
 
     let chainIdHex;
     try {
-      chainIdHex = await p?.request<string>({
+      chainIdHex = await p.request<string>({
         method: "eth_chainId",
       });
       if (!chainIdHex) {
@@ -1403,6 +1498,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       return parseChainId(chainIdHex);
     } catch (err) {
+      // Handle Rainbow wallet chrome.runtime.sendMessage errors gracefully
+      if (this.isRainbowWalletChromeError(err)) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        logger.warn("Provider request failed due to chrome extension communication error (likely Rainbow wallet):", errorMessage);
+        // For Rainbow wallet chrome.runtime errors, return current cached chainId if available
+        return this.currentChainId || 0;
+      }
+      
       logger.error("eth_chainId threw an error:", err);
       return 0;
     }
