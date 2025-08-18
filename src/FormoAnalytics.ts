@@ -116,10 +116,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
   }
 
-
-
-
-
   private constructor(
     public readonly writeKey: string,
     public options: Options = {}
@@ -839,35 +835,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.handleProviderMismatch(provider);
     }
 
-    // Avoid mutating provider until we have required data
-    let addressToUse: Address | undefined = this.currentAddress;
-
-    if (!addressToUse) {
-      try {
-        const fetched = await this.getAddress(provider);
-        
-        if (!fetched) {
-          logger.info(
-            "OnChainChanged: Unable to fetch or store connected address"
-          );
-          // Still try to emit chain event with cached address if we have chainId
-          if (nextChainId && this.currentAddress) {
-            addressToUse = this.currentAddress;
-          } else {
-            return Promise.resolve();
-          }
-        } else {
-          addressToUse = this.validateAndChecksumAddress(fetched);
-        }
-      } catch (error) {
-        logger.warn("OnChainChanged: Error fetching address, using cached address:", error);
-        // Fallback to cached address if available
-        addressToUse = this.currentAddress;
-        if (!addressToUse) {
-          logger.info("OnChainChanged: No cached address available, skipping chain event");
-          return Promise.resolve();
-        }
-      }
+    // Chain changes only matter for connected users
+    if (!this.currentAddress) {
+      logger.info("OnChainChanged: No current address, user appears disconnected");
+      return Promise.resolve();
     }
 
     // Set provider if none exists
@@ -877,44 +848,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     this.currentChainId = nextChainId;
 
-    // Proceed only if the address exists
-    if (addressToUse) {
-      // Check if this is actually a connection event (transition from no address to having an address)
-      const wasDisconnected = !this.currentAddress;
-      
-      this.currentAddress = addressToUse;
-      
-      try {
-        // If we were previously disconnected and now have an address, this is a connect event
-        if (wasDisconnected && this.currentAddress && this.currentChainId) {
-          const providerInfo = this.getProviderInfo(provider);
-          
-          logger.info("OnChainChanged: Detected wallet connection, emitting connect event", {
-            providerName: providerInfo.name,
-            rdns: providerInfo.rdns
-          });
-          
-          await this.connect({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
-          }, {
-            providerName: providerInfo.name,
-            rdns: providerInfo.rdns
-          });
-        } else {
-          // Otherwise, this is just a chain change
-          return this.chain({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
-          });
-        }
-      } catch (error) {
-        logger.error("OnChainChanged: Failed to emit chain/connect event:", error);
-      }
-    } else {
-      logger.info(
-        "OnChainChanged: Current connected address is null despite fetch attempt"
-      );
+    try {
+      // This is just a chain change since we already confirmed currentAddress exists
+      return this.chain({
+        chainId: this.currentChainId,
+        address: this.currentAddress,
+      });
+    } catch (error) {
+      logger.error("OnChainChanged: Failed to emit chain event:", error);
     }
   }
 
