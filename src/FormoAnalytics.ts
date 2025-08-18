@@ -76,9 +76,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private _trackedProviders: Set<EIP1193Provider> = new Set();
   
-  // Track which provider the cached chainId belongs to to avoid unnecessary network requests
-  private _chainIdProvider?: EIP1193Provider;
-  
   // Cache for injected provider detection to avoid redundant operations
   private _injectedProviderDetail?: EIP6963ProviderDetail;
   
@@ -972,16 +969,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
-        // Capture chainId once to avoid race conditions
-        let capturedChainId: number | undefined;
-        // Only use cached chainId if it's for the same provider instance
-        if (this.currentChainId != null && this._chainIdProvider === provider) {
-          capturedChainId = this.currentChainId;
-        } else {
-          capturedChainId = await this.getCurrentChainId(provider);
-          this.currentChainId = capturedChainId;
-          this._chainIdProvider = provider;
-        }
+        // Use current chainId if available, otherwise fetch it
+        const capturedChainId = this.currentChainId || await this.getCurrentChainId(provider);
         // Fire-and-forget tracking
         (async () => {
           try {
