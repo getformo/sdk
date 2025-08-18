@@ -232,7 +232,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
-   * @throws {Error} If chainId or address is empty
    * @returns {Promise<void>}
    */
   async connect(
@@ -249,23 +248,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     if (!chainId) {
       logger.warn("Connect: Chain ID cannot be empty");
+      return;
     }
     if (!address) {
       logger.warn("Connect: Address cannot be empty");
+      return;
     }
 
     this.currentChainId = chainId;
     const checksummedAddress = this.validateAndChecksumAddress(address);
     if (!checksummedAddress) {
-      const errorMessage = `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`;
-      
-      if (this.options.strictAddressValidation) {
-        throw new Error(errorMessage);
-      } else {
-        logger.warn(errorMessage);
-        // For backward compatibility, don't throw error but also don't set invalid address
-        return;
-      }
+      logger.warn(`Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`);
+      return;
     }
     this.currentAddress = checksummedAddress;
 
@@ -325,8 +319,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
-   * @throws {Error} If chainId is empty, zero, or not a valid number
-   * @throws {Error} If no address is provided and no previous address is recorded
    * @returns {Promise<void>}
    */
   async chain(
@@ -342,17 +334,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
-      throw new Error("FormoAnalytics::chain: chainId cannot be empty or 0");
+      logger.warn("FormoAnalytics::chain: chainId cannot be empty or 0");
+      return;
     }
     if (isNaN(Number(chainId))) {
-      throw new Error(
+      logger.warn(
         "FormoAnalytics::chain: chainId must be a valid decimal number"
       );
+      return;
     }
     if (!address && !this.currentAddress) {
-      throw new Error(
+      logger.warn(
         "FormoAnalytics::chain: address was empty and no previous address has been recorded"
       );
+      return;
     }
 
     this.currentChainId = chainId;
@@ -706,18 +701,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
     
-    // Validate the first account is a valid address before processing
-    const validAddress = getValidAddress(accounts[0]);
-    if (!validAddress) {
-      logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
-      return;
-    }
-    
-    const address = validAddress ? toChecksumAddress(validAddress) : undefined;
-    
-    // If no valid address, skip processing
+    // Validate and checksum the first account address
+    const address = this.validateAndChecksumAddress(accounts[0]);
     if (!address) {
-      logger.warn("onAccountsChanged: No valid address found");
+      logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
       return;
     }
     
@@ -746,9 +733,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentAddress = address;
     this.currentChainId = nextChainId;
     // Fire-and-forget analytics tracking - don't block the critical path
-    this.connect({ chainId: this.currentChainId, address }).catch(error => {
-      logger.error("Failed to track connect event during account change:", error);
-    });
+    if (nextChainId) {
+      this.connect({ chainId: nextChainId, address }).catch(error => {
+        logger.error("Failed to track connect event during account change:", error);
+      });
+    }
   }
 
   private registerChainChangedListener(provider: EIP1193Provider): void {
@@ -837,17 +826,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onConnected", connection);
     
     try {
-      if (!connection || typeof connection.chainId !== 'string') return;
+      if (!connection?.chainId || typeof connection.chainId !== 'string') return;
+      
       const chainId = parseChainId(connection.chainId);
       const address = await this.getAddress(provider);
       
-      // Allow provider switching - remove the restrictive provider mismatch check
-      // Only prevent switching if we're in the middle of another operation with the same provider
-      if (this._provider && this._provider !== provider) {
-        // If we have a different active provider, allow the switch
-      }
-      
-      if (chainId !== null && chainId !== undefined && address) {
+      if (chainId && address) {
         // Set provider if none exists
         if (!this._provider) {
           this._provider = provider;
@@ -913,33 +897,33 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         try {
           const response = (await request({ method, params })) as T;
-          (async () => {
-                      try {
-            if (response) {
-              this.signature({
-                status: SignatureStatus.CONFIRMED,
-                ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
-              });
-            }
-          } catch (e) {
-            logger.error("Formo: Failed to track signature confirmation", e);
+          if (response) {
+            (async () => {
+              try {
+                this.signature({
+                  status: SignatureStatus.CONFIRMED,
+                  ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
+                });
+              } catch (e) {
+                logger.error("Formo: Failed to track signature confirmation", e);
+              }
+            })();
           }
-          })();
           return response;
         } catch (error) {
-          (async () => {
-            try {
-              const rpcError = error as RPCError;
-              if (rpcError && rpcError?.code === 4001) {
+          const rpcError = error as RPCError;
+          if (rpcError?.code === 4001) {
+            (async () => {
+              try {
                 this.signature({
                   status: SignatureStatus.REJECTED,
                   ...this.buildSignatureEventPayload(method, params, undefined, capturedChainId),
                 });
+              } catch (e) {
+                logger.error("Formo: Failed to track signature rejection", e);
               }
-            } catch (e) {
-              logger.error("Formo: Failed to track signature rejection", e);
-            }
-          })();
+            })();
+          }
           throw error;
         }
       }
@@ -978,19 +962,16 @@ export class FormoAnalytics implements IFormoAnalytics {
               // Start async polling for transaction receipt
               this.pollTransactionReceipt(provider, transactionHash, payload);
             } catch (e) {
-              logger.error(
-                "Formo: Failed to track transaction broadcast",
-                e
-              );
+              logger.error("Formo: Failed to track transaction broadcast", e);
             }
           })();
 
           return transactionHash as unknown as T;
         } catch (error) {
-          (async () => {
-            try {
-              const rpcError = error as RPCError;
-              if (rpcError && rpcError?.code === 4001) {
+          const rpcError = error as RPCError;
+          if (rpcError?.code === 4001) {
+            (async () => {
+              try {
                 const payload = await this.buildTransactionEventPayload(
                   params,
                   provider
@@ -999,11 +980,11 @@ export class FormoAnalytics implements IFormoAnalytics {
                   status: TransactionStatus.REJECTED,
                   ...payload,
                 });
+              } catch (e) {
+                logger.error("Formo: Failed to track transaction rejection", e);
               }
-            } catch (e) {
-              logger.error("Formo: Failed to track transaction rejection", e);
-            }
-          })();
+            })();
+          }
           throw error;
         }
       }
@@ -1064,17 +1045,23 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    setTimeout(async () => {
-      this.trackEvent(
-        EventType.PAGE,
-        {
-          category,
-          name,
-        },
-        properties,
-        context,
-        callback
-      );
+    setTimeout(() => {
+      (async () => {
+        try {
+          await this.trackEvent(
+            EventType.PAGE,
+            {
+              category,
+              name,
+            },
+            properties,
+            context,
+            callback
+          );
+        } catch (e) {
+          logger.error("Formo: Failed to track page hit", e);
+        }
+      })();
     }, 300);
   }
 
@@ -1243,9 +1230,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (newDetails.length > 0) {
         this.trackProviders(newDetails);
         // Detect newly discovered wallets (session de-dupes) with error handling
-        this.detectWallets(newDetails).catch(error => {
-          logger.error("Failed to detect wallets during EIP-6963 subscription:", error);
-        });
+        (async () => {
+          try {
+            await this.detectWallets(newDetails);
+          } catch (e) {
+            logger.error("Formo: Failed to detect wallets", e);
+          }
+        })();
       }
     });
 
@@ -1550,6 +1541,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
     );
   }
+
+
 
   /**
    * Handle provider mismatch by switching to the new provider and invalidating old tokens
