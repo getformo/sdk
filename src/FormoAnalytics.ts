@@ -82,11 +82,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   // Cache for injected provider detection to avoid redundant operations
   private _injectedProviderDetail?: EIP6963ProviderDetail;
   
-  // Set to efficiently track seen providers for deduplication
+  // Set to efficiently track seen providers for deduplication and O(1) lookup
   private _seenProviders: Set<EIP1193Provider> = new Set();
-  
-  // Set to efficiently track provider instances for O(1) lookup
-  private _providerInstances: Set<EIP1193Provider> = new Set();
 
   config: Config;
   currentChainId?: ChainID;
@@ -300,26 +297,18 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     logger.info("Disconnect: Emitting disconnect event with:", { chainId, address });
 
-    // Only emit disconnect event if we have both chainId and address
-    if (chainId && address) {
-      await this.trackEvent(
-        EventType.DISCONNECT,
-        {
-          chainId,
-          address,
-        },
-        properties,
-        context,
-        callback
-      );
-    } else {
-      logger.warn("Disconnect: Skipping disconnect event due to missing chainId or address", {
-        chainId,
-        address,
-        currentChainId: this.currentChainId,
-        currentAddress: this.currentAddress
-      });
-    }
+    // Always emit disconnect event, even if chainId or address are missing
+    // This ensures we track all disconnection attempts for analytics completeness
+    await this.trackEvent(
+      EventType.DISCONNECT,
+      {
+        ...(chainId && { chainId }),
+        ...(address && { address }),
+      },
+      properties,
+      context,
+      callback
+    );
 
     this.currentAddress = undefined;
     this.currentChainId = undefined;
@@ -1441,7 +1430,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (!res || res.length === 0) return null;
       return res
         .map((e) => this.validateAndChecksumAddress(e))
-        .filter((e): e is string => e !== undefined);
+        .filter((e): e is Address => e !== undefined);
     } catch (err) {
       const code = (err as RPCError)?.code;
       if (code !== 4001) {
@@ -1626,14 +1615,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     totalProviders: number;
     trackedProviders: number;
     seenProviders: number;
-    providerInstances: number;
     activeProvider: boolean;
   } {
     return {
       totalProviders: this._providers.length,
       trackedProviders: this._trackedProviders.size,
       seenProviders: this._seenProviders.size,
-      providerInstances: this._providerInstances.size,
       activeProvider: !!this._provider,
     };
   }
@@ -1711,15 +1698,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     const alreadyExists = this._providers.some(existing => existing.provider === provider);
     
     if (!alreadyExists) {
-      // Add to all tracking structures
+      // Add to providers array and mark as seen
       this._providers = [...this._providers, detail];
       this._seenProviders.add(provider);
-      this._providerInstances.add(provider);
       return true;
     } else {
-      // Ensure tracking structures are in sync even if provider already exists
+      // Ensure provider is marked as seen even if it already exists in _providers
       this._seenProviders.add(provider);
-      this._providerInstances.add(provider);
       return false;
     }
   }
