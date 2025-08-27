@@ -907,13 +907,26 @@ export class FormoAnalytics implements IFormoAnalytics {
         if (!this._provider) {
           this._provider = provider;
         }
-        // If we had no connection but this provider successfully connected, switch to it
-        else if (!this.currentAddress && address) {
-          logger.info("OnConnected: Switching to provider with successful connection", {
-            newProvider: this.getProviderInfo(provider),
-            previousProvider: this.getProviderInfo(this._provider)
-          });
-          this._provider = provider;
+        // If we have an active provider but no current address, check if we should switch to this provider
+        else if (this._provider && !this.currentAddress && address) {
+          // Only switch if the current active provider doesn't have a valid address
+          try {
+            const activeProviderAddress = await this.getAddress(this._provider);
+            if (!activeProviderAddress && address) {
+              logger.info("OnConnected: Switching to provider with successful connection", {
+                newProvider: this.getProviderInfo(provider),
+                previousProvider: this.getProviderInfo(this._provider),
+                reason: "Active provider has no address, switching to connected provider"
+              });
+              this._provider = provider;
+            }
+          } catch (error) {
+            logger.warn("OnConnected: Could not get address from active provider, switching to new provider", {
+              error: error,
+              newProvider: this.getProviderInfo(provider)
+            });
+            this._provider = provider;
+          }
         }
         
         // Only emit connect event for the active provider to avoid duplicates
@@ -951,7 +964,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           }).catch(error => {
             logger.error("Failed to track connect event during provider connection:", error);
           });
-        } else if (this.currentAddress && !isActiveProvider) {
+        } else if (address && !isActiveProvider) {
           const providerInfo = this.getProviderInfo(provider);
           logger.debug("OnConnected: Skipping connect event for non-active provider", {
             chainId,
