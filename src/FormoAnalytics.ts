@@ -79,6 +79,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   // Cache for injected provider detection to avoid redundant operations
   private _injectedProviderDetail?: EIP6963ProviderDetail;
   
+  // Flag to prevent concurrent processing of accountsChanged events
+  private _processingAccountsChanged: boolean = false;
+  
   // Set to efficiently track seen providers for deduplication and O(1) lookup
   private _seenProviders: Set<EIP1193Provider> = new Set();
 
@@ -698,6 +701,25 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async onAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
     logger.info("onAccountsChanged", accounts);
 
+    // Prevent concurrent processing of accountsChanged events to avoid race conditions
+    if (this._processingAccountsChanged) {
+      logger.debug("OnAccountsChanged: Already processing accountsChanged, skipping", {
+        provider: this.getProviderInfo(provider).name
+      });
+      return;
+    }
+
+    this._processingAccountsChanged = true;
+
+    try {
+      await this._handleAccountsChanged(provider, accounts);
+    } finally {
+      this._processingAccountsChanged = false;
+    }
+  }
+
+  private async _handleAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
+
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
       if (this._provider === provider) {
@@ -730,13 +752,88 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
     
-    // Simple logic: Only process events from the active provider
+    // Handle provider switching: if we have an active provider but a different provider 
+    // is connecting with accounts, check if the current provider is still connected
     if (this._provider && this._provider !== provider) {
-      logger.debug("OnAccountsChanged: Ignoring accounts change from non-active provider", {
+      // Capture current state BEFORE any changes
+      const currentStoredAddress = this.currentAddress;
+      const newProviderAddress = this.validateAndChecksumAddress(address);
+      
+      logger.info("OnAccountsChanged: Different provider attempting to connect", {
         activeProvider: this.getProviderInfo(this._provider).name,
-        eventProvider: this.getProviderInfo(provider).name
+        eventProvider: this.getProviderInfo(provider).name,
+        currentStoredAddress: currentStoredAddress,
+        newProviderAddress: newProviderAddress
       });
-      return;
+
+      // Check if current active provider still has accounts
+      try {
+        const activeProviderAccounts = await this.getAccounts(this._provider);
+        logger.info("OnAccountsChanged: Checking current provider accounts", {
+          activeProvider: this.getProviderInfo(this._provider).name,
+          accountsLength: activeProviderAccounts ? activeProviderAccounts.length : 0,
+          accounts: activeProviderAccounts
+        });
+        
+        if (activeProviderAccounts && activeProviderAccounts.length > 0) {
+          // Check if the new provider has a different address - this indicates a real wallet switch
+          if (newProviderAddress && currentStoredAddress && newProviderAddress !== currentStoredAddress) {
+            logger.info("OnAccountsChanged: Different address detected, switching providers despite current provider having accounts", {
+              activeProvider: this.getProviderInfo(this._provider).name,
+              eventProvider: this.getProviderInfo(provider).name,
+              currentAddress: currentStoredAddress,
+              newAddress: newProviderAddress,
+              reason: "Address mismatch indicates wallet switch"
+            });
+            
+            // Emit disconnect for the old provider
+            await this.disconnect({
+              chainId: this.currentChainId,
+              address: this.currentAddress
+            });
+            
+            // Clear state and let the new provider become active
+            this._provider = undefined;
+          } else {
+            logger.info("OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider", {
+              activeProvider: this.getProviderInfo(this._provider).name,
+              eventProvider: this.getProviderInfo(provider).name,
+              activeProviderAccountsCount: activeProviderAccounts.length,
+              currentAddress: currentStoredAddress,
+              newAddress: newProviderAddress
+            });
+            return;
+          }
+        } else {
+          logger.info("OnAccountsChanged: Current provider has no accounts, switching to new provider", {
+            oldProvider: this.getProviderInfo(this._provider).name,
+            newProvider: this.getProviderInfo(provider).name
+          });
+          
+          // Emit disconnect for the old provider that didn't signal properly
+          await this.disconnect({
+            chainId: this.currentChainId,
+            address: this.currentAddress
+          });
+          
+          // Clear state and let the new provider become active
+          this._provider = undefined;
+        }
+      } catch (error) {
+        logger.warn("OnAccountsChanged: Could not check current provider accounts, switching to new provider", {
+          error: error,
+          oldProvider: this._provider ? this.getProviderInfo(this._provider).name : 'unknown',
+          newProvider: this.getProviderInfo(provider).name
+        });
+        
+        // If we can't check the current provider, assume it's disconnected
+        await this.disconnect({
+          chainId: this.currentChainId,
+          address: this.currentAddress
+        });
+        
+        this._provider = undefined;
+      }
     }
 
     // Set provider if none exists (first connection)
