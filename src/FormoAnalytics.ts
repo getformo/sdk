@@ -321,7 +321,8 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentAddress = undefined;
     this.currentChainId = undefined;
-    logger.info("Wallet disconnected: Cleared currentAddress and currentChainId");    
+    this._provider = undefined;
+    logger.info("Wallet disconnected: Cleared currentAddress, currentChainId, and provider");    
   }
 
   /**
@@ -729,70 +730,39 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
     
-    // If both the provider and address are the same, no-op. Allow provider switches even if address is the same.
+    // Simple logic: Only process events from the active provider
+    if (this._provider && this._provider !== provider) {
+      logger.debug("OnAccountsChanged: Ignoring accounts change from non-active provider", {
+        activeProvider: this.getProviderInfo(this._provider).name,
+        eventProvider: this.getProviderInfo(provider).name
+      });
+      return;
+    }
+
+    // Set provider if none exists (first connection)
+    if (!this._provider) {
+      this._provider = provider;
+    }
+
+    // If both the provider and address are the same, no-op
     if (this._provider === provider && address === this.currentAddress) {
       return;
     }
 
-    // Prepare new chainId first to avoid race; do not mutate state yet
+    // Get chain ID and update state
     const nextChainId = await this.getCurrentChainId(provider);
-
-    // Check if this is a connection event (transition from no address to having an address)
-    // Must check BEFORE handling provider mismatch which clears state
     const wasDisconnected = !this.currentAddress;
-    const isProviderSwitch = this._provider && this._provider !== provider;
     
-    logger.info("OnAccountsChanged: Provider switching analysis:", {
-      currentProvider: this._provider?.constructor?.name || 'none',
-      newProvider: provider?.constructor?.name || 'unknown',
-      currentAddress: this.currentAddress,
-      wasDisconnected,
-      isProviderMismatch: isProviderSwitch
-    });
-
-    // Handle provider switching scenario
-    if (isProviderSwitch) {
-      // If we were connected to a different provider and now connecting to a new one,
-      // this is actually a disconnect from the old provider followed by connect to new provider
-      const hadPreviousConnection = !!this.currentAddress;
-      
-      if (hadPreviousConnection) {
-        logger.info("OnAccountsChanged: Detected provider switch with existing connection - emitting disconnect for previous provider");
-        // Emit disconnect event for the previous provider before switching
-        try {
-          await this.disconnect({
-            chainId: this.currentChainId,
-            address: this.currentAddress
-          });
-        } catch (error) {
-          logger.error("Failed to emit disconnect during provider switch:", error);
-        }
-      }
-      
-      // Validate that the new provider is in a valid state before switching
-      if (this.isProviderInValidState(provider)) {
-        logger.info("OnAccountsChanged: Handling provider mismatch - switching providers");
-        this.handleProviderMismatch(provider);
-      } else {
-        logger.warn("Provider switching blocked: new provider is not in a valid state");
-        return;
-      }
-    }
-
-    // Commit new active provider and state
-    this._provider = provider;
     this.currentAddress = address;
     this.currentChainId = nextChainId;
     
-    // Always emit connect event for better analytics capture
-    // This ensures we track all wallet connection attempts regardless of chainId availability
+    // Emit connect event
     const providerInfo = this.getProviderInfo(provider);
     
     logger.info("OnAccountsChanged: Detected wallet connection, emitting connect event", {
       chainId: nextChainId,
       address,
       wasDisconnected,
-      isProviderSwitch,
       providerName: providerInfo.name,
       rdns: providerInfo.rdns,
       hasChainId: !!nextChainId
