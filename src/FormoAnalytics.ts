@@ -903,15 +903,15 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Check if this is a connection event (transition from no address to having an address)
         const wasDisconnected = !this.currentAddress;
         
-        // Set provider if none exists or if this provider has an address when current doesn't
-        // Also switch to this provider if it successfully connected and we had no active connection
-        if (!this._provider || !this.currentAddress) {
+        // Set provider if none exists
+        if (!this._provider) {
           this._provider = provider;
-        } else if (this._provider !== provider && address && !this.currentAddress) {
-          // If current provider has no address but this one does, switch to this provider
+        }
+        // If we had no connection but this provider successfully connected, switch to it
+        else if (!this.currentAddress && address) {
           logger.info("OnConnected: Switching to provider with successful connection", {
             newProvider: this.getProviderInfo(provider),
-            previousProvider: this._provider ? this.getProviderInfo(this._provider) : null
+            previousProvider: this.getProviderInfo(this._provider)
           });
           this._provider = provider;
         }
@@ -1471,7 +1471,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     if (!this._trackedProviders.has(provider)) {
-      logger.warn("setActiveProvider: Provider is not tracked. Track it first with trackProvider()");
+      logger.warn("setActiveProvider: Provider is not tracked. It must be discovered and tracked by the SDK first.");
       return false;
     }
     
