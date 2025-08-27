@@ -916,13 +916,16 @@ export class FormoAnalytics implements IFormoAnalytics {
           this._provider = provider;
         }
         
-        this.currentChainId = chainId;
-        this.currentAddress = this.validateAndChecksumAddress(address) || undefined;
-        
         // Only emit connect event for the active provider to avoid duplicates
-        // Check if this provider is the currently active one or if no provider was previously set
+        // Check if this provider is the currently active one
         const isActiveProvider = this._provider === provider;
-        if (this.currentAddress && isActiveProvider) {
+        
+        // Only update global state (chainId/address) from the active provider
+        if (isActiveProvider) {
+          this.currentChainId = chainId;
+          this.currentAddress = this.validateAndChecksumAddress(address) || undefined;
+        }
+        if (isActiveProvider && this.currentAddress) {
           const providerInfo = this.getProviderInfo(provider);
           
           logger.info("OnConnected: Detected wallet connection, emitting connect event", {
@@ -950,7 +953,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           });
         } else if (this.currentAddress && !isActiveProvider) {
           const providerInfo = this.getProviderInfo(provider);
-          logger.info("OnConnected: Skipping connect event for non-active provider", {
+          logger.debug("OnConnected: Skipping connect event for non-active provider", {
             chainId,
             providerName: providerInfo.name,
             rdns: providerInfo.rdns,
