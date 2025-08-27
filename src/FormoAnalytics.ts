@@ -903,16 +903,26 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Check if this is a connection event (transition from no address to having an address)
         const wasDisconnected = !this.currentAddress;
         
-        // Set provider if none exists
-        if (!this._provider) {
+        // Set provider if none exists or if this provider has an address when current doesn't
+        // Also switch to this provider if it successfully connected and we had no active connection
+        if (!this._provider || !this.currentAddress) {
+          this._provider = provider;
+        } else if (this._provider !== provider && address && !this.currentAddress) {
+          // If current provider has no address but this one does, switch to this provider
+          logger.info("OnConnected: Switching to provider with successful connection", {
+            newProvider: this.getProviderInfo(provider),
+            previousProvider: this._provider ? this.getProviderInfo(this._provider) : null
+          });
           this._provider = provider;
         }
         
         this.currentChainId = chainId;
         this.currentAddress = this.validateAndChecksumAddress(address) || undefined;
         
-        // Always emit connect event for better analytics capture
-        if (this.currentAddress) {
+        // Only emit connect event for the active provider to avoid duplicates
+        // Check if this provider is the currently active one or if no provider was previously set
+        const isActiveProvider = this._provider === provider;
+        if (this.currentAddress && isActiveProvider) {
           const providerInfo = this.getProviderInfo(provider);
           
           logger.info("OnConnected: Detected wallet connection, emitting connect event", {
@@ -920,7 +930,8 @@ export class FormoAnalytics implements IFormoAnalytics {
             wasDisconnected,
             providerName: providerInfo.name,
             rdns: providerInfo.rdns,
-            hasChainId: !!chainId
+            hasChainId: !!chainId,
+            isActiveProvider
           });
           
           const effectiveChainId = chainId || 0;
@@ -936,6 +947,15 @@ export class FormoAnalytics implements IFormoAnalytics {
             rdns: providerInfo.rdns
           }).catch(error => {
             logger.error("Failed to track connect event during provider connection:", error);
+          });
+        } else if (this.currentAddress && !isActiveProvider) {
+          const providerInfo = this.getProviderInfo(provider);
+          logger.info("OnConnected: Skipping connect event for non-active provider", {
+            chainId,
+            providerName: providerInfo.name,
+            rdns: providerInfo.rdns,
+            isActiveProvider,
+            activeProviderInfo: this._provider ? this.getProviderInfo(this._provider) : null
           });
         }
       }
@@ -1436,6 +1456,37 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
+  }
+
+  /**
+   * Manually set the active provider. This will designate which provider should emit analytics events.
+   * Use this when you want to explicitly control which wallet provider is considered "active".
+   * @param provider The provider to set as active
+   * @returns true if successful, false if provider is not tracked
+   */
+  setActiveProvider(provider: EIP1193Provider): boolean {
+    if (!provider) {
+      logger.warn("setActiveProvider: Cannot set null or undefined provider as active");
+      return false;
+    }
+    
+    if (!this._trackedProviders.has(provider)) {
+      logger.warn("setActiveProvider: Provider is not tracked. Track it first with trackProvider()");
+      return false;
+    }
+    
+    const previousProvider = this._provider;
+    this._provider = provider;
+    
+    const currentProviderInfo = this.getProviderInfo(provider);
+    const previousProviderInfo = previousProvider ? this.getProviderInfo(previousProvider) : null;
+    
+    logger.info("setActiveProvider: Active provider changed", {
+      newActiveProvider: currentProviderInfo,
+      previousActiveProvider: previousProviderInfo
+    });
+    
+    return true;
   }
 
   private async getAddress(
