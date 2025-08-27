@@ -55,6 +55,15 @@ interface WalletProviderFlags {
   isPhantom?: boolean;
 }
 
+/**
+ * Constants for provider switching reasons
+ */
+const PROVIDER_SWITCH_REASONS = {
+  ADDRESS_MISMATCH: "Address mismatch indicates wallet switch",
+  NO_ACCOUNTS: "Current provider has no accounts",
+  CHECK_FAILED: "Could not check current provider accounts"
+} as const;
+
 export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
   private _providerListenersMap: Map<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new Map();
@@ -718,6 +727,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
+  /**
+   * Handles changes to the accounts of a given EIP-1193 provider.
+   *
+   * @param provider - The EIP-1193 provider whose accounts have changed.
+   * @param accounts - The new array of account addresses. An empty array indicates a disconnect.
+   * @returns A promise that resolves when the account change has been processed.
+   *
+   * If the accounts array is empty and the provider is the active provider, this method triggers
+   * a disconnect flow. Otherwise, it updates the state to reflect the new accounts as needed.
+   */
   private async _handleAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
 
     if (accounts.length === 0) {
@@ -783,7 +802,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               eventProvider: this.getProviderInfo(provider).name,
               currentAddress: currentStoredAddress,
               newAddress: newProviderAddress,
-              reason: "Address mismatch indicates wallet switch"
+              reason: PROVIDER_SWITCH_REASONS.ADDRESS_MISMATCH
             });
             
             // Emit disconnect for the old provider
@@ -807,7 +826,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         } else {
           logger.info("OnAccountsChanged: Current provider has no accounts, switching to new provider", {
             oldProvider: this.getProviderInfo(this._provider).name,
-            newProvider: this.getProviderInfo(provider).name
+            newProvider: this.getProviderInfo(provider).name,
+            reason: PROVIDER_SWITCH_REASONS.NO_ACCOUNTS
           });
           
           // Emit disconnect for the old provider that didn't signal properly
@@ -821,9 +841,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       } catch (error) {
         logger.warn("OnAccountsChanged: Could not check current provider accounts, switching to new provider", {
-          error: error,
+          error: error instanceof Error ? error.message : String(error),
+          errorType: error instanceof Error ? error.constructor.name : typeof error,
           oldProvider: this._provider ? this.getProviderInfo(this._provider).name : 'unknown',
-          newProvider: this.getProviderInfo(provider).name
+          newProvider: this.getProviderInfo(provider).name,
+          reason: PROVIDER_SWITCH_REASONS.CHECK_FAILED
         });
         
         // If we can't check the current provider, assume it's disconnected
