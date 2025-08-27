@@ -14,7 +14,6 @@ const defaultContext: IFormoAnalytics = {
   transaction: () => Promise.resolve(),
   identify: () => Promise.resolve(),
   track: () => Promise.resolve(),
-  setActiveProvider: () => false,
 };
 
 export const FormoAnalyticsContext =

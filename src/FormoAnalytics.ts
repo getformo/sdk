@@ -907,27 +907,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         if (!this._provider) {
           this._provider = provider;
         }
-        // If we have an active provider but no current address, check if we should switch to this provider
-        else if (this._provider && !this.currentAddress && address) {
-          // Only switch if the current active provider doesn't have a valid address
-          try {
-            const activeProviderAddress = await this.getAddress(this._provider);
-            if (!activeProviderAddress && address) {
-              logger.info("OnConnected: Switching to provider with successful connection", {
-                newProvider: this.getProviderInfo(provider),
-                previousProvider: this.getProviderInfo(this._provider),
-                reason: "Active provider has no address, switching to connected provider"
-              });
-              this._provider = provider;
-            }
-          } catch (error) {
-            logger.warn("OnConnected: Could not get address from active provider, switching to new provider", {
-              error: error,
-              newProvider: this.getProviderInfo(provider)
-            });
-            this._provider = provider;
-          }
-        }
         
         // Only emit connect event for the active provider to avoid duplicates
         // Check if this provider is the currently active one
@@ -1472,37 +1451,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
-  }
-
-  /**
-   * Manually set the active provider. This will designate which provider should emit analytics events.
-   * Use this when you want to explicitly control which wallet provider is considered "active".
-   * @param provider The provider to set as active
-   * @returns true if successful, false if provider is not tracked
-   */
-  setActiveProvider(provider: EIP1193Provider): boolean {
-    if (!provider) {
-      logger.warn("setActiveProvider: Cannot set null or undefined provider as active");
-      return false;
-    }
-    
-    if (!this._trackedProviders.has(provider)) {
-      logger.warn("setActiveProvider: Provider is not tracked. It must be discovered and tracked by the SDK first.");
-      return false;
-    }
-    
-    const previousProvider = this._provider;
-    this._provider = provider;
-    
-    const currentProviderInfo = this.getProviderInfo(provider);
-    const previousProviderInfo = previousProvider ? this.getProviderInfo(previousProvider) : null;
-    
-    logger.info("setActiveProvider: Active provider changed", {
-      newActiveProvider: currentProviderInfo,
-      previousActiveProvider: previousProviderInfo
-    });
-    
-    return true;
   }
 
   private async getAddress(

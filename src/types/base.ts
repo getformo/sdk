@@ -92,7 +92,6 @@ export interface IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
-  setActiveProvider(provider: EIP1193Provider): boolean;
 }
 
 export interface Config {
