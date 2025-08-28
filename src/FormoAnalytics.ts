@@ -6,6 +6,7 @@ import {
   SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
   SESSION_WALLET_DETECTED_KEY,
+  SESSION_WALLET_IDENTIFIED_KEY,
   TEventType,
   DEFAULT_PROVIDER_ICON,
 } from "./constants";
@@ -227,6 +228,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
+    cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
   }
 
   /**
@@ -333,7 +335,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.currentAddress = undefined;
     this.currentChainId = undefined;
-    this._provider = undefined;
+    this.clearActiveProvider();
     logger.info("Wallet disconnected: Cleared currentAddress, currentChainId, and provider");    
   }
 
@@ -523,23 +525,33 @@ export class FormoAnalytics implements IFormoAnalytics {
           try {
             const address = await this.getAddress(provider);
             if (address) {
-              logger.info(
-                "Auto-identifying",
-                address,
-                providerDetail.info.name,
-                providerDetail.info.rdns
-              );
-              // NOTE: do not set this.currentAddress without explicit connect or identify
-              await this.identify(
-                {
-                  address,
-                  providerName: providerDetail.info.name,
-                  rdns: providerDetail.info.rdns,
-                },
-                properties,
-                context,
-                callback
-              );
+              const validAddress = this.validateAndChecksumAddress(address);
+              if (validAddress && !this.session.isWalletIdentified(validAddress, providerDetail.info.rdns)) {
+                logger.info(
+                  "Auto-identifying",
+                  validAddress,
+                  providerDetail.info.name,
+                  providerDetail.info.rdns
+                );
+                // NOTE: do not set this.currentAddress without explicit connect or identify
+                await this.identify(
+                  {
+                    address: validAddress,
+                    providerName: providerDetail.info.name,
+                    rdns: providerDetail.info.rdns,
+                  },
+                  properties,
+                  context,
+                  callback
+                );
+              } else if (validAddress) {
+                logger.info(
+                  "Auto-identify: Skipping already identified wallet",
+                  validAddress,
+                  providerDetail.info.name,
+                  providerDetail.info.rdns
+                );
+              }
             }
           } catch (err) {
             logger.error(
@@ -567,6 +579,19 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (userId) {
         this.currentUserId = userId;
         cookie().set(SESSION_USER_ID_KEY, userId);
+      }
+
+      // Check for duplicate identify events in this session
+      if (validAddress && rdns && this.session.isWalletIdentified(validAddress, rdns)) {
+        logger.warn(
+          `Identify: Wallet ${providerName || 'Unknown'} with address ${validAddress} already identified in this session`
+        );
+        return;
+      }
+
+      // Mark as identified before emitting the event
+      if (validAddress && rdns) {
+        this.session.markWalletIdentified(validAddress, rdns);
       }
 
       await this.trackEvent(
@@ -812,7 +837,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             });
             
             // Clear state and let the new provider become active
-            this._provider = undefined;
+            this.clearActiveProvider();
           } else {
             logger.info("OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider", {
               activeProvider: this.getProviderInfo(this._provider).name,
@@ -837,7 +862,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           });
           
           // Clear state and let the new provider become active
-          this._provider = undefined;
+          this.clearActiveProvider();
         }
       } catch (error) {
         logger.warn("OnAccountsChanged: Could not check current provider accounts, switching to new provider", {
@@ -854,7 +879,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           address: this.currentAddress
         });
         
-        this._provider = undefined;
+        this.clearActiveProvider();
       }
     }
 
@@ -1746,7 +1771,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       this._trackedProviders.delete(provider);
       
       if (this._provider === provider) {
-        this._provider = undefined;
+        this.clearActiveProvider();
       }
     } catch (e) {
       logger.warn("Failed to untrack provider", e);
@@ -1837,6 +1862,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Helper method to clear the active provider state
+   * Centralizes provider clearing logic for consistency
+   */
+  private clearActiveProvider(): void {
+    this._provider = undefined;
+  }
+
+  /**
    * Helper method to safely add a provider detail to _providers array, ensuring no duplicates
    * @param detail The provider detail to add
    * @returns true if the provider was added, false if it was already present
@@ -1864,6 +1897,8 @@ export class FormoAnalytics implements IFormoAnalytics {
 interface IFormoAnalyticsSession {
   isWalletDetected(rdns: string): boolean;
   markWalletDetected(rdns: string): void;
+  isWalletIdentified(address: string, rdns: string): boolean;
+  markWalletIdentified(address: string, rdns: string): void;
 }
 
 class FormoAnalyticsSession implements IFormoAnalyticsSession {
@@ -1874,11 +1909,32 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
 
   public markWalletDetected(rdns: string): void {
     const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
-    rdnses.push(rdns);
-    cookie().set(SESSION_WALLET_DETECTED_KEY, rdnses.join(","), {
-      // by the end of the day
-      expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
-      path: "/",
-    });
+    if (!rdnses.includes(rdns)) {
+      rdnses.push(rdns);
+      cookie().set(SESSION_WALLET_DETECTED_KEY, rdnses.join(","), {
+        // by the end of the day
+        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
+        path: "/",
+      });
+    }
+  }
+
+  public isWalletIdentified(address: string, rdns: string): boolean {
+    const identifiedKey = `${address}:${rdns}`;
+    const identifiedWallets = cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
+    return identifiedWallets.includes(identifiedKey);
+  }
+
+  public markWalletIdentified(address: string, rdns: string): void {
+    const identifiedKey = `${address}:${rdns}`;
+    const identifiedWallets = cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
+    if (!identifiedWallets.includes(identifiedKey)) {
+      identifiedWallets.push(identifiedKey);
+      cookie().set(SESSION_WALLET_IDENTIFIED_KEY, identifiedWallets.join(","), {
+        // by the end of the day
+        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
+        path: "/",
+      });
+    }
   }
 }
