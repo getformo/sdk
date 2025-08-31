@@ -590,8 +590,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Check for duplicate identify events in this session
       // Handle both cases: with rdns (address:rdns) and without rdns (address only)
-      const canCheckDeduplication = !!validAddress;
-      const isAlreadyIdentified = canCheckDeduplication ? this.session.isWalletIdentified(validAddress!, rdns || '') : false;
+      const isAlreadyIdentified = validAddress ? this.session.isWalletIdentified(validAddress, rdns || '') : false;
       
       logger.info("Identify: Checking deduplication", {
         validAddress,
@@ -599,11 +598,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         providerName,
         hasValidAddress: !!validAddress,
         hasRdns: !!rdns,
-        canCheckDeduplication,
         isAlreadyIdentified
       });
 
-      if (canCheckDeduplication && isAlreadyIdentified) {
+      if (isAlreadyIdentified) {
         logger.warn(
           `Identify: Wallet ${providerName || 'Unknown'} with address ${validAddress} already identified in this session (rdns: ${rdns || 'empty'})`
         );
@@ -1924,6 +1922,11 @@ interface IFormoAnalyticsSession {
 }
 
 class FormoAnalyticsSession implements IFormoAnalyticsSession {
+  private generateIdentificationKey(address: string, rdns: string): string {
+    // If rdns is missing, use address-only key as fallback for empty identifies
+    return rdns ? `${address}:${rdns}` : address;
+  }
+
   public isWalletDetected(rdns: string): boolean {
     const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
     return rdnses.includes(rdns);
@@ -1942,15 +1945,15 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
   }
 
   public isWalletIdentified(address: string, rdns: string): boolean {
-    // If rdns is missing, use address-only key as fallback for empty identifies
-    const identifiedKey = rdns ? `${address}:${rdns}` : address;
-    const identifiedWallets = cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
+    const identifiedKey = this.generateIdentificationKey(address, rdns);
+    const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
+    const identifiedWallets = cookieValue?.split(",") || [];
     const isIdentified = identifiedWallets.includes(identifiedKey);
     logger.info("Session: Checking wallet identification", {
       identifiedKey,
       identifiedWallets,
       isIdentified,
-      storageValue: cookie().get(SESSION_WALLET_IDENTIFIED_KEY),
+      storageValue: cookieValue,
       hasRdns: !!rdns,
       fallbackToAddressOnly: !rdns
     });
@@ -1958,8 +1961,7 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
   }
 
   public markWalletIdentified(address: string, rdns: string): void {
-    // If rdns is missing, use address-only key as fallback for empty identifies
-    const identifiedKey = rdns ? `${address}:${rdns}` : address;
+    const identifiedKey = this.generateIdentificationKey(address, rdns);
     const identifiedWallets = cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
     if (!identifiedWallets.includes(identifiedKey)) {
       identifiedWallets.push(identifiedKey);
