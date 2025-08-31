@@ -526,6 +526,13 @@ export class FormoAnalytics implements IFormoAnalytics {
             const address = await this.getAddress(provider);
             if (address) {
               const validAddress = this.validateAndChecksumAddress(address);
+              logger.info("Auto-identify: Checking deduplication", {
+                validAddress,
+                rdns: providerDetail.info.rdns,
+                providerName: providerDetail.info.name,
+                isAlreadyIdentified: validAddress ? this.session.isWalletIdentified(validAddress, providerDetail.info.rdns) : false
+              });
+              
               if (validAddress && !this.session.isWalletIdentified(validAddress, providerDetail.info.rdns)) {
                 logger.info(
                   "Auto-identifying",
@@ -582,16 +589,31 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Check for duplicate identify events in this session
-      if (validAddress && rdns && this.session.isWalletIdentified(validAddress, rdns)) {
+      // Handle both cases: with rdns (address:rdns) and without rdns (address only)
+      const canCheckDeduplication = !!validAddress;
+      const isAlreadyIdentified = canCheckDeduplication ? this.session.isWalletIdentified(validAddress!, rdns || '') : false;
+      
+      logger.info("Identify: Checking deduplication", {
+        validAddress,
+        rdns,
+        providerName,
+        hasValidAddress: !!validAddress,
+        hasRdns: !!rdns,
+        canCheckDeduplication,
+        isAlreadyIdentified
+      });
+
+      if (canCheckDeduplication && isAlreadyIdentified) {
         logger.warn(
-          `Identify: Wallet ${providerName || 'Unknown'} with address ${validAddress} already identified in this session`
+          `Identify: Wallet ${providerName || 'Unknown'} with address ${validAddress} already identified in this session (rdns: ${rdns || 'empty'})`
         );
         return;
       }
 
       // Mark as identified before emitting the event
-      if (validAddress && rdns) {
-        this.session.markWalletIdentified(validAddress, rdns);
+      // Mark even if rdns is empty to prevent duplicate empty identifies
+      if (validAddress) {
+        this.session.markWalletIdentified(validAddress, rdns || '');
       }
 
       await this.trackEvent(
@@ -1920,20 +1942,45 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
   }
 
   public isWalletIdentified(address: string, rdns: string): boolean {
-    const identifiedKey = `${address}:${rdns}`;
+    // If rdns is missing, use address-only key as fallback for empty identifies
+    const identifiedKey = rdns ? `${address}:${rdns}` : address;
     const identifiedWallets = cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
-    return identifiedWallets.includes(identifiedKey);
+    const isIdentified = identifiedWallets.includes(identifiedKey);
+    logger.info("Session: Checking wallet identification", {
+      identifiedKey,
+      identifiedWallets,
+      isIdentified,
+      storageValue: cookie().get(SESSION_WALLET_IDENTIFIED_KEY),
+      hasRdns: !!rdns,
+      fallbackToAddressOnly: !rdns
+    });
+    return isIdentified;
   }
 
   public markWalletIdentified(address: string, rdns: string): void {
-    const identifiedKey = `${address}:${rdns}`;
+    // If rdns is missing, use address-only key as fallback for empty identifies
+    const identifiedKey = rdns ? `${address}:${rdns}` : address;
     const identifiedWallets = cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
     if (!identifiedWallets.includes(identifiedKey)) {
       identifiedWallets.push(identifiedKey);
-      cookie().set(SESSION_WALLET_IDENTIFIED_KEY, identifiedWallets.join(","), {
+      const newValue = identifiedWallets.join(",");
+      cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
         // by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
         path: "/",
+      });
+      logger.info("Session: Marked wallet as identified", {
+        identifiedKey,
+        newValue,
+        allIdentifiedWallets: identifiedWallets,
+        hasRdns: !!rdns,
+        fallbackToAddressOnly: !rdns
+      });
+    } else {
+      logger.info("Session: Wallet already marked as identified", {
+        identifiedKey,
+        existingWallets: identifiedWallets,
+        hasRdns: !!rdns
       });
     }
   }
