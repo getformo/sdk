@@ -592,7 +592,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Handle both cases: with rdns (address:rdns) and without rdns (address only)
       const isAlreadyIdentified = validAddress ? this.session.isWalletIdentified(validAddress, rdns || '') : false;
       
-      logger.info("Identify: Checking deduplication", {
+      logger.debug("Identify: Checking deduplication", {
         validAddress,
         rdns,
         providerName,
@@ -602,7 +602,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       });
 
       if (isAlreadyIdentified) {
-        logger.warn(
+        logger.info(
           `Identify: Wallet ${providerName || 'Unknown'} with address ${validAddress} already identified in this session (rdns: ${rdns || 'empty'})`
         );
         return;
@@ -1949,7 +1949,7 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
     const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
     const identifiedWallets = cookieValue?.split(",") || [];
     const isIdentified = identifiedWallets.includes(identifiedKey);
-    logger.debug?.("Session: Checking wallet identification", {
+    logger.debug("Session: Checking wallet identification", {
       identifiedKey,
       isIdentified,
       hasRdns: !!rdns
@@ -1968,7 +1968,7 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
         path: "/",
       });
-      logger.debug?.("Session: Marked wallet as identified", {
+      logger.debug("Session: Marked wallet as identified", {
         identifiedKey,
         hasRdns: !!rdns
       });
