@@ -1949,13 +1949,10 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
     const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
     const identifiedWallets = cookieValue?.split(",") || [];
     const isIdentified = identifiedWallets.includes(identifiedKey);
-    logger.info("Session: Checking wallet identification", {
+    logger.debug?.("Session: Checking wallet identification", {
       identifiedKey,
-      identifiedWallets,
       isIdentified,
-      storageValue: cookieValue,
-      hasRdns: !!rdns,
-      fallbackToAddressOnly: !rdns
+      hasRdns: !!rdns
     });
     return isIdentified;
   }
@@ -1971,12 +1968,9 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
         path: "/",
       });
-      logger.info("Session: Marked wallet as identified", {
+      logger.debug?.("Session: Marked wallet as identified", {
         identifiedKey,
-        newValue,
-        allIdentifiedWallets: identifiedWallets,
-        hasRdns: !!rdns,
-        fallbackToAddressOnly: !rdns
+        hasRdns: !!rdns
       });
     } else {
       logger.info("Session: Wallet already marked as identified", {
