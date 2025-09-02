@@ -725,11 +725,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     // This must be done before switching storage to ensure persistence
     this.setConsentFlag(CONSENT_OPT_OUT_KEY, "true");
     
-    // Switch to memory storage for future operations first
-    this.switchToConsentAwareStorage(false);
-    
-    // Clear existing tracking data after switching storage mode
+    // Clear existing tracking data BEFORE switching storage mode
+    // This ensures persistent cookies are cleared while still in cookie mode
     this.reset();
+    
+    // Switch to memory storage for future operations after clearing data
+    this.switchToConsentAwareStorage(false);
     
     logger.info("Successfully opted out of tracking");
   }
@@ -756,15 +757,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Handle analytics consent changes
     if (preferences.analytics === false) {
       this.optOutTracking();
-    } else {
-      // Analytics consent is granted (true) or default (undefined)
-      // Since we're in the else branch, analytics is not false, so enable storage
+    } else if (preferences.analytics === true) {
+      // Analytics consent is explicitly granted (true)
+      // Only enable tracking when explicitly consented to
       if (this.hasOptedOutTracking()) {
         // Remove opt-out flag if analytics is explicitly consented to
         this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
       }
-      // Enable consent-aware storage since analytics is not denied
+      // Enable consent-aware storage since analytics is explicitly granted
       this.switchToConsentAwareStorage(true);
+    } else {
+      // Analytics consent is undefined - respect existing opt-out state
+      // Don't change tracking state when preference is undefined
+      logger.info("Analytics consent is undefined, preserving existing tracking state");
+      
+      // Only update non-analytics related consent without changing tracking state
+      // Keep current storage mode and opt-out flags unchanged
     }
     
     logger.info("Consent preferences set successfully");
@@ -1638,10 +1646,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       const parts = hostname.split('.');
       
       // Only try parent domain deletion for proper domains with multiple parts
-      // Skip localhost, IP addresses (contain only numbers/dots/colons), and single-level domains
+      // Skip localhost, IP addresses, and single-level domains
       if (parts.length >= 2 && 
           hostname !== 'localhost' && 
-          !hostname.match(/^[\d.:]+$/)) { // Simple check: only numbers, dots, and colons = likely IP
+          !(hostname.match(/^[\d.]+$/) || hostname.match(/^[\d:]+$/))) { // More precise: IPv4 or IPv6 address
         const domain = parts.slice(-2).join('.');
         document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
       }
