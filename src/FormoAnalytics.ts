@@ -20,6 +20,7 @@ import {
   initStorageManager,
   logger,
   Logger,
+  setConsentAwareStorage,
 } from "./lib";
 import {
   Address,
@@ -44,7 +45,6 @@ import {
 } from "./types";
 import { toChecksumAddress } from "./utils";
 import { getValidAddress } from "./utils/address";
-import { autoSyncWithCookieBanner, detectCookieBanner } from "./utils/consent";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
@@ -169,23 +169,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
 
     // Check consent status on initialization
-    if (this.has_opted_out_tracking()) {
+    if (this.hasOptedOutTracking()) {
       logger.info("User has previously opted out of tracking");
       this.switchToConsentAwareStorage(false);
     } else {
-      const consent = this.get_consent();
+      const consent = this.getConsent();
       if (consent && consent.analytics === false) {
         logger.info("User has denied analytics consent");
         this.switchToConsentAwareStorage(false);
       }
-    }
-
-    // Enable auto-sync with cookie banners if configured
-    if (options.consent?.autoDetectBanners) {
-      // Delay initialization to ensure cookie banner frameworks are loaded
-      setTimeout(() => {
-        this.enableCookieBannerSync();
-      }, 100);
     }
 
     // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
@@ -726,7 +718,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Following the Mixpanel pattern: https://docs.mixpanel.com/docs/tracking-methods/sdks/javascript#opt-out-of-tracking
    * @returns {void}
    */
-  public opt_out_tracking(): void {
+  public optOutTracking(): void {
     logger.info("Opting out of tracking");
     
     // Set opt-out flag in persistent storage first
@@ -745,26 +737,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Opt back into tracking. This will re-enable analytics tracking and switch back to cookie storage.
-   * @returns {void}
-   */
-  public opt_in_tracking(): void {
-    logger.info("Opting back into tracking");
-    
-    // Remove opt-out flag
-    cookie().remove(CONSENT_OPT_OUT_KEY);
-    
-    // Switch back to cookie storage
-    this.switchToConsentAwareStorage(true);
-    
-    logger.info("Successfully opted back into tracking");
-  }
-
-  /**
    * Check if the user has opted out of tracking.
    * @returns {boolean} True if the user has opted out
    */
-  public has_opted_out_tracking(): boolean {
+  public hasOptedOutTracking(): boolean {
     return cookie().get(CONSENT_OPT_OUT_KEY) === "true";
   }
 
@@ -773,7 +749,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {ConsentPreferences} preferences - The consent preferences to set
    * @returns {void}
    */
-  public set_consent(preferences: ConsentPreferences): void {
+  public setConsent(preferences: ConsentPreferences): void {
     logger.info("Setting consent preferences", preferences);
     
     // Store consent preferences
@@ -784,9 +760,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     // If analytics consent is denied, opt out of tracking
     if (preferences.analytics === false) {
-      this.opt_out_tracking();
-    } else if (preferences.analytics === true && this.has_opted_out_tracking()) {
-      this.opt_in_tracking();
+      this.optOutTracking();
+    } else if (preferences.analytics === true && this.hasOptedOutTracking()) {
+      // Remove opt-out flag and enable storage
+      cookie().remove(CONSENT_OPT_OUT_KEY);
+      this.switchToConsentAwareStorage(true);
     }
     
     // Switch storage based on analytics consent
@@ -799,7 +777,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Get the current consent preferences.
    * @returns {ConsentPreferences | null} The current consent preferences or null if not set
    */
-  public get_consent(): ConsentPreferences | null {
+  public getConsent(): ConsentPreferences | null {
     const preferencesString = cookie().get(CONSENT_PREFERENCES_KEY);
     if (!preferencesString) {
       return null;
@@ -817,7 +795,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Clear all consent preferences and opt-out flags.
    * @returns {void}
    */
-  public clear_consent(): void {
+  public clearConsent(): void {
     logger.info("Clearing consent preferences");
     
     cookie().remove(CONSENT_OPT_OUT_KEY);
@@ -829,38 +807,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("Consent preferences cleared");
   }
 
-  /**
-   * Enable automatic synchronization with cookie banner frameworks.
-   * This will detect common cookie consent management platforms and automatically
-   * sync consent preferences with Formo Analytics.
-   * @returns {(() => void) | null} Cleanup function to remove event listeners, or null if no banner detected
-   */
-  public enableCookieBannerSync(): (() => void) | null {
-    logger.info("Enabling automatic cookie banner synchronization");
-    
-    const cleanup = autoSyncWithCookieBanner({
-      opt_out_tracking: () => this.opt_out_tracking(),
-      opt_in_tracking: () => this.opt_in_tracking(),
-      set_consent: (preferences: ConsentPreferences) => this.set_consent(preferences),
-    });
-    
-    if (cleanup) {
-      logger.info("Successfully enabled cookie banner synchronization");
-    } else {
-      logger.info("No compatible cookie banner framework detected");
-    }
-    
-    return cleanup;
-  }
 
-  /**
-   * Detect the current cookie banner framework being used on the page.
-   * @returns {string | null} The name of the detected framework or null if none found
-   */
-  public detectCookieBannerFramework(): string | null {
-    const framework = detectCookieBanner();
-    return framework ? framework.name : null;
-  }
 
   /*
     SDK tracking and event listener functions
@@ -1509,18 +1456,18 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private shouldTrack(): boolean {
     // First check if user has opted out of tracking
-    if (this.has_opted_out_tracking()) {
+    if (this.hasOptedOutTracking()) {
       return false;
     }
     
     // Check consent preferences - analytics must be explicitly consented to or undefined (default true)
-    const consent = this.get_consent();
+    const consent = this.getConsent();
     if (consent && consent.analytics === false) {
       return false;
     }
     
     // Check Do Not Track header if configured
-    if (this.options.consent?.respectDNT && 
+    if (this.options.respectDNT && 
         typeof navigator !== 'undefined' && 
         navigator.doNotTrack === '1') {
       return false;
@@ -1578,17 +1525,66 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @private
    */
   private switchToConsentAwareStorage(hasConsent: boolean): void {
-    // This method would typically work with the storage manager to switch
-    // between cookie storage (with consent) and memory storage (without consent)
-    // For now, we rely on the existing storage fallback mechanism
-    // and the shouldTrack() method to prevent data collection
+    logger.info(`Switching to ${hasConsent ? 'full analytics' : 'privacy-friendly'} storage mode`);
+    
+    // Enable consent-aware storage mode
+    setConsentAwareStorage(hasConsent);
     
     if (!hasConsent) {
-      logger.info("Switching to privacy-friendly storage (memory only)");
-      // The storage system will automatically fall back to memory storage
-      // when cookies are not available or consent is not given
+      logger.info("Storage switched to memory-only mode (no persistent cookies)");
+      // Clear any existing persistent data when switching to memory storage
+      this.clearPersistentData();
     } else {
-      logger.info("Switching to full analytics storage (cookies enabled)");
+      logger.info("Storage switched to full analytics mode (cookies enabled)");
+    }
+  }
+
+  /**
+   * Clear persistent data when switching to privacy mode
+   * @private
+   */
+  private clearPersistentData(): void {
+    try {
+      // We need to temporarily access actual cookie storage to clear it
+      // since setConsentAwareStorage might have already switched to memory
+      if (typeof document !== 'undefined') {
+        // Clear analytics-related cookies manually
+        const cookiesToClear = [
+          LOCAL_ANONYMOUS_ID_KEY,
+          SESSION_USER_ID_KEY,
+          SESSION_WALLET_DETECTED_KEY,
+          SESSION_WALLET_IDENTIFIED_KEY,
+          SESSION_CURRENT_URL_KEY,
+        ];
+        
+        cookiesToClear.forEach(cookieName => {
+          // Clear from current domain
+          document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+          // Also try to clear from parent domain
+          const domain = window.location.hostname.split('.').slice(-2).join('.');
+          document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
+        });
+      }
+      
+      // Clear localStorage if available
+      if (typeof localStorage !== 'undefined') {
+        const localStorageKeys = [
+          LOCAL_ANONYMOUS_ID_KEY,
+          SESSION_USER_ID_KEY,
+        ];
+        
+        localStorageKeys.forEach(key => {
+          try {
+            localStorage.removeItem(key);
+          } catch (e) {
+            // Ignore errors (e.g., storage disabled)
+          }
+        });
+      }
+      
+      logger.info("Persistent analytics data cleared");
+    } catch (error) {
+      logger.warn("Failed to clear some persistent data", error);
     }
   }
 

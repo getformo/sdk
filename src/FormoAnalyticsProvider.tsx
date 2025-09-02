@@ -16,12 +16,11 @@ const defaultContext: IFormoAnalytics = {
   track: () => Promise.resolve(),
   
   // Consent management methods
-  opt_out_tracking: () => {},
-  opt_in_tracking: () => {},
-  has_opted_out_tracking: () => false,
-  set_consent: () => {},
-  get_consent: () => null,
-  clear_consent: () => {},
+  optOutTracking: () => {},
+  hasOptedOutTracking: () => false,
+  setConsent: () => {},
+  getConsent: () => null,
+  clearConsent: () => {},
 };
 
 export const FormoAnalyticsContext =

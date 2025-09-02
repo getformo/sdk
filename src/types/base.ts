@@ -94,12 +94,11 @@ export interface IFormoAnalytics {
   ): Promise<void>;
   
   // Consent management methods
-  opt_out_tracking(): void;
-  opt_in_tracking(): void;
-  has_opted_out_tracking(): boolean;
-  set_consent(preferences: ConsentPreferences): void;
-  get_consent(): ConsentPreferences | null;
-  clear_consent(): void;
+  optOutTracking(): void;
+  hasOptedOutTracking(): boolean;
+  setConsent(preferences: ConsentPreferences): void;
+  getConsent(): ConsentPreferences | null;
+  clearConsent(): void;
 }
 
 export interface Config {
@@ -125,15 +124,6 @@ export interface ConsentPreferences {
   performance?: boolean;
 }
 
-/**
- * Consent management options
- */
-export interface ConsentOptions {
-  respectDNT?: boolean; // Respect Do Not Track header
-  defaultStorage?: 'memory' | 'localStorage' | 'sessionStorage'; // Storage to use when no consent
-  autoDetectBanners?: boolean; // Auto-detect common consent banners
-}
-
 export interface Options {
   provider?: EIP1193Provider;
   tracking?: boolean | TrackingOptions;
@@ -145,7 +135,7 @@ export interface Options {
     enabled?: boolean;
     levels?: LogLevel[];
   };
-  consent?: ConsentOptions;
+  respectDNT?: boolean; // Respect Do Not Track header
   ready?: (formo: IFormoAnalytics) => void;
 }
 
