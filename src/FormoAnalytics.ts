@@ -721,17 +721,15 @@ export class FormoAnalytics implements IFormoAnalytics {
   public optOutTracking(): void {
     logger.info("Opting out of tracking");
     
-    // Set opt-out flag in persistent storage first
-    cookie().set(CONSENT_OPT_OUT_KEY, "true", {
-      expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(), // 1 year
-      path: "/",
-    });
+    // Set opt-out flag in persistent storage using direct cookie access
+    // This must be done before switching storage to ensure persistence
+    this.setConsentFlag(CONSENT_OPT_OUT_KEY, "true");
     
-    // Clear existing tracking data
-    this.reset();
-    
-    // Switch to memory storage for future operations
+    // Switch to memory storage for future operations first
     this.switchToConsentAwareStorage(false);
+    
+    // Clear existing tracking data after switching storage mode
+    this.reset();
     
     logger.info("Successfully opted out of tracking");
   }
@@ -741,7 +739,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {boolean} True if the user has opted out
    */
   public hasOptedOutTracking(): boolean {
-    return cookie().get(CONSENT_OPT_OUT_KEY) === "true";
+    return this.getConsentFlag(CONSENT_OPT_OUT_KEY) === "true";
   }
 
   /**
@@ -752,23 +750,23 @@ export class FormoAnalytics implements IFormoAnalytics {
   public setConsent(preferences: ConsentPreferences): void {
     logger.info("Setting consent preferences", preferences);
     
-    // Store consent preferences
-    cookie().set(CONSENT_PREFERENCES_KEY, JSON.stringify(preferences), {
-      expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(), // 1 year
-      path: "/",
-    });
+    // Store consent preferences using direct cookie access
+    this.setConsentFlag(CONSENT_PREFERENCES_KEY, JSON.stringify(preferences));
     
-    // If analytics consent is denied, opt out of tracking
+    // Handle analytics consent changes
     if (preferences.analytics === false) {
       this.optOutTracking();
-    } else if (preferences.analytics === true && this.hasOptedOutTracking()) {
-      // Remove opt-out flag and enable storage
-      cookie().remove(CONSENT_OPT_OUT_KEY);
-      this.switchToConsentAwareStorage(true);
+    } else {
+      // Analytics consent is granted (true) or default (undefined)
+      if (this.hasOptedOutTracking()) {
+        // Remove opt-out flag if analytics is explicitly consented to
+        this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
+      }
+      // Switch to consent-aware storage based on analytics preference
+      // Analytics is enabled if true or undefined (default), disabled only if explicitly false
+      const hasAnalyticsConsent = preferences.analytics === undefined || preferences.analytics === true;
+      this.switchToConsentAwareStorage(hasAnalyticsConsent);
     }
-    
-    // Switch storage based on analytics consent
-    this.switchToConsentAwareStorage(preferences.analytics !== false);
     
     logger.info("Consent preferences set successfully");
   }
@@ -778,7 +776,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {ConsentPreferences | null} The current consent preferences or null if not set
    */
   public getConsent(): ConsentPreferences | null {
-    const preferencesString = cookie().get(CONSENT_PREFERENCES_KEY);
+    const preferencesString = this.getConsentFlag(CONSENT_PREFERENCES_KEY);
     if (!preferencesString) {
       return null;
     }
@@ -798,8 +796,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   public clearConsent(): void {
     logger.info("Clearing consent preferences");
     
-    cookie().remove(CONSENT_OPT_OUT_KEY);
-    cookie().remove(CONSENT_PREFERENCES_KEY);
+    // Remove consent flags using direct cookie access
+    this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
+    this.removeConsentFlag(CONSENT_PREFERENCES_KEY);
     
     // Switch back to default cookie storage
     this.switchToConsentAwareStorage(true);
@@ -1467,9 +1466,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
     
     // Check Do Not Track header if configured
-    if (this.options.respectDNT && 
-        typeof navigator !== 'undefined' && 
-        navigator.doNotTrack === '1') {
+    if (this.options.respectDNT && this.isDoNotTrackEnabled()) {
       return false;
     }
     
@@ -1558,11 +1555,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         ];
         
         cookiesToClear.forEach(cookieName => {
-          // Clear from current domain
-          document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
-          // Also try to clear from parent domain
-          const domain = window.location.hostname.split('.').slice(-2).join('.');
-          document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
+          this.deleteCookieDirectly(cookieName);
         });
       }
       
@@ -1586,6 +1579,97 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch (error) {
       logger.warn("Failed to clear some persistent data", error);
     }
+  }
+
+  /**
+   * Set a consent flag directly in cookies, bypassing the consent-aware storage system
+   * @param key - The cookie key
+   * @param value - The cookie value
+   * @private
+   */
+  private setConsentFlag(key: string, value: string): void {
+    if (typeof document !== 'undefined') {
+      const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year
+      document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
+    }
+  }
+
+  /**
+   * Get a consent flag directly from cookies, bypassing the consent-aware storage system
+   * @param key - The cookie key
+   * @returns The cookie value or null if not found
+   * @private
+   */
+  private getConsentFlag(key: string): string | null {
+    if (typeof document === 'undefined') return null;
+    
+    const cookies = document.cookie.split(';');
+    for (const cookie of cookies) {
+      const [cookieKey, cookieValue] = cookie.trim().split('=');
+      if (cookieKey === key) {
+        return decodeURIComponent(cookieValue || '');
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Remove a consent flag directly from cookies, bypassing the consent-aware storage system
+   * @param key - The cookie key
+   * @private
+   */
+  private removeConsentFlag(key: string): void {
+    this.deleteCookieDirectly(key);
+  }
+
+  /**
+   * Delete a cookie directly, handling various domain scenarios
+   * @param cookieName - The name of the cookie to delete
+   * @private
+   */
+  private deleteCookieDirectly(cookieName: string): void {
+    if (typeof document === 'undefined') return;
+    
+    // Clear from current domain/path
+    document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    
+    // Try to clear from parent domain if it's a multi-level domain
+    if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
+      const parts = hostname.split('.');
+      
+      // Only try parent domain deletion for multi-level domains (not localhost or IP addresses)
+      if (parts.length > 1 && !this.isIpAddress(hostname) && hostname !== 'localhost') {
+        const domain = parts.slice(-2).join('.');
+        document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
+      }
+    }
+  }
+
+  /**
+   * Check if a hostname is an IP address
+   * @param hostname - The hostname to check
+   * @returns True if the hostname is an IP address
+   * @private
+   */
+  private isIpAddress(hostname: string): boolean {
+    const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+    const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
+    return ipv4Regex.test(hostname) || ipv6Regex.test(hostname);
+  }
+
+  /**
+   * Check if Do Not Track is enabled in the browser
+   * @returns True if Do Not Track is enabled
+   * @private
+   */
+  private isDoNotTrackEnabled(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    
+    // Check all possible DNT values that indicate user preference to not be tracked
+    return navigator.doNotTrack === '1' || 
+           navigator.doNotTrack === 'yes' ||
+           (navigator as any).msDoNotTrack === '1';
   }
 
   /*
