@@ -758,14 +758,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.optOutTracking();
     } else {
       // Analytics consent is granted (true) or default (undefined)
+      // Since we're in the else branch, analytics is not false, so enable storage
       if (this.hasOptedOutTracking()) {
         // Remove opt-out flag if analytics is explicitly consented to
         this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
       }
-      // Switch to consent-aware storage based on analytics preference
-      // Analytics is enabled if true or undefined (default), disabled only if explicitly false
-      const hasAnalyticsConsent = preferences.analytics === undefined || preferences.analytics === true;
-      this.switchToConsentAwareStorage(hasAnalyticsConsent);
+      // Enable consent-aware storage since analytics is not denied
+      this.switchToConsentAwareStorage(true);
     }
     
     logger.info("Consent preferences set successfully");
@@ -1633,29 +1632,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Clear from current domain/path
     document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
     
-    // Try to clear from parent domain if it's a multi-level domain
+    // Try to clear from parent domain if it's a proper multi-level domain
     if (typeof window !== 'undefined') {
       const hostname = window.location.hostname;
       const parts = hostname.split('.');
       
-      // Only try parent domain deletion for multi-level domains (not localhost or IP addresses)
-      if (parts.length > 1 && !this.isIpAddress(hostname) && hostname !== 'localhost') {
+      // Only try parent domain deletion for proper domains with multiple parts
+      // Skip localhost, IP addresses (contain only numbers/dots/colons), and single-level domains
+      if (parts.length >= 2 && 
+          hostname !== 'localhost' && 
+          !hostname.match(/^[\d.:]+$/)) { // Simple check: only numbers, dots, and colons = likely IP
         const domain = parts.slice(-2).join('.');
         document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
       }
     }
-  }
-
-  /**
-   * Check if a hostname is an IP address
-   * @param hostname - The hostname to check
-   * @returns True if the hostname is an IP address
-   * @private
-   */
-  private isIpAddress(hostname: string): boolean {
-    const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
-    const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
-    return ipv4Regex.test(hostname) || ipv6Regex.test(hostname);
   }
 
   /**
