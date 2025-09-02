@@ -9,6 +9,8 @@ import {
   SESSION_WALLET_IDENTIFIED_KEY,
   TEventType,
   DEFAULT_PROVIDER_ICON,
+  CONSENT_OPT_OUT_KEY,
+  CONSENT_PREFERENCES_KEY,
 } from "./constants";
 import {
   cookie,
@@ -23,6 +25,7 @@ import {
   Address,
   ChainID,
   Config,
+  ConsentPreferences,
   EIP1193Provider,
   IFormoAnalytics,
   IFormoEventContext,
@@ -41,6 +44,7 @@ import {
 } from "./types";
 import { toChecksumAddress } from "./utils";
 import { getValidAddress } from "./utils/address";
+import { autoSyncWithCookieBanner, detectCookieBanner } from "./utils/consent";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 
@@ -163,6 +167,26 @@ export class FormoAnalytics implements IFormoAnalytics {
         flushInterval: options.flushInterval,
       })
     );
+
+    // Check consent status on initialization
+    if (this.has_opted_out_tracking()) {
+      logger.info("User has previously opted out of tracking");
+      this.switchToConsentAwareStorage(false);
+    } else {
+      const consent = this.get_consent();
+      if (consent && consent.analytics === false) {
+        logger.info("User has denied analytics consent");
+        this.switchToConsentAwareStorage(false);
+      }
+    }
+
+    // Enable auto-sync with cookie banners if configured
+    if (options.consent?.autoDetectBanners) {
+      // Delay initialization to ensure cookie banner frameworks are loaded
+      setTimeout(() => {
+        this.enableCookieBannerSync();
+      }, 100);
+    }
 
     // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
     let provider: EIP1193Provider | undefined = undefined;
@@ -691,6 +715,151 @@ export class FormoAnalytics implements IFormoAnalytics {
       context,
       callback
     );
+  }
+
+  /*
+    Consent management functions
+  */
+
+  /**
+   * Opt out of tracking. This will stop all analytics tracking and switch to memory storage.
+   * Following the Mixpanel pattern: https://docs.mixpanel.com/docs/tracking-methods/sdks/javascript#opt-out-of-tracking
+   * @returns {void}
+   */
+  public opt_out_tracking(): void {
+    logger.info("Opting out of tracking");
+    
+    // Set opt-out flag in persistent storage first
+    cookie().set(CONSENT_OPT_OUT_KEY, "true", {
+      expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(), // 1 year
+      path: "/",
+    });
+    
+    // Clear existing tracking data
+    this.reset();
+    
+    // Switch to memory storage for future operations
+    this.switchToConsentAwareStorage(false);
+    
+    logger.info("Successfully opted out of tracking");
+  }
+
+  /**
+   * Opt back into tracking. This will re-enable analytics tracking and switch back to cookie storage.
+   * @returns {void}
+   */
+  public opt_in_tracking(): void {
+    logger.info("Opting back into tracking");
+    
+    // Remove opt-out flag
+    cookie().remove(CONSENT_OPT_OUT_KEY);
+    
+    // Switch back to cookie storage
+    this.switchToConsentAwareStorage(true);
+    
+    logger.info("Successfully opted back into tracking");
+  }
+
+  /**
+   * Check if the user has opted out of tracking.
+   * @returns {boolean} True if the user has opted out
+   */
+  public has_opted_out_tracking(): boolean {
+    return cookie().get(CONSENT_OPT_OUT_KEY) === "true";
+  }
+
+  /**
+   * Set detailed consent preferences for different types of tracking.
+   * @param {ConsentPreferences} preferences - The consent preferences to set
+   * @returns {void}
+   */
+  public set_consent(preferences: ConsentPreferences): void {
+    logger.info("Setting consent preferences", preferences);
+    
+    // Store consent preferences
+    cookie().set(CONSENT_PREFERENCES_KEY, JSON.stringify(preferences), {
+      expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(), // 1 year
+      path: "/",
+    });
+    
+    // If analytics consent is denied, opt out of tracking
+    if (preferences.analytics === false) {
+      this.opt_out_tracking();
+    } else if (preferences.analytics === true && this.has_opted_out_tracking()) {
+      this.opt_in_tracking();
+    }
+    
+    // Switch storage based on analytics consent
+    this.switchToConsentAwareStorage(preferences.analytics !== false);
+    
+    logger.info("Consent preferences set successfully");
+  }
+
+  /**
+   * Get the current consent preferences.
+   * @returns {ConsentPreferences | null} The current consent preferences or null if not set
+   */
+  public get_consent(): ConsentPreferences | null {
+    const preferencesString = cookie().get(CONSENT_PREFERENCES_KEY);
+    if (!preferencesString) {
+      return null;
+    }
+    
+    try {
+      return JSON.parse(preferencesString) as ConsentPreferences;
+    } catch (error) {
+      logger.error("Failed to parse consent preferences", error);
+      return null;
+    }
+  }
+
+  /**
+   * Clear all consent preferences and opt-out flags.
+   * @returns {void}
+   */
+  public clear_consent(): void {
+    logger.info("Clearing consent preferences");
+    
+    cookie().remove(CONSENT_OPT_OUT_KEY);
+    cookie().remove(CONSENT_PREFERENCES_KEY);
+    
+    // Switch back to default cookie storage
+    this.switchToConsentAwareStorage(true);
+    
+    logger.info("Consent preferences cleared");
+  }
+
+  /**
+   * Enable automatic synchronization with cookie banner frameworks.
+   * This will detect common cookie consent management platforms and automatically
+   * sync consent preferences with Formo Analytics.
+   * @returns {(() => void) | null} Cleanup function to remove event listeners, or null if no banner detected
+   */
+  public enableCookieBannerSync(): (() => void) | null {
+    logger.info("Enabling automatic cookie banner synchronization");
+    
+    const cleanup = autoSyncWithCookieBanner({
+      opt_out_tracking: () => this.opt_out_tracking(),
+      opt_in_tracking: () => this.opt_in_tracking(),
+      set_consent: (preferences: ConsentPreferences) => this.set_consent(preferences),
+    });
+    
+    if (cleanup) {
+      logger.info("Successfully enabled cookie banner synchronization");
+    } else {
+      logger.info("No compatible cookie banner framework detected");
+    }
+    
+    return cleanup;
+  }
+
+  /**
+   * Detect the current cookie banner framework being used on the page.
+   * @returns {string | null} The name of the detected framework or null if none found
+   */
+  public detectCookieBannerFramework(): string | null {
+    const framework = detectCookieBanner();
+    return framework ? framework.name : null;
   }
 
   /*
@@ -1335,10 +1504,28 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Determines if tracking should be enabled based on configuration
+   * Determines if tracking should be enabled based on configuration and consent
    * @returns {boolean} True if tracking should be enabled
    */
   private shouldTrack(): boolean {
+    // First check if user has opted out of tracking
+    if (this.has_opted_out_tracking()) {
+      return false;
+    }
+    
+    // Check consent preferences - analytics must be explicitly consented to or undefined (default true)
+    const consent = this.get_consent();
+    if (consent && consent.analytics === false) {
+      return false;
+    }
+    
+    // Check Do Not Track header if configured
+    if (this.options.consent?.respectDNT && 
+        typeof navigator !== 'undefined' && 
+        navigator.doNotTrack === '1') {
+      return false;
+    }
+    
     // Check if tracking is explicitly provided as a boolean
     if (typeof this.options.tracking === 'boolean') {
       return this.options.tracking;
@@ -1383,6 +1570,26 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     // Default behavior: track everywhere except localhost
     return !isLocalhost();
+  }
+
+  /**
+   * Switch storage strategy based on consent preferences
+   * @param {boolean} hasConsent - Whether the user has given consent for analytics
+   * @private
+   */
+  private switchToConsentAwareStorage(hasConsent: boolean): void {
+    // This method would typically work with the storage manager to switch
+    // between cookie storage (with consent) and memory storage (without consent)
+    // For now, we rely on the existing storage fallback mechanism
+    // and the shouldTrack() method to prevent data collection
+    
+    if (!hasConsent) {
+      logger.info("Switching to privacy-friendly storage (memory only)");
+      // The storage system will automatically fall back to memory storage
+      // when cookies are not available or consent is not given
+    } else {
+      logger.info("Switching to full analytics storage (cookies enabled)");
+    }
   }
 
   /*

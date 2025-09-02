@@ -6,7 +6,7 @@ import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
 const defaultContext: IFormoAnalytics = {
   chain: () => Promise.resolve(),
   page: () => Promise.resolve(),
-  reset: () => Promise.resolve(),
+  reset: () => {},
   detect: () => Promise.resolve(),
   connect: () => Promise.resolve(),
   disconnect: () => Promise.resolve(),
@@ -14,6 +14,14 @@ const defaultContext: IFormoAnalytics = {
   transaction: () => Promise.resolve(),
   identify: () => Promise.resolve(),
   track: () => Promise.resolve(),
+  
+  // Consent management methods
+  opt_out_tracking: () => {},
+  opt_in_tracking: () => {},
+  has_opted_out_tracking: () => false,
+  set_consent: () => {},
+  get_consent: () => null,
+  clear_consent: () => {},
 };
 
 export const FormoAnalyticsContext =
