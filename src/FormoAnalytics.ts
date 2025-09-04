@@ -9,6 +9,8 @@ import {
   SESSION_WALLET_IDENTIFIED_KEY,
   TEventType,
   DEFAULT_PROVIDER_ICON,
+  CONSENT_OPT_OUT_KEY,
+  CONSENT_PREFERENCES_KEY,
 } from "./constants";
 import {
   cookie,
@@ -18,11 +20,13 @@ import {
   initStorageManager,
   logger,
   Logger,
+  setConsentAwareStorage,
 } from "./lib";
 import {
   Address,
   ChainID,
   Config,
+  ConsentPreferences,
   EIP1193Provider,
   IFormoAnalytics,
   IFormoEventContext,
@@ -163,6 +167,18 @@ export class FormoAnalytics implements IFormoAnalytics {
         flushInterval: options.flushInterval,
       })
     );
+
+    // Check consent status on initialization
+    if (this.hasOptedOutTracking()) {
+      logger.info("User has previously opted out of tracking");
+      this.switchToConsentAwareStorage(false);
+    } else {
+      const consent = this.getConsent();
+      if (consent && consent.analytics === false) {
+        logger.info("User has denied analytics consent");
+        this.switchToConsentAwareStorage(false);
+      }
+    }
 
     // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
     let provider: EIP1193Provider | undefined = undefined;
@@ -692,6 +708,122 @@ export class FormoAnalytics implements IFormoAnalytics {
       callback
     );
   }
+
+  /*
+    Consent management functions
+  */
+
+  /**
+   * Opt out of tracking. This will stop all analytics tracking and switch to memory storage.
+   * Following the Mixpanel pattern: https://docs.mixpanel.com/docs/tracking-methods/sdks/javascript#opt-out-of-tracking
+   * @returns {void}
+   */
+  public optOutTracking(): void {
+    logger.info("Opting out of tracking");
+    
+    // Set opt-out flag in persistent storage using direct cookie access
+    // This must be done before switching storage to ensure persistence
+    this.setConsentFlag(CONSENT_OPT_OUT_KEY, "true");
+    
+    // Clear existing tracking data BEFORE switching storage mode
+    // This ensures persistent cookies are cleared while still in cookie mode
+    this.reset();
+    
+    // Switch to memory storage for future operations after clearing data
+    this.switchToConsentAwareStorage(false);
+    
+    logger.info("Successfully opted out of tracking");
+  }
+
+  /**
+   * Check if the user has opted out of tracking.
+   * @returns {boolean} True if the user has opted out
+   */
+  public hasOptedOutTracking(): boolean {
+    return this.getConsentFlag(CONSENT_OPT_OUT_KEY) === "true";
+  }
+
+  /**
+   * Set detailed consent preferences for different types of tracking.
+   * @param {ConsentPreferences} preferences - The consent preferences to set
+   * @returns {void}
+   */
+  public setConsent(preferences: ConsentPreferences): void {
+    logger.info("Setting consent preferences", preferences);
+    
+    // Store consent preferences using direct cookie access, but validate size first
+    const MAX_COOKIE_SIZE = 4000; // bytes, conservative to allow for key/metadata
+    const serialized = JSON.stringify(preferences);
+    // Use encodeURIComponent to approximate byte size in cookie
+    if (encodeURIComponent(serialized).length > MAX_COOKIE_SIZE) {
+      logger.error("Consent preferences too large to store in cookie (" + encodeURIComponent(serialized).length + " bytes). Not setting consent cookie.");
+      return;
+    }
+    this.setConsentFlag(CONSENT_PREFERENCES_KEY, serialized);
+    
+    // Handle analytics consent changes
+    if (preferences.analytics === false) {
+      this.optOutTracking();
+    } else if (preferences.analytics === true) {
+      // Analytics consent is explicitly granted (true)
+      // Only enable tracking when explicitly consented to
+      if (this.hasOptedOutTracking()) {
+        // Remove opt-out flag if analytics is explicitly consented to
+        this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
+      }
+      // Enable consent-aware storage since analytics is explicitly granted
+      this.switchToConsentAwareStorage(true);
+    } else {
+      // Analytics consent is undefined - respect existing opt-out state
+      // Don't change tracking state when preference is undefined
+      logger.info("Analytics consent is undefined, preserving existing tracking state");
+      
+      // Only update non-analytics related consent without changing tracking state.
+      // Merge new preferences with existing ones, updating only non-analytics fields.
+      const existing = this.getConsent() || {};
+      const merged = { ...existing, ...preferences, analytics: existing.analytics };
+      this.setConsentFlag(CONSENT_PREFERENCES_KEY, JSON.stringify(merged));
+    }
+    
+    logger.info("Consent preferences set successfully");
+  }
+
+  /**
+   * Get the current consent preferences.
+   * @returns {ConsentPreferences | null} The current consent preferences or null if not set
+   */
+  public getConsent(): ConsentPreferences | null {
+    const preferencesString = this.getConsentFlag(CONSENT_PREFERENCES_KEY);
+    if (!preferencesString) {
+      return null;
+    }
+    
+    try {
+      return JSON.parse(preferencesString) as ConsentPreferences;
+    } catch (error) {
+      logger.error("Failed to parse consent preferences", error);
+      return null;
+    }
+  }
+
+  /**
+   * Clear all consent preferences and opt-out flags.
+   * @returns {void}
+   */
+  public clearConsent(): void {
+    logger.info("Clearing consent preferences");
+    
+    // Remove consent flags using direct cookie access
+    this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
+    this.removeConsentFlag(CONSENT_PREFERENCES_KEY);
+    
+    // Switch back to default cookie storage
+    this.switchToConsentAwareStorage(true);
+    
+    logger.info("Consent preferences cleared");
+  }
+
+
 
   /*
     SDK tracking and event listener functions
@@ -1335,10 +1467,26 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Determines if tracking should be enabled based on configuration
+   * Determines if tracking should be enabled based on configuration and consent
    * @returns {boolean} True if tracking should be enabled
    */
   private shouldTrack(): boolean {
+    // First check if user has opted out of tracking
+    if (this.hasOptedOutTracking()) {
+      return false;
+    }
+    
+    // Check consent preferences - analytics must be explicitly consented to or undefined (default true)
+    const consent = this.getConsent();
+    if (consent && consent.analytics === false) {
+      return false;
+    }
+    
+    // Check Do Not Track header if configured
+    if (this.options.respectDNT && this.isDoNotTrackEnabled()) {
+      return false;
+    }
+    
     // Check if tracking is explicitly provided as a boolean
     if (typeof this.options.tracking === 'boolean') {
       return this.options.tracking;
@@ -1383,6 +1531,169 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     // Default behavior: track everywhere except localhost
     return !isLocalhost();
+  }
+
+  /**
+   * Switch storage strategy based on consent preferences
+   * @param {boolean} hasConsent - Whether the user has given consent for analytics
+   * @private
+   */
+  private switchToConsentAwareStorage(hasConsent: boolean): void {
+    logger.info(`Switching to ${hasConsent ? 'full analytics' : 'privacy-friendly'} storage mode`);
+    
+    // Enable consent-aware storage mode
+    setConsentAwareStorage(hasConsent);
+    
+    if (!hasConsent) {
+      logger.info("Storage switched to memory-only mode (no persistent cookies)");
+      // Clear any existing persistent data when switching to memory storage
+      this.clearPersistentData();
+    } else {
+      logger.info("Storage switched to full analytics mode (cookies enabled)");
+    }
+  }
+
+  /**
+   * Clear persistent data when switching to privacy mode
+   * @private
+   */
+  private clearPersistentData(): void {
+    try {
+      // We need to temporarily access actual cookie storage to clear it
+      // since setConsentAwareStorage might have already switched to memory
+      if (typeof document !== 'undefined') {
+        // Clear analytics-related cookies manually
+        const cookiesToClear = [
+          LOCAL_ANONYMOUS_ID_KEY,
+          SESSION_USER_ID_KEY,
+          SESSION_WALLET_DETECTED_KEY,
+          SESSION_WALLET_IDENTIFIED_KEY,
+          SESSION_CURRENT_URL_KEY,
+        ];
+        
+        cookiesToClear.forEach(cookieName => {
+          this.deleteCookieDirectly(cookieName);
+        });
+      }
+      
+      // Clear localStorage if available
+      if (typeof localStorage !== 'undefined') {
+        const localStorageKeys = [
+          LOCAL_ANONYMOUS_ID_KEY,
+          SESSION_USER_ID_KEY,
+        ];
+        
+        localStorageKeys.forEach(key => {
+          try {
+            localStorage.removeItem(key);
+          } catch (e) {
+            // Ignore errors (e.g., storage disabled)
+          }
+        });
+      }
+      
+      logger.info("Persistent analytics data cleared");
+    } catch (error) {
+      logger.warn("Failed to clear some persistent data", error);
+    }
+  }
+
+  /**
+   * Set a consent flag directly in cookies, bypassing the consent-aware storage system
+   * @param key - The cookie key
+   * @param value - The cookie value
+   * @private
+   */
+  private setConsentFlag(key: string, value: string): void {
+    if (typeof document !== 'undefined') {
+      const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year
+      document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
+    }
+  }
+
+  /**
+   * Get a consent flag directly from cookies, bypassing the consent-aware storage system
+   * @param key - The cookie key
+   * @returns The cookie value or null if not found
+   * @private
+   */
+  private getConsentFlag(key: string): string | null {
+    if (typeof document === 'undefined') return null;
+    
+    const cookies = document.cookie.split(';');
+    for (const cookie of cookies) {
+      const [cookieKey, cookieValue] = cookie.trim().split('=');
+      if (cookieKey === key) {
+        return decodeURIComponent(cookieValue || '');
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Remove a consent flag directly from cookies, bypassing the consent-aware storage system
+   * @param key - The cookie key
+   * @private
+   */
+  private removeConsentFlag(key: string): void {
+    this.deleteCookieDirectly(key);
+  }
+
+  /**
+   * Check if a hostname is an IP address (IPv4 or IPv6)
+   * @param hostname - The hostname to check
+   * @returns true if the hostname is an IP address
+   * @private
+   */
+  private isIPAddress(hostname: string): boolean {
+    // IPv4 address pattern
+    const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    
+    // IPv6 address pattern - comprehensive but readable
+    const ipv6Pattern = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$|^(?:[0-9a-fA-F]{1,4}:){1,7}:$|^:(?:[0-9a-fA-F]{1,4}:){1,7}$|^(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}$|^(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}$|^(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}$|^[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}$/;
+    
+    return ipv4Pattern.test(hostname) || ipv6Pattern.test(hostname);
+  }
+
+  /**
+   * Delete a cookie directly, handling various domain scenarios
+   * @param cookieName - The name of the cookie to delete
+   * @private
+   */
+  private deleteCookieDirectly(cookieName: string): void {
+    if (typeof document === 'undefined') return;
+    
+    // Clear from current domain/path
+    document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    
+    // Try to clear from parent domain if it's a proper multi-level domain
+    if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
+      const parts = hostname.split('.');
+      
+      // Only try parent domain deletion for proper domains with multiple parts
+      // Skip localhost, IP addresses, and single-level domains
+      if (parts.length >= 2 && 
+          hostname !== 'localhost' && 
+          !this.isIPAddress(hostname)) {
+        const domain = parts.slice(-2).join('.');
+        document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
+      }
+    }
+  }
+
+  /**
+   * Check if Do Not Track is enabled in the browser
+   * @returns True if Do Not Track is enabled
+   * @private
+   */
+  private isDoNotTrackEnabled(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    
+    // Check all possible DNT values that indicate user preference to not be tracked
+    return navigator.doNotTrack === '1' || 
+           navigator.doNotTrack === 'yes' ||
+           ('msDoNotTrack' in navigator && (navigator as any).msDoNotTrack === '1');
   }
 
   /*

@@ -92,6 +92,13 @@ export interface IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
+  
+  // Consent management methods
+  optOutTracking(): void;
+  hasOptedOutTracking(): boolean;
+  setConsent(preferences: ConsentPreferences): void;
+  getConsent(): ConsentPreferences | null;
+  clearConsent(): void;
 }
 
 export interface Config {
@@ -107,6 +114,16 @@ export interface TrackingOptions {
   excludeChains?: ChainID[];
 }
 
+/**
+ * Consent management configuration
+ */
+export interface ConsentPreferences {
+  analytics?: boolean;
+  marketing?: boolean;
+  functional?: boolean;
+  performance?: boolean;
+}
+
 export interface Options {
   provider?: EIP1193Provider;
   tracking?: boolean | TrackingOptions;
@@ -118,6 +135,7 @@ export interface Options {
     enabled?: boolean;
     levels?: LogLevel[];
   };
+  respectDNT?: boolean; // Respect Do Not Track header
   ready?: (formo: IFormoAnalytics) => void;
 }
 
