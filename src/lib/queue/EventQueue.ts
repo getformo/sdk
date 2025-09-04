@@ -203,6 +203,26 @@ export class EventQueue implements IEventQueue {
         return Promise.resolve(data);
       })
       .catch((err) => {
+        // Log specific error details for better debugging
+        if (err.response) {
+          logger.error("API request failed", {
+            status: err.response.status,
+            statusText: err.response.statusText,
+            url: this.url
+          });
+
+          // Handle authentication errors with specific messaging
+          if (err.response.status === 401 || err.response.status === 403) {
+            const authError = new Error(`Authentication failed: ${err.response.statusText}. Please check your writeKey.`);
+            done(authError);
+            
+            if (typeof this.errorHandler === "function") {
+              return this.errorHandler(authError);
+            }
+            throw authError;
+          }
+        }
+
         if (typeof this.errorHandler === "function") {
           done(err);
           return this.errorHandler(err);
@@ -226,6 +246,15 @@ export class EventQueue implements IEventQueue {
 
     // Cannot determine if the request can be retried
     if (!error?.response) return false;
+
+    // Don't retry authentication errors (401, 403)
+    if (error?.response?.status === 401 || error?.response?.status === 403) {
+      logger.error("Authentication error - writeKey may be invalid or expired", {
+        status: error.response.status,
+        statusText: error.response.statusText
+      });
+      return false;
+    }
 
     // Retry Server Errors (5xx).
     if (error?.response?.status >= 500 && error?.response?.status <= 599)

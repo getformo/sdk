@@ -751,8 +751,15 @@ export class FormoAnalytics implements IFormoAnalytics {
   public setConsent(preferences: ConsentPreferences): void {
     logger.info("Setting consent preferences", preferences);
     
-    // Store consent preferences using direct cookie access
-    this.setConsentFlag(CONSENT_PREFERENCES_KEY, JSON.stringify(preferences));
+    // Store consent preferences using direct cookie access, but validate size first
+    const MAX_COOKIE_SIZE = 4000; // bytes, conservative to allow for key/metadata
+    const serialized = JSON.stringify(preferences);
+    // Use encodeURIComponent to approximate byte size in cookie
+    if (encodeURIComponent(serialized).length > MAX_COOKIE_SIZE) {
+      logger.error("Consent preferences too large to store in cookie (" + encodeURIComponent(serialized).length + " bytes). Not setting consent cookie.");
+      return;
+    }
+    this.setConsentFlag(CONSENT_PREFERENCES_KEY, serialized);
     
     // Handle analytics consent changes
     if (preferences.analytics === false) {
@@ -771,8 +778,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Don't change tracking state when preference is undefined
       logger.info("Analytics consent is undefined, preserving existing tracking state");
       
-      // Only update non-analytics related consent without changing tracking state
-      // Keep current storage mode and opt-out flags unchanged
+      // Only update non-analytics related consent without changing tracking state.
+      // Merge new preferences with existing ones, updating only non-analytics fields.
+      const existing = this.getConsent() || {};
+      const merged = { ...existing, ...preferences, analytics: existing.analytics };
+      this.setConsentFlag(CONSENT_PREFERENCES_KEY, JSON.stringify(merged));
     }
     
     logger.info("Consent preferences set successfully");
@@ -1630,6 +1640,22 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Check if a hostname is an IP address (IPv4 or IPv6)
+   * @param hostname - The hostname to check
+   * @returns true if the hostname is an IP address
+   * @private
+   */
+  private isIPAddress(hostname: string): boolean {
+    // IPv4 address pattern
+    const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    
+    // IPv6 address pattern - comprehensive but readable
+    const ipv6Pattern = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$|^(?:[0-9a-fA-F]{1,4}:){1,7}:$|^:(?:[0-9a-fA-F]{1,4}:){1,7}$|^(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}$|^(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}$|^(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}$|^[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}$/;
+    
+    return ipv4Pattern.test(hostname) || ipv6Pattern.test(hostname);
+  }
+
+  /**
    * Delete a cookie directly, handling various domain scenarios
    * @param cookieName - The name of the cookie to delete
    * @private
@@ -1649,7 +1675,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Skip localhost, IP addresses, and single-level domains
       if (parts.length >= 2 && 
           hostname !== 'localhost' && 
-          !(hostname.match(/^[\d.]+$/) || hostname.match(/^[\d:]+$/))) { // More precise: IPv4 or IPv6 address
+          !this.isIPAddress(hostname)) {
         const domain = parts.slice(-2).join('.');
         document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
       }
@@ -1667,7 +1693,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Check all possible DNT values that indicate user preference to not be tracked
     return navigator.doNotTrack === '1' || 
            navigator.doNotTrack === 'yes' ||
-           (navigator as any).msDoNotTrack === '1';
+           ('msDoNotTrack' in navigator && (navigator as any).msDoNotTrack === '1');
   }
 
   /*
