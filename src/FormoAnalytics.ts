@@ -61,6 +61,13 @@ interface WalletProviderFlags {
 }
 
 /**
+ * Extended Navigator interface to include Microsoft-specific doNotTrack property
+ */
+interface ExtendedNavigator extends Navigator {
+  msDoNotTrack?: string;
+}
+
+/**
  * Constants for provider switching reasons
  */
 const PROVIDER_SWITCH_REASONS = {
@@ -70,6 +77,18 @@ const PROVIDER_SWITCH_REASONS = {
 } as const;
 
 export class FormoAnalytics implements IFormoAnalytics {
+  /**
+   * Cookie size limit for consent preferences storage.
+   * Standard cookie size limits are typically 4096 bytes (see RFC 6265 and browser documentation).
+   * We use a conservative estimate of 4000 bytes to account for:
+   * - Cookie key names, attributes, and encoding overhead
+   * - Variations in browser implementations and metadata
+   * This helps ensure we do not exceed the practical limit in real-world usage.
+   */
+  private static readonly MAX_COOKIE_SIZE = 4000; // bytes
+  // Shared TextEncoder instance for efficient byte size calculation
+  private static readonly textEncoder = new TextEncoder();
+  
   private _provider?: EIP1193Provider;
   private _providerListenersMap: Map<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new Map();
   private session: FormoAnalyticsSession;
@@ -759,20 +778,26 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Don't change tracking state when preference is undefined
       logger.info("Analytics consent is undefined, preserving existing tracking state");
       
-      // Merge new preferences with existing ones, preserving existing analytics setting
+      // Merge new preferences with existing ones, with proper fallback handling
       const existing = this.getConsent() || {};
-      finalPreferences = { ...existing, ...preferences, analytics: existing.analytics };
+      finalPreferences = { 
+        ...existing, 
+        ...preferences, 
+        analytics: 
+          preferences.analytics !== undefined ? preferences.analytics
+          : existing.analytics !== undefined ? existing.analytics
+          : false // Default to false if both are undefined
+      };
     } else {
       // Analytics consent is explicitly set (true or false)
       finalPreferences = preferences;
     }
     
     // Validate size before storing
-    const MAX_COOKIE_SIZE = 4000; // bytes, conservative to allow for key/metadata
     const serialized = JSON.stringify(finalPreferences);
     // Use TextEncoder to accurately measure byte size in UTF-8
-    const byteSize = new TextEncoder().encode(serialized).length;
-    if (byteSize > MAX_COOKIE_SIZE) {
+    const byteSize = FormoAnalytics.textEncoder.encode(serialized).length;
+    if (byteSize > FormoAnalytics.MAX_COOKIE_SIZE) {
       logger.error(`Consent preferences too large to store in cookie (${byteSize} bytes). Not setting consent cookie.`);
       return;
     }
@@ -1617,7 +1642,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private setConsentFlag(key: string, value: string): void {
     if (typeof document !== 'undefined') {
       const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year
-      const isSecure = (window?.location?.protocol === 'https:');
+      const isSecure = window?.location?.protocol === 'https:';
       document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax${isSecure ? '; Secure' : ''}`;
     }
   }
@@ -1691,7 +1716,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Check all possible DNT values that indicate user preference to not be tracked
     return navigator.doNotTrack === '1' || 
            navigator.doNotTrack === 'yes' ||
-           ('msDoNotTrack' in navigator && (navigator as any).msDoNotTrack === '1');
+           ('msDoNotTrack' in navigator && (navigator as ExtendedNavigator).msDoNotTrack === '1');
   }
 
   /*
