@@ -11,8 +11,6 @@ import {
   DEFAULT_PROVIDER_ICON,
   CONSENT_OPT_OUT_KEY,
   CONSENT_PREFERENCES_KEY,
-  IPV4_PATTERN,
-  IPV6_PATTERN,
 } from "./constants";
 import {
   cookie,
@@ -772,9 +770,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Validate size before storing
     const MAX_COOKIE_SIZE = 4000; // bytes, conservative to allow for key/metadata
     const serialized = JSON.stringify(finalPreferences);
-    // Use encodeURIComponent to approximate byte size in cookie
-    if (encodeURIComponent(serialized).length > MAX_COOKIE_SIZE) {
-      logger.error(`Consent preferences too large to store in cookie (${encodeURIComponent(serialized).length} bytes). Not setting consent cookie.`);
+    // Use TextEncoder to accurately measure byte size in UTF-8
+    const byteSize = new TextEncoder().encode(serialized).length;
+    if (byteSize > MAX_COOKIE_SIZE) {
+      logger.error(`Consent preferences too large to store in cookie (${byteSize} bytes). Not setting consent cookie.`);
       return;
     }
     
@@ -1618,7 +1617,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   private setConsentFlag(key: string, value: string): void {
     if (typeof document !== 'undefined') {
       const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year
-      document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
+      const isSecure = (window?.location?.protocol === 'https:');
+      document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax${isSecure ? '; Secure' : ''}`;
     }
   }
 
@@ -1633,7 +1633,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     const cookies = document.cookie.split(';');
     for (const cookie of cookies) {
-      const [cookieKey, cookieValue] = cookie.trim().split('=');
+      const trimmed = cookie.trim();
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const cookieKey = trimmed.substring(0, eqIdx);
+      const cookieValue = trimmed.substring(eqIdx + 1);
       if (cookieKey === key) {
         return decodeURIComponent(cookieValue || '');
       }
@@ -1650,15 +1654,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.deleteCookieDirectly(key);
   }
 
-  /**
-   * Check if a hostname is an IP address (IPv4 or IPv6)
-   * @param hostname - The hostname to check
-   * @returns true if the hostname is an IP address
-   * @private
-   */
-  private isIPAddress(hostname: string): boolean {
-    return IPV4_PATTERN.test(hostname) || IPV6_PATTERN.test(hostname);
-  }
 
   /**
    * Delete a cookie directly, handling various domain scenarios
@@ -1677,10 +1672,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       const parts = hostname.split('.');
       
       // Only try parent domain deletion for proper domains with multiple parts
-      // Skip localhost, IP addresses, and single-level domains
-      if (parts.length >= 2 && 
-          hostname !== 'localhost' && 
-          !this.isIPAddress(hostname)) {
+      // Skip localhost and single-level domains
+      if (parts.length >= 2 && hostname !== 'localhost') {
         const domain = parts.slice(-2).join('.');
         document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
       }
