@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import { IPV4_PATTERN, IPV6_PATTERN } from '../../src/constants';
 
 /**
  * Test suite for IPv6 address detection bug fix
@@ -10,13 +11,7 @@ import { expect } from 'chai';
 describe('IPv6 Address Detection', () => {
   // Helper function that mimics the isIPAddress method logic from FormoAnalytics
   function isIPAddress(hostname: string): boolean {
-    // IPv4 address pattern
-    const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-    
-    // IPv6 address pattern - comprehensive but readable
-    const ipv6Pattern = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$|^(?:[0-9a-fA-F]{1,4}:){1,7}:$|^:(?:[0-9a-fA-F]{1,4}:){1,7}$|^(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}$|^(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}$|^(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}$|^[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}$/;
-    
-    return ipv4Pattern.test(hostname) || ipv6Pattern.test(hostname);
+    return IPV4_PATTERN.test(hostname) || IPV6_PATTERN.test(hostname);
   }
 
   describe('IPv4 Address Detection', () => {

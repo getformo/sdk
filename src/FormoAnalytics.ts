@@ -11,6 +11,8 @@ import {
   DEFAULT_PROVIDER_ICON,
   CONSENT_OPT_OUT_KEY,
   CONSENT_PREFERENCES_KEY,
+  IPV4_PATTERN,
+  IPV6_PATTERN,
 } from "./constants";
 import {
   cookie,
@@ -751,20 +753,38 @@ export class FormoAnalytics implements IFormoAnalytics {
   public setConsent(preferences: ConsentPreferences): void {
     logger.info("Setting consent preferences", preferences);
     
-    // Store consent preferences using direct cookie access, but validate size first
+    // Determine final preferences to store
+    let finalPreferences: ConsentPreferences;
+    
+    if (preferences.analytics === undefined) {
+      // Analytics consent is undefined - merge with existing preferences
+      // Don't change tracking state when preference is undefined
+      logger.info("Analytics consent is undefined, preserving existing tracking state");
+      
+      // Merge new preferences with existing ones, preserving existing analytics setting
+      const existing = this.getConsent() || {};
+      finalPreferences = { ...existing, ...preferences, analytics: existing.analytics };
+    } else {
+      // Analytics consent is explicitly set (true or false)
+      finalPreferences = preferences;
+    }
+    
+    // Validate size before storing
     const MAX_COOKIE_SIZE = 4000; // bytes, conservative to allow for key/metadata
-    const serialized = JSON.stringify(preferences);
+    const serialized = JSON.stringify(finalPreferences);
     // Use encodeURIComponent to approximate byte size in cookie
     if (encodeURIComponent(serialized).length > MAX_COOKIE_SIZE) {
-      logger.error("Consent preferences too large to store in cookie (" + encodeURIComponent(serialized).length + " bytes). Not setting consent cookie.");
+      logger.error(`Consent preferences too large to store in cookie (${encodeURIComponent(serialized).length} bytes). Not setting consent cookie.`);
       return;
     }
+    
+    // Store the final preferences
     this.setConsentFlag(CONSENT_PREFERENCES_KEY, serialized);
     
-    // Handle analytics consent changes
-    if (preferences.analytics === false) {
+    // Handle analytics consent changes based on the final preferences
+    if (finalPreferences.analytics === false) {
       this.optOutTracking();
-    } else if (preferences.analytics === true) {
+    } else if (finalPreferences.analytics === true) {
       // Analytics consent is explicitly granted (true)
       // Only enable tracking when explicitly consented to
       if (this.hasOptedOutTracking()) {
@@ -773,17 +793,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       // Enable consent-aware storage since analytics is explicitly granted
       this.switchToConsentAwareStorage(true);
-    } else {
-      // Analytics consent is undefined - respect existing opt-out state
-      // Don't change tracking state when preference is undefined
-      logger.info("Analytics consent is undefined, preserving existing tracking state");
-      
-      // Only update non-analytics related consent without changing tracking state.
-      // Merge new preferences with existing ones, updating only non-analytics fields.
-      const existing = this.getConsent() || {};
-      const merged = { ...existing, ...preferences, analytics: existing.analytics };
-      this.setConsentFlag(CONSENT_PREFERENCES_KEY, JSON.stringify(merged));
     }
+    // If analytics is undefined, don't change tracking state
     
     logger.info("Consent preferences set successfully");
   }
@@ -1646,13 +1657,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @private
    */
   private isIPAddress(hostname: string): boolean {
-    // IPv4 address pattern
-    const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-    
-    // IPv6 address pattern - comprehensive but readable
-    const ipv6Pattern = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$|^(?:[0-9a-fA-F]{1,4}:){1,7}:$|^:(?:[0-9a-fA-F]{1,4}:){1,7}$|^(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}$|^(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}$|^(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}$|^[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}$/;
-    
-    return ipv4Pattern.test(hostname) || ipv6Pattern.test(hostname);
+    return IPV4_PATTERN.test(hostname) || IPV6_PATTERN.test(hostname);
   }
 
   /**
