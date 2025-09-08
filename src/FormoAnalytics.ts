@@ -70,19 +70,7 @@ const PROVIDER_SWITCH_REASONS = {
   CHECK_FAILED: "Could not check current provider accounts"
 } as const;
 
-export class FormoAnalytics implements IFormoAnalytics {
-  /**
-   * Cookie size limit for consent preferences storage.
-   * Standard cookie size limits are typically 4096 bytes (see RFC 6265 and browser documentation).
-   * We use a conservative estimate of 4000 bytes to account for:
-   * - Cookie key names, attributes, and encoding overhead
-   * - Variations in browser implementations and metadata
-   * This helps ensure we do not exceed the practical limit in real-world usage.
-   */
-  private static readonly MAX_COOKIE_SIZE = 4000; // bytes
-  // Shared TextEncoder instance for efficient byte size calculation
-  private static readonly textEncoder = new TextEncoder();
-  
+export class FormoAnalytics implements IFormoAnalytics {  
   private _provider?: EIP1193Provider;
   private _providerListenersMap: Map<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new Map();
   private session: FormoAnalyticsSession;
@@ -720,8 +708,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   /**
-   * Opt out of tracking. This will stop all analytics tracking and switch to memory storage.
-   * Following the Mixpanel pattern: https://docs.mixpanel.com/docs/tracking-methods/sdks/javascript#opt-out-of-tracking
+   * Opt out of tracking.
    * @returns {void}
    */
   public optOutTracking(): void {
@@ -729,22 +716,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
-    setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
-    
-    // Perform opt-out operations without circular dependency
-    this.performOptOutOperations();
+    setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");    
+    this.reset();
     
     logger.info("Successfully opted out of tracking");
-  }
-
-  /**
-   * Internal method to perform opt-out operations without circular dependencies.
-   * This method is called by both optOutTracking() and setConsent() to avoid code duplication.
-   * @private
-   */
-  private performOptOutOperations(): void {
-    // Clear existing tracking data 
-    this.reset();
   }
 
   /**
