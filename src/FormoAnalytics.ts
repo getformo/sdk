@@ -766,17 +766,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.getConsentFlag(CONSENT_OPT_OUT_KEY) === "true";
   }
 
-  /**
-   * Clear all consent preferences and opt-out flags.
-   * @returns {void}
-   */
-  public clearConsent(): void {
-    logger.info("Clearing consent preferences");
-    
-    // Remove opt-out
-    this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
-    logger.info("Consent preferences cleared");
-  }
 
   /*
     SDK tracking and event listener functions

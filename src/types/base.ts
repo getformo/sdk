@@ -97,7 +97,6 @@ export interface IFormoAnalytics {
   optOutTracking(): void;
   optInTracking(): void;
   hasOptedOutTracking(): boolean;
-  clearConsent(): void;
 }
 
 export interface Config {

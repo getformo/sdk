@@ -52,9 +52,6 @@ analytics.optOutTracking();          // Disable analytics tracking
 if (!analytics.hasOptedOutTracking()) {
   console.log('Analytics tracking is enabled');
 }
-
-// Clear consent state (resets to default)
-analytics.clearConsent();
 ```
 
 ## Manual Integration with Cookie Banners
@@ -135,12 +132,6 @@ if (analytics.hasOptedOutTracking()) {
 ```
 
 
-#### `clearConsent()`
-Clears the opt-out flag and resets consent state to default.
-
-```javascript
-analytics.clearConsent();
-```
 
 ## Examples
 
