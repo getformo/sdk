@@ -16,7 +16,7 @@ import {
   TransactionStatus,
   UTMParameters,
 } from "../../types";
-import { toChecksumAddress, toSnakeCase } from "../../utils";
+import { filterInternalReferrer, toChecksumAddress, toSnakeCase } from "../../utils";
 import { getValidAddress } from "../../utils/address";
 import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { isUndefined } from "../../validators";
@@ -100,10 +100,15 @@ class EventFactory implements IEventFactory {
 
   private getTrafficSources = (url: string): ITrafficSource => {
     const urlObj = new URL(url);
+    
+    // Get the raw referrer and filter it if it's internal
+    const rawReferrer = document.referrer;
+    const filteredReferrer = filterInternalReferrer(rawReferrer, url);
+    
     const contextTrafficSources: ITrafficSource = {
       ...this.extractUTMParameters(url),
       ref: this.extractReferralParameter(urlObj),
-      referrer: document.referrer,
+      referrer: filteredReferrer,
     };
     const storedTrafficSources =
       (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {};
