@@ -19,6 +19,9 @@ import {
   initStorageManager,
   logger,
   Logger,
+  setConsentFlag,
+  getConsentFlag,
+  removeConsentFlag,
 } from "./lib";
 import {
   Address,
@@ -726,7 +729,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
-    this.setConsentFlag(CONSENT_OPT_OUT_KEY, "true");
+    setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
     
     // Perform opt-out operations without circular dependency
     this.performOptOutOperations();
@@ -753,7 +756,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("Opting back into tracking");
     
     // Remove opt-out flag
-    this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
+    removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
     
     logger.info("Successfully opted back into tracking");
   }
@@ -763,7 +766,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {boolean} True if the user has opted out
    */
   public hasOptedOutTracking(): boolean {
-    return this.getConsentFlag(CONSENT_OPT_OUT_KEY) === "true";
+    return getConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY) === "true";
   }
 
 
@@ -1466,83 +1469,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
 
-  /**
-   * Set a consent flag directly in cookies, bypassing the consent-aware storage system.
-   * Uses cookies for consent storage to ensure:
-   * - Cross-domain/subdomain compatibility
-   * - Server-side accessibility for compliance auditing
-   * - Regulatory compliance (GDPR/CCPA requirements)
-   * - Explicit expiration handling
-   * @param key - The cookie key
-   * @param value - The cookie value
-   * @private
-   */
-  private setConsentFlag(key: string, value: string): void {
-    if (typeof document !== 'undefined') {
-      const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year (GDPR compliant)
-      const isSecure = window?.location?.protocol === 'https:';
-      // Enhanced privacy settings: Secure (HTTPS), SameSite=Strict for consent cookies
-      document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Strict${isSecure ? '; Secure' : ''}`;
-    }
-  }
-
-  /**
-   * Get a consent flag directly from cookies, bypassing the consent-aware storage system
-   * @param key - The cookie key
-   * @returns The cookie value or null if not found
-   * @private
-   */
-  private getConsentFlag(key: string): string | null {
-    if (typeof document === 'undefined') return null;
-    
-    const cookies = document.cookie.split(';');
-    for (const cookie of cookies) {
-      const trimmed = cookie.trim();
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx === -1) continue;
-      const cookieKey = trimmed.substring(0, eqIdx);
-      const cookieValue = trimmed.substring(eqIdx + 1);
-      if (cookieKey === key) {
-        return decodeURIComponent(cookieValue || '');
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Remove a consent flag directly from cookies, bypassing the consent-aware storage system
-   * @param key - The cookie key
-   * @private
-   */
-  private removeConsentFlag(key: string): void {
-    this.deleteCookieDirectly(key);
-  }
-
-
-  /**
-   * Delete a cookie directly, handling various domain scenarios
-   * @param cookieName - The name of the cookie to delete
-   * @private
-   */
-  private deleteCookieDirectly(cookieName: string): void {
-    if (typeof document === 'undefined') return;
-    
-    // Clear from current domain/path
-    document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
-    
-    // Try to clear from parent domain if it's a proper multi-level domain
-    if (typeof window !== 'undefined') {
-      const hostname = window.location.hostname;
-      const parts = hostname.split('.');
-      
-      // Only try parent domain deletion for proper domains with multiple parts
-      // Skip localhost and single-level domains
-      if (parts.length >= 2 && hostname !== 'localhost') {
-        const domain = parts.slice(-2).join('.');
-        document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
-      }
-    }
-  }
 
 
   /*
