@@ -15,8 +15,8 @@ The Formo Analytics SDK includes simplified consent management functionality to 
 
 The simplified consent management system provides:
 
-- **Opt-out tracking**: Similar to Mixpanel's `optOutTracking()` function
-- **Granular consent preferences**: Control different types of tracking (analytics, marketing, etc.)
+- **Opt-out/Opt-in tracking**: Similar to Mixpanel's consent functions
+- **Analytics consent preferences**: Control analytics tracking consent
 - **Privacy-friendly storage**: Switches to memory storage when consent is denied
 - **Do Not Track support**: Respects browser privacy preferences
 
@@ -38,27 +38,23 @@ if (!analytics.hasOptedOutTracking()) {
 // Opt out of tracking (stops all analytics)
 analytics.optOutTracking();
 
-// To opt back in, clear the opt-out and set consent
-analytics.clearConsent();
-analytics.setConsent({ analytics: true });
+// Opt back into tracking (re-enables analytics)
+analytics.optInTracking();
 ```
 
-### Granular Consent Management
+### Analytics Consent Management
 
 ```javascript
-// Set detailed consent preferences
+// Set analytics consent preference
 analytics.setConsent({
-  analytics: true,     // Allow analytics tracking
-  marketing: false,    // Deny marketing tracking
-  functional: true,    // Allow functional cookies
-  performance: true    // Allow performance tracking
+  analytics: true      // Allow analytics tracking
 });
 
 // Get current consent preferences
 const consent = analytics.getConsent();
 console.log('Analytics consent:', consent?.analytics);
 
-// Clear all consent preferences
+// Clear consent preferences
 analytics.clearConsent();
 ```
 
@@ -144,10 +140,7 @@ Sets detailed consent preferences for different types of tracking.
 
 ```javascript
 analytics.setConsent({
-  analytics: true,
-  marketing: false,
-  functional: true,
-  performance: true
+  analytics: true
 });
 ```
 
@@ -195,10 +188,7 @@ function App() {
 
   const handleAcceptCookies = () => {
     analytics?.setConsent({
-      analytics: true,
-      marketing: true,
-      functional: true,
-      performance: true
+      analytics: true
     });
     setHasConsent(true);
   };
@@ -265,10 +255,7 @@ export default {
   methods: {
     handleAccept() {
       this.analytics?.setConsent({
-        analytics: true,
-        marketing: true,
-        functional: true,
-        performance: true
+        analytics: true
       });
       this.hasConsent = true;
     },
@@ -320,10 +307,7 @@ The consent management system helps with GDPR compliance by:
 ```javascript
 // GDPR-compliant implementation
 analytics.setConsent({
-  analytics: userExplicitlyConsented,  // Only true if user explicitly agreed
-  marketing: false,                    // Start with strict settings
-  functional: true,                    // Necessary cookies for site function
-  performance: userExplicitlyConsented
+  analytics: userExplicitlyConsented  // Only true if user explicitly agreed
 });
 ```
 

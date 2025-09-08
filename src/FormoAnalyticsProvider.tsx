@@ -17,6 +17,7 @@ const defaultContext: IFormoAnalytics = {
   
   // Consent management methods
   optOutTracking: () => {},
+  optInTracking: () => {},
   hasOptedOutTracking: () => false,
   setConsent: () => {},
   getConsent: () => null,

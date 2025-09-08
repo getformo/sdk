@@ -765,6 +765,27 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Opt back into tracking after previously opting out. This will re-enable analytics tracking
+   * and switch back to persistent storage.
+   * @returns {void}
+   */
+  public optInTracking(): void {
+    logger.info("Opting back into tracking");
+    
+    // Remove opt-out flag
+    this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
+    
+    // Set analytics consent to true to explicitly opt in
+    const updatedConsent = { analytics: true };
+    this.setConsentFlag(CONSENT_PREFERENCES_KEY, JSON.stringify(updatedConsent));
+    
+    // Switch back to persistent storage for future operations
+    this.switchToConsentAwareStorage(true);
+    
+    logger.info("Successfully opted back into tracking");
+  }
+
+  /**
    * Check if the user has opted out of tracking.
    * @returns {boolean} True if the user has opted out
    */
@@ -784,31 +805,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     let finalPreferences: ConsentPreferences;
     
     if (preferences.analytics === undefined) {
-      // Analytics consent is undefined - merge with existing preferences
-      // Don't change tracking state when preference is undefined
+      // Analytics consent is undefined - preserve existing setting or default to false
       logger.info("Analytics consent is undefined, preserving existing tracking state");
       
-      // Merge new preferences with existing ones, with proper fallback handling
-      const existing = this.getConsent() || {};
-      
-      // Determine analytics value with clear precedence order
-      let analyticsValue: boolean;
-      if (preferences.analytics !== undefined) {
-        analyticsValue = preferences.analytics;
-      } else if (existing.analytics !== undefined) {
-        analyticsValue = existing.analytics;
-      } else {
-        analyticsValue = false; // Default to false if both are undefined
-      }
-      
+      const existing = this.getConsent();
       finalPreferences = { 
-        ...existing, 
-        ...preferences, 
-        analytics: analyticsValue
+        analytics: existing?.analytics ?? false // Default to false if no existing preference
       };
     } else {
       // Analytics consent is explicitly set (true or false)
-      finalPreferences = preferences;
+      finalPreferences = { analytics: preferences.analytics };
     }
     
     // Validate size before storing
@@ -1655,16 +1661,22 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Set a consent flag directly in cookies, bypassing the consent-aware storage system
+   * Set a consent flag directly in cookies, bypassing the consent-aware storage system.
+   * Uses cookies for consent storage to ensure:
+   * - Cross-domain/subdomain compatibility
+   * - Server-side accessibility for compliance auditing
+   * - Regulatory compliance (GDPR/CCPA requirements)
+   * - Explicit expiration handling
    * @param key - The cookie key
    * @param value - The cookie value
    * @private
    */
   private setConsentFlag(key: string, value: string): void {
     if (typeof document !== 'undefined') {
-      const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year
+      const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year (GDPR compliant)
       const isSecure = window?.location?.protocol === 'https:';
-      document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax${isSecure ? '; Secure' : ''}`;
+      // Enhanced privacy settings: Secure (HTTPS), SameSite=Strict for consent cookies
+      document.cookie = `${key}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Strict${isSecure ? '; Secure' : ''}`;
     }
   }
 
