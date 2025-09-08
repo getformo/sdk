@@ -97,8 +97,6 @@ export interface IFormoAnalytics {
   optOutTracking(): void;
   optInTracking(): void;
   hasOptedOutTracking(): boolean;
-  setConsent(preferences: ConsentPreferences): void;
-  getConsent(): ConsentPreferences | null;
   clearConsent(): void;
 }
 
@@ -115,12 +113,6 @@ export interface TrackingOptions {
   excludeChains?: ChainID[];
 }
 
-/**
- * Consent management configuration for analytics tracking
- */
-export interface ConsentPreferences {
-  analytics?: boolean;
-}
 
 export interface Options {
   provider?: EIP1193Provider;
