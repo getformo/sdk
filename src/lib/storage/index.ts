@@ -16,6 +16,7 @@ function getStorageInstance(type: StorageType): IStorage {
       "StorageManager not initialized. Call initStorageManager(writeKey) first."
     );
   }
+  
   return globalManager.getStorage(type);
 }
 

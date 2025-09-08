@@ -9,6 +9,7 @@ import {
   SESSION_WALLET_IDENTIFIED_KEY,
   TEventType,
   DEFAULT_PROVIDER_ICON,
+  CONSENT_OPT_OUT_KEY,
 } from "./constants";
 import {
   cookie,
@@ -18,6 +19,9 @@ import {
   initStorageManager,
   logger,
   Logger,
+  setConsentFlag,
+  getConsentFlag,
+  removeConsentFlag,
 } from "./lib";
 import {
   Address,
@@ -56,6 +60,7 @@ interface WalletProviderFlags {
   isPhantom?: boolean;
 }
 
+
 /**
  * Constants for provider switching reasons
  */
@@ -65,7 +70,7 @@ const PROVIDER_SWITCH_REASONS = {
   CHECK_FAILED: "Could not check current provider accounts"
 } as const;
 
-export class FormoAnalytics implements IFormoAnalytics {
+export class FormoAnalytics implements IFormoAnalytics {  
   private _provider?: EIP1193Provider;
   private _providerListenersMap: Map<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new Map();
   private session: FormoAnalyticsSession;
@@ -163,6 +168,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         flushInterval: options.flushInterval,
       })
     );
+
+    // Check consent status on initialization
+    if (this.hasOptedOutTracking()) {
+      logger.info("User has previously opted out of tracking");
+    }
 
     // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
     let provider: EIP1193Provider | undefined = undefined;
@@ -692,6 +702,48 @@ export class FormoAnalytics implements IFormoAnalytics {
       callback
     );
   }
+
+  /*
+    Consent management functions
+  */
+
+  /**
+   * Opt out of tracking.
+   * @returns {void}
+   */
+  public optOutTracking(): void {
+    logger.info("Opting out of tracking");
+    
+    // Set opt-out flag in persistent storage using direct cookie access
+    // This must be done before switching storage to ensure persistence
+    setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");    
+    this.reset();
+    
+    logger.info("Successfully opted out of tracking");
+  }
+
+  /**
+   * Opt back into tracking after previously opting out. This will re-enable analytics tracking
+   * and switch back to persistent storage.
+   * @returns {void}
+   */
+  public optInTracking(): void {
+    logger.info("Opting back into tracking");
+    
+    // Remove opt-out flag
+    removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
+    
+    logger.info("Successfully opted back into tracking");
+  }
+
+  /**
+   * Check if the user has opted out of tracking.
+   * @returns {boolean} True if the user has opted out
+   */
+  public hasOptedOutTracking(): boolean {
+    return getConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY) === "true";
+  }
+
 
   /*
     SDK tracking and event listener functions
@@ -1335,10 +1387,16 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Determines if tracking should be enabled based on configuration
+   * Determines if tracking should be enabled based on configuration and consent
    * @returns {boolean} True if tracking should be enabled
    */
   private shouldTrack(): boolean {
+    // First check if user has opted out of tracking
+    if (this.hasOptedOutTracking()) {
+      return false;
+    }
+    
+    
     // Check if tracking is explicitly provided as a boolean
     if (typeof this.options.tracking === 'boolean') {
       return this.options.tracking;
@@ -1384,6 +1442,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Default behavior: track everywhere except localhost
     return !isLocalhost();
   }
+
+
+
 
   /*
     Utility functions

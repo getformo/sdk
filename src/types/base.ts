@@ -92,6 +92,11 @@ export interface IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
+  
+  // Consent management methods
+  optOutTracking(): void;
+  optInTracking(): void;
+  hasOptedOutTracking(): boolean;
 }
 
 export interface Config {
@@ -106,6 +111,7 @@ export interface TrackingOptions {
   excludePaths?: string[];
   excludeChains?: ChainID[];
 }
+
 
 export interface Options {
   provider?: EIP1193Provider;

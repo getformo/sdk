@@ -7,6 +7,7 @@ import {
   uint8ArrayToHexString,
 } from "../validators";
 import { isNullish } from "../validators/object";
+import { BLOCKED_ADDRESSES } from "../constants";
 
 /**
  * Private helper function to validate and trim an address
@@ -43,6 +44,26 @@ export const isValidAddress = (address: Address | null | undefined): address is 
  */
 export const getValidAddress = (address: Address | null | undefined): string | null => {
   return _validateAndTrimAddress(address);
+};
+
+/**
+ * Checks if an address is in the blocked list and should not emit events.
+ * Blocked addresses include the zero address and dead address which are not normal user addresses.
+ * @param address The address to check
+ * @returns true if the address is blocked, false otherwise
+ */
+export const isBlockedAddress = (address: Address | null | undefined): boolean => {
+  if (!address) return false;
+  
+  const validAddress = getValidAddress(address);
+  if (!validAddress) return false;
+  
+  // Normalize to checksum format for comparison
+  const checksumAddress = toChecksumAddress(validAddress);
+  
+  return BLOCKED_ADDRESSES.some(blockedAddr => 
+    toChecksumAddress(blockedAddr) === checksumAddress
+  );
 };
 
 export const toChecksumAddress = (address: Address): string => {
