@@ -125,7 +125,6 @@ export interface Options {
     enabled?: boolean;
     levels?: LogLevel[];
   };
-  respectDNT?: boolean; // Respect Do Not Track header
   ready?: (formo: IFormoAnalytics) => void;
 }
 

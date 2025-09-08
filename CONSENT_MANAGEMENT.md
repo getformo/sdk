@@ -17,8 +17,7 @@ The simplified consent management system provides:
 
 - **Opt-out/Opt-in tracking**: Similar to Mixpanel's consent functions
 - **Analytics consent preferences**: Control analytics tracking consent
-- **Privacy-friendly storage**: Switches to memory storage when consent is denied
-- **Do Not Track support**: Respects browser privacy preferences
+- **Simple binary controls**: Just enable or disable tracking
 
 ## Basic Usage
 
@@ -42,19 +41,19 @@ analytics.optOutTracking();
 analytics.optInTracking();
 ```
 
-### Analytics Consent Management
+### Simple Consent Management
 
 ```javascript
-// Set analytics consent preference
-analytics.setConsent({
-  analytics: true      // Allow analytics tracking
-});
+// Simple binary consent controls
+analytics.optInTracking();           // Enable analytics tracking
+analytics.optOutTracking();          // Disable analytics tracking
 
-// Get current consent preferences
-const consent = analytics.getConsent();
-console.log('Analytics consent:', consent?.analytics);
+// Check current consent status
+if (!analytics.hasOptedOutTracking()) {
+  console.log('Analytics tracking is enabled');
+}
 
-// Clear consent preferences
+// Clear consent state (resets to default)
 analytics.clearConsent();
 ```
 
@@ -135,27 +134,9 @@ if (analytics.hasOptedOutTracking()) {
 }
 ```
 
-#### `setConsent(preferences: ConsentPreferences)`
-Sets detailed consent preferences for different types of tracking.
-
-```javascript
-analytics.setConsent({
-  analytics: true
-});
-```
-
-#### `getConsent(): ConsentPreferences | null`
-Gets the current consent preferences.
-
-```javascript
-const consent = analytics.getConsent();
-if (consent?.analytics) {
-  console.log('Analytics tracking is consented');
-}
-```
 
 #### `clearConsent()`
-Clears all consent preferences and opt-out flags.
+Clears the opt-out flag and resets consent state to default.
 
 ```javascript
 analytics.clearConsent();
@@ -175,9 +156,7 @@ function App() {
 
   useEffect(() => {
     async function initAnalytics() {
-      const instance = await FormoAnalytics.init('your-write-key', {
-        respectDNT: true
-      });
+      const instance = await FormoAnalytics.init('your-write-key');
       
       setAnalytics(instance);
       setHasConsent(!instance.hasOptedOutTracking());
@@ -187,9 +166,7 @@ function App() {
   }, []);
 
   const handleAcceptCookies = () => {
-    analytics?.setConsent({
-      analytics: true
-    });
+    analytics?.optInTracking();
     setHasConsent(true);
   };
 
@@ -245,18 +222,14 @@ export default {
   },
   
   async mounted() {
-    this.analytics = await FormoAnalytics.init('your-write-key', {
-      respectDNT: true
-    });
+    this.analytics = await FormoAnalytics.init('your-write-key');
     
     this.hasConsent = !this.analytics.hasOptedOutTracking();
   },
   
   methods: {
     handleAccept() {
-      this.analytics?.setConsent({
-        analytics: true
-      });
+      this.analytics?.optInTracking();
       this.hasConsent = true;
     },
     
@@ -275,9 +248,7 @@ export default {
 // For SSR frameworks like Next.js, check for browser environment
 function initializeAnalytics() {
   if (typeof window !== 'undefined') {
-    return FormoAnalytics.init('your-write-key', {
-      respectDNT: true
-    });
+    return FormoAnalytics.init('your-write-key');
   }
   return null;
 }
@@ -299,16 +270,18 @@ useEffect(() => {
 
 The consent management system helps with GDPR compliance by:
 
-1. **Obtaining explicit consent**: Use `set_consent()` to record explicit user choices
-2. **Honoring opt-out requests**: `opt_out_tracking()` immediately stops data collection
+1. **Obtaining explicit consent**: Use `optInTracking()` to record explicit user choices
+2. **Honoring opt-out requests**: `optOutTracking()` immediately stops data collection
 3. **Data minimization**: Only tracks when consent is given
-4. **Right to withdraw**: Users can revoke consent at any time
+4. **Right to withdraw**: Users can revoke consent at any time with `optOutTracking()`
 
 ```javascript
 // GDPR-compliant implementation
-analytics.setConsent({
-  analytics: userExplicitlyConsented  // Only true if user explicitly agreed
-});
+if (userExplicitlyConsented) {
+  analytics.optInTracking();  // Only opt in if user explicitly agreed
+} else {
+  analytics.optOutTracking(); // Default to opted out for privacy
+}
 ```
 
 ### CCPA Compliance

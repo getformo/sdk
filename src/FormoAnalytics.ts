@@ -57,12 +57,6 @@ interface WalletProviderFlags {
   isPhantom?: boolean;
 }
 
-/**
- * Extended Navigator interface to include Microsoft-specific doNotTrack property
- */
-interface ExtendedNavigator extends Navigator {
-  msDoNotTrack?: string;
-}
 
 /**
  * Constants for provider switching reasons
@@ -772,7 +766,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.getConsentFlag(CONSENT_OPT_OUT_KEY) === "true";
   }
 
-
   /**
    * Clear all consent preferences and opt-out flags.
    * @returns {void}
@@ -780,13 +773,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   public clearConsent(): void {
     logger.info("Clearing consent preferences");
     
-    // Remove opt-out flag using direct cookie access
+    // Remove opt-out
     this.removeConsentFlag(CONSENT_OPT_OUT_KEY);
-    
     logger.info("Consent preferences cleared");
   }
-
-
 
   /*
     SDK tracking and event listener functions
@@ -1439,10 +1429,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       return false;
     }
     
-    // Check Do Not Track header if configured
-    if (this.options.respectDNT && this.isDoNotTrackEnabled()) {
-      return false;
-    }
     
     // Check if tracking is explicitly provided as a boolean
     if (typeof this.options.tracking === 'boolean') {
@@ -1569,19 +1555,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  /**
-   * Check if Do Not Track is enabled in the browser
-   * @returns True if Do Not Track is enabled
-   * @private
-   */
-  private isDoNotTrackEnabled(): boolean {
-    if (typeof navigator === 'undefined') return false;
-    
-    // Check all possible DNT values that indicate user preference to not be tracked
-    return navigator.doNotTrack === '1' || 
-           navigator.doNotTrack === 'yes' ||
-           ('msDoNotTrack' in navigator && (navigator as ExtendedNavigator).msDoNotTrack === '1');
-  }
 
   /*
     Utility functions
