@@ -17,9 +17,7 @@ import { secureHash } from '../utils/hash';
  * @returns Project-specific cookie key
  */
 function getProjectSpecificKey(projectId: string, key: string): string {
-  // Use SHA-256 hash of the projectId to keep cookie names reasonable length
-  const projectHash = secureHash(projectId);
-  return `formo_${projectHash}_${key}`;
+  return `formo_${secureHash(projectId)}_${key}`;
 }
 
 /**

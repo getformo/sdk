@@ -11,9 +11,7 @@ abstract class StorageBlueprint implements IStorage {
   abstract remove(key: string): void;
 
   protected getKey(key: string): string {
-    // Use SHA-256 hashed writeKey for privacy and security
-    const hashedWriteKey = secureHash(this.writeKey);
-    return `${KEY_PREFIX}_${hashedWriteKey}_${key}`;
+    return `${KEY_PREFIX}_${secureHash(this.writeKey)}_${key}`;
   }
 }
 
