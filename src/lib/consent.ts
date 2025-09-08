@@ -7,30 +7,18 @@
  * Formo projects on the same domain.
  */
 
-/**
- * Generate a simple hash of a string for creating short, consistent identifiers
- * @param str - The string to hash
- * @returns Short hash string
- */
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return Math.abs(hash).toString(36).slice(0, 8);
-}
+import { secureHash } from '../utils/hash';
 
 /**
  * Generate a project-specific cookie key to avoid conflicts between different Formo projects
+ * Uses hashed writeKey for privacy and security
  * @param projectId - The project identifier (writeKey)
  * @param key - The base cookie key
  * @returns Project-specific cookie key
  */
 function getProjectSpecificKey(projectId: string, key: string): string {
-  // Use a hash of the projectId to keep cookie names reasonable length
-  const projectHash = simpleHash(projectId);
+  // Use SHA-256 hash of the projectId to keep cookie names reasonable length
+  const projectHash = secureHash(projectId);
   return `formo_${projectHash}_${key}`;
 }
 
@@ -89,6 +77,7 @@ export function removeConsentFlag(projectId: string, key: string): void {
   const projectSpecificKey = getProjectSpecificKey(projectId, key);
   deleteCookieDirectly(projectSpecificKey);
 }
+
 
 /**
  * Delete a cookie directly, handling various domain scenarios
