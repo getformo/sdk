@@ -24,7 +24,9 @@ You can install Formo on:
 - [React apps](https://docs.formo.so/install#react)
 - [Next.js apps](https://docs.formo.so/install#next-js-app-router)
 
-Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides and installation instructions.
+## Configuration
+
+Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on local testing, debugging, and consent management.
 
 ## Methodology
 
