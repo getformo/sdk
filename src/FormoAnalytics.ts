@@ -744,14 +744,24 @@ export class FormoAnalytics implements IFormoAnalytics {
     // This must be done before switching storage to ensure persistence
     this.setConsentFlag(CONSENT_OPT_OUT_KEY, "true");
     
+    // Perform opt-out operations without circular dependency
+    this.performOptOutOperations();
+    
+    logger.info("Successfully opted out of tracking");
+  }
+
+  /**
+   * Internal method to perform opt-out operations without circular dependencies.
+   * This method is called by both optOutTracking() and setConsent() to avoid code duplication.
+   * @private
+   */
+  private performOptOutOperations(): void {
     // Clear existing tracking data BEFORE switching storage mode
     // This ensures persistent cookies are cleared while still in cookie mode
     this.reset();
     
     // Switch to memory storage for future operations after clearing data
     this.switchToConsentAwareStorage(false);
-    
-    logger.info("Successfully opted out of tracking");
   }
 
   /**
@@ -780,13 +790,21 @@ export class FormoAnalytics implements IFormoAnalytics {
       
       // Merge new preferences with existing ones, with proper fallback handling
       const existing = this.getConsent() || {};
+      
+      // Determine analytics value with clear precedence order
+      let analyticsValue: boolean;
+      if (preferences.analytics !== undefined) {
+        analyticsValue = preferences.analytics;
+      } else if (existing.analytics !== undefined) {
+        analyticsValue = existing.analytics;
+      } else {
+        analyticsValue = false; // Default to false if both are undefined
+      }
+      
       finalPreferences = { 
         ...existing, 
         ...preferences, 
-        analytics: 
-          preferences.analytics !== undefined ? preferences.analytics
-          : existing.analytics !== undefined ? existing.analytics
-          : false // Default to false if both are undefined
+        analytics: analyticsValue
       };
     } else {
       // Analytics consent is explicitly set (true or false)
@@ -798,8 +816,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Use TextEncoder to accurately measure byte size in UTF-8
     const byteSize = FormoAnalytics.textEncoder.encode(serialized).length;
     if (byteSize > FormoAnalytics.MAX_COOKIE_SIZE) {
-      logger.error(`Consent preferences too large to store in cookie (${byteSize} bytes). Not setting consent cookie.`);
-      return;
+      const errorMessage = `Consent preferences too large to store in cookie (${byteSize} bytes exceeds ${FormoAnalytics.MAX_COOKIE_SIZE} byte limit). Consider reducing the size of your consent preferences.`;
+      logger.error(errorMessage);
+      throw new Error(errorMessage);
     }
     
     // Store the final preferences
@@ -807,7 +826,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     // Handle analytics consent changes based on the final preferences
     if (finalPreferences.analytics === false) {
-      this.optOutTracking();
+      // Set opt-out flag and perform opt-out operations without circular dependency
+      this.setConsentFlag(CONSENT_OPT_OUT_KEY, "true");
+      this.performOptOutOperations();
     } else if (finalPreferences.analytics === true) {
       // Analytics consent is explicitly granted (true)
       // Only enable tracking when explicitly consented to
