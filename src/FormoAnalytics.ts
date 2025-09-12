@@ -58,6 +58,20 @@ interface WalletProviderFlags {
   isTrust?: boolean;
   isBraveWallet?: boolean;
   isPhantom?: boolean;
+  // Additional mobile wallet flags
+  isBinance?: boolean;
+  isRainbow?: boolean;
+  isImToken?: boolean;
+  isMathWallet?: boolean;
+  isTokenPocket?: boolean;
+  isOKXWallet?: boolean;
+  isBitKeep?: boolean;
+  // WalletConnect specific properties
+  connector?: any;
+  bridge?: string;
+  qrcode?: boolean;
+  wc?: any;
+  walletConnectVersion?: string;
 }
 
 
@@ -842,7 +856,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.info("OnAccountsChanged: Detecting disconnect, current state:", {
           currentAddress: this.currentAddress,
           currentChainId: this.currentChainId,
-          providerMatch: this._provider === provider
+          providerMatch: this._provider === provider,
+          isWalletConnect: this.isWalletConnectProvider(provider)
         });
         try {
           // Pass current state explicitly to ensure we have the data for the disconnect event
@@ -981,7 +996,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       wasDisconnected,
       providerName: providerInfo.name,
       rdns: providerInfo.rdns,
-      hasChainId: !!nextChainId
+      hasChainId: !!nextChainId,
+      isWalletConnect: this.isWalletConnectProvider(provider)
     });
     
     const effectiveChainId = nextChainId || 0;
@@ -1050,6 +1066,125 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     provider.on("connect", listener);
     this.addProviderListener(provider, "connect", listener);
+    
+    // Enhanced WalletConnect support - some WalletConnect providers emit different events
+    if (this.isWalletConnectProvider(provider)) {
+      this.registerWalletConnectSpecificListeners(provider);
+    }
+  }
+
+  /**
+   * Register WalletConnect-specific event listeners
+   * @param provider The WalletConnect provider
+   */
+  private registerWalletConnectSpecificListeners(provider: EIP1193Provider): void {
+    logger.info("registerWalletConnectSpecificListeners");
+    
+    try {
+      const providerAny = provider as any;
+      
+      // Listen for WalletConnect session updates
+      if (providerAny.connector) {
+        const sessionUpdateListener = (error: any, payload: any) => {
+          if (error) {
+            logger.error("WalletConnect session update error:", error);
+            return;
+          }
+          
+          logger.info("WalletConnect session update:", payload);
+          
+          // Handle session connection
+          if (payload?.params?.[0]?.accounts?.length > 0) {
+            const accounts = payload.params[0].accounts;
+            const chainId = payload.params[0].chainId;
+            
+            // Simulate accountsChanged event for WalletConnect
+            this.onAccountsChanged(provider, accounts).catch(error => {
+              logger.error("Failed to handle WalletConnect session update:", error);
+            });
+          }
+        };
+        
+        // Register session update listener
+        if (typeof providerAny.connector.on === 'function') {
+          providerAny.connector.on("session_update", sessionUpdateListener);
+          this.addProviderListener(provider, "wc_session_update", sessionUpdateListener);
+        }
+        
+        // Listen for WalletConnect connection events
+        const connectListener = (error: any, payload: any) => {
+          if (error) {
+            logger.error("WalletConnect connect error:", error);
+            return;
+          }
+          
+          logger.info("WalletConnect connected:", payload);
+          
+          if (payload?.params?.[0]) {
+            const session = payload.params[0];
+            if (session.accounts?.length > 0) {
+              // Simulate connect event
+              this.onConnected(provider, {
+                chainId: `0x${session.chainId?.toString(16) || '1'}`
+              }).catch(error => {
+                logger.error("Failed to handle WalletConnect connect:", error);
+              });
+            }
+          }
+        };
+        
+        if (typeof providerAny.connector.on === 'function') {
+          providerAny.connector.on("connect", connectListener);
+          this.addProviderListener(provider, "wc_connect", connectListener);
+        }
+        
+        // Listen for WalletConnect disconnection
+        const disconnectListener = () => {
+          logger.info("WalletConnect disconnected");
+          if (this._provider === provider) {
+            this.disconnect().catch(error => {
+              logger.error("Failed to handle WalletConnect disconnect:", error);
+            });
+          }
+        };
+        
+        if (typeof providerAny.connector.on === 'function') {
+          providerAny.connector.on("disconnect", disconnectListener);
+          this.addProviderListener(provider, "wc_disconnect", disconnectListener);
+        }
+      }
+      
+      // Additional event listeners for different WalletConnect implementations
+      const additionalEvents = ['session_request', 'call_request', 'wc_sessionUpdate'];
+      
+      additionalEvents.forEach(eventName => {
+        try {
+          if (typeof provider.on === 'function') {
+            const listener = (...args: unknown[]) => {
+              logger.debug(`WalletConnect ${eventName} event:`, args);
+              
+              // Handle session-related events that might indicate connection changes
+              if (eventName.includes('session') && args[0]) {
+                const eventData = args[0] as any;
+                if (eventData?.accounts?.length > 0) {
+                  this.onAccountsChanged(provider, eventData.accounts).catch(error => {
+                    logger.error(`Failed to handle WalletConnect ${eventName}:`, error);
+                  });
+                }
+              }
+            };
+            
+            provider.on(eventName, listener);
+            this.addProviderListener(provider, `wc_${eventName}`, listener);
+          }
+        } catch (error) {
+          logger.debug(`Could not register ${eventName} listener:`, error);
+        }
+      });
+      
+    } catch (error) {
+      logger.error("Error registering WalletConnect-specific listeners:", error);
+    }
   }
 
   private registerDisconnectListener(provider: EIP1193Provider): void {
@@ -1501,15 +1636,51 @@ export class FormoAnalytics implements IFormoAnalytics {
       name = 'Coinbase Wallet';
       rdns = 'com.coinbase.wallet';
     }
-    // Check if it's WalletConnect
-    else if (flags.isWalletConnect) {
-      name = 'WalletConnect';
-      rdns = 'com.walletconnect';
+    // Enhanced WalletConnect detection
+    else if (this.isWalletConnectProvider(provider)) {
+      const walletConnectInfo = this.detectWalletConnectProvider(provider);
+      name = walletConnectInfo.name;
+      rdns = walletConnectInfo.rdns;
     }
     // Check if it's Trust Wallet
     else if (flags.isTrust) {
       name = 'Trust Wallet';
       rdns = 'com.trustwallet';
+    }
+    // Check if it's Binance Wallet
+    else if (flags.isBinance) {
+      name = 'Binance Wallet';
+      rdns = 'com.binance.wallet';
+    }
+    // Check if it's Rainbow Wallet
+    else if (flags.isRainbow) {
+      name = 'Rainbow';
+      rdns = 'me.rainbow';
+    }
+    // Check if it's ImToken
+    else if (flags.isImToken) {
+      name = 'ImToken';
+      rdns = 'im.token';
+    }
+    // Check if it's MathWallet
+    else if (flags.isMathWallet) {
+      name = 'MathWallet';
+      rdns = 'com.mathwallet';
+    }
+    // Check if it's TokenPocket
+    else if (flags.isTokenPocket) {
+      name = 'TokenPocket';
+      rdns = 'com.tokenpocket';
+    }
+    // Check if it's OKX Wallet
+    else if (flags.isOKXWallet) {
+      name = 'OKX Wallet';
+      rdns = 'com.okx.wallet';
+    }
+    // Check if it's BitKeep
+    else if (flags.isBitKeep) {
+      name = 'BitKeep';
+      rdns = 'com.bitkeep';
     }
     // Check if it's Brave Wallet
     else if (flags.isBraveWallet) {
@@ -1528,6 +1699,101 @@ export class FormoAnalytics implements IFormoAnalytics {
       uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, '-')}`,
       icon: DEFAULT_PROVIDER_ICON
     };
+  }
+
+  /**
+   * Enhanced WalletConnect provider detection
+   * @param provider The provider to check
+   * @returns true if the provider is WalletConnect-based
+   */
+  private isWalletConnectProvider(provider: EIP1193Provider): boolean {
+    const flags = provider as WalletProviderFlags;
+    
+    // Check multiple WalletConnect indicators
+    return !!(
+      flags.isWalletConnect ||
+      flags.connector ||
+      flags.bridge ||
+      flags.wc ||
+      flags.walletConnectVersion ||
+      // Check for WalletConnect in the provider object structure
+      (provider as any)._walletConnect ||
+      (provider as any).walletConnect ||
+      (provider as any).isWalletConnect ||
+      // Check for common WalletConnect properties
+      (provider as any).connector?.bridge ||
+      (provider as any).connector?.connected ||
+      // Check for WalletConnect session
+      (provider as any).session ||
+      (provider as any).connector?.session ||
+      // Check for WalletConnect URI
+      (provider as any).uri ||
+      (provider as any).connector?.uri ||
+      // Check for mobile-specific WalletConnect patterns
+      (provider as any).isMobile ||
+      (provider as any).isWalletConnectV2 ||
+      // Check constructor name patterns
+      provider.constructor?.name?.toLowerCase().includes('walletconnect')
+    );
+  }
+
+  /**
+   * Detect specific WalletConnect provider information
+   * @param provider The WalletConnect provider
+   * @returns Provider name and rdns
+   */
+  private detectWalletConnectProvider(provider: EIP1193Provider): { name: string; rdns: string } {
+    const flags = provider as WalletProviderFlags;
+    const providerAny = provider as any;
+    
+    // Try to get wallet name from various WalletConnect properties
+    let walletName = '';
+    let rdns = 'com.walletconnect';
+    
+    // Check for wallet metadata
+    if (providerAny.connector?.peerMeta?.name) {
+      walletName = providerAny.connector.peerMeta.name;
+    } else if (providerAny.session?.peerMeta?.name) {
+      walletName = providerAny.session.peerMeta.name;
+    } else if (providerAny.walletMeta?.name) {
+      walletName = providerAny.walletMeta.name;
+    } else if (providerAny.connector?.session?.peerMeta?.name) {
+      walletName = providerAny.connector.session.peerMeta.name;
+    }
+    
+    // Map known wallet names to proper rdns
+    const walletNameLower = walletName.toLowerCase();
+    if (walletNameLower.includes('trust')) {
+      return { name: 'Trust Wallet', rdns: 'com.trustwallet' };
+    } else if (walletNameLower.includes('coinbase')) {
+      return { name: 'Coinbase Wallet', rdns: 'com.coinbase.wallet' };
+    } else if (walletNameLower.includes('binance')) {
+      return { name: 'Binance Wallet', rdns: 'com.binance.wallet' };
+    } else if (walletNameLower.includes('rainbow')) {
+      return { name: 'Rainbow', rdns: 'me.rainbow' };
+    } else if (walletNameLower.includes('imtoken')) {
+      return { name: 'ImToken', rdns: 'im.token' };
+    } else if (walletNameLower.includes('mathwallet') || walletNameLower.includes('math wallet')) {
+      return { name: 'MathWallet', rdns: 'com.mathwallet' };
+    } else if (walletNameLower.includes('tokenpocket')) {
+      return { name: 'TokenPocket', rdns: 'com.tokenpocket' };
+    } else if (walletNameLower.includes('okx')) {
+      return { name: 'OKX Wallet', rdns: 'com.okx.wallet' };
+    } else if (walletNameLower.includes('bitkeep')) {
+      return { name: 'BitKeep', rdns: 'com.bitkeep' };
+    } else if (walletNameLower.includes('metamask')) {
+      return { name: 'MetaMask Mobile', rdns: 'io.metamask.mobile' };
+    }
+    
+    // Default WalletConnect naming
+    if (walletName) {
+      // Clean up the wallet name and create rdns
+      const cleanName = walletName.trim();
+      const rdnsFromName = `com.${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      return { name: cleanName, rdns: rdnsFromName };
+    }
+    
+    return { name: 'WalletConnect', rdns: 'com.walletconnect' };
   }
 
   private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
@@ -1873,13 +2139,54 @@ export class FormoAnalytics implements IFormoAnalytics {
     trackedProviders: number;
     seenProviders: number;
     activeProvider: boolean;
+    walletConnectProviders: number;
   } {
+    const walletConnectCount = this._providers.filter(detail => 
+      this.isWalletConnectProvider(detail.provider)
+    ).length;
+    
     return {
       totalProviders: this._providers.length,
       trackedProviders: this._trackedProviders.size,
       seenProviders: this._seenProviders.size,
       activeProvider: !!this._provider,
+      walletConnectProviders: walletConnectCount,
     };
+  }
+
+  /**
+   * Manually check and emit connect events for WalletConnect providers
+   * This can be useful for debugging connection issues
+   * @returns Promise<void>
+   */
+  public async checkWalletConnectConnections(): Promise<void> {
+    logger.info("Manually checking WalletConnect connections");
+    
+    for (const providerDetail of this._providers) {
+      const provider = providerDetail.provider;
+      
+      if (this.isWalletConnectProvider(provider)) {
+        try {
+          const accounts = await this.getAccounts(provider);
+          const providerInfo = this.getProviderInfo(provider);
+          
+          logger.info("WalletConnect provider check:", {
+            providerName: providerInfo.name,
+            rdns: providerInfo.rdns,
+            hasAccounts: !!(accounts && accounts.length > 0),
+            accountsCount: accounts?.length || 0,
+            isActiveProvider: this._provider === provider
+          });
+          
+          if (accounts && accounts.length > 0) {
+            // Trigger accountsChanged to ensure proper connection handling
+            await this.onAccountsChanged(provider, accounts);
+          }
+        } catch (error) {
+          logger.error("Error checking WalletConnect provider:", error);
+        }
+      }
+    }
   }
   
   /**
