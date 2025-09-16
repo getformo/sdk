@@ -24,6 +24,56 @@ You can install Formo on:
 - [React apps](https://docs.formo.so/install#react)
 - [Next.js apps](https://docs.formo.so/install#next-js-app-router)
 
+## Integrations
+
+### Wagmi Integration
+
+Formo now provides seamless integration with [Wagmi](https://wagmi.sh/) for automatic wallet event tracking:
+
+#### Drop-in Replacement (Easiest for Existing Apps)
+```tsx
+// 1. Use the unified provider
+import { WagmiFormoProvider } from '@formo/analytics/wagmi';
+
+// 2. Change hook imports (everything else stays the same!)
+import { useSignMessage, useSendTransaction } from '@formo/analytics/wagmi';
+
+function App() {
+  return (
+    <WagmiProvider config={wagmiConfig}>
+      <WagmiFormoProvider writeKey="your-write-key">
+        <YourApp />
+      </WagmiFormoProvider>
+    </WagmiProvider>
+  );
+}
+```
+
+#### Simple Setup
+```tsx
+import { WagmiProvider } from 'wagmi';
+import { WagmiFormoProvider } from '@formo/analytics/wagmi';
+
+function App() {
+  return (
+    <WagmiProvider config={wagmiConfig}>
+      <WagmiFormoProvider writeKey="your-write-key">
+        <YourApp />
+      </WagmiFormoProvider>
+    </WagmiProvider>
+  );
+}
+```
+
+**Features:**
+- ✅ **Drop-in replacement hooks** - Just change import statements
+- ✅ Automatic wallet connect/disconnect tracking
+- ✅ Chain switching events
+- ✅ Single unified provider
+- ✅ Full TypeScript support
+
+[📖 Read the Wagmi Integration Guide](./docs/WAGMI_INTEGRATION.md)
+
 ## Configuration
 
 Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on local testing, debugging, and consent management.

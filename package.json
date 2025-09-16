@@ -105,6 +105,14 @@
     "@types/react": ">=16.14.34",
     "react": ">=16.14.0"
   },
+  "peerDependenciesMeta": {
+    "wagmi": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    }
+  },
   "config": {
     "commitizen": {
       "path": "./node_modules/cz-conventional-changelog"
