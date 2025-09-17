@@ -14,7 +14,7 @@ If you already have a Wagmi app and want to add analytics, this is the approach 
    <FormoAnalyticsProvider writeKey="key">
    
    // After  
-   <FormoAnalyticsProviderWithWagmi writeKey="key">
+   <WagmiFormoProvider writeKey="key">
    ```
 
 2. **Change hook imports** (just the import statements):
@@ -61,7 +61,7 @@ If you already have a Wagmi app and want to add analytics, this is the approach 
    
    Edit `App.tsx` and replace `"your-formo-write-key"`:
    ```tsx
-   <FormoAnalyticsProviderWithWagmi writeKey="your-actual-write-key">
+   <WagmiFormoProvider writeKey="your-actual-write-key">
    ```
 
 3. **Configure WalletConnect (optional):**
@@ -114,15 +114,15 @@ import {
   useSignMessage, 
   useSendTransaction 
 } from '@formo/analytics/wagmi';
-import { FormoAnalyticsProviderWithWagmi } from '@formo/analytics';
+import { WagmiFormoProvider } from '@formo/analytics/wagmi';
 
 function App() {
   return (
     <WagmiProvider config={config}>
       {/* 🎯 Only this provider changes! */}
-      <FormoAnalyticsProviderWithWagmi writeKey="key">
+      <WagmiFormoProvider writeKey="key">
         <WalletComponent />
-      </FormoAnalyticsProviderWithWagmi>
+      </WagmiFormoProvider>
     </WagmiProvider>
   );
 }
@@ -170,7 +170,7 @@ Migrate hooks one component at a time:
 
 ```tsx
 // Week 1: Add provider
-<FormoAnalyticsProviderWithWagmi writeKey="key">
+<WagmiFormoProvider writeKey="key">
 
 // Week 2: Migrate signature hooks
 import { useSignMessage } from '@formo/analytics/wagmi';
@@ -201,12 +201,12 @@ The drop-in hooks preserve all your existing mutation handlers while adding auto
 
 ### Conditional Tracking
 ```tsx
-<FormoAnalyticsProviderWithWagmi 
+<WagmiFormoProvider 
   writeKey="key"
   enableWagmiIntegration={process.env.NODE_ENV === 'production'}
 >
   <App />
-</FormoAnalyticsProviderWithWagmi>
+</WagmiFormoProvider>
 ```
 
 ## Troubleshooting
@@ -225,7 +225,7 @@ import { useSignMessage } from '@formo/analytics/wagmi';
 The drop-in hooks have identical TypeScript types. If you see type errors, ensure you have the latest version of both packages.
 
 ### Events not tracking
-1. Check that you're using `FormoAnalyticsProviderWithWagmi`
+1. Check that you're using `WagmiFormoProvider`
 2. Verify your write key is correct
 3. Check browser console for Formo logs
 
@@ -242,3 +242,4 @@ The drop-in hooks have identical TypeScript types. If you see type errors, ensur
 - Try other examples to see different integration approaches
 - Read the [full Wagmi integration documentation](../../docs/WAGMI_INTEGRATION.md)
 - Explore advanced Formo Analytics features
+

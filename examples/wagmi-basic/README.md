@@ -139,3 +139,4 @@ You can customize the integration behavior:
 - Try the [Advanced Example](../wagmi-advanced) for more complex scenarios
 - Check out the [Next.js Example](../nextjs-wagmi) for a full-stack setup
 - Read the [Wagmi Integration Documentation](../../docs/WAGMI_INTEGRATION.md)
+

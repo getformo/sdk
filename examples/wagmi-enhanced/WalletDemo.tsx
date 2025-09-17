@@ -79,7 +79,7 @@ function WalletDemo() {
               <li>✅ <strong>Single Provider</strong> - No need for separate WagmiFormoProvider</li>
               <li>✅ <strong>Automatic Detection</strong> - Detects Wagmi context automatically</li>
               <li>✅ <strong>Flexible Layout</strong> - Works with Wagmi outside Formo provider</li>
-              <li>✅ <strong>Zero Config</strong> - Just wrap with FormoAnalyticsProviderWithWagmi</li>
+              <li>✅ <strong>Zero Config</strong> - Just wrap with WagmiFormoProvider</li>
             </ul>
           </div>
         </div>

@@ -19,15 +19,58 @@ import { useFormo } from "../../FormoAnalyticsProvider";
 import { logger } from "../../lib";
 import { SignatureStatus, TransactionStatus, Address, ChainID } from "../../types";
 
-// Type-only imports to avoid runtime dependency when wagmi is not installed
-type UseSignMessageParameters = any;
-type UseSendTransactionParameters = any;
+// Type definitions that mirror Wagmi's types to maintain type safety
+// These are defined to avoid runtime dependency when wagmi is not installed
+interface UseSignMessageParameters {
+  message?: string;
+  mutation?: {
+    onMutate?: (variables: any) => any;
+    onSuccess?: (data: any, variables: any, context: any) => any;
+    onError?: (error: any, variables: any, context: any) => any;
+  };
+}
+
+interface UseSignMessageReturnType {
+  signMessage: (args: { message: string }) => void;
+  isPending?: boolean;
+  error?: Error | null;
+  data?: string;
+}
+
+interface UseSendTransactionParameters {
+  to?: string;
+  value?: bigint;
+  data?: string;
+  mutation?: {
+    onMutate?: (variables: any) => any;
+    onSuccess?: (data: any, variables: any, context: any) => any;
+    onError?: (error: any, variables: any, context: any) => any;
+  };
+}
+
+interface UseSendTransactionReturnType {
+  sendTransaction: (args: { to: string; value?: bigint; data?: string }) => void;
+  isPending?: boolean;
+  error?: Error | null;
+  data?: string;
+}
+
+interface UseAccountReturnType {
+  address?: string;
+  isConnected: boolean;
+  connector?: {
+    id?: string;
+    name?: string;
+  };
+}
+
+type UseChainIdReturnType = number | undefined;
 
 // Dynamic imports for wagmi hooks - these will be undefined if wagmi is not installed
-let useWagmiSignMessage: any;
-let useWagmiSendTransaction: any;
-let useWagmiAccount: any;
-let useWagmiChainId: any;
+let useWagmiSignMessage: (parameters?: UseSignMessageParameters) => UseSignMessageReturnType;
+let useWagmiSendTransaction: (parameters?: UseSendTransactionParameters) => UseSendTransactionReturnType;
+let useWagmiAccount: () => UseAccountReturnType;
+let useWagmiChainId: () => UseChainIdReturnType;
 
 try {
   const wagmi = require("wagmi");
@@ -37,6 +80,18 @@ try {
   useWagmiChainId = wagmi.useChainId;
 } catch (error) {
   // Wagmi is not installed - hooks will throw helpful errors
+  useWagmiSignMessage = () => { 
+    throw new Error("wagmi is not installed. Please install wagmi: npm install wagmi"); 
+  };
+  useWagmiSendTransaction = () => { 
+    throw new Error("wagmi is not installed. Please install wagmi: npm install wagmi"); 
+  };
+  useWagmiAccount = () => { 
+    throw new Error("wagmi is not installed. Please install wagmi: npm install wagmi"); 
+  };
+  useWagmiChainId = () => { 
+    throw new Error("wagmi is not installed. Please install wagmi: npm install wagmi"); 
+  };
 }
 
 /**
@@ -59,7 +114,7 @@ try {
  * }
  * ```
  */
-export function useSignMessage(parameters?: UseSignMessageParameters) {
+export function useSignMessage(parameters?: UseSignMessageParameters): UseSignMessageReturnType {
   if (!useWagmiSignMessage) {
     throw new Error("useSignMessage requires wagmi to be installed. Please install wagmi: npm install wagmi");
   }
@@ -166,7 +221,7 @@ export function useSignMessage(parameters?: UseSignMessageParameters) {
  * }
  * ```
  */
-export function useSendTransaction(parameters?: UseSendTransactionParameters) {
+export function useSendTransaction(parameters?: UseSendTransactionParameters): UseSendTransactionReturnType {
   if (!useWagmiSendTransaction) {
     throw new Error("useSendTransaction requires wagmi to be installed. Please install wagmi: npm install wagmi");
   }
@@ -323,3 +378,4 @@ export function useFormoWallet() {
     chainId,
   };
 }
+

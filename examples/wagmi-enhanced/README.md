@@ -21,17 +21,17 @@ The enhanced provider works regardless of layout order:
 ```tsx
 // Layout 1: Wagmi outside (recommended)
 <WagmiProvider>
-  <FormoAnalyticsProviderWithWagmi>
+  <WagmiFormoProvider>
     <App />
-  </FormoAnalyticsProviderWithWagmi>
+  </WagmiFormoProvider>
 </WagmiProvider>
 
 // Layout 2: Wagmi inside (also works)
-<FormoAnalyticsProviderWithWagmi>
+<WagmiFormoProvider>
   <WagmiProvider>
     <App />
   </WagmiProvider>
-</FormoAnalyticsProviderWithWagmi>
+</WagmiFormoProvider>
 ```
 
 ### ✅ **Automatic Wagmi Detection**
@@ -56,7 +56,7 @@ The provider automatically detects if Wagmi context is available and enables int
    
    Edit `App.tsx` and replace `"your-formo-write-key"` with your actual key:
    ```tsx
-   <FormoAnalyticsProviderWithWagmi writeKey="your-actual-write-key">
+   <WagmiFormoProvider writeKey="your-actual-write-key">
    ```
 
 3. **Configure WalletConnect (optional):**
@@ -76,7 +76,7 @@ The provider automatically detects if Wagmi context is available and enables int
 The enhanced provider accepts all the same options as `FormoAnalyticsProvider` plus additional Wagmi-specific options:
 
 ```tsx
-<FormoAnalyticsProviderWithWagmi 
+<WagmiFormoProvider 
   writeKey="your-key"
   // Standard Formo options
   options={{
@@ -89,7 +89,7 @@ The enhanced provider accepts all the same options as `FormoAnalyticsProvider` p
   wagmiDebounceMs={100}          // Debounce time for wallet state changes
 >
   <App />
-</FormoAnalyticsProviderWithWagmi>
+</WagmiFormoProvider>
 ```
 
 ## Event Source Identification
@@ -98,7 +98,7 @@ Events from the enhanced provider are tagged with different sources:
 
 | Source | Description |
 |--------|-------------|
-| `wagmi-auto` | Automatic events from FormoAnalyticsProviderWithWagmi |
+| `wagmi-auto` | Automatic events from WagmiFormoProvider |
 | `wagmi` | Events from enhanced hooks (useFormoSignMessage, etc.) |
 | `wagmi-manual` | Events from manual tracking with useFormoWallet |
 
@@ -132,9 +132,9 @@ If you're using the basic example, migration is simple:
 ### After
 ```tsx
 <WagmiProvider config={config}>
-  <FormoAnalyticsProviderWithWagmi writeKey="key">
+  <WagmiFormoProvider writeKey="key">
     <App />
-  </FormoAnalyticsProviderWithWagmi>
+  </WagmiFormoProvider>
 </WagmiProvider>
 ```
 
@@ -142,22 +142,22 @@ If you're using the basic example, migration is simple:
 
 ### Conditional Wagmi Integration
 ```tsx
-<FormoAnalyticsProviderWithWagmi 
+<WagmiFormoProvider 
   writeKey="key"
   enableWagmiIntegration={process.env.NODE_ENV === 'production'}
 >
   <App />
-</FormoAnalyticsProviderWithWagmi>
+</WagmiFormoProvider>
 ```
 
 ### Custom Debouncing
 ```tsx
-<FormoAnalyticsProviderWithWagmi 
+<WagmiFormoProvider 
   writeKey="key"
   wagmiDebounceMs={200} // Slower debouncing for apps with frequent state changes
 >
   <App />
-</FormoAnalyticsProviderWithWagmi>
+</WagmiFormoProvider>
 ```
 
 ### Fallback for Non-Wagmi Apps
@@ -165,9 +165,9 @@ The enhanced provider gracefully falls back to regular Formo Analytics if Wagmi 
 
 ```tsx
 // Works in both Wagmi and non-Wagmi apps
-<FormoAnalyticsProviderWithWagmi writeKey="key">
+<WagmiFormoProvider writeKey="key">
   <App /> {/* Will work with or without Wagmi context */}
-</FormoAnalyticsProviderWithWagmi>
+</WagmiFormoProvider>
 ```
 
 ## Benefits
