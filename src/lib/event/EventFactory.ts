@@ -29,6 +29,25 @@ import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 
 class EventFactory implements IEventFactory {
+  private cachedIsBrave: boolean | null = null;
+
+  private async isBraveBrowser(): Promise<boolean> {
+    if (this.cachedIsBrave !== null) {
+      return this.cachedIsBrave;
+    }
+
+    try {
+      this.cachedIsBrave =
+        typeof globalThis.navigator?.brave !== "undefined" &&
+        (await globalThis.navigator?.brave?.isBrave());
+      return this.cachedIsBrave;
+    } catch (error) {
+      logger.error("Error resolving Brave detection:", error);
+      this.cachedIsBrave = false;
+      return false;
+    }
+  }
+
   private getTimezone(): string {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -151,13 +170,15 @@ class EventFactory implements IEventFactory {
   };
 
   // Contextual fields that are automatically collected and populated by the Formo SDK
-  private generateContext(context?: IFormoEventContext): IFormoEventContext {
+  private async generateContext(
+    context?: IFormoEventContext
+  ): Promise<IFormoEventContext> {
     const path = globalThis.location.pathname;
+    let isBraveBrowser = await this.isBraveBrowser();
     const language = this.getLanguage();
     const timezone = this.getTimezone();
     const location = this.getLocation();
     const library_version = this.getLibraryVersion();
-
     // contextual properties
     const defaultContext = {
       user_agent: globalThis.navigator.userAgent,
@@ -170,6 +191,7 @@ class EventFactory implements IEventFactory {
       page_url: globalThis.location.href,
       library_name: "Formo Web SDK",
       library_version,
+      is_brave_browser: isBraveBrowser,
     };
 
     const mergedContext = mergeDeepRight(
@@ -205,12 +227,12 @@ class EventFactory implements IEventFactory {
     return pageProps;
   };
 
-  private getEnrichedEvent = (
+  private async getEnrichedEvent(
     formoEvent: Partial<IFormoEvent>,
     context?: IFormoEventContext
-  ): IFormoEvent => {
+  ): Promise<IFormoEvent> {
     const commonEventData = {
-      context: this.generateContext(context),
+      context: await this.generateContext(context),
       original_timestamp: getCurrentTimeFormatted(),
       user_id: formoEvent.user_id,
       type: formoEvent.type,
@@ -242,14 +264,14 @@ class EventFactory implements IEventFactory {
     }
 
     return toSnakeCase(processedEvent);
-  };
+  }
 
-  generatePageEvent(
+  async generatePageEvent(
     category?: string,
     name?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
-  ): IFormoEvent {
+  ): Promise<IFormoEvent> {
     let props = properties ?? {};
     props.category = category;
     props.name = name;
@@ -263,7 +285,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(pageEvent, context);
   }
 
-  generateDetectWalletEvent(
+  async generateDetectWalletEvent(
     providerName: string,
     rdns: string,
     properties?: IFormoEventProperties,
@@ -281,7 +303,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(detectEvent, context);
   }
 
-  generateIdentifyEvent(
+  async generateIdentifyEvent(
     providerName: string,
     rdns: string,
     address: Nullable<Address>,
@@ -303,7 +325,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(identifyEvent, context);
   }
 
-  generateConnectEvent(
+  async generateConnectEvent(
     chainId: ChainID,
     address: Address,
     properties?: IFormoEventProperties,
@@ -321,7 +343,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(connectEvent, context);
   }
 
-  generateDisconnectEvent(
+  async generateDisconnectEvent(
     chainId?: ChainID,
     address?: Address,
     properties?: IFormoEventProperties,
@@ -339,7 +361,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(disconnectEvent, context);
   }
 
-  generateChainChangedEvent(
+  async generateChainChangedEvent(
     chainId: ChainID,
     address: Address,
     properties?: IFormoEventProperties,
@@ -357,7 +379,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(chainEvent, context);
   }
 
-  generateSignatureEvent(
+  async generateSignatureEvent(
     status: SignatureStatus,
     chainId: ChainID,
     address: Address,
@@ -381,7 +403,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(signatureEvent, context);
   }
 
-  generateTransactionEvent(
+  async generateTransactionEvent(
     status: TransactionStatus,
     chainId: ChainID,
     address: Address,
@@ -409,7 +431,7 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(transactionEvent, context);
   }
 
-  generateTrackEvent(
+  async generateTrackEvent(
     event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
@@ -439,12 +461,16 @@ class EventFactory implements IEventFactory {
   }
 
   // Returns an event with type, context, properties, and common properties
-  create(event: APIEvent, address?: Address, userId?: string): IFormoEvent {
+  async create(
+    event: APIEvent,
+    address?: Address,
+    userId?: string
+  ): Promise<IFormoEvent> {
     let formoEvent: Partial<IFormoEvent> = {};
 
     switch (event.type) {
       case "page":
-        formoEvent = this.generatePageEvent(
+        formoEvent = await this.generatePageEvent(
           event.category,
           event.name,
           event.properties,
@@ -452,7 +478,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "detect":
-        formoEvent = this.generateDetectWalletEvent(
+        formoEvent = await this.generateDetectWalletEvent(
           event.providerName,
           event.rdns,
           event.properties,
@@ -460,7 +486,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "identify":
-        formoEvent = this.generateIdentifyEvent(
+        formoEvent = await this.generateIdentifyEvent(
           event.providerName,
           event.rdns,
           event.address,
@@ -470,7 +496,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "chain":
-        formoEvent = this.generateChainChangedEvent(
+        formoEvent = await this.generateChainChangedEvent(
           event.chainId,
           event.address,
           event.properties,
@@ -478,7 +504,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "connect":
-        formoEvent = this.generateConnectEvent(
+        formoEvent = await this.generateConnectEvent(
           event.chainId,
           event.address,
           event.properties,
@@ -486,7 +512,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "disconnect":
-        formoEvent = this.generateDisconnectEvent(
+        formoEvent = await this.generateDisconnectEvent(
           event.chainId,
           event.address,
           event.properties,
@@ -494,7 +520,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "signature":
-        formoEvent = this.generateSignatureEvent(
+        formoEvent = await this.generateSignatureEvent(
           event.status,
           event.chainId,
           event.address,
@@ -505,7 +531,7 @@ class EventFactory implements IEventFactory {
         );
         break;
       case "transaction":
-        formoEvent = this.generateTransactionEvent(
+        formoEvent = await this.generateTransactionEvent(
           event.status,
           event.chainId,
           event.address,
@@ -519,7 +545,7 @@ class EventFactory implements IEventFactory {
         break;
       case "track":
       default:
-        formoEvent = this.generateTrackEvent(
+        formoEvent = await this.generateTrackEvent(
           event.event,
           event.properties,
           event.context
@@ -530,7 +556,9 @@ class EventFactory implements IEventFactory {
     // Set address if not already set by the specific event generator
     if (formoEvent.address === undefined || formoEvent.address === null) {
       const validAddress = getValidAddress(address);
-      formoEvent.address = validAddress ? toChecksumAddress(validAddress) : null;
+      formoEvent.address = validAddress
+        ? toChecksumAddress(validAddress)
+        : null;
     }
     formoEvent.user_id = userId || null;
 

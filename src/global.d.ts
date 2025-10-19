@@ -6,8 +6,13 @@ declare global {
     web3?: {
       currentProvider?: EIP1193Provider;
     };
-    formo?: import('./types').IFormoAnalytics;
-    formofy?: (writeKey: string, options?: import('./types').Options) => void;
+    formo?: import("./types").IFormoAnalytics;
+    formofy?: (writeKey: string, options?: import("./types").Options) => void;
+  }
+  interface Navigator {
+    brave?: {
+      isBrave: () => Promise<boolean>;
+    };
   }
 }
 
