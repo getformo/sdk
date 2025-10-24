@@ -133,10 +133,10 @@ export class EventQueue implements IEventQueue {
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
-    const { hash: message_id, timestamp: eventTimestamp } = await this.generateMessageId(event);
+    const { hash: message_id } = await this.generateMessageId(event);
     // check if the message already exists within the deduplication window
-    // Use the event's timestamp (not Date.now()) for consistent time-based deduplication
-    if (await this.isDuplicate(message_id, eventTimestamp)) {
+    // Deduplication is based on hash equality + real-time window (60s since first seen)
+    if (await this.isDuplicate(message_id)) {
       // Duplicate detected - isDuplicate() already logged a detailed warning
       return;
     }
@@ -261,33 +261,41 @@ export class EventQueue implements IEventQueue {
   /**
    * Check if an event is a duplicate and clean up old hashes
    * Events are considered duplicates if they have the same hash within the deduplication window
-   * @param eventId The hash of the event
-   * @param eventTimestamp The timestamp from the event's original_timestamp field (NOT current system time)
+   * The deduplication window is 60 seconds of real time (since we first saw the event)
+   * 
+   * @param eventId The hash of the event (generated from event.original_timestamp + event data)
+   * @returns true if duplicate (should be blocked), false otherwise
    */
-  private async isDuplicate(eventId: string, eventTimestamp: number): Promise<boolean> {
-    // Clean up old hashes that are outside the deduplication window
-    // Use eventTimestamp (not Date.now()) to ensure consistency with hash generation
+  private async isDuplicate(eventId: string): Promise<boolean> {
+    const now = Date.now();
+    
+    // Clean up old hashes based on actual elapsed time (Date.now())
+    // This handles out-of-order events correctly - we clean up based on real time passage
+    // not based on event timestamps which may arrive out of order
     const hashesToDelete: string[] = [];
     this.payloadHashes.forEach((storedTimestamp, hash) => {
-      if (eventTimestamp - storedTimestamp > DEDUPLICATION_WINDOW_MS) {
+      // storedTimestamp is when we first saw this hash (Date.now() at storage time)
+      if (now - storedTimestamp > DEDUPLICATION_WINDOW_MS) {
         hashesToDelete.push(hash);
       }
     });
     hashesToDelete.forEach(hash => this.payloadHashes.delete(hash));
     
     // Check if this event already exists within the deduplication window
+    // Compare using event timestamps to detect true duplicates
     if (this.payloadHashes.has(eventId)) {
-      const existingTimestamp = this.payloadHashes.get(eventId)!;
-      const timeSinceLastEvent = eventTimestamp - existingTimestamp;
+      const storedAt = this.payloadHashes.get(eventId)!;
+      const elapsedRealTime = now - storedAt;
       logger.warn(
-        `Duplicate event detected and blocked. Same event was sent ${Math.round(timeSinceLastEvent / 1000)}s ago. ` +
+        `Duplicate event detected and blocked. Same event was first seen ${Math.round(elapsedRealTime / 1000)}s ago. ` +
         `Events are deduplicated within a ${DEDUPLICATION_WINDOW_MS / 1000}s window.`
       );
       return true;
     }
 
-    // Store the hash with the event's timestamp (not current system time)
-    this.payloadHashes.set(eventId, eventTimestamp);
+    // Store the hash with the current time (Date.now()) for cleanup purposes
+    // This ensures cleanup works correctly even with out-of-order events
+    this.payloadHashes.set(eventId, now);
     return false;
   }
 
