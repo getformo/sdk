@@ -1012,6 +1012,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("onChainChanged", chainIdHex);
     
     const nextChainId = parseChainId(chainIdHex);
+    const previousChainId = this.currentChainId;
 
     // Only handle chain changes for the active provider (or if none is set yet)
     if (this.isProviderMismatch(provider)) {
@@ -1029,13 +1030,26 @@ export class FormoAnalytics implements IFormoAnalytics {
       this._provider = provider;
     }
     
+    // Log chain transition for debugging
+    logger.info("OnChainChanged: Chain transition", {
+      from: previousChainId,
+      to: nextChainId,
+      address: this.currentAddress
+    });
+    
+    // Update current chain ID AFTER capturing the previous value
     this.currentChainId = nextChainId;
 
     try {
-      // This is just a chain change since we already confirmed currentAddress exists
+      // Emit chain change event with the new chain ID
+      // The shouldTrack() method will handle whether to track based on excludeChains
+      // Chain transitions are always tracked to capture network switching behavior
       return this.chain({
-        chainId: this.currentChainId,
+        chainId: nextChainId,
         address: this.currentAddress,
+      }, {
+        // Include previous chain ID in properties for better analytics
+        ...(previousChainId && { previousChainId })
       });
     } catch (error) {
       logger.error("OnChainChanged: Failed to emit chain event:", error);
@@ -1330,7 +1344,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    if (!this.shouldTrack()) {
+    // Page events don't have a specific chainId, so we use currentChainId
+    if (!this.shouldTrack(EventType.PAGE)) {
       logger.info(
         "Track page hit: Skipping event due to tracking configuration"
       );
@@ -1365,8 +1380,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
-      if (!this.shouldTrack()) {
-        logger.info(`Skipping ${type} event due to tracking configuration`);
+      // Pass event type and chainId from payload to shouldTrack for context-aware decisions
+      const chainIdForCheck = payload?.chainId !== undefined ? payload.chainId : this.currentChainId;
+      
+      if (!this.shouldTrack(type, chainIdForCheck)) {
+        logger.info(`Skipping ${type} event due to tracking configuration (chainId: ${chainIdForCheck})`);
         return;
       }
 
@@ -1388,9 +1406,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Determines if tracking should be enabled based on configuration and consent
+   * @param eventType - Optional event type for context-aware tracking decisions
+   * @param chainId - Optional chainId to check (defaults to currentChainId)
    * @returns {boolean} True if tracking should be enabled
    */
-  private shouldTrack(): boolean {
+  private shouldTrack(eventType?: TEventType, chainId?: ChainID): boolean {
     // First check if user has opted out of tracking
     if (this.hasOptedOutTracking()) {
       return false;
@@ -1428,11 +1448,33 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       }
       
-      // Check chainId exclusions
-      if (excludeChains.length > 0 && 
-          this.currentChainId && 
-          excludeChains.includes(this.currentChainId)) {
-        return false;
+      // Check chainId exclusions with improved logic
+      if (excludeChains.length > 0) {
+        // Use provided chainId or fall back to currentChainId
+        const effectiveChainId = chainId !== undefined ? chainId : this.currentChainId;
+        
+        // Only check exclusions if we have a valid chain ID
+        // Chain ID 0 is technically invalid but we use it as a fallback
+        // so we should still check if it's explicitly excluded
+        if (effectiveChainId !== undefined && effectiveChainId !== null) {
+          // Validate that effectiveChainId is a number to prevent type confusion
+          const chainIdNum = typeof effectiveChainId === 'number' ? effectiveChainId : Number(effectiveChainId);
+          
+          if (!isNaN(chainIdNum) && excludeChains.includes(chainIdNum)) {
+            // For chain change events, we want to track transitions to/from excluded chains
+            // This provides valuable analytics about when users enter/exit certain networks
+            if (eventType === EventType.CHAIN) {
+              // Always track chain change events - the transition itself is valuable
+              // But we'll filter out other events that occur on excluded chains
+              logger.info(`Tracking chain transition involving excluded chain ${chainIdNum}`);
+              return true;
+            }
+            
+            // For all other events (transactions, signatures, etc.), respect the exclusion
+            logger.info(`Skipping ${eventType || 'event'} on excluded chain ${chainIdNum}`);
+            return false;
+          }
+        }
       }
       
       // If nothing is excluded, tracking is enabled
