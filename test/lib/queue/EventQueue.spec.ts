@@ -1,7 +1,20 @@
-import { describe, it, beforeEach } from "mocha";
+import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
+import * as sinon from "sinon";
 import { EventQueue } from "../../../src/lib/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
+import { logger } from "../../../src/lib/logger";
+
+// Mock browser APIs for Node.js environment
+if (typeof globalThis.addEventListener === 'undefined') {
+  (globalThis as any).addEventListener = () => {};
+}
+if (typeof document === 'undefined') {
+  (global as any).document = {
+    addEventListener: () => {},
+    visibilityState: 'visible'
+  };
+}
 
 // Helper to create a mock event
 const createMockEvent = (overrides: Partial<IFormoEvent> = {}): IFormoEvent => ({
@@ -33,9 +46,15 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe("EventQueue Deduplication", () => {
   let eventQueue: EventQueue;
+  let loggerWarnStub: sinon.SinonStub;
+  let loggerLogStub: sinon.SinonStub;
   const mockWriteKey = "test_write_key";
   
   beforeEach(() => {
+    // Stub logger methods to spy on calls
+    loggerWarnStub = sinon.stub(logger, "warn");
+    loggerLogStub = sinon.stub(logger, "log");
+    
     // Create a new EventQueue instance for each test
     eventQueue = new EventQueue(mockWriteKey, {
       url: "https://api.test.com/events",
@@ -43,6 +62,11 @@ describe("EventQueue Deduplication", () => {
       flushInterval: 30000, // 30 seconds
       maxQueueSize: 1024 * 500, // 500kB
     });
+  });
+  
+  afterEach(() => {
+    // Restore all stubs
+    sinon.restore();
   });
 
   describe("Basic Deduplication", () => {
@@ -59,13 +83,17 @@ describe("EventQueue Deduplication", () => {
 
       // Enqueue first event - should succeed
       await eventQueue.enqueue(event1);
+      expect(loggerLogStub.calledOnce).to.be.true;
+      expect(loggerWarnStub.called).to.be.false;
       
       // Enqueue duplicate event - should be blocked
       await eventQueue.enqueue(event2);
       
-      // We can't directly check the queue size, but we can verify
-      // that the second call doesn't throw and returns silently
-      // In a real test, you'd want to spy on logger.warn to verify the warning
+      // Verify duplicate was detected
+      expect(loggerWarnStub.calledOnce).to.be.true;
+      expect(loggerWarnStub.firstCall.args[0]).to.include("Duplicate event detected");
+      // Only one "Event enqueued" log (first event only)
+      expect(loggerLogStub.calledOnce).to.be.true;
     });
 
     it("should allow different events with different properties", async () => {
@@ -85,7 +113,9 @@ describe("EventQueue Deduplication", () => {
       await eventQueue.enqueue(event1);
       await eventQueue.enqueue(event2);
       
-      // Both events should be in the queue (different hashes)
+      // Verify both were enqueued (no duplicate warnings)
+      expect(loggerWarnStub.called).to.be.false;
+      expect(loggerLogStub.calledTwice).to.be.true; // Two "Event enqueued" logs
     });
 
     it("should allow events with different event names", async () => {
@@ -104,6 +134,10 @@ describe("EventQueue Deduplication", () => {
       // Both should be enqueued because they have different event names
       await eventQueue.enqueue(event1);
       await eventQueue.enqueue(event2);
+      
+      // Verify both were enqueued (no duplicate warnings)
+      expect(loggerWarnStub.called).to.be.false;
+      expect(loggerLogStub.calledTwice).to.be.true;
     });
   });
 
@@ -122,7 +156,10 @@ describe("EventQueue Deduplication", () => {
       await eventQueue.enqueue(event1);
       await eventQueue.enqueue(event2);
       
-      // Second event should be blocked (within 60s window, same data)
+      // Verify second event was blocked (within 60s window)
+      expect(loggerWarnStub.calledOnce).to.be.true;
+      expect(loggerWarnStub.firstCall.args[0]).to.include("30s ago");
+      expect(loggerLogStub.calledOnce).to.be.true; // Only first event enqueued
     });
 
     it("should allow events outside 60 second window", async () => {
@@ -137,13 +174,11 @@ describe("EventQueue Deduplication", () => {
       });
 
       await eventQueue.enqueue(event1);
-      
-      // Wait a bit to simulate real timing
-      await wait(100);
-      
       await eventQueue.enqueue(event2);
       
-      // Second event should be allowed (outside 60s window)
+      // Verify both were allowed (outside 60s window)
+      expect(loggerWarnStub.called).to.be.false;
+      expect(loggerLogStub.calledTwice).to.be.true;
     });
   });
 
@@ -162,6 +197,11 @@ describe("EventQueue Deduplication", () => {
       for (const event of events) {
         await eventQueue.enqueue(event);
       }
+      
+      // At this point, queue should have flushed
+      // Reset counters to test the duplicate
+      loggerLogStub.resetHistory();
+      loggerWarnStub.resetHistory();
 
       // Now try to enqueue a duplicate of the first event
       // This should be blocked even though we've flushed
@@ -172,26 +212,34 @@ describe("EventQueue Deduplication", () => {
 
       await eventQueue.enqueue(duplicateEvent);
       
-      // This duplicate should be blocked
+      // Verify duplicate was blocked even after flush
+      expect(loggerWarnStub.calledOnce).to.be.true;
+      expect(loggerWarnStub.firstCall.args[0]).to.include("Duplicate event detected");
+      expect(loggerLogStub.called).to.be.false; // Event not enqueued
     });
   });
 
   describe("Hash Cleanup", () => {
     it("should clean up old hashes automatically", async () => {
-      // This test verifies that the cleanup logic in isDuplicate() works
-      // In a real scenario, you'd mock Date.now() to simulate time passing
-      
-      const event = createMockEvent({
+      const event1 = createMockEvent({
         event: "test_event",
         original_timestamp: "2025-01-01T10:30:00.000Z",
       });
 
-      await eventQueue.enqueue(event);
+      await eventQueue.enqueue(event1);
       
-      // In a real test with mocked time, you'd:
-      // 1. Mock Date.now() to return time + 61 seconds
-      // 2. Enqueue the same event again
-      // 3. Verify it's allowed (hash was cleaned up)
+      // Now enqueue the same event but with a timestamp > 60s later
+      // This simulates time passing and should trigger cleanup
+      const event2 = createMockEvent({
+        event: "test_event",
+        original_timestamp: "2025-01-01T10:31:05.000Z", // 65 seconds later
+      });
+      
+      await eventQueue.enqueue(event2);
+      
+      // Verify second event was allowed (hash was cleaned up)
+      expect(loggerWarnStub.called).to.be.false;
+      expect(loggerLogStub.calledTwice).to.be.true;
     });
   });
 
@@ -211,7 +259,9 @@ describe("EventQueue Deduplication", () => {
       await eventQueue.enqueue(event1);
       await eventQueue.enqueue(event2);
       
-      // Both should be enqueued (different seconds)
+      // Verify both were enqueued (different seconds = different hashes)
+      expect(loggerWarnStub.called).to.be.false;
+      expect(loggerLogStub.calledTwice).to.be.true;
     });
 
     it("should generate same IDs for events in the same second", async () => {
@@ -229,7 +279,9 @@ describe("EventQueue Deduplication", () => {
       await eventQueue.enqueue(event1);
       await eventQueue.enqueue(event2);
       
-      // Second should be blocked (same second, same data)
+      // Verify second was blocked (same second, same data)
+      expect(loggerWarnStub.calledOnce).to.be.true;
+      expect(loggerLogStub.calledOnce).to.be.true;
     });
   });
 
@@ -247,7 +299,9 @@ describe("EventQueue Deduplication", () => {
         await eventQueue.enqueue(event);
       }
       
-      // Only the first event should be enqueued, others blocked
+      // Only the first event should be enqueued (all within same second)
+      expect(loggerLogStub.calledOnce).to.be.true;
+      expect(loggerWarnStub.callCount).to.equal(4); // 4 duplicates blocked
     });
 
     it("should allow transaction lifecycle events", async () => {
@@ -269,7 +323,9 @@ describe("EventQueue Deduplication", () => {
       await eventQueue.enqueue(submitEvent);
       await eventQueue.enqueue(successEvent);
       
-      // Both should be enqueued (different event names)
+      // Verify both were enqueued (different event names)
+      expect(loggerWarnStub.called).to.be.false;
+      expect(loggerLogStub.calledTwice).to.be.true;
     });
 
     it("should handle multiple transactions of the same type", async () => {
@@ -291,7 +347,9 @@ describe("EventQueue Deduplication", () => {
       await eventQueue.enqueue(swap1);
       await eventQueue.enqueue(swap2);
       
-      // Both should be enqueued (different properties)
+      // Verify both were enqueued (different properties)
+      expect(loggerWarnStub.called).to.be.false;
+      expect(loggerLogStub.calledTwice).to.be.true;
     });
   });
 });

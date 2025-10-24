@@ -108,10 +108,13 @@ export class EventQueue implements IEventQueue {
   /**
    * Generate a unique message ID for deduplication
    * Uses second-level precision for better granularity while still catching rapid duplicates
+   * Returns both the hash and the event's timestamp for consistent time-based deduplication
    */
-  private async generateMessageId(event: IFormoEvent): Promise<string> {
+  private async generateMessageId(event: IFormoEvent): Promise<{ hash: string; timestamp: number }> {
     // Format timestamp to second precision (YYYY-MM-DD HH:mm:ss) for better deduplication
     const date = new Date(event.original_timestamp);
+    const eventTimestamp = date.getTime(); // Get timestamp in milliseconds
+    
     const formattedTimestamp = 
       date.getUTCFullYear() + "-" +
       ("0" + (date.getUTCMonth() + 1)).slice(-2) + "-" +
@@ -122,15 +125,18 @@ export class EventQueue implements IEventQueue {
     
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
-    return hash(eventString);
+    const hashValue = await hash(eventString);
+    
+    return { hash: hashValue, timestamp: eventTimestamp };
   }
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
-    const message_id = await this.generateMessageId(event);
+    const { hash: message_id, timestamp: eventTimestamp } = await this.generateMessageId(event);
     // check if the message already exists within the deduplication window
-    if (await this.isDuplicate(message_id)) {
+    // Use the event's timestamp (not Date.now()) for consistent time-based deduplication
+    if (await this.isDuplicate(message_id, eventTimestamp)) {
       // Duplicate detected - isDuplicate() already logged a detailed warning
       return;
     }
@@ -255,14 +261,15 @@ export class EventQueue implements IEventQueue {
   /**
    * Check if an event is a duplicate and clean up old hashes
    * Events are considered duplicates if they have the same hash within the deduplication window
+   * @param eventId The hash of the event
+   * @param eventTimestamp The timestamp from the event's original_timestamp field (NOT current system time)
    */
-  private async isDuplicate(eventId: string): Promise<boolean> {
-    const now = Date.now();
-    
+  private async isDuplicate(eventId: string, eventTimestamp: number): Promise<boolean> {
     // Clean up old hashes that are outside the deduplication window
+    // Use eventTimestamp (not Date.now()) to ensure consistency with hash generation
     const hashesToDelete: string[] = [];
-    this.payloadHashes.forEach((timestamp, hash) => {
-      if (now - timestamp > DEDUPLICATION_WINDOW_MS) {
+    this.payloadHashes.forEach((storedTimestamp, hash) => {
+      if (eventTimestamp - storedTimestamp > DEDUPLICATION_WINDOW_MS) {
         hashesToDelete.push(hash);
       }
     });
@@ -271,7 +278,7 @@ export class EventQueue implements IEventQueue {
     // Check if this event already exists within the deduplication window
     if (this.payloadHashes.has(eventId)) {
       const existingTimestamp = this.payloadHashes.get(eventId)!;
-      const timeSinceLastEvent = now - existingTimestamp;
+      const timeSinceLastEvent = eventTimestamp - existingTimestamp;
       logger.warn(
         `Duplicate event detected and blocked. Same event was sent ${Math.round(timeSinceLastEvent / 1000)}s ago. ` +
         `Events are deduplicated within a ${DEDUPLICATION_WINDOW_MS / 1000}s window.`
@@ -279,8 +286,8 @@ export class EventQueue implements IEventQueue {
       return true;
     }
 
-    // Add new event hash with current timestamp
-    this.payloadHashes.set(eventId, now);
+    // Store the hash with the event's timestamp (not current system time)
+    this.payloadHashes.set(eventId, eventTimestamp);
     return false;
   }
 
