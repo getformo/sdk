@@ -1036,12 +1036,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       to: nextChainId,
       address: this.currentAddress
     });
-    
-    // Update current chain ID AFTER capturing the previous value
-    this.currentChainId = nextChainId;
 
     try {
       // Emit chain change event with the new chain ID
+      // The chain() method will update this.currentChainId (line 390)
       // The shouldTrack() method will handle whether to track based on excludeChains
       // Chain transitions are always tracked to capture network switching behavior
       return this.chain({
@@ -1049,7 +1047,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         address: this.currentAddress,
       }, {
         // Include previous chain ID in properties for better analytics
-        ...(previousChainId && { previousChainId })
+        // Use !== undefined to preserve chain ID 0 (valid fallback value)
+        ...(previousChainId !== undefined && { previousChainId })
       });
     } catch (error) {
       logger.error("OnChainChanged: Failed to emit chain event:", error);
