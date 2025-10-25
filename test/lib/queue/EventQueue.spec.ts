@@ -85,6 +85,7 @@ describe("EventQueue Deduplication", () => {
       await eventQueue.enqueue(event1);
       expect(loggerLogStub.calledOnce).to.be.true;
       expect(loggerWarnStub.called).to.be.false;
+      expect((eventQueue as any).queue.length).to.equal(1);
       
       // Enqueue duplicate event - should be blocked
       await eventQueue.enqueue(event2);
@@ -94,6 +95,8 @@ describe("EventQueue Deduplication", () => {
       expect(loggerWarnStub.firstCall.args[0]).to.include("Duplicate event detected");
       // Only one "Event enqueued" log (first event only)
       expect(loggerLogStub.calledOnce).to.be.true;
+      // Queue should still only have one event
+      expect((eventQueue as any).queue.length).to.equal(1);
     });
 
     it("should allow different events with different properties", async () => {
@@ -266,6 +269,46 @@ describe("EventQueue Deduplication", () => {
       // Second event should be blocked as duplicate (same hash)
       expect(loggerWarnStub.calledOnce).to.be.true;
       expect(loggerLogStub.calledOnce).to.be.true;
+    });
+
+    it("should allow events after 60s deduplication window expires", async () => {
+      // This test verifies that the same event CAN be sent again after 60s
+      // To properly test this, we need to mock Date.now() to simulate time passing
+      
+      const event1 = createMockEvent({
+        event: "test_event",
+        original_timestamp: "2025-01-01T10:30:00.000Z",
+      });
+
+      // Stub Date.now() to control time
+      let currentTime = new Date("2025-01-01T10:30:00.000Z").getTime();
+      const dateNowStub = sinon.stub(Date, 'now').callsFake(() => currentTime);
+
+      // Enqueue first event at time T
+      await eventQueue.enqueue(event1);
+      expect(loggerLogStub.calledOnce).to.be.true;
+      expect(loggerWarnStub.called).to.be.false;
+      expect((eventQueue as any).queue.length).to.equal(1);
+
+      // Try to enqueue duplicate immediately - should be blocked
+      await eventQueue.enqueue(event1);
+      expect(loggerWarnStub.calledOnce).to.be.true;
+      expect(loggerLogStub.calledOnce).to.be.true; // Still only one
+      expect((eventQueue as any).queue.length).to.equal(1);
+
+      // Advance time by 61 seconds (past the 60s window)
+      currentTime += 61 * 1000;
+      loggerLogStub.resetHistory();
+      loggerWarnStub.resetHistory();
+
+      // Now try to enqueue the same event again - should be allowed
+      await eventQueue.enqueue(event1);
+      expect(loggerWarnStub.called).to.be.false; // No duplicate warning
+      expect(loggerLogStub.calledOnce).to.be.true; // Event enqueued
+      expect((eventQueue as any).queue.length).to.equal(2); // Both events in queue
+
+      // Restore the stub
+      dateNowStub.restore();
     });
   });
 

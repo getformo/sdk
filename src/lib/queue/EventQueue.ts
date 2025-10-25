@@ -108,12 +108,11 @@ export class EventQueue implements IEventQueue {
   /**
    * Generate a unique message ID for deduplication
    * Uses second-level precision for better granularity while still catching rapid duplicates
-   * Returns both the hash and the event's timestamp for consistent time-based deduplication
+   * Hash is based on event data + timestamp, allowing same event at different times to be distinguished
    */
-  private async generateMessageId(event: IFormoEvent): Promise<{ hash: string; timestamp: number }> {
+  private async generateMessageId(event: IFormoEvent): Promise<string> {
     // Format timestamp to second precision (YYYY-MM-DD HH:mm:ss) for better deduplication
     const date = new Date(event.original_timestamp);
-    const eventTimestamp = date.getTime(); // Get timestamp in milliseconds
     
     const formattedTimestamp = 
       date.getUTCFullYear() + "-" +
@@ -125,15 +124,13 @@ export class EventQueue implements IEventQueue {
     
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
-    const hashValue = await hash(eventString);
-    
-    return { hash: hashValue, timestamp: eventTimestamp };
+    return await hash(eventString);
   }
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
-    const { hash: message_id } = await this.generateMessageId(event);
+    const message_id = await this.generateMessageId(event);
     // check if the message already exists within the deduplication window
     // Deduplication is based on hash equality + real-time window (60s since first seen)
     if (await this.isDuplicate(message_id)) {
@@ -272,6 +269,7 @@ export class EventQueue implements IEventQueue {
     // Clean up old hashes based on actual elapsed time (Date.now())
     // This handles out-of-order events correctly - we clean up based on real time passage
     // not based on event timestamps which may arrive out of order
+    // Note: We collect hashes to delete first to avoid modifying Map during iteration
     const hashesToDelete: string[] = [];
     this.payloadHashes.forEach((storedTimestamp, hash) => {
       // storedTimestamp is when we first saw this hash (Date.now() at storage time)
