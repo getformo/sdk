@@ -310,6 +310,34 @@ describe("EventQueue Deduplication", () => {
       // Restore the stub
       dateNowStub.restore();
     });
+
+    it("should clean up old hashes during flush to prevent memory leaks", async () => {
+      // This test verifies that cleanup happens during flush even when no events arrive
+      const event1 = createMockEvent({
+        event: "test_event",
+        original_timestamp: "2025-01-01T10:30:00.000Z",
+      });
+
+      // Stub Date.now() to control time
+      let currentTime = new Date("2025-01-01T10:30:00.000Z").getTime();
+      const dateNowStub = sinon.stub(Date, 'now').callsFake(() => currentTime);
+
+      // Enqueue event and verify hash is stored
+      await eventQueue.enqueue(event1);
+      expect((eventQueue as any).payloadHashes.size).to.equal(1);
+
+      // Advance time by 61 seconds (past the 60s window)
+      currentTime += 61 * 1000;
+
+      // Trigger flush - should clean up old hashes even with no events in queue
+      await (eventQueue as any).flush();
+
+      // Verify hash was cleaned up
+      expect((eventQueue as any).payloadHashes.size).to.equal(0);
+
+      // Restore the stub
+      dateNowStub.restore();
+    });
   });
 
   describe("Message ID Generation", () => {

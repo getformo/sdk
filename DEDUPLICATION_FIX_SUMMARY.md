@@ -6,7 +6,7 @@ Users were experiencing an excess of custom events being sent by the Formo Analy
 
 ## Root Cause Analysis
 
-The SDK's deduplication mechanism had **three critical bugs**:
+The SDK's deduplication mechanism had **four critical bugs**:
 
 ### Bug #1: Hash Cleared on Every Flush ❌
 ```typescript
@@ -49,6 +49,30 @@ isDuplicate(eventId, eventTimestamp) {
 10:31:05 → Event B arrives (timestamp: 10:30:00) ← Older!
            Cleanup uses 10:30:00, deletes hashes < 09:29:00
            But should keep hashes until 09:30:00 based on Event A!
+```
+
+### Bug #4: Memory Leak - No Cleanup Without Events ❌
+```typescript
+// BEFORE: Cleanup only in isDuplicate()
+private async isDuplicate(eventId: string): Promise<boolean> {
+  // Clean up old hashes...
+  // But this only runs when NEW events arrive!
+}
+
+async flush() {
+  // No cleanup here!
+}
+```
+**Impact**: If events stop arriving, expired hashes are never removed from memory. In long-running applications with sporadic event activity, this could accumulate thousands of expired hashes, causing a memory leak.
+
+**Example**:
+```
+10:30:00 → Event arrives, hash stored
+10:30:30 → Event arrives, hash stored
+10:31:00 → Last event arrives, hash stored
+... 2 hours pass with no events ...
+           All 3 hashes still in memory! ❌
+           Should have been cleaned up after 60s
 ```
 
 ## Solution Architecture
@@ -105,7 +129,10 @@ async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
 
 #### 3. Cleanup & Storage (Memory Management)
 ```typescript
-private async isDuplicate(eventId: string): Promise<boolean> {
+/**
+ * Separate cleanup method that can be called from multiple places
+ */
+private cleanupOldHashes(): void {
   const now = Date.now();
   
   // CLEANUP: Remove old hashes based on REAL elapsed time
@@ -116,6 +143,13 @@ private async isDuplicate(eventId: string): Promise<boolean> {
     }
   });
   hashesToDelete.forEach(hash => this.payloadHashes.delete(hash));
+}
+
+private async isDuplicate(eventId: string): Promise<boolean> {
+  const now = Date.now();
+  
+  // CLEANUP: Clean up old hashes to prevent memory leaks
+  this.cleanupOldHashes();
   
   // CHECK: Is this hash in recent memory?
   if (this.payloadHashes.has(eventId)) {
@@ -132,19 +166,35 @@ private async isDuplicate(eventId: string): Promise<boolean> {
 ```
 
 **Key Points**:
+- Cleanup extracted to separate `cleanupOldHashes()` method
 - Cleanup based on `Date.now()` (real time elapsed)
 - Storage uses `Date.now()` (when we first saw it)
 - Deduplication window = 60 seconds of real time since first seen
 - Hash map is **never cleared** - only time-based cleanup
 
-#### 4. No More Clearing on Flush ✅
+#### 4. Periodic Cleanup on Flush ✅
 ```typescript
-async flush() {
+async flush(callback?: (...args: any) => void) {
+  // ... clear timer ...
+  
+  // CLEANUP: Run periodic cleanup to prevent memory leaks
+  // This ensures cleanup happens even when no new events arrive
+  this.cleanupOldHashes();
+  
+  if (!this.queue.length) {
+    return Promise.resolve();
+  }
+  
   // ... send events ...
-  // this.payloadHashes.clear(); ← REMOVED!
-  // Hashes now persist and are cleaned up based on age only
+  // Note: payloadHashes is NOT cleared - only time-based cleanup
 }
 ```
+
+**Key Points**:
+- Cleanup runs on every flush cycle (default: every 10 seconds)
+- Prevents memory leaks in long-running apps with sporadic events
+- No additional timers needed - leverages existing flush interval
+- Works even when queue is empty
 
 ## What Changed
 
@@ -157,6 +207,7 @@ async flush() {
 | **Storage time source** | ❌ Inconsistent | ✅ **Date.now() (real time)** |
 | **Deduplication window** | ❌ Broken across flushes | ✅ **60s real-time window** |
 | **Out-of-order events** | ❌ Broken | ✅ **Handled correctly** |
+| **Memory leak prevention** | ❌ No cleanup without events | ✅ **Periodic cleanup on flush** |
 | **Test coverage** | ❌ No assertions | ✅ **Comprehensive tests** |
 
 ## How It Works
@@ -246,15 +297,18 @@ Comprehensive test suite added with **proper assertions**:
 5. ✅ **Out-of-order events** - Older events after newer
 6. ✅ **Window expiration** - Events allowed after 60s
 7. ✅ **Hash cleanup** - Old hashes removed
-8. ✅ **Queue length assertions** - Verify actual queue state
-9. ✅ **Real-world scenarios** - Transaction lifecycles
+8. ✅ **Memory leak prevention** - Cleanup during flush even with no events
+9. ✅ **Queue length assertions** - Verify actual queue state
+10. ✅ **Real-world scenarios** - Transaction lifecycles
 
 ## Files Modified
 
 ### Implementation
 - `src/lib/queue/EventQueue.ts` - Core deduplication logic
   - Simplified `generateMessageId()` to return just the hash
-  - Modified `isDuplicate()` to use `Date.now()` for cleanup
+  - Extracted cleanup logic into separate `cleanupOldHashes()` method
+  - Modified `isDuplicate()` to use `cleanupOldHashes()` 
+  - Modified `flush()` to call `cleanupOldHashes()` periodically
   - Removed `this.payloadHashes.clear()` from `flush()`
   - Added detailed logging for duplicate detection
 
@@ -264,6 +318,7 @@ Comprehensive test suite added with **proper assertions**:
   - Added queue length assertions
   - Added window expiration test with `Date.now()` mock
   - Added out-of-order event tests
+  - Added memory leak prevention test (cleanup during flush)
   - Added real-world scenario tests
 
 ## Build Status
@@ -298,6 +353,7 @@ Comprehensive test suite added with **proper assertions**:
 2. **Window = Real Time**: 60 seconds since we first saw the hash
 3. **Cleanup = Memory Management**: Remove hashes after 60s of real time
 4. **Never Clear Hash Map**: Only time-based cleanup, no manual clearing
+5. **Periodic Cleanup**: Runs on flush to prevent memory leaks
 
 ## Deduplication Semantics
 
@@ -312,7 +368,14 @@ This means:
 
 ---
 
+## All Four Bugs Fixed ✅
+
+1. ✅ **Bug #1 - Hash Cleared on Flush**: Hash map now preserved, cleaned only by time
+2. ✅ **Bug #2 - Timing Inconsistency**: Cleanup uses `Date.now()` consistently
+3. ✅ **Bug #3 - Out-of-Order Events**: Cleanup based on real time, not event timestamps
+4. ✅ **Bug #4 - Memory Leak**: Periodic cleanup on flush prevents hash accumulation
+
 **Status**: ✅ **PRODUCTION READY**
 
-All critical issues identified and fixed. Comprehensive test coverage added. Ready for deployment.
+All critical issues identified and fixed. Comprehensive test coverage added. Memory leak prevention implemented. Ready for deployment.
 

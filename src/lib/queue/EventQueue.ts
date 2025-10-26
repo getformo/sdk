@@ -176,6 +176,10 @@ export class EventQueue implements IEventQueue {
       this.timer = null;
     }
 
+    // Clean up old hashes periodically during flush to prevent memory leaks
+    // This ensures cleanup happens even when no new events arrive
+    this.cleanupOldHashes();
+
     if (!this.queue.length) {
       callback();
       return Promise.resolve();
@@ -193,7 +197,7 @@ export class EventQueue implements IEventQueue {
     const items = this.queue.splice(0, this.flushAt);
     
     // Note: We no longer clear payloadHashes on flush to maintain deduplication across flush cycles
-    // Old hashes are cleaned up automatically in isDuplicate() based on DEDUPLICATION_WINDOW_MS
+    // Old hashes are cleaned up periodically in cleanupOldHashes() based on DEDUPLICATION_WINDOW_MS
     
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
@@ -256,14 +260,11 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
-   * Check if an event is a duplicate and clean up old hashes
-   * Events are considered duplicates if they have the same hash within the deduplication window
-   * The deduplication window is 60 seconds of real time (since we first saw the event)
-   * 
-   * @param eventId The hash of the event (generated from event.original_timestamp + event data)
-   * @returns true if duplicate (should be blocked), false otherwise
+   * Clean up old hashes that are outside the deduplication window
+   * This prevents memory leaks by removing hashes we no longer need to track
+   * Called both during duplicate checks and periodic flush cycles
    */
-  private async isDuplicate(eventId: string): Promise<boolean> {
+  private cleanupOldHashes(): void {
     const now = Date.now();
     
     // Clean up old hashes based on actual elapsed time (Date.now())
@@ -278,9 +279,23 @@ export class EventQueue implements IEventQueue {
       }
     });
     hashesToDelete.forEach(hash => this.payloadHashes.delete(hash));
+  }
+
+  /**
+   * Check if an event is a duplicate
+   * Events are considered duplicates if they have the same hash within the deduplication window
+   * The deduplication window is 60 seconds of real time (since we first saw the event)
+   * 
+   * @param eventId The hash of the event (generated from event.original_timestamp + event data)
+   * @returns true if duplicate (should be blocked), false otherwise
+   */
+  private async isDuplicate(eventId: string): Promise<boolean> {
+    const now = Date.now();
+    
+    // Clean up old hashes to prevent memory leaks
+    this.cleanupOldHashes();
     
     // Check if this event already exists within the deduplication window
-    // Compare using event timestamps to detect true duplicates
     if (this.payloadHashes.has(eventId)) {
       const storedAt = this.payloadHashes.get(eventId)!;
       const elapsedRealTime = now - storedAt;
