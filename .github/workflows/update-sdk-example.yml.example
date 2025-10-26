@@ -1,0 +1,70 @@
+# Example workflow for automating Formo SDK updates in your project
+# Copy this file to your project's .github/workflows/ directory
+# Rename to remove the .example extension
+
+name: Update Formo SDK
+
+on:
+  # Run weekly on Monday at midnight
+  schedule:
+    - cron: '0 0 * * 1'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'SDK version to install (e.g., 1.20.0 or latest)'
+        required: false
+        default: 'latest'
+
+jobs:
+  update-sdk:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download update script
+        run: |
+          mkdir -p scripts
+          curl -o scripts/update-formo-sdk.sh \
+            https://raw.githubusercontent.com/getformo/sdk/main/scripts/update-formo-sdk.sh
+          chmod +x scripts/update-formo-sdk.sh
+      
+      - name: Update SDK
+        run: |
+          VERSION="${{ github.event.inputs.version || 'latest' }}"
+          ./scripts/update-formo-sdk.sh $VERSION
+      
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: 'chore: update Formo Analytics SDK'
+          title: 'Update Formo Analytics SDK'
+          body: |
+            ## 📦 Formo SDK Update
+            
+            This PR updates the self-hosted Formo Analytics SDK to the latest version.
+            
+            ### Changes
+            - Updated SDK bundle
+            - Updated SRI hash
+            - Updated version documentation
+            
+            ### Testing
+            - [ ] Verify SDK loads correctly
+            - [ ] Test analytics tracking
+            - [ ] Check browser console for errors
+            
+            ### Deployment
+            After merging, deploy the changes to update the SDK in production.
+          branch: chore/update-formo-sdk
+          delete-branch: true
+      
+      - name: Enable Auto-merge
+        if: github.event_name == 'schedule'
+        run: |
+          echo "Auto-merge can be configured here if desired"
+          # gh pr merge --auto --squash ${{ steps.create-pr.outputs.pull-request-number }}
+
