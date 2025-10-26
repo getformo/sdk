@@ -1088,32 +1088,35 @@ export class FormoAnalytics implements IFormoAnalytics {
     const nextChainId = await this.getCurrentChainId(provider);
     const wasDisconnected = !this.currentAddress;
 
+    // CRITICAL: Always update state regardless of whether connect tracking is enabled
+    // This ensures disconnect events will have valid address/chainId values
     this.currentAddress = address;
     this.currentChainId = nextChainId;
 
-    // Emit connect event
+    // Conditionally emit connect event based on tracking configuration
     const providerInfo = this.getProviderInfo(provider);
 
-    logger.info(
-      "OnAccountsChanged: Detected wallet connection, emitting connect event",
-      {
-        chainId: nextChainId,
-        address,
-        wasDisconnected,
-        providerName: providerInfo.name,
-        rdns: providerInfo.rdns,
-        hasChainId: !!nextChainId,
-      }
-    );
-
     const effectiveChainId = nextChainId || 0;
-    if (effectiveChainId === 0) {
-      logger.info(
-        "OnAccountsChanged: Using fallback chainId 0 for connect event"
-      );
-    }
-
+    
     if (this.isWalletAutocaptureEnabled("connect")) {
+      logger.info(
+        "OnAccountsChanged: Detected wallet connection, emitting connect event",
+        {
+          chainId: nextChainId,
+          address,
+          wasDisconnected,
+          providerName: providerInfo.name,
+          rdns: providerInfo.rdns,
+          hasChainId: !!nextChainId,
+        }
+      );
+
+      if (effectiveChainId === 0) {
+        logger.info(
+          "OnAccountsChanged: Using fallback chainId 0 for connect event"
+        );
+      }
+
       this.connect(
         {
           chainId: effectiveChainId,
@@ -1129,6 +1132,16 @@ export class FormoAnalytics implements IFormoAnalytics {
           error
         );
       });
+    } else {
+      logger.info(
+        "OnAccountsChanged: Connect tracking disabled, state updated without emitting event",
+        {
+          chainId: nextChainId,
+          address,
+          wasDisconnected,
+          providerName: providerInfo.name,
+        }
+      );
     }
   }
 
@@ -1255,35 +1268,38 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Check if this provider is the currently active one
         const isActiveProvider = this._provider === provider;
 
-        // Only update global state (chainId/address) from the active provider
+        // CRITICAL: Always update state from active provider regardless of tracking config
+        // This ensures disconnect events will have valid address/chainId values
         if (isActiveProvider) {
           this.currentChainId = chainId;
           this.currentAddress =
             this.validateAndChecksumAddress(address) || undefined;
         }
+        
+        // Conditionally emit connect event based on tracking configuration
         if (isActiveProvider && this.currentAddress) {
           const providerInfo = this.getProviderInfo(provider);
-
-          logger.info(
-            "OnConnected: Detected wallet connection, emitting connect event",
-            {
-              chainId,
-              wasDisconnected,
-              providerName: providerInfo.name,
-              rdns: providerInfo.rdns,
-              hasChainId: !!chainId,
-              isActiveProvider,
-            }
-          );
-
           const effectiveChainId = chainId || 0;
-          if (effectiveChainId === 0) {
-            logger.info(
-              "OnConnected: Using fallback chainId 0 for connect event"
-            );
-          }
 
           if (this.isWalletAutocaptureEnabled("connect")) {
+            logger.info(
+              "OnConnected: Detected wallet connection, emitting connect event",
+              {
+                chainId,
+                wasDisconnected,
+                providerName: providerInfo.name,
+                rdns: providerInfo.rdns,
+                hasChainId: !!chainId,
+                isActiveProvider,
+              }
+            );
+
+            if (effectiveChainId === 0) {
+              logger.info(
+                "OnConnected: Using fallback chainId 0 for connect event"
+              );
+            }
+
             this.connect(
               {
                 chainId: effectiveChainId,
@@ -1299,6 +1315,16 @@ export class FormoAnalytics implements IFormoAnalytics {
                 error
               );
             });
+          } else {
+            logger.info(
+              "OnConnected: Connect tracking disabled, state updated without emitting event",
+              {
+                chainId,
+                address,
+                wasDisconnected,
+                providerName: providerInfo.name,
+              }
+            );
           }
         } else if (address && !isActiveProvider) {
           const providerInfo = this.getProviderInfo(provider);
