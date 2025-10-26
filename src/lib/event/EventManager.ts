@@ -25,13 +25,19 @@ class EventManager implements IEventManager {
    * Consumes a new incoming event
    * @param event Incoming event data
    */
-  addEvent(event: APIEvent, address?: Address, userId?: string): void {
+  async addEvent(
+    event: APIEvent,
+    address?: Address,
+    userId?: string
+  ): Promise<void> {
     const { callback, ..._event } = event;
-    const formoEvent = this.eventFactory.create(_event, address, userId);
-    
+    const formoEvent = await this.eventFactory.create(_event, address, userId);
+
     // Check if the final event has a blocked address - don't queue it
     if (formoEvent.address && isBlockedAddress(formoEvent.address)) {
-      logger.warn(`Event blocked: Address ${formoEvent.address} is in the blocked list and cannot emit events`);
+      logger.warn(
+        `Event blocked: Address ${formoEvent.address} is in the blocked list and cannot emit events`
+      );
       return;
     }
 

@@ -60,19 +60,21 @@ interface WalletProviderFlags {
   isPhantom?: boolean;
 }
 
-
 /**
  * Constants for provider switching reasons
  */
 const PROVIDER_SWITCH_REASONS = {
   ADDRESS_MISMATCH: "Address mismatch indicates wallet switch",
   NO_ACCOUNTS: "Current provider has no accounts",
-  CHECK_FAILED: "Could not check current provider accounts"
+  CHECK_FAILED: "Could not check current provider accounts",
 } as const;
 
-export class FormoAnalytics implements IFormoAnalytics {  
+export class FormoAnalytics implements IFormoAnalytics {
   private _provider?: EIP1193Provider;
-  private _providerListenersMap: Map<EIP1193Provider, Record<string, (...args: unknown[]) => void>> = new Map();
+  private _providerListenersMap: Map<
+    EIP1193Provider,
+    Record<string, (...args: unknown[]) => void>
+  > = new Map();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   /**
@@ -80,7 +82,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * This array contains all available providers with their metadata
    */
   private _providers: readonly EIP6963ProviderDetail[] = [];
-  
+
   /**
    * Set of providers that have been tracked with event listeners
    * This is separate from _providers because:
@@ -90,13 +92,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * - A provider can be tracked but later removed from discovery
    */
   private _trackedProviders: Set<EIP1193Provider> = new Set();
-  
+
   // Cache for injected provider detection to avoid redundant operations
   private _injectedProviderDetail?: EIP6963ProviderDetail;
-  
+
   // Flag to prevent concurrent processing of accountsChanged events
   private _processingAccountsChanged: boolean = false;
-  
+
   // Set to efficiently track seen providers for deduplication and O(1) lookup
   private _seenProviders: Set<EIP1193Provider> = new Set();
 
@@ -125,9 +127,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Basic validation: ensure provider exists and has required methods
     return (
       provider &&
-      typeof provider.request === 'function' &&
-      typeof provider.on === 'function' &&
-      typeof provider.removeListener === 'function'
+      typeof provider.request === "function" &&
+      typeof provider.on === "function" &&
+      typeof provider.removeListener === "function"
     );
   }
 
@@ -179,10 +181,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     const optProvider = options.provider as EIP1193Provider | undefined;
     if (optProvider) {
       provider = optProvider;
-    } else if (typeof window !== 'undefined' && window.ethereum) {
+    } else if (typeof window !== "undefined" && window.ethereum) {
       provider = window.ethereum;
     }
-    
+
     if (provider) {
       this.trackProvider(provider);
     }
@@ -274,7 +276,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentChainId = chainId;
     const checksummedAddress = this.validateAndChecksumAddress(address);
     if (!checksummedAddress) {
-      logger.warn(`Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`);
+      logger.warn(
+        `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`
+      );
       return;
     }
     this.currentAddress = checksummedAddress;
@@ -313,13 +317,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     const address = params?.address || this.currentAddress;
 
     // Get provider info for the disconnect event
-    const providerInfo = this._provider ? this.getProviderInfo(this._provider) : null;
-    
-    logger.info("Disconnect: Emitting disconnect event with:", { 
-      chainId, 
-      address, 
+    const providerInfo = this._provider
+      ? this.getProviderInfo(this._provider)
+      : null;
+
+    logger.info("Disconnect: Emitting disconnect event with:", {
+      chainId,
+      address,
       providerName: providerInfo?.name,
-      rdns: providerInfo?.rdns 
+      rdns: providerInfo?.rdns,
     });
 
     // Always emit disconnect event, even if chainId or address are missing
@@ -327,11 +333,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     const disconnectProperties = {
       ...(providerInfo && {
         providerName: providerInfo.name,
-        rdns: providerInfo.rdns
+        rdns: providerInfo.rdns,
       }),
-      ...properties
+      ...properties,
     };
-    
+
     await this.trackEvent(
       EventType.DISCONNECT,
       {
@@ -346,7 +352,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.currentAddress = undefined;
     this.currentChainId = undefined;
     this.clearActiveProvider();
-    logger.info("Wallet disconnected: Cleared currentAddress, currentChainId, and provider");    
+    logger.info(
+      "Wallet disconnected: Cleared currentAddress, currentChainId, and provider"
+    );
   }
 
   /**
@@ -540,10 +548,21 @@ export class FormoAnalytics implements IFormoAnalytics {
                 validAddress,
                 rdns: providerDetail.info.rdns,
                 providerName: providerDetail.info.name,
-                isAlreadyIdentified: validAddress ? this.session.isWalletIdentified(validAddress, providerDetail.info.rdns) : false
+                isAlreadyIdentified: validAddress
+                  ? this.session.isWalletIdentified(
+                      validAddress,
+                      providerDetail.info.rdns
+                    )
+                  : false,
               });
-              
-              if (validAddress && !this.session.isWalletIdentified(validAddress, providerDetail.info.rdns)) {
+
+              if (
+                validAddress &&
+                !this.session.isWalletIdentified(
+                  validAddress,
+                  providerDetail.info.rdns
+                )
+              ) {
                 logger.info(
                   "Auto-identifying",
                   validAddress,
@@ -600,20 +619,26 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Check for duplicate identify events in this session
       // Handle both cases: with rdns (address:rdns) and without rdns (address only)
-      const isAlreadyIdentified = validAddress ? this.session.isWalletIdentified(validAddress, rdns || '') : false;
-      
+      const isAlreadyIdentified = validAddress
+        ? this.session.isWalletIdentified(validAddress, rdns || "")
+        : false;
+
       logger.debug("Identify: Checking deduplication", {
         validAddress,
         rdns,
         providerName,
         hasValidAddress: !!validAddress,
         hasRdns: !!rdns,
-        isAlreadyIdentified
+        isAlreadyIdentified,
       });
 
       if (isAlreadyIdentified) {
         logger.info(
-          `Identify: Wallet ${providerName || 'Unknown'} with address ${validAddress} already identified in this session (rdns: ${rdns || 'empty'})`
+          `Identify: Wallet ${
+            providerName || "Unknown"
+          } with address ${validAddress} already identified in this session (rdns: ${
+            rdns || "empty"
+          })`
         );
         return;
       }
@@ -621,7 +646,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Mark as identified before emitting the event
       // Mark even if rdns is empty to prevent duplicate empty identifies
       if (validAddress) {
-        this.session.markWalletIdentified(validAddress, rdns || '');
+        this.session.markWalletIdentified(validAddress, rdns || "");
       }
 
       await this.trackEvent(
@@ -713,12 +738,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public optOutTracking(): void {
     logger.info("Opting out of tracking");
-    
+
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
-    setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");    
+    setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
     this.reset();
-    
+
     logger.info("Successfully opted out of tracking");
   }
 
@@ -729,10 +754,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public optInTracking(): void {
     logger.info("Opting back into tracking");
-    
+
     // Remove opt-out flag
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
-    
+
     logger.info("Successfully opted back into tracking");
   }
 
@@ -743,7 +768,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   public hasOptedOutTracking(): boolean {
     return getConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY) === "true";
   }
-
 
   /*
     SDK tracking and event listener functions
@@ -764,7 +788,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.registerConnectListener(provider);
       this.registerRequestListeners(provider);
       this.registerDisconnectListener(provider);
-      
+
       // Only add to tracked providers after all listeners are successfully registered
       this._trackedProviders.add(provider);
     } catch (error) {
@@ -775,13 +799,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   private trackProviders(providers: readonly EIP6963ProviderDetail[]): void {
     try {
       for (const eip6963ProviderDetail of providers) {
-        const provider = eip6963ProviderDetail?.provider as EIP1193Provider | undefined;
+        const provider = eip6963ProviderDetail?.provider as
+          | EIP1193Provider
+          | undefined;
         if (provider && !this._trackedProviders.has(provider)) {
           this.trackProvider(provider);
         }
       }
     } catch (error) {
-      logger.error("Failed to track EIP-6963 providers during initialization:", error);
+      logger.error(
+        "Failed to track EIP-6963 providers during initialization:",
+        error
+      );
     }
   }
 
@@ -804,14 +833,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.addProviderListener(provider, "accountsChanged", listener);
   }
 
-  private async onAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
+  private async onAccountsChanged(
+    provider: EIP1193Provider,
+    accounts: string[]
+  ): Promise<void> {
     logger.info("onAccountsChanged", accounts);
 
     // Prevent concurrent processing of accountsChanged events to avoid race conditions
     if (this._processingAccountsChanged) {
-      logger.debug("OnAccountsChanged: Already processing accountsChanged, skipping", {
-        provider: this.getProviderInfo(provider).name
-      });
+      logger.debug(
+        "OnAccountsChanged: Already processing accountsChanged, skipping",
+        {
+          provider: this.getProviderInfo(provider).name,
+        }
+      );
       return;
     }
 
@@ -834,123 +869,154 @@ export class FormoAnalytics implements IFormoAnalytics {
    * If the accounts array is empty and the provider is the active provider, this method triggers
    * a disconnect flow. Otherwise, it updates the state to reflect the new accounts as needed.
    */
-  private async _handleAccountsChanged(provider: EIP1193Provider, accounts: string[]): Promise<void> {
-
+  private async _handleAccountsChanged(
+    provider: EIP1193Provider,
+    accounts: string[]
+  ): Promise<void> {
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
       if (this._provider === provider) {
         logger.info("OnAccountsChanged: Detecting disconnect, current state:", {
           currentAddress: this.currentAddress,
           currentChainId: this.currentChainId,
-          providerMatch: this._provider === provider
+          providerMatch: this._provider === provider,
         });
         try {
           // Pass current state explicitly to ensure we have the data for the disconnect event
           await this.disconnect({
             chainId: this.currentChainId,
-            address: this.currentAddress
+            address: this.currentAddress,
           });
           // Provider remains tracked to allow for reconnection scenarios
         } catch (error) {
-          logger.error("Failed to disconnect provider on accountsChanged", error);
+          logger.error(
+            "Failed to disconnect provider on accountsChanged",
+            error
+          );
           // Don't untrack if disconnect failed to maintain state consistency
         }
       } else {
-        logger.info("OnAccountsChanged: Ignoring disconnect for non-active provider");
+        logger.info(
+          "OnAccountsChanged: Ignoring disconnect for non-active provider"
+        );
       }
       return;
     }
-    
+
     // Validate and checksum the first account address
     const address = this.validateAndChecksumAddress(accounts[0]);
     if (!address) {
       logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
       return;
     }
-    
-    // Handle provider switching: if we have an active provider but a different provider 
+
+    // Handle provider switching: if we have an active provider but a different provider
     // is connecting with accounts, check if the current provider is still connected
     if (this._provider && this._provider !== provider) {
       // Capture current state BEFORE any changes
       const currentStoredAddress = this.currentAddress;
       const newProviderAddress = this.validateAndChecksumAddress(address);
-      
-      logger.info("OnAccountsChanged: Different provider attempting to connect", {
-        activeProvider: this.getProviderInfo(this._provider).name,
-        eventProvider: this.getProviderInfo(provider).name,
-        currentStoredAddress: currentStoredAddress,
-        newProviderAddress: newProviderAddress
-      });
+
+      logger.info(
+        "OnAccountsChanged: Different provider attempting to connect",
+        {
+          activeProvider: this.getProviderInfo(this._provider).name,
+          eventProvider: this.getProviderInfo(provider).name,
+          currentStoredAddress: currentStoredAddress,
+          newProviderAddress: newProviderAddress,
+        }
+      );
 
       // Check if current active provider still has accounts
       try {
         const activeProviderAccounts = await this.getAccounts(this._provider);
         logger.info("OnAccountsChanged: Checking current provider accounts", {
           activeProvider: this.getProviderInfo(this._provider).name,
-          accountsLength: activeProviderAccounts ? activeProviderAccounts.length : 0,
-          accounts: activeProviderAccounts
+          accountsLength: activeProviderAccounts
+            ? activeProviderAccounts.length
+            : 0,
+          accounts: activeProviderAccounts,
         });
-        
+
         if (activeProviderAccounts && activeProviderAccounts.length > 0) {
           // Check if the new provider has a different address - this indicates a real wallet switch
-          if (newProviderAddress && currentStoredAddress && newProviderAddress !== currentStoredAddress) {
-            logger.info("OnAccountsChanged: Different address detected, switching providers despite current provider having accounts", {
-              activeProvider: this.getProviderInfo(this._provider).name,
-              eventProvider: this.getProviderInfo(provider).name,
-              currentAddress: currentStoredAddress,
-              newAddress: newProviderAddress,
-              reason: PROVIDER_SWITCH_REASONS.ADDRESS_MISMATCH
-            });
-            
+          if (
+            newProviderAddress &&
+            currentStoredAddress &&
+            newProviderAddress !== currentStoredAddress
+          ) {
+            logger.info(
+              "OnAccountsChanged: Different address detected, switching providers despite current provider having accounts",
+              {
+                activeProvider: this.getProviderInfo(this._provider).name,
+                eventProvider: this.getProviderInfo(provider).name,
+                currentAddress: currentStoredAddress,
+                newAddress: newProviderAddress,
+                reason: PROVIDER_SWITCH_REASONS.ADDRESS_MISMATCH,
+              }
+            );
+
             // Emit disconnect for the old provider
             await this.disconnect({
               chainId: this.currentChainId,
-              address: this.currentAddress
+              address: this.currentAddress,
             });
-            
+
             // Clear state and let the new provider become active
             this.clearActiveProvider();
           } else {
-            logger.info("OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider", {
-              activeProvider: this.getProviderInfo(this._provider).name,
-              eventProvider: this.getProviderInfo(provider).name,
-              activeProviderAccountsCount: activeProviderAccounts.length,
-              currentAddress: currentStoredAddress,
-              newAddress: newProviderAddress
-            });
+            logger.info(
+              "OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider",
+              {
+                activeProvider: this.getProviderInfo(this._provider).name,
+                eventProvider: this.getProviderInfo(provider).name,
+                activeProviderAccountsCount: activeProviderAccounts.length,
+                currentAddress: currentStoredAddress,
+                newAddress: newProviderAddress,
+              }
+            );
             return;
           }
         } else {
-          logger.info("OnAccountsChanged: Current provider has no accounts, switching to new provider", {
-            oldProvider: this.getProviderInfo(this._provider).name,
-            newProvider: this.getProviderInfo(provider).name,
-            reason: PROVIDER_SWITCH_REASONS.NO_ACCOUNTS
-          });
-          
+          logger.info(
+            "OnAccountsChanged: Current provider has no accounts, switching to new provider",
+            {
+              oldProvider: this.getProviderInfo(this._provider).name,
+              newProvider: this.getProviderInfo(provider).name,
+              reason: PROVIDER_SWITCH_REASONS.NO_ACCOUNTS,
+            }
+          );
+
           // Emit disconnect for the old provider that didn't signal properly
           await this.disconnect({
             chainId: this.currentChainId,
-            address: this.currentAddress
+            address: this.currentAddress,
           });
-          
+
           // Clear state and let the new provider become active
           this.clearActiveProvider();
         }
       } catch (error) {
-        logger.warn("OnAccountsChanged: Could not check current provider accounts, switching to new provider", {
-          error: error instanceof Error ? error.message : String(error),
-          errorType: error instanceof Error ? error.constructor.name : typeof error,
-          oldProvider: this._provider ? this.getProviderInfo(this._provider).name : 'unknown',
-          newProvider: this.getProviderInfo(provider).name,
-          reason: PROVIDER_SWITCH_REASONS.CHECK_FAILED
-        });
-        
+        logger.warn(
+          "OnAccountsChanged: Could not check current provider accounts, switching to new provider",
+          {
+            error: error instanceof Error ? error.message : String(error),
+            errorType:
+              error instanceof Error ? error.constructor.name : typeof error,
+            oldProvider: this._provider
+              ? this.getProviderInfo(this._provider).name
+              : "unknown",
+            newProvider: this.getProviderInfo(provider).name,
+            reason: PROVIDER_SWITCH_REASONS.CHECK_FAILED,
+          }
+        );
+
         // If we can't check the current provider, assume it's disconnected
         await this.disconnect({
           chainId: this.currentChainId,
-          address: this.currentAddress
+          address: this.currentAddress,
         });
-        
+
         this.clearActiveProvider();
       }
     }
@@ -968,35 +1034,46 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Get chain ID and update state
     const nextChainId = await this.getCurrentChainId(provider);
     const wasDisconnected = !this.currentAddress;
-    
+
     this.currentAddress = address;
     this.currentChainId = nextChainId;
-    
+
     // Emit connect event
     const providerInfo = this.getProviderInfo(provider);
-    
-    logger.info("OnAccountsChanged: Detected wallet connection, emitting connect event", {
-      chainId: nextChainId,
-      address,
-      wasDisconnected,
-      providerName: providerInfo.name,
-      rdns: providerInfo.rdns,
-      hasChainId: !!nextChainId
-    });
-    
+
+    logger.info(
+      "OnAccountsChanged: Detected wallet connection, emitting connect event",
+      {
+        chainId: nextChainId,
+        address,
+        wasDisconnected,
+        providerName: providerInfo.name,
+        rdns: providerInfo.rdns,
+        hasChainId: !!nextChainId,
+      }
+    );
+
     const effectiveChainId = nextChainId || 0;
     if (effectiveChainId === 0) {
-      logger.info("OnAccountsChanged: Using fallback chainId 0 for connect event");
+      logger.info(
+        "OnAccountsChanged: Using fallback chainId 0 for connect event"
+      );
     }
-    
-    this.connect({ 
-      chainId: effectiveChainId,
-      address 
-    }, {
-      providerName: providerInfo.name,
-      rdns: providerInfo.rdns
-    }).catch(error => {
-      logger.error("Failed to track connect event during account change:", error);
+
+    this.connect(
+      {
+        chainId: effectiveChainId,
+        address,
+      },
+      {
+        providerName: providerInfo.name,
+        rdns: providerInfo.rdns,
+      }
+    ).catch((error) => {
+      logger.error(
+        "Failed to track connect event during account change:",
+        error
+      );
     });
   }
 
@@ -1008,9 +1085,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.addProviderListener(provider, "chainChanged", listener);
   }
 
-  private async onChainChanged(provider: EIP1193Provider, chainIdHex: string): Promise<void> {
+  private async onChainChanged(
+    provider: EIP1193Provider,
+    chainIdHex: string
+  ): Promise<void> {
     logger.info("onChainChanged", chainIdHex);
-    
+
     const nextChainId = parseChainId(chainIdHex);
 
     // Only handle chain changes for the active provider (or if none is set yet)
@@ -1020,7 +1100,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Chain changes only matter for connected users
     if (!this.currentAddress) {
-      logger.info("OnChainChanged: No current address, user appears disconnected");
+      logger.info(
+        "OnChainChanged: No current address, user appears disconnected"
+      );
       return Promise.resolve();
     }
 
@@ -1028,7 +1110,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (!this._provider) {
       this._provider = provider;
     }
-    
+
     this.currentChainId = nextChainId;
 
     try {
@@ -1056,15 +1138,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("registerDisconnectListener");
     const listener = async (_error?: unknown) => {
       if (this._provider !== provider) return;
-      logger.info("OnDisconnect: Wallet disconnect event received, current state:", {
-        currentAddress: this.currentAddress,
-        currentChainId: this.currentChainId
-      });
+      logger.info(
+        "OnDisconnect: Wallet disconnect event received, current state:",
+        {
+          currentAddress: this.currentAddress,
+          currentChainId: this.currentChainId,
+        }
+      );
       try {
         // Pass current state explicitly to ensure we have the data for the disconnect event
         await this.disconnect({
           chainId: this.currentChainId,
-          address: this.currentAddress
+          address: this.currentAddress,
         });
         // Provider remains tracked to allow for reconnection scenarios
       } catch (e) {
@@ -1076,68 +1161,89 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.addProviderListener(provider, "disconnect", listener);
   }
 
-  private async onConnected(provider: EIP1193Provider, connection: ConnectInfo): Promise<void> {
+  private async onConnected(
+    provider: EIP1193Provider,
+    connection: ConnectInfo
+  ): Promise<void> {
     logger.info("onConnected", connection);
-    
+
     try {
-      if (!connection?.chainId || typeof connection.chainId !== 'string') return;
-      
+      if (!connection?.chainId || typeof connection.chainId !== "string")
+        return;
+
       const chainId = parseChainId(connection.chainId);
       const address = await this.getAddress(provider);
-      
+
       if (chainId && address) {
         // Check if this is a connection event (transition from no address to having an address)
         const wasDisconnected = !this.currentAddress;
-        
+
         // Set provider if none exists
         if (!this._provider) {
           this._provider = provider;
         }
-        
+
         // Only emit connect event for the active provider to avoid duplicates
         // Check if this provider is the currently active one
         const isActiveProvider = this._provider === provider;
-        
+
         // Only update global state (chainId/address) from the active provider
         if (isActiveProvider) {
           this.currentChainId = chainId;
-          this.currentAddress = this.validateAndChecksumAddress(address) || undefined;
+          this.currentAddress =
+            this.validateAndChecksumAddress(address) || undefined;
         }
         if (isActiveProvider && this.currentAddress) {
           const providerInfo = this.getProviderInfo(provider);
-          
-          logger.info("OnConnected: Detected wallet connection, emitting connect event", {
-            chainId,
-            wasDisconnected,
-            providerName: providerInfo.name,
-            rdns: providerInfo.rdns,
-            hasChainId: !!chainId,
-            isActiveProvider
-          });
-          
+
+          logger.info(
+            "OnConnected: Detected wallet connection, emitting connect event",
+            {
+              chainId,
+              wasDisconnected,
+              providerName: providerInfo.name,
+              rdns: providerInfo.rdns,
+              hasChainId: !!chainId,
+              isActiveProvider,
+            }
+          );
+
           const effectiveChainId = chainId || 0;
           if (effectiveChainId === 0) {
-            logger.info("OnConnected: Using fallback chainId 0 for connect event");
+            logger.info(
+              "OnConnected: Using fallback chainId 0 for connect event"
+            );
           }
-          
-          this.connect({ 
-            chainId: effectiveChainId,
-            address 
-          }, {
-            providerName: providerInfo.name,
-            rdns: providerInfo.rdns
-          }).catch(error => {
-            logger.error("Failed to track connect event during provider connection:", error);
+
+          this.connect(
+            {
+              chainId: effectiveChainId,
+              address,
+            },
+            {
+              providerName: providerInfo.name,
+              rdns: providerInfo.rdns,
+            }
+          ).catch((error) => {
+            logger.error(
+              "Failed to track connect event during provider connection:",
+              error
+            );
           });
         } else if (address && !isActiveProvider) {
           const providerInfo = this.getProviderInfo(provider);
-          logger.debug("OnConnected: Skipping connect event for non-active provider", {
-            chainId,
-            providerName: providerInfo.name,
-            rdns: providerInfo.rdns,
-            isActiveProvider,
-            activeProviderInfo: this._provider ? this.getProviderInfo(this._provider) : null
-          });
+          logger.debug(
+            "OnConnected: Skipping connect event for non-active provider",
+            {
+              chainId,
+              providerName: providerInfo.name,
+              rdns: providerInfo.rdns,
+              isActiveProvider,
+              activeProviderInfo: this._provider
+                ? this.getProviderInfo(this._provider)
+                : null,
+            }
+          );
         }
       }
     } catch (e) {
@@ -1148,14 +1254,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   private registerRequestListeners(provider: EIP1193Provider): void {
     logger.info("registerRequestListeners");
     if (!provider) {
-      logger.error("Provider not found for request (signature, transaction) tracking");
+      logger.error(
+        "Provider not found for request (signature, transaction) tracking"
+      );
       return;
     }
 
     // Check if the provider is already wrapped with our SDK's wrapper
     const currentRequest = provider.request as WrappedRequestFunction;
     if (this.isProviderAlreadyWrapped(provider, currentRequest)) {
-      logger.info("Provider already wrapped with our SDK; skipping request wrapping.");
+      logger.info(
+        "Provider already wrapped with our SDK; skipping request wrapping."
+      );
       return;
     }
 
@@ -1171,13 +1281,19 @@ export class FormoAnalytics implements IFormoAnalytics {
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
         // Use current chainId if available, otherwise fetch it
-        const capturedChainId = this.currentChainId || await this.getCurrentChainId(provider);
+        const capturedChainId =
+          this.currentChainId || (await this.getCurrentChainId(provider));
         // Fire-and-forget tracking
         (async () => {
           try {
             this.signature({
               status: SignatureStatus.REQUESTED,
-              ...this.buildSignatureEventPayload(method, params, undefined, capturedChainId),
+              ...this.buildSignatureEventPayload(
+                method,
+                params,
+                undefined,
+                capturedChainId
+              ),
             });
           } catch (e) {
             logger.error("Formo: Failed to track signature request", e);
@@ -1192,10 +1308,18 @@ export class FormoAnalytics implements IFormoAnalytics {
               try {
                 this.signature({
                   status: SignatureStatus.CONFIRMED,
-                  ...this.buildSignatureEventPayload(method, params, response, capturedChainId),
+                  ...this.buildSignatureEventPayload(
+                    method,
+                    params,
+                    response,
+                    capturedChainId
+                  ),
                 });
               } catch (e) {
-                logger.error("Formo: Failed to track signature confirmation", e);
+                logger.error(
+                  "Formo: Failed to track signature confirmation",
+                  e
+                );
               }
             })();
           }
@@ -1208,7 +1332,12 @@ export class FormoAnalytics implements IFormoAnalytics {
               try {
                 this.signature({
                   status: SignatureStatus.REJECTED,
-                  ...this.buildSignatureEventPayload(method, params, undefined, capturedChainId),
+                  ...this.buildSignatureEventPayload(
+                    method,
+                    params,
+                    undefined,
+                    capturedChainId
+                  ),
                 });
               } catch (e) {
                 logger.error("Formo: Failed to track signature rejection", e);
@@ -1228,7 +1357,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       ) {
         (async () => {
           try {
-            const payload = await this.buildTransactionEventPayload(params, provider);
+            const payload = await this.buildTransactionEventPayload(
+              params,
+              provider
+            );
             this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
@@ -1243,7 +1375,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
           (async () => {
             try {
-              const payload = await this.buildTransactionEventPayload(params, provider);
+              const payload = await this.buildTransactionEventPayload(
+                params,
+                provider
+              );
               this.transaction({
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
@@ -1285,7 +1420,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
     wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
-    (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] = wrappedRequest;
+    (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
+      wrappedRequest;
 
     try {
       // Attempt to assign the wrapped request function (rely on try-catch for mutability errors)
@@ -1370,7 +1506,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      this.eventManager.addEvent(
+      await this.eventManager.addEvent(
         {
           type,
           ...payload,
@@ -1395,56 +1531,56 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (this.hasOptedOutTracking()) {
       return false;
     }
-    
-    
+
     // Check if tracking is explicitly provided as a boolean
-    if (typeof this.options.tracking === 'boolean') {
+    if (typeof this.options.tracking === "boolean") {
       return this.options.tracking;
     }
-    
+
     // Handle object configuration with exclusion rules
-    if (this.options.tracking !== null && 
-        typeof this.options.tracking === 'object' && 
-        !Array.isArray(this.options.tracking)) {
-      const { 
+    if (
+      this.options.tracking !== null &&
+      typeof this.options.tracking === "object" &&
+      !Array.isArray(this.options.tracking)
+    ) {
+      const {
         excludeHosts = [],
-        excludePaths = [], 
-        excludeChains = [] 
+        excludePaths = [],
+        excludeChains = [],
       } = this.options.tracking as TrackingOptions;
-      
+
       // Check hostname exclusions - use exact matching
-      if (excludeHosts.length > 0  && typeof window !== 'undefined') {
+      if (excludeHosts.length > 0 && typeof window !== "undefined") {
         const hostname = window.location.hostname;
         if (excludeHosts.includes(hostname)) {
           return false;
         }
       }
-      
+
       // Check path exclusions - use exact matching
-      if (excludePaths.length > 0 && typeof window !== 'undefined') {
+      if (excludePaths.length > 0 && typeof window !== "undefined") {
         const pathname = window.location.pathname;
         if (excludePaths.includes(pathname)) {
           return false;
         }
       }
-      
+
       // Check chainId exclusions
-      if (excludeChains.length > 0 && 
-          this.currentChainId && 
-          excludeChains.includes(this.currentChainId)) {
+      if (
+        excludeChains.length > 0 &&
+        this.currentChainId &&
+        excludeChains.includes(this.currentChainId)
+      ) {
         return false;
       }
-      
+
       // If nothing is excluded, tracking is enabled
       return true;
     }
-    
+
     // Default behavior: track everywhere except localhost
     return !isLocalhost();
   }
-
-
-
 
   /*
     Utility functions
@@ -1455,21 +1591,26 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param provider The provider to get info for
    * @returns Provider information
    */
-  private getProviderInfo(provider: EIP1193Provider): { name: string; rdns: string } {
+  private getProviderInfo(provider: EIP1193Provider): {
+    name: string;
+    rdns: string;
+  } {
     // First check if provider is in our EIP-6963 providers list
-    const eip6963Provider = this._providers.find(p => p.provider === provider);
+    const eip6963Provider = this._providers.find(
+      (p) => p.provider === provider
+    );
     if (eip6963Provider) {
       return {
         name: eip6963Provider.info.name,
-        rdns: eip6963Provider.info.rdns
+        rdns: eip6963Provider.info.rdns,
       };
     }
-    
+
     // Fallback to injected provider detection
     const injectedInfo = this.detectInjectedProviderInfo(provider);
     return {
       name: injectedInfo.name,
-      rdns: injectedInfo.rdns
+      rdns: injectedInfo.rdns,
     };
   }
 
@@ -1485,75 +1626,75 @@ export class FormoAnalytics implements IFormoAnalytics {
     icon: `data:image/${string}`;
   } {
     // Try to detect provider type from common properties
-    let name = 'Injected Provider';
-    let rdns = 'io.injected.provider';
-    
+    let name = "Injected Provider";
+    let rdns = "io.injected.provider";
+
     // Use WalletProviderFlags interface for type safety
     const flags = provider as WalletProviderFlags;
-    
+
     // Check if it's MetaMask
     if (flags.isMetaMask) {
-      name = 'MetaMask';
-      rdns = 'io.metamask';
+      name = "MetaMask";
+      rdns = "io.metamask";
     }
     // Check if it's Coinbase Wallet
     else if (flags.isCoinbaseWallet) {
-      name = 'Coinbase Wallet';
-      rdns = 'com.coinbase.wallet';
+      name = "Coinbase Wallet";
+      rdns = "com.coinbase.wallet";
     }
     // Check if it's WalletConnect
     else if (flags.isWalletConnect) {
-      name = 'WalletConnect';
-      rdns = 'com.walletconnect';
+      name = "WalletConnect";
+      rdns = "com.walletconnect";
     }
     // Check if it's Trust Wallet
     else if (flags.isTrust) {
-      name = 'Trust Wallet';
-      rdns = 'com.trustwallet';
+      name = "Trust Wallet";
+      rdns = "com.trustwallet";
     }
     // Check if it's Brave Wallet
     else if (flags.isBraveWallet) {
-      name = 'Brave Wallet';
-      rdns = 'com.brave.wallet';
+      name = "Brave Wallet";
+      rdns = "com.brave.wallet";
     }
     // Check if it's Phantom
     else if (flags.isPhantom) {
-      name = 'Phantom';
-      rdns = 'app.phantom';
+      name = "Phantom";
+      rdns = "app.phantom";
     }
-    
+
     return {
       name,
       rdns,
-      uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, '-')}`,
-      icon: DEFAULT_PROVIDER_ICON
+      uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, "-")}`,
+      icon: DEFAULT_PROVIDER_ICON,
     };
   }
 
   private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
     let providers = store.getProviders();
-    
+
     store.subscribe((providerDetails) => {
       providers = providerDetails;
-      
+
       // Process newly added providers with proper deduplication
       const newlyAddedDetails = providerDetails.filter((detail) => {
         const provider = detail?.provider;
         return provider && !this._seenProviders.has(provider);
       });
-      
+
       // Add new providers to the array without overwriting existing ones
       for (const detail of newlyAddedDetails) {
         this.safeAddProviderDetail(detail);
       }
-      
+
       // Track listeners for newly discovered providers only
       const newDetails = providerDetails.filter((detail) => {
         const p = detail?.provider as EIP1193Provider | undefined;
         return !!p && !this._trackedProviders.has(p);
       });
-      
+
       if (newDetails.length > 0) {
         this.trackProviders(newDetails);
         // Detect newly discovered wallets (session de-dupes) with error handling
@@ -1565,14 +1706,15 @@ export class FormoAnalytics implements IFormoAnalytics {
           }
         })();
       }
-      
+
       // Clean up providers that are no longer available
       this.cleanupUnavailableProviders();
     });
 
     // Fallback to injected provider if no providers are found
     if (providers.length === 0) {
-      const injected = typeof window !== 'undefined' ? window.ethereum : undefined;
+      const injected =
+        typeof window !== "undefined" ? window.ethereum : undefined;
       if (injected) {
         // If we have already detected and cached the injected provider, and it's the same instance, return the cached result
         if (
@@ -1584,44 +1726,51 @@ export class FormoAnalytics implements IFormoAnalytics {
             this.trackProvider(injected);
           }
           // Merge with existing providers instead of overwriting
-          if (!this._providers.some(existing => existing.provider === injected)) {
-            this._providers = [...this._providers, this._injectedProviderDetail];
+          if (
+            !this._providers.some((existing) => existing.provider === injected)
+          ) {
+            this._providers = [
+              ...this._providers,
+              this._injectedProviderDetail,
+            ];
           }
           return this._providers;
         }
-        
+
         // Re-check if the injected provider is already tracked just before tracking
         if (!this._trackedProviders.has(injected)) {
           this.trackProvider(injected);
         }
-        
+
         // Create a mock EIP6963ProviderDetail for the injected provider
         const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
         const injectedDetail: EIP6963ProviderDetail = {
           provider: injected,
-          info: injectedProviderInfo
+          info: injectedProviderInfo,
         };
-        
+
         // Cache the detected injected provider detail
         this._injectedProviderDetail = injectedDetail;
-        
+
         // Merge with existing providers instead of overwriting
         this.safeAddProviderDetail(injectedDetail);
       }
       return this._providers;
     }
-    
+
     // Initialize providers array with discovered providers, avoiding duplicates
-    const uniqueProviders = providers.filter((detail: EIP6963ProviderDetail) => {
-      const provider = detail?.provider;
-      return provider && !this._seenProviders.has(provider);
-    });
-    
+    const uniqueProviders = providers.filter(
+      (detail: EIP6963ProviderDetail) => {
+        const provider = detail?.provider;
+        return provider && !this._seenProviders.has(provider);
+      }
+    );
+
     // Add to seen providers and instances, ensuring no duplicates in _providers
     for (const detail of uniqueProviders) {
       this.safeAddProviderDetail(detail);
     }
-    
+
     return this._providers;
   }
 
@@ -1729,15 +1878,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     response?: unknown,
     chainId?: number
   ) {
-    const rawAddress = method === "personal_sign"
-      ? (params[1] as Address)
-      : (params[0] as Address);
-    
+    const rawAddress =
+      method === "personal_sign"
+        ? (params[1] as Address)
+        : (params[0] as Address);
+
     const validAddress = this.validateAndChecksumAddress(rawAddress);
     if (!validAddress) {
       throw new Error(`Invalid address in signature payload: ${rawAddress}`);
     }
-    
+
     const basePayload = {
       chainId: chainId ?? this.currentChainId ?? undefined,
       address: validAddress,
@@ -1762,19 +1912,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  private async buildTransactionEventPayload(params: unknown[], provider?: EIP1193Provider) {
+  private async buildTransactionEventPayload(
+    params: unknown[],
+    provider?: EIP1193Provider
+  ) {
     const { data, from, to, value } = params[0] as {
       data: string;
       from: string;
       to: string;
       value: string;
     };
-    
+
     const validAddress = this.validateAndChecksumAddress(from);
     if (!validAddress) {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
-    
+
     return {
       chainId: this.currentChainId || (await this.getCurrentChainId(provider)),
       data,
@@ -1850,7 +2003,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       this.removeProviderListeners(provider);
       this._trackedProviders.delete(provider);
-      
+
       if (this._provider === provider) {
         this.clearActiveProvider();
       }
@@ -1863,7 +2016,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   public getTrackedProvidersCount(): number {
     return this._trackedProviders.size;
   }
-  
+
   /**
    * Get current provider state for debugging
    * @returns Object containing current provider state information
@@ -1881,23 +2034,27 @@ export class FormoAnalytics implements IFormoAnalytics {
       activeProvider: !!this._provider,
     };
   }
-  
+
   /**
    * Clean up providers that are no longer available
    * This helps maintain consistent state and prevents memory leaks
    */
   private cleanupUnavailableProviders(): void {
     // Remove providers that are no longer in the current providers list
-    const currentProviderInstances = new Set(this._providers.map(detail => detail.provider));
-    
+    const currentProviderInstances = new Set(
+      this._providers.map((detail) => detail.provider)
+    );
+
     for (const provider of Array.from(this._trackedProviders)) {
       if (!currentProviderInstances.has(provider)) {
-        logger.info(`Cleaning up unavailable provider: ${provider.constructor.name}`);
+        logger.info(
+          `Cleaning up unavailable provider: ${provider.constructor.name}`
+        );
         this.untrackProvider(provider);
       }
     }
   }
-  
+
   /**
    * Helper method to check if a provider is already wrapped
    * @param provider The provider to check
@@ -1910,13 +2067,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): boolean {
     return !!(
       currentRequest &&
-      typeof currentRequest === 'function' &&
+      typeof currentRequest === "function" &&
       currentRequest[WRAPPED_REQUEST_SYMBOL] &&
-      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] === currentRequest
+      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] ===
+        currentRequest
     );
   }
-
-
 
   /**
    * Handle provider mismatch by switching to the new provider and invalidating old tokens
@@ -1960,8 +2116,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (!provider) return false;
 
     // Check if provider already exists in _providers array
-    const alreadyExists = this._providers.some(existing => existing.provider === provider);
-    
+    const alreadyExists = this._providers.some(
+      (existing) => existing.provider === provider
+    );
+
     if (!alreadyExists) {
       // Add to providers array and mark as seen
       this._providers = [...this._providers, detail];
@@ -2013,14 +2171,15 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
     logger.debug("Session: Checking wallet identification", {
       identifiedKey,
       isIdentified,
-      hasRdns: !!rdns
+      hasRdns: !!rdns,
     });
     return isIdentified;
   }
 
   public markWalletIdentified(address: string, rdns: string): void {
     const identifiedKey = this.generateIdentificationKey(address, rdns);
-    const identifiedWallets = cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
+    const identifiedWallets =
+      cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
     if (!identifiedWallets.includes(identifiedKey)) {
       identifiedWallets.push(identifiedKey);
       const newValue = identifiedWallets.join(",");
@@ -2031,13 +2190,13 @@ class FormoAnalyticsSession implements IFormoAnalyticsSession {
       });
       logger.debug("Session: Marked wallet as identified", {
         identifiedKey,
-        hasRdns: !!rdns
+        hasRdns: !!rdns,
       });
     } else {
       logger.info("Session: Wallet already marked as identified", {
         identifiedKey,
         existingWallets: identifiedWallets,
-        hasRdns: !!rdns
+        hasRdns: !!rdns,
       });
     }
   }
