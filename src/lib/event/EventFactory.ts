@@ -27,27 +27,9 @@ import { version } from "../version";
 import { CHANNEL, VERSION } from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
+import { detectBrowser } from "../browser/browsers";
 
 class EventFactory implements IEventFactory {
-  private cachedIsBrave: boolean | null = null;
-
-  private async isBraveBrowser(): Promise<boolean> {
-    if (this.cachedIsBrave !== null) {
-      return this.cachedIsBrave;
-    }
-
-    try {
-      this.cachedIsBrave =
-        typeof globalThis.navigator?.brave !== "undefined" &&
-        (await globalThis.navigator?.brave?.isBrave());
-      return this.cachedIsBrave;
-    } catch (error) {
-      logger.error("Error resolving Brave detection:", error);
-      this.cachedIsBrave = false;
-      return false;
-    }
-  }
-
   private getTimezone(): string {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -174,11 +156,12 @@ class EventFactory implements IEventFactory {
     context?: IFormoEventContext
   ): Promise<IFormoEventContext> {
     const path = globalThis.location.pathname;
-    let isBraveBrowser = await this.isBraveBrowser();
+    const browserName = await detectBrowser();
     const language = this.getLanguage();
     const timezone = this.getTimezone();
     const location = this.getLocation();
     const library_version = this.getLibraryVersion();
+
     // contextual properties
     const defaultContext = {
       user_agent: globalThis.navigator.userAgent,
@@ -191,7 +174,7 @@ class EventFactory implements IEventFactory {
       page_url: globalThis.location.href,
       library_name: "Formo Web SDK",
       library_version,
-      is_brave_browser: isBraveBrowser,
+      browser: browserName,
     };
 
     const mergedContext = mergeDeepRight(
