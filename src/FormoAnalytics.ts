@@ -906,19 +906,29 @@ export class FormoAnalytics implements IFormoAnalytics {
           currentChainId: this.currentChainId,
           providerMatch: this._provider === provider,
         });
-        try {
-          // Pass current state explicitly to ensure we have the data for the disconnect event
-          await this.disconnect({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
-          });
-          // Provider remains tracked to allow for reconnection scenarios
-        } catch (error) {
-          logger.error(
-            "Failed to disconnect provider on accountsChanged",
-            error
-          );
-          // Don't untrack if disconnect failed to maintain state consistency
+        
+        // Check if disconnect tracking is enabled before emitting event
+        if (this.isWalletAutocaptureEnabled("disconnect")) {
+          try {
+            // Pass current state explicitly to ensure we have the data for the disconnect event
+            await this.disconnect({
+              chainId: this.currentChainId,
+              address: this.currentAddress,
+            });
+            // Provider remains tracked to allow for reconnection scenarios
+          } catch (error) {
+            logger.error(
+              "Failed to disconnect provider on accountsChanged",
+              error
+            );
+            // Don't untrack if disconnect failed to maintain state consistency
+          }
+        } else {
+          logger.info("OnAccountsChanged: Disconnect tracking disabled, clearing state without emitting event");
+          // Still need to clear state even if not tracking the event
+          this.currentAddress = undefined;
+          this.currentChainId = undefined;
+          this.clearActiveProvider();
         }
       } else {
         logger.info(
@@ -981,11 +991,17 @@ export class FormoAnalytics implements IFormoAnalytics {
               }
             );
 
-            // Emit disconnect for the old provider
-            await this.disconnect({
-              chainId: this.currentChainId,
-              address: this.currentAddress,
-            });
+            // Emit disconnect for the old provider if tracking is enabled
+            if (this.isWalletAutocaptureEnabled("disconnect")) {
+              await this.disconnect({
+                chainId: this.currentChainId,
+                address: this.currentAddress,
+              });
+            } else {
+              // Still need to clear state even if not tracking the event
+              this.currentAddress = undefined;
+              this.currentChainId = undefined;
+            }
 
             // Clear state and let the new provider become active
             this.clearActiveProvider();
@@ -1012,11 +1028,17 @@ export class FormoAnalytics implements IFormoAnalytics {
             }
           );
 
-          // Emit disconnect for the old provider that didn't signal properly
-          await this.disconnect({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
-          });
+          // Emit disconnect for the old provider that didn't signal properly if tracking is enabled
+          if (this.isWalletAutocaptureEnabled("disconnect")) {
+            await this.disconnect({
+              chainId: this.currentChainId,
+              address: this.currentAddress,
+            });
+          } else {
+            // Still need to clear state even if not tracking the event
+            this.currentAddress = undefined;
+            this.currentChainId = undefined;
+          }
 
           // Clear state and let the new provider become active
           this.clearActiveProvider();
@@ -1037,10 +1059,16 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
 
         // If we can't check the current provider, assume it's disconnected
-        await this.disconnect({
-          chainId: this.currentChainId,
-          address: this.currentAddress,
-        });
+        if (this.isWalletAutocaptureEnabled("disconnect")) {
+          await this.disconnect({
+            chainId: this.currentChainId,
+            address: this.currentAddress,
+          });
+        } else {
+          // Still need to clear state even if not tracking the event
+          this.currentAddress = undefined;
+          this.currentChainId = undefined;
+        }
 
         this.clearActiveProvider();
       }
@@ -1174,16 +1202,27 @@ export class FormoAnalytics implements IFormoAnalytics {
           currentChainId: this.currentChainId,
         }
       );
-      try {
-        // Pass current state explicitly to ensure we have the data for the disconnect event
-        await this.disconnect({
-          chainId: this.currentChainId,
-          address: this.currentAddress,
-        });
-        // Provider remains tracked to allow for reconnection scenarios
-      } catch (e) {
-        logger.error("Error during disconnect in disconnect listener", e);
-        // Don't untrack if disconnect failed to maintain state consistency
+      
+      // Double-check disconnect tracking is enabled (defensive programming)
+      // Note: This listener should only be registered if tracking is enabled
+      if (this.isWalletAutocaptureEnabled("disconnect")) {
+        try {
+          // Pass current state explicitly to ensure we have the data for the disconnect event
+          await this.disconnect({
+            chainId: this.currentChainId,
+            address: this.currentAddress,
+          });
+          // Provider remains tracked to allow for reconnection scenarios
+        } catch (e) {
+          logger.error("Error during disconnect in disconnect listener", e);
+          // Don't untrack if disconnect failed to maintain state consistency
+        }
+      } else {
+        logger.info("OnDisconnect: Disconnect tracking disabled, clearing state without emitting event");
+        // Still need to clear state even if not tracking the event
+        this.currentAddress = undefined;
+        this.currentChainId = undefined;
+        this.clearActiveProvider();
       }
     };
     provider.on("disconnect", listener);
