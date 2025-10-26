@@ -112,10 +112,59 @@ export interface TrackingOptions {
   excludeChains?: ChainID[];
 }
 
+/**
+ * Configuration options for controlling wallet event autocapture
+ */
+export interface AutocaptureOptions {
+  /**
+   * Enable/disable all wallet event autocapture
+   * When false, no wallet events are tracked and no listeners are registered
+   * @default true
+   */
+  enabled?: boolean;
+  
+  /**
+   * Control which specific wallet events are tracked
+   * All events are enabled by default unless explicitly set to false
+   */
+  events?: {
+    /**
+     * Track wallet connect events
+     * @default true
+     */
+    connect?: boolean;
+    
+    /**
+     * Track wallet disconnect events
+     * @default true
+     */
+    disconnect?: boolean;
+    
+    /**
+     * Track wallet signature events (personal_sign, eth_signTypedData_v4)
+     * @default true
+     */
+    signature?: boolean;
+    
+    /**
+     * Track wallet transaction events (eth_sendTransaction)
+     * @default true
+     */
+    transaction?: boolean;
+    
+    /**
+     * Track wallet chain change events
+     * @default true
+     */
+    chain?: boolean;
+  };
+}
+
 
 export interface Options {
   provider?: EIP1193Provider;
   tracking?: boolean | TrackingOptions;
+  autocapture?: boolean | AutocaptureOptions;
   flushAt?: number;
   flushInterval?: number;
   retryCount?: number;

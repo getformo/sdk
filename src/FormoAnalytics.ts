@@ -154,6 +154,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.transaction = this.transaction.bind(this);
     this.detect = this.detect.bind(this);
     this.track = this.track.bind(this);
+    this.isWalletAutocaptureEnabled = this.isWalletAutocaptureEnabled.bind(this);
 
     // Initialize logger with configuration from options
     Logger.init({
@@ -782,12 +783,36 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      // Register listeners for this provider first
-      this.registerAccountsChangedListener(provider);
-      this.registerChainChangedListener(provider);
-      this.registerConnectListener(provider);
-      this.registerRequestListeners(provider);
-      this.registerDisconnectListener(provider);
+      // Register listeners for this provider based on autocapture configuration
+      // accountsChanged listener is needed for connect/disconnect events
+      const shouldTrackConnectOrDisconnect = 
+        this.isWalletAutocaptureEnabled("connect") || this.isWalletAutocaptureEnabled("disconnect");
+      
+      if (shouldTrackConnectOrDisconnect) {
+        this.registerAccountsChangedListener(provider);
+      }
+
+      const shouldTrackChain = this.isWalletAutocaptureEnabled("chain");
+      const shouldTrackConnect = this.isWalletAutocaptureEnabled("connect");
+      const shouldTrackSignatureOrTx = 
+        this.isWalletAutocaptureEnabled("signature") || this.isWalletAutocaptureEnabled("transaction");
+      const shouldTrackDisconnect = this.isWalletAutocaptureEnabled("disconnect");
+
+      if (shouldTrackChain) {
+        this.registerChainChangedListener(provider);
+      }
+
+      if (shouldTrackConnect) {
+        this.registerConnectListener(provider);
+      }
+
+      if (shouldTrackSignatureOrTx) {
+        this.registerRequestListeners(provider);
+      }
+
+      if (shouldTrackDisconnect) {
+        this.registerDisconnectListener(provider);
+      }
 
       // Only add to tracked providers after all listeners are successfully registered
       this._trackedProviders.add(provider);
@@ -1060,21 +1085,23 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
     }
 
-    this.connect(
-      {
-        chainId: effectiveChainId,
-        address,
-      },
-      {
-        providerName: providerInfo.name,
-        rdns: providerInfo.rdns,
-      }
-    ).catch((error) => {
-      logger.error(
-        "Failed to track connect event during account change:",
-        error
-      );
-    });
+    if (this.isWalletAutocaptureEnabled("connect")) {
+      this.connect(
+        {
+          chainId: effectiveChainId,
+          address,
+        },
+        {
+          providerName: providerInfo.name,
+          rdns: providerInfo.rdns,
+        }
+      ).catch((error) => {
+        logger.error(
+          "Failed to track connect event during account change:",
+          error
+        );
+      });
+    }
   }
 
   private registerChainChangedListener(provider: EIP1193Provider): void {
@@ -1115,10 +1142,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     try {
       // This is just a chain change since we already confirmed currentAddress exists
-      return this.chain({
-        chainId: this.currentChainId,
-        address: this.currentAddress,
-      });
+      if (this.isWalletAutocaptureEnabled("chain")) {
+        return this.chain({
+          chainId: this.currentChainId,
+          address: this.currentAddress,
+        });
+      }
     } catch (error) {
       logger.error("OnChainChanged: Failed to emit chain event:", error);
     }
@@ -1215,21 +1244,23 @@ export class FormoAnalytics implements IFormoAnalytics {
             );
           }
 
-          this.connect(
-            {
-              chainId: effectiveChainId,
-              address,
-            },
-            {
-              providerName: providerInfo.name,
-              rdns: providerInfo.rdns,
-            }
-          ).catch((error) => {
-            logger.error(
-              "Failed to track connect event during provider connection:",
-              error
-            );
-          });
+          if (this.isWalletAutocaptureEnabled("connect")) {
+            this.connect(
+              {
+                chainId: effectiveChainId,
+                address,
+              },
+              {
+                providerName: providerInfo.name,
+                rdns: providerInfo.rdns,
+              }
+            ).catch((error) => {
+              logger.error(
+                "Failed to track connect event during provider connection:",
+                error
+              );
+            });
+          }
         } else if (address && !isActiveProvider) {
           const providerInfo = this.getProviderInfo(provider);
           logger.debug(
@@ -1277,6 +1308,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }: RequestArguments): Promise<T | null | undefined> => {
       // Handle Signatures
       if (
+        this.isWalletAutocaptureEnabled("signature") &&
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
@@ -1351,6 +1383,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Handle Transactions
       // TODO: Support eip5792.xyz calls
       if (
+        this.isWalletAutocaptureEnabled("transaction") &&
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
         params[0]
@@ -1580,6 +1613,49 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Default behavior: track everywhere except localhost
     return !isLocalhost();
+  }
+
+  /**
+   * Check if a specific wallet event type is enabled for tracking
+   * @param eventType The wallet event type to check
+   * @returns {boolean} True if the event type should be tracked
+   */
+  private isWalletAutocaptureEnabled(
+    eventType: "connect" | "disconnect" | "signature" | "transaction" | "chain"
+  ): boolean {
+    // If no configuration provided, default to enabled
+    if (this.options.autocapture === undefined) {
+      return true;
+    }
+
+    // If boolean, return that value for all events
+    if (typeof this.options.autocapture === "boolean") {
+      return this.options.autocapture;
+    }
+
+    // If it's an object, check both global enabled flag and specific event config
+    if (
+      this.options.autocapture !== null &&
+      typeof this.options.autocapture === "object"
+    ) {
+      // If globally disabled, all events are disabled
+      if (this.options.autocapture.enabled === false) {
+        return false;
+      }
+
+      // Check the specific event configuration
+      if (this.options.autocapture.events) {
+        const eventConfig = this.options.autocapture.events[eventType];
+        // Default to true if not explicitly set to false
+        return eventConfig !== false;
+      }
+
+      // If no events config but enabled is true/undefined, default to enabled
+      return true;
+    }
+
+    // Default to enabled if no specific configuration
+    return true;
   }
 
   /*
