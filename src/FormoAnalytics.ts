@@ -799,6 +799,8 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       if (this.isAutocaptureEnabled("signature") || this.isAutocaptureEnabled("transaction")) {
         this.registerRequestListeners(provider);
+      } else {
+        logger.debug("TrackProvider: Skipping request wrapping (both signature and transaction autocapture disabled)");
       }
 
       if (this.isAutocaptureEnabled("disconnect")) {
@@ -915,7 +917,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             // Don't untrack if disconnect failed to maintain state consistency
           }
         } else {
-          logger.info("OnAccountsChanged: Disconnect tracking disabled, clearing state without emitting event");
+          logger.debug("OnAccountsChanged: Disconnect event skipped (autocapture.disconnect: false)");
           // Still clear state even if not tracking the event
           this.currentAddress = undefined;
           this.currentChainId = undefined;
@@ -989,6 +991,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                 address: this.currentAddress,
               });
             } else {
+              logger.debug("OnAccountsChanged: Disconnect event skipped during provider switch (autocapture.disconnect: false)");
               // Still clear state even if not tracking the event
               this.currentAddress = undefined;
               this.currentChainId = undefined;
@@ -1026,6 +1029,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               address: this.currentAddress,
             });
           } else {
+            logger.debug("OnAccountsChanged: Disconnect event skipped for old provider (autocapture.disconnect: false)");
             // Still clear state even if not tracking the event
             this.currentAddress = undefined;
             this.currentChainId = undefined;
@@ -1056,6 +1060,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             address: this.currentAddress,
           });
         } else {
+          logger.debug("OnAccountsChanged: Disconnect event skipped for failed provider check (autocapture.disconnect: false)");
           // Still clear state even if not tracking the event
           this.currentAddress = undefined;
           this.currentChainId = undefined;
@@ -1123,12 +1128,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
       });
     } else {
-      logger.info(
-        "OnAccountsChanged: Connect tracking disabled, state updated without emitting event",
+      logger.debug(
+        "OnAccountsChanged: Connect event skipped (autocapture.connect: false)",
         {
           chainId: nextChainId,
           address,
-          wasDisconnected,
           providerName: providerInfo.name,
         }
       );
@@ -1178,6 +1182,11 @@ export class FormoAnalytics implements IFormoAnalytics {
           chainId: this.currentChainId,
           address: this.currentAddress,
         });
+      } else {
+        logger.debug("OnChainChanged: Chain event skipped (autocapture.chain: false)", {
+          chainId: this.currentChainId,
+          address: this.currentAddress,
+        });
       }
     } catch (error) {
       logger.error("OnChainChanged: Failed to emit chain event:", error);
@@ -1221,7 +1230,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           // Don't untrack if disconnect failed to maintain state consistency
         }
       } else {
-        logger.info("OnDisconnect: Disconnect tracking disabled, clearing state without emitting event");
+        logger.debug("OnDisconnect: Disconnect event skipped (autocapture.disconnect: false)");
         // Still clear state even if not tracking the event
         this.currentAddress = undefined;
         this.currentChainId = undefined;
@@ -1306,12 +1315,11 @@ export class FormoAnalytics implements IFormoAnalytics {
               );
             });
           } else {
-            logger.info(
-              "OnConnected: Connect tracking disabled, state updated without emitting event",
+            logger.debug(
+              "OnConnected: Connect event skipped (autocapture.connect: false)",
               {
                 chainId,
                 address,
-                wasDisconnected,
                 providerName: providerInfo.name,
               }
             );
@@ -1363,10 +1371,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     }: RequestArguments): Promise<T | null | undefined> => {
       // Handle Signatures
       if (
-        this.isAutocaptureEnabled("signature") &&
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
+        if (!this.isAutocaptureEnabled("signature")) {
+          logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
+          return request({ method, params });
+        }
         // Use current chainId if available, otherwise fetch it
         const capturedChainId =
           this.currentChainId || (await this.getCurrentChainId(provider));
@@ -1438,11 +1449,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Handle Transactions
       // TODO: Support eip5792.xyz calls
       if (
-        this.isAutocaptureEnabled("transaction") &&
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
         params[0]
       ) {
+        if (!this.isAutocaptureEnabled("transaction")) {
+          logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
+          return request({ method, params });
+        }
         (async () => {
           try {
             const payload = await this.buildTransactionEventPayload(
