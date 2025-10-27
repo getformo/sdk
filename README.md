@@ -24,15 +24,6 @@ You can install Formo on:
 - [React apps](https://docs.formo.so/install#react)
 - [Next.js apps](https://docs.formo.so/install#next-js-app-router)
 
-### Self-Hosting
-
-Want to host the SDK on your own infrastructure? See the [Self-Hosting Guide](SELF_HOSTING.md) for detailed instructions on:
-- Downloading and hosting the pre-built SDK bundle
-- Building from source
-- Versioning strategies
-- Automation scripts and CI/CD integration
-- Security best practices with SRI hashes
-
 ## Configuration
 
 Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on local testing, debugging, and consent management.
