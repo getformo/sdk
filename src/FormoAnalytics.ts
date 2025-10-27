@@ -154,7 +154,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.transaction = this.transaction.bind(this);
     this.detect = this.detect.bind(this);
     this.track = this.track.bind(this);
-    this.isWalletAutocaptureEnabled = this.isWalletAutocaptureEnabled.bind(this);
+    this.isAutocaptureEnabled = this.isAutocaptureEnabled.bind(this);
 
     // Initialize logger with configuration from options
     Logger.init({
@@ -783,25 +783,25 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      // CRITICAL: Always register accountsChanged listener for state management
+      // CRITICAL: Always register accountsChanged for state management
       // This ensures currentAddress, currentChainId, and _provider are always up-to-date
       // Event emission is controlled conditionally inside the handlers
       this.registerAccountsChangedListener(provider);
 
       // Register other listeners based on autocapture configuration
-      if (this.isWalletAutocaptureEnabled("chain")) {
+      if (this.isAutocaptureEnabled("chain")) {
         this.registerChainChangedListener(provider);
       }
 
-      if (this.isWalletAutocaptureEnabled("connect")) {
+      if (this.isAutocaptureEnabled("connect")) {
         this.registerConnectListener(provider);
       }
 
-      if (this.isWalletAutocaptureEnabled("signature") || this.isWalletAutocaptureEnabled("transaction")) {
+      if (this.isAutocaptureEnabled("signature") || this.isAutocaptureEnabled("transaction")) {
         this.registerRequestListeners(provider);
       }
 
-      if (this.isWalletAutocaptureEnabled("disconnect")) {
+      if (this.isAutocaptureEnabled("disconnect")) {
         this.registerDisconnectListener(provider);
       }
 
@@ -899,7 +899,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         });
         
         // Check if disconnect tracking is enabled before emitting event
-        if (this.isWalletAutocaptureEnabled("disconnect")) {
+        if (this.isAutocaptureEnabled("disconnect")) {
           try {
             // Pass current state explicitly to ensure we have the data for the disconnect event
             await this.disconnect({
@@ -916,7 +916,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           }
         } else {
           logger.info("OnAccountsChanged: Disconnect tracking disabled, clearing state without emitting event");
-          // Still need to clear state even if not tracking the event
+          // Still clear state even if not tracking the event
           this.currentAddress = undefined;
           this.currentChainId = undefined;
           this.clearActiveProvider();
@@ -983,13 +983,13 @@ export class FormoAnalytics implements IFormoAnalytics {
             );
 
             // Emit disconnect for the old provider if tracking is enabled
-            if (this.isWalletAutocaptureEnabled("disconnect")) {
+            if (this.isAutocaptureEnabled("disconnect")) {
               await this.disconnect({
                 chainId: this.currentChainId,
                 address: this.currentAddress,
               });
             } else {
-              // Still need to clear state even if not tracking the event
+              // Still clear state even if not tracking the event
               this.currentAddress = undefined;
               this.currentChainId = undefined;
             }
@@ -1020,13 +1020,13 @@ export class FormoAnalytics implements IFormoAnalytics {
           );
 
           // Emit disconnect for the old provider that didn't signal properly if tracking is enabled
-          if (this.isWalletAutocaptureEnabled("disconnect")) {
+          if (this.isAutocaptureEnabled("disconnect")) {
             await this.disconnect({
               chainId: this.currentChainId,
               address: this.currentAddress,
             });
           } else {
-            // Still need to clear state even if not tracking the event
+            // Still clear state even if not tracking the event
             this.currentAddress = undefined;
             this.currentChainId = undefined;
           }
@@ -1050,13 +1050,13 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
 
         // If we can't check the current provider, assume it's disconnected
-        if (this.isWalletAutocaptureEnabled("disconnect")) {
+        if (this.isAutocaptureEnabled("disconnect")) {
           await this.disconnect({
             chainId: this.currentChainId,
             address: this.currentAddress,
           });
         } else {
-          // Still need to clear state even if not tracking the event
+          // Still clear state even if not tracking the event
           this.currentAddress = undefined;
           this.currentChainId = undefined;
         }
@@ -1086,10 +1086,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Conditionally emit connect event based on tracking configuration
     const providerInfo = this.getProviderInfo(provider);
-
     const effectiveChainId = nextChainId || 0;
     
-    if (this.isWalletAutocaptureEnabled("connect")) {
+    if (this.isAutocaptureEnabled("connect")) {
       logger.info(
         "OnAccountsChanged: Detected wallet connection, emitting connect event",
         {
@@ -1174,7 +1173,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     try {
       // This is just a chain change since we already confirmed currentAddress exists
-      if (this.isWalletAutocaptureEnabled("chain")) {
+      if (this.isAutocaptureEnabled("chain")) {
         return this.chain({
           chainId: this.currentChainId,
           address: this.currentAddress,
@@ -1209,7 +1208,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       
       // Double-check disconnect tracking is enabled (defensive programming)
       // Note: This listener should only be registered if tracking is enabled
-      if (this.isWalletAutocaptureEnabled("disconnect")) {
+      if (this.isAutocaptureEnabled("disconnect")) {
         try {
           // Pass current state explicitly to ensure we have the data for the disconnect event
           await this.disconnect({
@@ -1223,7 +1222,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       } else {
         logger.info("OnDisconnect: Disconnect tracking disabled, clearing state without emitting event");
-        // Still need to clear state even if not tracking the event
+        // Still clear state even if not tracking the event
         this.currentAddress = undefined;
         this.currentChainId = undefined;
         this.clearActiveProvider();
@@ -1272,7 +1271,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           const providerInfo = this.getProviderInfo(provider);
           const effectiveChainId = chainId || 0;
 
-          if (this.isWalletAutocaptureEnabled("connect")) {
+          if (this.isAutocaptureEnabled("connect")) {
             logger.info(
               "OnConnected: Detected wallet connection, emitting connect event",
               {
@@ -1364,7 +1363,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }: RequestArguments): Promise<T | null | undefined> => {
       // Handle Signatures
       if (
-        this.isWalletAutocaptureEnabled("signature") &&
+        this.isAutocaptureEnabled("signature") &&
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
@@ -1439,7 +1438,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Handle Transactions
       // TODO: Support eip5792.xyz calls
       if (
-        this.isWalletAutocaptureEnabled("transaction") &&
+        this.isAutocaptureEnabled("transaction") &&
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
         params[0]
@@ -1672,11 +1671,11 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Check if a specific wallet event type is enabled for tracking
+   * Check if a specific wallet event type is enabled for autocapture
    * @param eventType The wallet event type to check
-   * @returns {boolean} True if the event type should be tracked
+   * @returns {boolean} True if the event type should be autocaptured
    */
-  private isWalletAutocaptureEnabled(
+  private isAutocaptureEnabled(
     eventType: "connect" | "disconnect" | "signature" | "transaction" | "chain"
   ): boolean {
     // If no configuration provided, default to enabled
@@ -1689,25 +1688,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       return this.options.autocapture;
     }
 
-    // If it's an object, check both global enabled flag and specific event config
+    // If it's an object, check the specific event configuration
     if (
       this.options.autocapture !== null &&
       typeof this.options.autocapture === "object"
     ) {
-      // If globally disabled, all events are disabled
-      if (this.options.autocapture.enabled === false) {
-        return false;
-      }
-
-      // Check the specific event configuration
-      if (this.options.autocapture.events) {
-        const eventConfig = this.options.autocapture.events[eventType];
-        // Default to true if not explicitly set to false
-        return eventConfig !== false;
-      }
-
-      // If no events config but enabled is true/undefined, default to enabled
-      return true;
+      const eventConfig = this.options.autocapture[eventType];
+      // Default to true if not explicitly set to false
+      return eventConfig !== false;
     }
 
     // Default to enabled if no specific configuration
