@@ -783,34 +783,25 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      // Register listeners for this provider based on autocapture configuration
-      // accountsChanged listener is needed for connect/disconnect events
-      const shouldTrackConnectOrDisconnect = 
-        this.isWalletAutocaptureEnabled("connect") || this.isWalletAutocaptureEnabled("disconnect");
-      
-      if (shouldTrackConnectOrDisconnect) {
-        this.registerAccountsChangedListener(provider);
-      }
+      // CRITICAL: Always register accountsChanged listener for state management
+      // This ensures currentAddress, currentChainId, and _provider are always up-to-date
+      // Event emission is controlled conditionally inside the handlers
+      this.registerAccountsChangedListener(provider);
 
-      const shouldTrackChain = this.isWalletAutocaptureEnabled("chain");
-      const shouldTrackConnect = this.isWalletAutocaptureEnabled("connect");
-      const shouldTrackSignatureOrTx = 
-        this.isWalletAutocaptureEnabled("signature") || this.isWalletAutocaptureEnabled("transaction");
-      const shouldTrackDisconnect = this.isWalletAutocaptureEnabled("disconnect");
-
-      if (shouldTrackChain) {
+      // Register other listeners based on autocapture configuration
+      if (this.isWalletAutocaptureEnabled("chain")) {
         this.registerChainChangedListener(provider);
       }
 
-      if (shouldTrackConnect) {
+      if (this.isWalletAutocaptureEnabled("connect")) {
         this.registerConnectListener(provider);
       }
 
-      if (shouldTrackSignatureOrTx) {
+      if (this.isWalletAutocaptureEnabled("signature") || this.isWalletAutocaptureEnabled("transaction")) {
         this.registerRequestListeners(provider);
       }
 
-      if (shouldTrackDisconnect) {
+      if (this.isWalletAutocaptureEnabled("disconnect")) {
         this.registerDisconnectListener(provider);
       }
 
