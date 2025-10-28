@@ -164,7 +164,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.eventManager = new EventManager(
       new EventQueue(this.config.writeKey, {
-        url: EVENTS_API_URL,
+        apiHost: options.apiHost || EVENTS_API_URL,
         flushAt: options.flushAt,
         retryCount: options.retryCount,
         maxQueueSize: options.maxQueueSize,

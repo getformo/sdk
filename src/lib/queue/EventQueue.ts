@@ -23,7 +23,7 @@ type IFormoEventFlushPayload = IFormoEventPayload & {
 };
 
 type Options = {
-  url: string;
+  apiHost: string;
   flushAt?: number;
   flushInterval?: number;
   host?: string;
@@ -50,7 +50,7 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
 export class EventQueue implements IEventQueue {
   private writeKey: string;
-  private url: string;
+  private apiHost: string;
   private queue: QueueItem[] = [];
   private timer: null | NodeJS.Timeout;
   private flushAt: number;
@@ -67,7 +67,7 @@ export class EventQueue implements IEventQueue {
 
     this.queue = [];
     this.writeKey = writeKey;
-    this.url = options.url;
+    this.apiHost = options.apiHost;
     this.retryCount = clampNumber(
       options.retryCount || DEFAULT_RETRY,
       MAX_RETRY,
@@ -189,7 +189,7 @@ export class EventQueue implements IEventQueue {
       callback(err, data);
     };
 
-    return (this.pendingFlush = fetch(`${this.url}`, {
+    return (this.pendingFlush = fetch(`${this.apiHost}`, {
       headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
       method: "POST",
       body: JSON.stringify(data),
