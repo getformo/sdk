@@ -154,6 +154,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.transaction = this.transaction.bind(this);
     this.detect = this.detect.bind(this);
     this.track = this.track.bind(this);
+    this.isAutocaptureEnabled = this.isAutocaptureEnabled.bind(this);
 
     // Initialize logger with configuration from options
     Logger.init({
@@ -782,12 +783,29 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      // Register listeners for this provider first
+      // CRITICAL: Always register accountsChanged for state management
+      // This ensures currentAddress, currentChainId, and _provider are always up-to-date
+      // Event emission is controlled conditionally inside the handlers
       this.registerAccountsChangedListener(provider);
-      this.registerChainChangedListener(provider);
-      this.registerConnectListener(provider);
-      this.registerRequestListeners(provider);
-      this.registerDisconnectListener(provider);
+
+      // Register other listeners based on autocapture configuration
+      if (this.isAutocaptureEnabled("chain")) {
+        this.registerChainChangedListener(provider);
+      }
+
+      if (this.isAutocaptureEnabled("connect")) {
+        this.registerConnectListener(provider);
+      }
+
+      if (this.isAutocaptureEnabled("signature") || this.isAutocaptureEnabled("transaction")) {
+        this.registerRequestListeners(provider);
+      } else {
+        logger.debug("TrackProvider: Skipping request wrapping (both signature and transaction autocapture disabled)");
+      }
+
+      if (this.isAutocaptureEnabled("disconnect")) {
+        this.registerDisconnectListener(provider);
+      }
 
       // Only add to tracked providers after all listeners are successfully registered
       this._trackedProviders.add(provider);
@@ -881,19 +899,29 @@ export class FormoAnalytics implements IFormoAnalytics {
           currentChainId: this.currentChainId,
           providerMatch: this._provider === provider,
         });
-        try {
-          // Pass current state explicitly to ensure we have the data for the disconnect event
-          await this.disconnect({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
-          });
-          // Provider remains tracked to allow for reconnection scenarios
-        } catch (error) {
-          logger.error(
-            "Failed to disconnect provider on accountsChanged",
-            error
-          );
-          // Don't untrack if disconnect failed to maintain state consistency
+        
+        // Check if disconnect tracking is enabled before emitting event
+        if (this.isAutocaptureEnabled("disconnect")) {
+          try {
+            // Pass current state explicitly to ensure we have the data for the disconnect event
+            await this.disconnect({
+              chainId: this.currentChainId,
+              address: this.currentAddress,
+            });
+            // Provider remains tracked to allow for reconnection scenarios
+          } catch (error) {
+            logger.error(
+              "Failed to disconnect provider on accountsChanged",
+              error
+            );
+            // Don't untrack if disconnect failed to maintain state consistency
+          }
+        } else {
+          logger.debug("OnAccountsChanged: Disconnect event skipped (autocapture.disconnect: false)");
+          // Still clear state even if not tracking the event
+          this.currentAddress = undefined;
+          this.currentChainId = undefined;
+          this.clearActiveProvider();
         }
       } else {
         logger.info(
@@ -956,11 +984,18 @@ export class FormoAnalytics implements IFormoAnalytics {
               }
             );
 
-            // Emit disconnect for the old provider
-            await this.disconnect({
-              chainId: this.currentChainId,
-              address: this.currentAddress,
-            });
+            // Emit disconnect for the old provider if tracking is enabled
+            if (this.isAutocaptureEnabled("disconnect")) {
+              await this.disconnect({
+                chainId: this.currentChainId,
+                address: this.currentAddress,
+              });
+            } else {
+              logger.debug("OnAccountsChanged: Disconnect event skipped during provider switch (autocapture.disconnect: false)");
+              // Still clear state even if not tracking the event
+              this.currentAddress = undefined;
+              this.currentChainId = undefined;
+            }
 
             // Clear state and let the new provider become active
             this.clearActiveProvider();
@@ -987,11 +1022,18 @@ export class FormoAnalytics implements IFormoAnalytics {
             }
           );
 
-          // Emit disconnect for the old provider that didn't signal properly
-          await this.disconnect({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
-          });
+          // Emit disconnect for the old provider that didn't signal properly if tracking is enabled
+          if (this.isAutocaptureEnabled("disconnect")) {
+            await this.disconnect({
+              chainId: this.currentChainId,
+              address: this.currentAddress,
+            });
+          } else {
+            logger.debug("OnAccountsChanged: Disconnect event skipped for old provider (autocapture.disconnect: false)");
+            // Still clear state even if not tracking the event
+            this.currentAddress = undefined;
+            this.currentChainId = undefined;
+          }
 
           // Clear state and let the new provider become active
           this.clearActiveProvider();
@@ -1012,10 +1054,17 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
 
         // If we can't check the current provider, assume it's disconnected
-        await this.disconnect({
-          chainId: this.currentChainId,
-          address: this.currentAddress,
-        });
+        if (this.isAutocaptureEnabled("disconnect")) {
+          await this.disconnect({
+            chainId: this.currentChainId,
+            address: this.currentAddress,
+          });
+        } else {
+          logger.debug("OnAccountsChanged: Disconnect event skipped for failed provider check (autocapture.disconnect: false)");
+          // Still clear state even if not tracking the event
+          this.currentAddress = undefined;
+          this.currentChainId = undefined;
+        }
 
         this.clearActiveProvider();
       }
@@ -1035,46 +1084,59 @@ export class FormoAnalytics implements IFormoAnalytics {
     const nextChainId = await this.getCurrentChainId(provider);
     const wasDisconnected = !this.currentAddress;
 
+    // CRITICAL: Always update state regardless of whether connect tracking is enabled
+    // This ensures disconnect events will have valid address/chainId values
     this.currentAddress = address;
     this.currentChainId = nextChainId;
 
-    // Emit connect event
+    // Conditionally emit connect event based on tracking configuration
     const providerInfo = this.getProviderInfo(provider);
-
-    logger.info(
-      "OnAccountsChanged: Detected wallet connection, emitting connect event",
-      {
-        chainId: nextChainId,
-        address,
-        wasDisconnected,
-        providerName: providerInfo.name,
-        rdns: providerInfo.rdns,
-        hasChainId: !!nextChainId,
-      }
-    );
-
     const effectiveChainId = nextChainId || 0;
-    if (effectiveChainId === 0) {
+    
+    if (this.isAutocaptureEnabled("connect")) {
       logger.info(
-        "OnAccountsChanged: Using fallback chainId 0 for connect event"
+        "OnAccountsChanged: Detected wallet connection, emitting connect event",
+        {
+          chainId: nextChainId,
+          address,
+          wasDisconnected,
+          providerName: providerInfo.name,
+          rdns: providerInfo.rdns,
+          hasChainId: !!nextChainId,
+        }
+      );
+
+      if (effectiveChainId === 0) {
+        logger.info(
+          "OnAccountsChanged: Using fallback chainId 0 for connect event"
+        );
+      }
+
+      this.connect(
+        {
+          chainId: effectiveChainId,
+          address,
+        },
+        {
+          providerName: providerInfo.name,
+          rdns: providerInfo.rdns,
+        }
+      ).catch((error) => {
+        logger.error(
+          "Failed to track connect event during account change:",
+          error
+        );
+      });
+    } else {
+      logger.debug(
+        "OnAccountsChanged: Connect event skipped (autocapture.connect: false)",
+        {
+          chainId: nextChainId,
+          address,
+          providerName: providerInfo.name,
+        }
       );
     }
-
-    this.connect(
-      {
-        chainId: effectiveChainId,
-        address,
-      },
-      {
-        providerName: providerInfo.name,
-        rdns: providerInfo.rdns,
-      }
-    ).catch((error) => {
-      logger.error(
-        "Failed to track connect event during account change:",
-        error
-      );
-    });
   }
 
   private registerChainChangedListener(provider: EIP1193Provider): void {
@@ -1115,10 +1177,17 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     try {
       // This is just a chain change since we already confirmed currentAddress exists
-      return this.chain({
-        chainId: this.currentChainId,
-        address: this.currentAddress,
-      });
+      if (this.isAutocaptureEnabled("chain")) {
+        return this.chain({
+          chainId: this.currentChainId,
+          address: this.currentAddress,
+        });
+      } else {
+        logger.debug("OnChainChanged: Chain event skipped (autocapture.chain: false)", {
+          chainId: this.currentChainId,
+          address: this.currentAddress,
+        });
+      }
     } catch (error) {
       logger.error("OnChainChanged: Failed to emit chain event:", error);
     }
@@ -1145,16 +1214,27 @@ export class FormoAnalytics implements IFormoAnalytics {
           currentChainId: this.currentChainId,
         }
       );
-      try {
-        // Pass current state explicitly to ensure we have the data for the disconnect event
-        await this.disconnect({
-          chainId: this.currentChainId,
-          address: this.currentAddress,
-        });
-        // Provider remains tracked to allow for reconnection scenarios
-      } catch (e) {
-        logger.error("Error during disconnect in disconnect listener", e);
-        // Don't untrack if disconnect failed to maintain state consistency
+      
+      // Double-check disconnect tracking is enabled (defensive programming)
+      // Note: This listener should only be registered if tracking is enabled
+      if (this.isAutocaptureEnabled("disconnect")) {
+        try {
+          // Pass current state explicitly to ensure we have the data for the disconnect event
+          await this.disconnect({
+            chainId: this.currentChainId,
+            address: this.currentAddress,
+          });
+          // Provider remains tracked to allow for reconnection scenarios
+        } catch (e) {
+          logger.error("Error during disconnect in disconnect listener", e);
+          // Don't untrack if disconnect failed to maintain state consistency
+        }
+      } else {
+        logger.debug("OnDisconnect: Disconnect event skipped (autocapture.disconnect: false)");
+        // Still clear state even if not tracking the event
+        this.currentAddress = undefined;
+        this.currentChainId = undefined;
+        this.clearActiveProvider();
       }
     };
     provider.on("disconnect", listener);
@@ -1187,49 +1267,63 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Check if this provider is the currently active one
         const isActiveProvider = this._provider === provider;
 
-        // Only update global state (chainId/address) from the active provider
+        // CRITICAL: Always update state from active provider regardless of tracking config
+        // This ensures disconnect events will have valid address/chainId values
         if (isActiveProvider) {
           this.currentChainId = chainId;
           this.currentAddress =
             this.validateAndChecksumAddress(address) || undefined;
         }
+        
+        // Conditionally emit connect event based on tracking configuration
         if (isActiveProvider && this.currentAddress) {
           const providerInfo = this.getProviderInfo(provider);
-
-          logger.info(
-            "OnConnected: Detected wallet connection, emitting connect event",
-            {
-              chainId,
-              wasDisconnected,
-              providerName: providerInfo.name,
-              rdns: providerInfo.rdns,
-              hasChainId: !!chainId,
-              isActiveProvider,
-            }
-          );
-
           const effectiveChainId = chainId || 0;
-          if (effectiveChainId === 0) {
+
+          if (this.isAutocaptureEnabled("connect")) {
             logger.info(
-              "OnConnected: Using fallback chainId 0 for connect event"
+              "OnConnected: Detected wallet connection, emitting connect event",
+              {
+                chainId,
+                wasDisconnected,
+                providerName: providerInfo.name,
+                rdns: providerInfo.rdns,
+                hasChainId: !!chainId,
+                isActiveProvider,
+              }
+            );
+
+            if (effectiveChainId === 0) {
+              logger.info(
+                "OnConnected: Using fallback chainId 0 for connect event"
+              );
+            }
+
+            this.connect(
+              {
+                chainId: effectiveChainId,
+                address,
+              },
+              {
+                providerName: providerInfo.name,
+                rdns: providerInfo.rdns,
+              }
+            ).catch((error) => {
+              logger.error(
+                "Failed to track connect event during provider connection:",
+                error
+              );
+            });
+          } else {
+            logger.debug(
+              "OnConnected: Connect event skipped (autocapture.connect: false)",
+              {
+                chainId,
+                address,
+                providerName: providerInfo.name,
+              }
             );
           }
-
-          this.connect(
-            {
-              chainId: effectiveChainId,
-              address,
-            },
-            {
-              providerName: providerInfo.name,
-              rdns: providerInfo.rdns,
-            }
-          ).catch((error) => {
-            logger.error(
-              "Failed to track connect event during provider connection:",
-              error
-            );
-          });
         } else if (address && !isActiveProvider) {
           const providerInfo = this.getProviderInfo(provider);
           logger.debug(
@@ -1280,6 +1374,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         Array.isArray(params) &&
         ["eth_signTypedData_v4", "personal_sign"].includes(method)
       ) {
+        if (!this.isAutocaptureEnabled("signature")) {
+          logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
+          return request({ method, params });
+        }
         // Use current chainId if available, otherwise fetch it
         const capturedChainId =
           this.currentChainId || (await this.getCurrentChainId(provider));
@@ -1355,6 +1453,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         method === "eth_sendTransaction" &&
         params[0]
       ) {
+        if (!this.isAutocaptureEnabled("transaction")) {
+          logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
+          return request({ method, params });
+        }
         (async () => {
           try {
             const payload = await this.buildTransactionEventPayload(
@@ -1580,6 +1682,38 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Default behavior: track everywhere except localhost
     return !isLocalhost();
+  }
+
+  /**
+   * Check if a specific wallet event type is enabled for autocapture
+   * @param eventType The wallet event type to check
+   * @returns {boolean} True if the event type should be autocaptured
+   */
+  private isAutocaptureEnabled(
+    eventType: "connect" | "disconnect" | "signature" | "transaction" | "chain"
+  ): boolean {
+    // If no configuration provided, default to enabled
+    if (this.options.autocapture === undefined) {
+      return true;
+    }
+
+    // If boolean, return that value for all events
+    if (typeof this.options.autocapture === "boolean") {
+      return this.options.autocapture;
+    }
+
+    // If it's an object, check the specific event configuration
+    if (
+      this.options.autocapture !== null &&
+      typeof this.options.autocapture === "object"
+    ) {
+      const eventConfig = this.options.autocapture[eventType];
+      // Default to true if not explicitly set to false
+      return eventConfig !== false;
+    }
+
+    // Default to enabled if no specific configuration
+    return true;
   }
 
   /*
