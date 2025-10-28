@@ -338,6 +338,42 @@ describe("EventQueue Deduplication", () => {
       // Restore the stub
       dateNowStub.restore();
     });
+
+    it("should throttle cleanup during high-throughput periods", async () => {
+      // This test verifies that cleanup is throttled to reduce overhead
+      const createEvent = (timestamp: string) => createMockEvent({
+        event: "test_event",
+        original_timestamp: timestamp,
+      });
+
+      // Stub Date.now() to control time
+      let currentTime = new Date("2025-01-01T10:30:00.000Z").getTime();
+      const dateNowStub = sinon.stub(Date, 'now').callsFake(() => currentTime);
+
+      // Enqueue 100 events in rapid succession (within 1 second)
+      for (let i = 0; i < 100; i++) {
+        await eventQueue.enqueue(createEvent(`2025-01-01T10:30:${String(i).padStart(2, '0')}.000Z`));
+        currentTime += 10; // 10ms between events
+      }
+
+      // Verify lastCleanupTime was updated (cleanup ran at least once)
+      const lastCleanup = (eventQueue as any).lastCleanupTime;
+      expect(lastCleanup).to.be.greaterThan(0);
+
+      // Advance time by 5 seconds (within throttle window)
+      currentTime += 5 * 1000;
+
+      // Enqueue one more event - cleanup should be throttled
+      const beforeCleanup = (eventQueue as any).lastCleanupTime;
+      await eventQueue.enqueue(createEvent("2025-01-01T10:30:59.000Z"));
+      const afterCleanup = (eventQueue as any).lastCleanupTime;
+
+      // lastCleanupTime should not have changed (cleanup was throttled)
+      expect(afterCleanup).to.equal(beforeCleanup);
+
+      // Restore the stub
+      dateNowStub.restore();
+    });
   });
 
   describe("Message ID Generation", () => {

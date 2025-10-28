@@ -52,6 +52,10 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 // This should be long enough to catch rapid duplicate events across flush cycles
 const DEDUPLICATION_WINDOW_MS = 1_000 * 60; // 60 seconds
 
+// Cleanup throttle: minimum time between cleanup operations to reduce overhead
+// during high-throughput periods. Cleanup also runs on flush as a safety net.
+const CLEANUP_THROTTLE_MS = 1_000 * 10; // 10 seconds
+
 export class EventQueue implements IEventQueue {
   private writeKey: string;
   private url: string;
@@ -65,6 +69,7 @@ export class EventQueue implements IEventQueue {
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
   private payloadHashes: Map<string, number> = new Map(); // Map hash to timestamp for time-based cleanup
+  private lastCleanupTime: number = 0; // Track last cleanup to throttle cleanup operations
 
   constructor(writeKey: string, options: Options) {
     options = options || {};
@@ -178,7 +183,8 @@ export class EventQueue implements IEventQueue {
 
     // Clean up old hashes periodically during flush to prevent memory leaks
     // This ensures cleanup happens even when no new events arrive
-    this.cleanupOldHashes();
+    // Force cleanup to bypass throttling since flush is our safety net
+    this.cleanupOldHashes(true);
 
     if (!this.queue.length) {
       callback();
@@ -262,10 +268,19 @@ export class EventQueue implements IEventQueue {
   /**
    * Clean up old hashes that are outside the deduplication window
    * This prevents memory leaks by removing hashes we no longer need to track
-   * Called both during duplicate checks and periodic flush cycles
+   * Called both during duplicate checks (throttled) and periodic flush cycles (always)
+   * @param force If true, bypass throttling and always run cleanup (used by flush)
    */
-  private cleanupOldHashes(): void {
+  private cleanupOldHashes(force: boolean = false): void {
     const now = Date.now();
+    
+    // Throttle cleanup to reduce overhead during high-throughput periods
+    // unless forced (e.g., by flush cycle)
+    if (!force && now - this.lastCleanupTime < CLEANUP_THROTTLE_MS) {
+      return; // Skip cleanup if we ran it recently
+    }
+    
+    this.lastCleanupTime = now;
     
     // Clean up old hashes based on actual elapsed time (Date.now())
     // This handles out-of-order events correctly - we clean up based on real time passage
