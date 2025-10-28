@@ -270,15 +270,13 @@ export class EventQueue implements IEventQueue {
     // Clean up old hashes based on actual elapsed time (Date.now())
     // This handles out-of-order events correctly - we clean up based on real time passage
     // not based on event timestamps which may arrive out of order
-    // Note: We collect hashes to delete first to avoid modifying Map during iteration
-    const hashesToDelete: string[] = [];
+    // Note: Map.forEach() safely supports deletion during iteration
     this.payloadHashes.forEach((storedTimestamp, hash) => {
       // storedTimestamp is when we first saw this hash (Date.now() at storage time)
       if (now - storedTimestamp > DEDUPLICATION_WINDOW_MS) {
-        hashesToDelete.push(hash);
+        this.payloadHashes.delete(hash);
       }
     });
-    hashesToDelete.forEach(hash => this.payloadHashes.delete(hash));
   }
 
   /**
