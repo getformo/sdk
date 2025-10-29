@@ -1,6 +1,5 @@
-export const EVENTS_API_HOST = "https://events.formo.so";
-export const EVENTS_API_URL = `${EVENTS_API_HOST}/v0/raw_events`;
-export const USER_API_URL = `${EVENTS_API_HOST}/user`;
+export const EVENTS_API_ORIGIN = "https://events.formo.so";
+export const EVENTS_API_HOST = `${EVENTS_API_ORIGIN}/v0/raw_events`;
 
 export const EVENTS_API_REQUEST_HEADER = (writeKey: string) => ({
   "Content-Type": "application/json",

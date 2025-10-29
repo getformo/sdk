@@ -112,10 +112,62 @@ export interface TrackingOptions {
   excludeChains?: ChainID[];
 }
 
+/**
+ * Configuration options for controlling wallet event autocapture
+ * All events are enabled by default unless explicitly set to false
+ */
+export interface AutocaptureOptions {
+  /**
+   * Track wallet connect events
+   * @default true
+   */
+  connect?: boolean;
+
+  /**
+   * Track wallet disconnect events
+   * @default true
+   */
+  disconnect?: boolean;
+
+  /**
+   * Track wallet signature events (personal_sign, eth_signTypedData_v4)
+   * @default true
+   */
+  signature?: boolean;
+
+  /**
+   * Track wallet transaction events (eth_sendTransaction)
+   * @default true
+   */
+  transaction?: boolean;
+
+  /**
+   * Track wallet chain change events
+   * @default true
+   */
+  chain?: boolean;
+}
 
 export interface Options {
   provider?: EIP1193Provider;
   tracking?: boolean | TrackingOptions;
+  /**
+   * Control wallet event autocapture
+   * - `false`: Disable all wallet autocapture
+   * - `true`: Enable all wallet events (default)
+   * - `AutocaptureOptions`: Granular control over specific events
+   * @default true
+   */
+  autocapture?: boolean | AutocaptureOptions;
+  /**
+   * Custom API host for sending events through your own domain to bypass ad blockers
+   * - If not provided, events are sent directly to events.formo.so
+   * - When provided, events are sent to your custom endpoint which should forward them to Formo
+   * - Example: 'https://your-host-url.com/ingest' or '/api/analytics'
+   * 
+   * See https://docs.formo.so/sdks/web#proxy for setup instructions
+   */
+  apiHost?: string;
   flushAt?: number;
   flushInterval?: number;
   retryCount?: number;
