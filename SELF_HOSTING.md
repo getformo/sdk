@@ -21,7 +21,7 @@ Use versioned filenames or directories. See examples below.
 curl -o formo-analytics.js https://unpkg.com/@formo/analytics@1.20.0/dist/index.umd.min.js
 
 # Or use the automation script
-./scripts/update-formo-sdk.sh 1.20.0
+./scripts/generate-inline-script.sh 1.20.0
 ```
 
 ```html
@@ -40,7 +40,7 @@ curl -o formo-analytics.js https://unpkg.com/@formo/analytics@1.20.0/dist/index.
 Generate a complete inline snippet with the entire SDK embedded:
 
 ```bash
-./scripts/update-formo-sdk.sh 1.20.0 --inline
+./scripts/generate-inline-script.sh 1.20.0 --inline
 # Creates dist/inline-snippet-1.20.0.html - copy entire contents
 ```
 
@@ -86,17 +86,17 @@ formofy("YOUR_API_KEY");
 
 One script handles both hosted files and inline snippets:
 
-### `update-formo-sdk.sh`
+### `generate-inline-script.sh`
 
 **Download SDK for hosting:**
 ```bash
-./scripts/update-formo-sdk.sh 1.20.0
+./scripts/generate-inline-script.sh 1.20.0
 # Downloads to public/libs/formo/1.20.0/analytics.min.js
 ```
 
 **Generate inline snippet (Safary-style):**
 ```bash
-./scripts/update-formo-sdk.sh 1.20.0 --inline
+./scripts/generate-inline-script.sh 1.20.0 --inline
 # Creates dist/inline-snippet-1.20.0.html with entire SDK embedded
 ```
 

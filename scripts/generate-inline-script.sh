@@ -3,11 +3,11 @@ set -e
 
 # Formo Analytics SDK - Self-Hosting Script
 # Downloads SDK and generates either hosted file or inline snippet
-# Usage: ./scripts/update-formo-sdk.sh [version] [--inline]
+# Usage: ./scripts/generate-inline-script.sh [version] [--inline]
 # Examples:
-#   ./scripts/update-formo-sdk.sh 1.20.0           # Download for hosting
-#   ./scripts/update-formo-sdk.sh 1.20.0 --inline # Generate inline snippet
-#   ./scripts/update-formo-sdk.sh latest           # Use latest version
+#   ./scripts/generate-inline-script.sh 1.20.0           # Download for hosting
+#   ./scripts/generate-inline-script.sh 1.20.0 --inline # Generate inline snippet
+#   ./scripts/generate-inline-script.sh latest           # Use latest version
 
 VERSION=${1:-latest}
 MODE=${2:-hosted}  # 'hosted' or 'inline'
@@ -17,30 +17,34 @@ if [ "$2" = "--inline" ]; then
   MODE="inline"
 fi
 
-DEST_DIR="public/libs/formo"
-DEST_FILE="$DEST_DIR/$VERSION/analytics.min.js"
-SDK_URL="https://unpkg.com/@formo/analytics@$VERSION/dist/index.umd.min.js"
-
 echo "📦 Downloading Formo Analytics SDK version: $VERSION"
 
-# Download SDK
-echo "⬇️  Fetching from unpkg.com..."
-SDK_CODE=$(curl -sSL "$SDK_URL")
+# Get the actual version if "latest" was requested
+ACTUAL_VERSION=$VERSION
+if [ "$VERSION" = "latest" ]; then
+  # Use unpkg for package.json since cdn.formo.so doesn't serve it
+  echo "🔍 Resolving latest version..."
+  ACTUAL_VERSION=$(curl -s "https://unpkg.com/@formo/analytics@latest/package.json" | grep '"version"' | head -1 | cut -d'"' -f4)
+  echo "ℹ️  Latest version is: $ACTUAL_VERSION"
+fi
+
+# Use cdn.formo.so for consistency with release SRI hashes
+SDK_URL="https://cdn.formo.so/analytics@$ACTUAL_VERSION"
+DEST_DIR="public/libs/formo"
+DEST_FILE="$DEST_DIR/$ACTUAL_VERSION/analytics.min.js"
+
+# Download SDK with compression (same as generate-sri.sh)
+echo "⬇️  Fetching from cdn.formo.so..."
+SDK_CODE=$(curl -sSL --compressed "$SDK_URL")
 
 if [ -z "$SDK_CODE" ] || [ "${SDK_CODE:0:1}" = "<" ]; then
   echo "❌ Error: Failed to download SDK"
   exit 1
 fi
 
-# Get the actual version if "latest" was requested
-ACTUAL_VERSION=$VERSION
-if [ "$VERSION" = "latest" ]; then
-  ACTUAL_VERSION=$(curl -s "https://unpkg.com/@formo/analytics@latest/package.json" | grep '"version"' | head -1 | cut -d'"' -f4)
-  echo "ℹ️  Latest version is: $ACTUAL_VERSION"
-fi
-
-# Generate SRI hash
-HASH=$(echo "$SDK_CODE" | openssl dgst -sha384 -binary | openssl base64 -A)
+# Generate SRI hash directly from curl output (same as generate-sri.sh)
+# This ensures no extra newlines are added
+HASH=$(curl -sSL --compressed "$SDK_URL" | openssl dgst -sha384 -binary | openssl base64 -A)
 
 # Get file size
 FILE_SIZE=$(echo -n "$SDK_CODE" | wc -c | tr -d ' ')
@@ -107,14 +111,14 @@ EOF
   
 else
   # Hosted file mode
-  mkdir -p "$DEST_DIR/$VERSION"
+  mkdir -p "$DEST_DIR/$ACTUAL_VERSION"
   
-  # Save SDK file
-  echo "$SDK_CODE" > "$DEST_FILE"
+  # Save SDK file (use printf to avoid trailing newline)
+  printf '%s' "$SDK_CODE" > "$DEST_FILE"
   
-  # Download source map if available
+  # Download source map if available (from unpkg since cdn.formo.so doesn't serve source maps)
   echo "⬇️  Fetching source map..."
-  curl -sSL "https://unpkg.com/@formo/analytics@$VERSION/dist/index.umd.min.js.map" \
+  curl -sSL "https://unpkg.com/@formo/analytics@$ACTUAL_VERSION/dist/index.umd.min.js.map" \
     -o "$DEST_FILE.map" 2>/dev/null || echo "⚠️  Source map not available"
   
   echo ""
@@ -164,7 +168,7 @@ SRI Hash: sha384-$HASH
 
 - Package: @formo/analytics
 - Version: $ACTUAL_VERSION
-- Source: https://unpkg.com/@formo/analytics@$ACTUAL_VERSION
+- Source: https://cdn.formo.so/analytics@$ACTUAL_VERSION
 
 ## Files
 
