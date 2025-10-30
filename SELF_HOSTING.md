@@ -1,41 +1,8 @@
 # Self-Hosting Support for Formo Analytics SDK
 
-The Formo Analytics SDK now supports self-hosting, allowing you to host the SDK on your own infrastructure instead of loading from `cdn.formo.so`.
+The Formo Analytics SDK supports self-hosting, allowing you to host the SDK on your own infrastructure instead of loading from `cdn.formo.so`.
 
-## Quick Answers
-
-**Q: Can we just paste `https://cdn.formo.so/analytics@latest`?**
-
-Yes! You can download that file and host it yourself. The SDK is a self-contained UMD bundle that can be hosted anywhere.
-
-**Q: How to do versioning?**
-
-Use versioned filenames or directories. See examples below.
-
-## Installation Methods
-
-### Option 1: Download & Host (Recommended for Production)
-
-```bash
-# Download from npm CDN
-curl -o formo-analytics.js https://unpkg.com/@formo/analytics@1.20.0/dist/index.umd.min.js
-
-# Or use the automation script
-./scripts/generate-inline-script.sh 1.20.0
-```
-
-```html
-<script 
-  src="/formo-analytics.js"
-  integrity="sha384-[GENERATE_HASH]"
-  crossorigin="anonymous"
-></script>
-<script>
-  window.formofy("YOUR_API_KEY");
-</script>
-```
-
-### Option 2: Inline Snippet (Safary-style)
+## Inline Snippet Installation
 
 Generate a complete inline snippet with the entire SDK embedded:
 
@@ -46,149 +13,123 @@ Generate a complete inline snippet with the entire SDK embedded:
 
 Paste the entire snippet into your HTML `<head>` - no external files needed.
 
-### Option 3: npm Package
+## Example HTML Scripts
 
-For React/Vue/Next.js apps:
-
-```bash
-npm install @formo/analytics
-```
-
-```javascript
-import { formofy } from '@formo/analytics';
-formofy("YOUR_API_KEY");
-```
-
-### Option 4: CDN (Fastest Setup)
+After generating the inline snippet, you'll get a file that looks like this:
 
 ```html
-<script src="https://cdn.formo.so/analytics@1.20.0"></script>
-<script>window.formofy("YOUR_API_KEY");</script>
+<!-- 
+  Formo Analytics SDK v1.20.0 - Inline Installation
+  
+  This is a self-contained, inline version of the Formo Analytics SDK.
+  No external dependencies required - everything is included in this snippet.
+  
+  Generated: 2025-10-26T15:12:09.383Z
+  Version: 1.20.0
+  Size: 135 KB
+  Integrity: sha384-Gf5TiX659wjVQuxu1GjfqZJusZCYZwAZjbjXMdz80wK/aCAx2Pyi/OYHGwO+KkgV
+  
+  Usage:
+  1. Copy this entire snippet
+  2. Paste into your HTML <head> section
+  3. Replace YOUR_API_KEY with your actual Formo API key
+  
+  Documentation: https://docs.formo.so
+  GitHub: https://github.com/getformo/sdk
+-->
+<script>
+  /* Entire SDK code embedded here */
+  (function(){/* ... SDK code ... */})();
+</script>
+<script>
+  // Initialize Formo Analytics
+  if (typeof window.formofy === 'function') {
+    window.formofy("YOUR_API_KEY", {
+      debug: false, // Set to true for development/debugging
+    });
+  } else {
+    console.error('❌ Formo Analytics failed to load');
+  }
+</script>
 ```
 
-## Versioning Strategies
+### Basic Usage
 
-### Strategy 1: Version in Filename (Recommended)
-```
-/js/formo-analytics-1.20.0.js
-/js/formo-analytics-1.21.0.js
-/js/formo-analytics-latest.js (symlink or copy)
-```
-
-### Strategy 2: Directory-Based
-```
-/libs/formo/1.20.0/analytics.js
-/libs/formo/1.21.0/analytics.js
-/libs/formo/latest/analytics.js
+```html
+<script>
+  /* SDK code embedded */
+</script>
+<script>
+  window.formofy("YOUR_API_KEY");
+</script>
 ```
 
-## Automation Scripts
+### With Debug Mode
 
-One script handles both hosted files and inline snippets:
+```html
+<script>
+  /* SDK code embedded */
+</script>
+<script>
+  window.formofy("YOUR_API_KEY", {
+    debug: true
+  });
+</script>
+```
 
-### `generate-inline-script.sh`
+### With Advanced Configuration
 
-**Download SDK for hosting:**
+```html
+<script>
+  /* SDK code embedded */
+</script>
+<script>
+  window.formofy("YOUR_API_KEY", {
+    debug: false,
+    // Additional configuration options can be added here
+  });
+</script>
+```
+
+## Versioning
+
+The script generates versioned files. To update to a new version:
+
 ```bash
-./scripts/generate-inline-script.sh 1.20.0
-# Downloads to public/libs/formo/1.20.0/analytics.min.js
+# Generate snippet for specific version
+./scripts/generate-inline-script.sh 1.21.0 --inline
+
+# Generate snippet for latest version
+./scripts/generate-inline-script.sh latest --inline
 ```
 
-**Generate inline snippet (Safary-style):**
-```bash
-./scripts/generate-inline-script.sh 1.20.0 --inline
-# Creates dist/inline-snippet-1.20.0.html with entire SDK embedded
-```
-
-**Note:** There's also `scripts/generate-sri.sh` used for releases - it fetches from CDN and updates GitHub release notes.
+Then copy the new snippet and replace the old one in your HTML.
 
 ## Security Best Practices
 
-1. **Use SRI hashes** for production deployments:
-   ```bash
-   cat formo-analytics.js | openssl dgst -sha384 -binary | openssl base64 -A
+1. **Pin to specific versions** - avoid using "latest" in production
+2. **Serve over HTTPS** - always use HTTPS for security
+3. **Update Content Security Policy** if needed:
+   ```
+   Content-Security-Policy: script-src 'self' 'unsafe-inline';
    ```
 
-2. **Pin to specific versions** - avoid using "latest" in production
+## Automation Script
 
-3. **Serve over HTTPS** - always use HTTPS for security
+The `generate-inline-script.sh` script downloads the SDK from the CDN and generates a complete inline snippet file.
 
-4. **Update CSP headers** if needed:
-   ```
-   Content-Security-Policy: script-src 'self' 'sha384-[HASH]';
-   ```
-
-## Examples
-
-### React App
-```jsx
-import { formofy } from '@formo/analytics';
-import { useEffect } from 'react';
-
-function App() {
-  useEffect(() => {
-    formofy("YOUR_API_KEY");
-  }, []);
-  return <div>Your App</div>;
-}
-```
-
-### Next.js App Router
-```jsx
-// app/layout.tsx
-import { formofy } from '@formo/analytics';
-import { useEffect } from 'react';
-
-export default function RootLayout({ children }) {
-  useEffect(() => {
-    formofy("YOUR_API_KEY");
-  }, []);
-  
-  return (
-    <html>
-      <body>{children}</body>
-    </html>
-  );
-}
-```
-
-### Vue 3
-```javascript
-// main.js
-import { createApp } from 'vue';
-import { formofy } from '@formo/analytics';
-import App from './App.vue';
-
-const app = createApp(App);
-formofy("YOUR_API_KEY");
-app.mount('#app');
-```
-
-## Troubleshooting
-
-**SDK not loading?**
-```javascript
-console.log(typeof window.formofy); // Should output "function"
-```
-
-**Enable debug mode:**
-```javascript
-window.formofy("YOUR_API_KEY", { debug: true });
-```
-
-**Generate SRI hash:**
+**Usage:**
 ```bash
-cat formo-analytics.js | openssl dgst -sha384 -binary | openssl base64 -A
+./scripts/generate-inline-script.sh [version] --inline
 ```
 
-## Summary
+**Examples:**
+```bash
+# Generate for specific version
+./scripts/generate-inline-script.sh 1.20.0 --inline
 
-- ✅ Download pre-built bundle from npm/CDN
-- ✅ Host on your own infrastructure  
-- ✅ Use provided scripts for automation
-- ✅ Generate inline snippets (Safary-style)
-- ✅ Full npm package support for modern apps
-- ✅ Security features (SRI, HTTPS, CSP)
+# Generate for latest version
+./scripts/generate-inline-script.sh latest --inline
+```
 
-All files needed are in the `scripts/` directory. The SDK works exactly the same whether loaded from CDN or self-hosted.
-
+The generated file will be saved to `dist/inline-snippet-{version}.html`. Open this file, copy the entire contents, and paste it into your HTML `<head>` section.

@@ -35,6 +35,7 @@ node_modules/
 
 #Build output
 dist
+public
 
 # Optional npm cache directory
 .npm
