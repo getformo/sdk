@@ -26,12 +26,7 @@ You can install Formo on:
 
 ### Self-Hosting
 
-Want to host the SDK on your own infrastructure? See the [Self-Hosting Guide](SELF_HOSTING.md) for detailed instructions on:
-- Downloading and hosting the pre-built SDK bundle
-- Building from source
-- Versioning strategies
-- Automation scripts and CI/CD integration
-- Security best practices with SRI hashes
+Want to host the SDK on your own infrastructure? See [UPDATE.md](UPDATE.md) for instructions on downloading, hosting, and versioning the SDK.
 
 ## Configuration
 
