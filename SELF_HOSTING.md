@@ -32,61 +32,40 @@ After generating the inline snippet, you'll get a file that looks like this:
   Usage:
   1. Copy this entire snippet
   2. Paste into your HTML <head> section
-  3. Replace YOUR_API_KEY with your actual Formo API key
+  3. Replace <YOUR_WRITE_KEY> with your actual Formo API key
   
   Documentation: https://docs.formo.so
   GitHub: https://github.com/getformo/sdk
 -->
-<script>
-  /* Entire SDK code embedded here */
-  (function(){/* ... SDK code ... */})();
-</script>
-<script>
-  // Initialize Formo Analytics
-  if (typeof window.formofy === 'function') {
-    window.formofy("YOUR_API_KEY", {
-      debug: false, // Set to true for development/debugging
+<script defer>
+  // --- Begin Formo SDK ---
+  // Paste contents of formo.js here
+  // --- End Formo SDK ---
+
+  window.addEventListener('load', function () {
+    window.formofy('<YOUR_WRITE_KEY>', {
+      ready: function (formo) {
+        formo.identify();
+      },
     });
-  } else {
-    console.error('❌ Formo Analytics failed to load');
-  }
+  });
 </script>
 ```
 
 ### Basic Usage
 
 ```html
-<script>
+<script defer>
+  // --- Begin Formo SDK ---
   /* SDK code embedded */
-</script>
-<script>
-  window.formofy("YOUR_API_KEY");
-</script>
-```
+  // --- End Formo SDK ---
 
-### With Debug Mode
-
-```html
-<script>
-  /* SDK code embedded */
-</script>
-<script>
-  window.formofy("YOUR_API_KEY", {
-    debug: true
-  });
-</script>
-```
-
-### With Advanced Configuration
-
-```html
-<script>
-  /* SDK code embedded */
-</script>
-<script>
-  window.formofy("YOUR_API_KEY", {
-    debug: false,
-    // Additional configuration options can be added here
+  window.addEventListener('load', function () {
+    window.formofy('<YOUR_WRITE_KEY>', {
+      ready: function (formo) {
+        formo.identify();
+      },
+    });
   });
 </script>
 ```

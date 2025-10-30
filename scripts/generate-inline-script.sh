@@ -24,7 +24,11 @@ ACTUAL_VERSION=$VERSION
 if [ "$VERSION" = "latest" ]; then
   # Use unpkg for package.json since cdn.formo.so doesn't serve it
   echo "🔍 Resolving latest version..."
-  ACTUAL_VERSION=$(curl -s "https://unpkg.com/@formo/analytics@latest/package.json" | grep '"version"' | head -1 | cut -d'"' -f4)
+  ACTUAL_VERSION=$(curl -sL "https://unpkg.com/@formo/analytics@latest/package.json" | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+  if [ -z "$ACTUAL_VERSION" ]; then
+    echo "❌ Error: Failed to resolve latest version"
+    exit 1
+  fi
   echo "ℹ️  Latest version is: $ACTUAL_VERSION"
 fi
 
@@ -37,8 +41,10 @@ DEST_FILE="$DEST_DIR/$ACTUAL_VERSION/analytics.min.js"
 echo "⬇️  Fetching from cdn.formo.so..."
 SDK_CODE=$(curl -sSL --compressed "$SDK_URL")
 
-if [ -z "$SDK_CODE" ] || [ "${SDK_CODE:0:1}" = "<" ]; then
-  echo "❌ Error: Failed to download SDK"
+if [ -z "$SDK_CODE" ] || [ "${SDK_CODE:0:1}" = "<" ] || [ "${#SDK_CODE}" -lt 100 ]; then
+  echo "❌ Error: Failed to download SDK from $SDK_URL"
+  echo "   Response length: ${#SDK_CODE} characters"
+  echo "   First 100 chars: ${SDK_CODE:0:100}"
   exit 1
 fi
 
@@ -72,23 +78,23 @@ if [ "$MODE" = "inline" ]; then
   Usage:
   1. Copy this entire snippet
   2. Paste into your HTML <head> section
-  3. Replace YOUR_API_KEY with your actual Formo API key
+  3. Replace <YOUR_WRITE_KEY> with your actual Formo API key
   
   Documentation: https://docs.formo.so
   GitHub: https://github.com/getformo/sdk
 -->
-<script>
+<script defer>
+  // --- Begin Formo SDK ---
 ${SDK_CODE}
-</script>
-<script>
-  // Initialize Formo Analytics
-  if (typeof window.formofy === 'function') {
-    window.formofy("YOUR_API_KEY", {
-      debug: false, // Set to true for development/debugging
+  // --- End Formo SDK ---
+
+  window.addEventListener('load', function () {
+    window.formofy('<YOUR_WRITE_KEY>', {
+      ready: function (formo) {
+        formo.identify();
+      },
     });
-  } else {
-    console.error('❌ Formo Analytics failed to load');
-  }
+  });
 </script>
 EOF
 
@@ -106,7 +112,7 @@ EOF
   echo "   1. Open the file: $OUTPUT_FILE"
   echo "   2. Copy the entire contents"
   echo "   3. Paste into your HTML <head>"
-  echo "   4. Replace YOUR_API_KEY with your actual API key"
+  echo "   4. Replace <YOUR_WRITE_KEY> with your actual Formo API key"
   echo ""
   
 else
