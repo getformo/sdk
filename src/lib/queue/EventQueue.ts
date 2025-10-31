@@ -48,6 +48,14 @@ const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 1 MINUTE
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
+// Deduplication window: how long to keep event hashes for duplicate detection
+// This should be long enough to catch rapid duplicate events across flush cycles
+const DEDUPLICATION_WINDOW_MS = 1_000 * 60; // 60 seconds
+
+// Cleanup throttle: minimum time between cleanup operations to reduce overhead
+// during high-throughput periods. Cleanup also runs on flush as a safety net.
+const CLEANUP_THROTTLE_MS = 1_000 * 10; // 10 seconds
+
 export class EventQueue implements IEventQueue {
   private writeKey: string;
   private apiHost: string;
@@ -60,7 +68,8 @@ export class EventQueue implements IEventQueue {
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
-  private payloadHashes: Set<string> = new Set();
+  private payloadHashes: Map<string, number> = new Map(); // Map hash to timestamp for time-based cleanup
+  private lastCleanupTime: number = 0; // Track last cleanup to throttle cleanup operations
 
   constructor(writeKey: string, options: Options) {
     options = options || {};
@@ -101,24 +110,36 @@ export class EventQueue implements IEventQueue {
   }
 
   //#region Public functions
+  /**
+   * Generate a unique message ID for deduplication
+   * Uses second-level precision for better granularity while still catching rapid duplicates
+   * Hash is based on event data + timestamp, allowing same event at different times to be distinguished
+   */
   private async generateMessageId(event: IFormoEvent): Promise<string> {
-    const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
+    // Format timestamp to second precision (YYYY-MM-DD HH:mm:ss) for better deduplication
+    const date = new Date(event.original_timestamp);
+    
+    const formattedTimestamp = 
+      date.getUTCFullYear() + "-" +
+      ("0" + (date.getUTCMonth() + 1)).slice(-2) + "-" +
+      ("0" + date.getUTCDate()).slice(-2) + " " +
+      ("0" + date.getUTCHours()).slice(-2) + ":" +
+      ("0" + date.getUTCMinutes()).slice(-2) + ":" +
+      ("0" + date.getUTCSeconds()).slice(-2);
+    
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
-    return hash(eventString);
+    return await hash(eventString);
   }
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
     const message_id = await this.generateMessageId(event);
-    // check if the message already exists
+    // check if the message already exists within the deduplication window
+    // Deduplication is based on hash equality + real-time window (60s since first seen)
     if (await this.isDuplicate(message_id)) {
-      logger.warn(
-        `Event already enqueued, try again after ${millisecondsToSecond(
-          this.flushIntervalMs
-        )} seconds.`
-      );
+      // Duplicate detected - isDuplicate() already logged a detailed warning
       return;
     }
 
@@ -160,6 +181,11 @@ export class EventQueue implements IEventQueue {
       this.timer = null;
     }
 
+    // Clean up old hashes periodically during flush to prevent memory leaks
+    // This ensures cleanup happens even when no new events arrive
+    // Force cleanup to bypass throttling since flush is our safety net
+    this.cleanupOldHashes(true);
+
     if (!this.queue.length) {
       callback();
       return Promise.resolve();
@@ -175,7 +201,9 @@ export class EventQueue implements IEventQueue {
     }
 
     const items = this.queue.splice(0, this.flushAt);
-    this.payloadHashes.clear();
+    
+    // Note: We no longer clear payloadHashes on flush to maintain deduplication across flush cycles
+    // Old hashes are cleaned up periodically in cleanupOldHashes() based on DEDUPLICATION_WINDOW_MS
     
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
@@ -237,11 +265,63 @@ export class EventQueue implements IEventQueue {
     return false;
   }
 
-  private async isDuplicate(eventId: string) {
-    // check if exists a message with identical payload within 1 minute
-    if (this.payloadHashes.has(eventId)) return true;
+  /**
+   * Clean up old hashes that are outside the deduplication window
+   * This prevents memory leaks by removing hashes we no longer need to track
+   * Called both during duplicate checks (throttled) and periodic flush cycles (always)
+   * @param force If true, bypass throttling and always run cleanup (used by flush)
+   */
+  private cleanupOldHashes(force: boolean = false): void {
+    const now = Date.now();
+    
+    // Throttle cleanup to reduce overhead during high-throughput periods
+    // unless forced (e.g., by flush cycle)
+    if (!force && now - this.lastCleanupTime < CLEANUP_THROTTLE_MS) {
+      return; // Skip cleanup if we ran it recently
+    }
+    
+    this.lastCleanupTime = now;
+    
+    // Clean up old hashes based on actual elapsed time (Date.now())
+    // This handles out-of-order events correctly - we clean up based on real time passage
+    // not based on event timestamps which may arrive out of order
+    // Note: Map.forEach() safely supports deletion during iteration
+    this.payloadHashes.forEach((storedTimestamp, hash) => {
+      // storedTimestamp is when we first saw this hash (Date.now() at storage time)
+      if (now - storedTimestamp > DEDUPLICATION_WINDOW_MS) {
+        this.payloadHashes.delete(hash);
+      }
+    });
+  }
 
-    this.payloadHashes.add(eventId);
+  /**
+   * Check if an event is a duplicate
+   * Events are considered duplicates if they have the same hash within the deduplication window
+   * The deduplication window is 60 seconds of real time (since we first saw the event)
+   * 
+   * @param eventId The hash of the event (generated from event.original_timestamp + event data)
+   * @returns true if duplicate (should be blocked), false otherwise
+   */
+  private async isDuplicate(eventId: string): Promise<boolean> {
+    const now = Date.now();
+    
+    // Clean up old hashes to prevent memory leaks
+    this.cleanupOldHashes();
+    
+    // Check if this event already exists within the deduplication window
+    if (this.payloadHashes.has(eventId)) {
+      const storedAt = this.payloadHashes.get(eventId)!;
+      const elapsedRealTime = now - storedAt;
+      logger.warn(
+        `Duplicate event detected and blocked. Same event was first seen ${Math.round(elapsedRealTime / 1000)}s ago. ` +
+        `Events are deduplicated within a ${DEDUPLICATION_WINDOW_MS / 1000}s window.`
+      );
+      return true;
+    }
+
+    // Store the hash with the current time (Date.now()) for cleanup purposes
+    // This ensures cleanup works correctly even with out-of-order events
+    this.payloadHashes.set(eventId, now);
     return false;
   }
 
