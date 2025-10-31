@@ -159,6 +159,15 @@ export interface Options {
    * @default true
    */
   autocapture?: boolean | AutocaptureOptions;
+  /**
+   * Custom API host for sending events through your own domain to bypass ad blockers
+   * - If not provided, events are sent directly to events.formo.so
+   * - When provided, events are sent to your custom endpoint which should forward them to Formo
+   * - Example: 'https://your-host-url.com/ingest' or '/api/analytics'
+   * 
+   * See https://docs.formo.so/sdks/web#proxy for setup instructions
+   */
+  apiHost?: string;
   flushAt?: number;
   flushInterval?: number;
   retryCount?: number;

@@ -1,6 +1,6 @@
 import { createStore, EIP6963ProviderDetail } from "mipd";
 import {
-  EVENTS_API_URL,
+  EVENTS_API_HOST,
   EventType,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_CURRENT_URL_KEY,
@@ -164,7 +164,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.eventManager = new EventManager(
       new EventQueue(this.config.writeKey, {
-        url: EVENTS_API_URL,
+        apiHost: options.apiHost || EVENTS_API_HOST,
         flushAt: options.flushAt,
         retryCount: options.retryCount,
         maxQueueSize: options.maxQueueSize,
