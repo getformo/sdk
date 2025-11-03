@@ -4,7 +4,7 @@
 
 "@actions/core@^1.10.0":
   version "1.11.1"
-  resolved "https://registry.npmjs.org/@actions/core/-/core-1.11.1.tgz"
+  resolved "https://registry.yarnpkg.com/@actions/core/-/core-1.11.1.tgz#ae683aac5112438021588030efb53b1adb86f172"
   integrity sha512-hXJCSrkwfA46Vd9Z3q4cpEpHB1rL5NG04+/rbqW9d3+CSvtB1tYe8UTpAlixa1vj0m/ULglfEK2UKxMGxCxv5A==
   dependencies:
     "@actions/exec" "^1.1.1"
@@ -1908,7 +1908,7 @@
 
 "@semantic-release/npm@12.0.1", "@semantic-release/npm@^12.0.0":
   version "12.0.1"
-  resolved "https://registry.npmjs.org/@semantic-release/npm/-/npm-12.0.1.tgz"
+  resolved "https://registry.yarnpkg.com/@semantic-release/npm/-/npm-12.0.1.tgz#ffb47906de95f8dade8fe0480df0a08dbe1b80c9"
   integrity sha512-/6nntGSUGK2aTOI0rHPwY3ZjgY9FkXmEHbW9Kr+62NVOsyqpKKeP0lrCH+tphv+EsNdJNmqqwijTEnVWUMQ2Nw==
   dependencies:
     "@semantic-release/error" "^4.0.0"
@@ -5426,7 +5426,7 @@ ip-address@^9.0.5:
 
 ip-regex@^5.0.0:
   version "5.0.0"
-  resolved "https://registry.npmjs.org/ip-regex/-/ip-regex-5.0.0.tgz"
+  resolved "https://registry.yarnpkg.com/ip-regex/-/ip-regex-5.0.0.tgz#cd313b2ae9c80c07bd3851e12bf4fa4dc5480632"
   integrity sha512-fOCG6lhoKKakwv+C6KdsOnGvgXnmgfmp0myi3bcNwj3qfwPAxRKWEuFhvEFF7ceYIz6+1jRZ+yguLFAmUNPEfw==
 
 is-arguments@^1.1.1:
