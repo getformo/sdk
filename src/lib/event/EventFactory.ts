@@ -152,6 +152,7 @@ class EventFactory implements IEventFactory {
   };
 
   // Get screen dimensions and pixel density
+  // Returns safe defaults if any error occurs to ensure event creation continues
   private getScreen(): {
     screen_width: number;
     screen_height: number;
@@ -159,6 +160,14 @@ class EventFactory implements IEventFactory {
     viewport_width: number;
     viewport_height: number;
   } {
+    const safeDefaults = {
+      screen_width: 0,
+      screen_height: 0,
+      screen_density: 1,
+      viewport_width: 0,
+      viewport_height: 0,
+    };
+
     try {
       return {
         screen_width: globalThis.screen?.width || 0,
@@ -169,13 +178,7 @@ class EventFactory implements IEventFactory {
       };
     } catch (error) {
       logger.error("Error resolving screen properties:", error);
-      return {
-        screen_width: 0,
-        screen_height: 0,
-        screen_density: 1,
-        viewport_width: 0,
-        viewport_height: 0,
-      };
+      return safeDefaults;
     }
   }
 
