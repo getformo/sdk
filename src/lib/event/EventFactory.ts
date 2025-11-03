@@ -151,6 +151,34 @@ class EventFactory implements IEventFactory {
     return finalTrafficSources;
   };
 
+  // Get screen dimensions and pixel density
+  private getScreen(): {
+    screen_width: number;
+    screen_height: number;
+    screen_density: number;
+    viewport_width: number;
+    viewport_height: number;
+  } {
+    try {
+      return {
+        screen_width: globalThis.screen?.width || 0,
+        screen_height: globalThis.screen?.height || 0,
+        screen_density: globalThis.devicePixelRatio || 1,
+        viewport_width: globalThis.innerWidth || 0,
+        viewport_height: globalThis.innerHeight || 0,
+      };
+    } catch (error) {
+      logger.error("Error resolving screen properties:", error);
+      return {
+        screen_width: 0,
+        screen_height: 0,
+        screen_density: 1,
+        viewport_width: 0,
+        viewport_height: 0,
+      };
+    }
+  }
+
   // Contextual fields that are automatically collected and populated by the Formo SDK
   private async generateContext(
     context?: IFormoEventContext
@@ -175,6 +203,7 @@ class EventFactory implements IEventFactory {
       library_name: "Formo Web SDK",
       library_version,
       browser: browserName,
+      ...this.getScreen(),
     };
 
     const mergedContext = mergeDeepRight(
