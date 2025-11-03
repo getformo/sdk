@@ -46,7 +46,7 @@ jobs:
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
       - name: Install dependencies
-        run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
+        run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }} --ignore-engines
       - name: Build SDK
         run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.build_command }}
       - name: Release
