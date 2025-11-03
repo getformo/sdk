@@ -148,6 +148,27 @@ export interface AutocaptureOptions {
   chain?: boolean;
 }
 
+/**
+ * Configuration options for referral parameter parsing
+ */
+export interface ReferralOptions {
+  /**
+   * Custom query parameter names to check for referral codes
+   * @default ["ref", "referral", "refcode"]
+   * @example ["via", "referrer", "source"] - will check ?via=CODE, ?referrer=CODE, ?source=CODE
+   */
+  queryParams?: string[];
+
+  /**
+   * URL path patterns to extract referral codes from
+   * Each pattern should be a regex string that matches the path segment containing the referral code
+   * The first capture group will be used as the referral code
+   * @example ["/r/([^/]+)"] - will extract "01K17FKB" from "https://glider.fi/r/01K17FKB"
+   * @example ["/referral/([^/]+)", "/ref/([^/]+)"] - will match multiple patterns
+   */
+  pathPatterns?: string[];
+}
+
 export interface Options {
   provider?: EIP1193Provider;
   tracking?: boolean | TrackingOptions;
@@ -176,6 +197,12 @@ export interface Options {
     enabled?: boolean;
     levels?: LogLevel[];
   };
+  /**
+   * Configuration for referral parameter parsing from URLs
+   * Allows customizing how referral codes are detected from query parameters and URL paths
+   * @example { queryParams: ["via"], pathPatterns: ["/r/([^/]+)"] }
+   */
+  referral?: ReferralOptions;
   ready?: (formo: IFormoAnalytics) => void;
 }
 

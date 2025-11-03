@@ -14,7 +14,6 @@ import {
   Nullable,
   SignatureStatus,
   TransactionStatus,
-  UTMParameters,
 } from "../../types";
 import { toChecksumAddress, toSnakeCase } from "../../utils";
 import { getValidAddress } from "../../utils/address";
@@ -68,87 +67,25 @@ class EventFactory implements IEventFactory {
     return version;
   }
 
-  private extractUTMParameters = (url: string): UTMParameters => {
-    const result: UTMParameters = {
+  /**
+   * Retrieves stored traffic sources from session storage
+   * Traffic sources are parsed and stored during initialization
+   */
+  private getTrafficSources = (): ITrafficSource => {
+    const stored = session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource;
+    if (stored) {
+      return stored;
+    }
+    // Return defaults if nothing stored (shouldn't happen after init, but safe fallback)
+    return {
+      ref: "",
+      referrer: document.referrer || "",
       utm_campaign: "",
       utm_content: "",
       utm_medium: "",
       utm_source: "",
       utm_term: "",
     };
-    try {
-      const urlObj = new URL(url);
-      const UTM_PREFIX = "utm_";
-      urlObj.searchParams.forEach((value, sParam) => {
-        if (sParam.startsWith(UTM_PREFIX)) {
-          result[sParam as keyof UTMParameters] = value.trim();
-        }
-      });
-    } catch (error) {}
-    return result;
-  };
-
-  private extractReferralParameter = (urlObj: URL): string => {
-    const referralParams = ["ref", "referral", "refcode"];
-
-    for (const param of referralParams) {
-      const value = urlObj.searchParams.get(param)?.trim();
-      if (value) return value;
-    }
-
-    return "";
-  };
-
-  private getTrafficSources = (url: string): ITrafficSource => {
-    const urlObj = new URL(url);
-    const contextTrafficSources: ITrafficSource = {
-      ...this.extractUTMParameters(url),
-      ref: this.extractReferralParameter(urlObj),
-      referrer: document.referrer,
-    };
-    const storedTrafficSources =
-      (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {};
-
-    const finalTrafficSources: ITrafficSource = {
-      ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
-      referrer:
-        contextTrafficSources.referrer || storedTrafficSources?.referrer || "",
-      utm_campaign:
-        contextTrafficSources.utm_campaign ||
-        storedTrafficSources?.utm_campaign ||
-        "",
-      utm_content:
-        contextTrafficSources.utm_content ||
-        storedTrafficSources?.utm_content ||
-        "",
-      utm_medium:
-        contextTrafficSources.utm_medium ||
-        storedTrafficSources?.utm_medium ||
-        "",
-      utm_source:
-        contextTrafficSources.utm_source ||
-        storedTrafficSources?.utm_source ||
-        "",
-      utm_term:
-        contextTrafficSources.utm_term || storedTrafficSources?.utm_term || "",
-    };
-
-    // Store to session
-    const sessionStoredTrafficSources = Object.keys(finalTrafficSources).reduce(
-      (res: any, key: any) => {
-        const value = finalTrafficSources[key as keyof ITrafficSource];
-        if (!isUndefined(value) && value !== "") {
-          res[key as keyof ITrafficSource] = value;
-        }
-        return res;
-      },
-      {}
-    );
-
-    if (Object.keys(sessionStoredTrafficSources).length)
-      session().set(SESSION_TRAFFIC_SOURCE_KEY, sessionStoredTrafficSources);
-
-    return finalTrafficSources;
   };
 
   // Contextual fields that are automatically collected and populated by the Formo SDK
@@ -168,7 +105,7 @@ class EventFactory implements IEventFactory {
       locale: language,
       timezone,
       location,
-      ...this.getTrafficSources(globalThis.location.href),
+      ...this.getTrafficSources(),
       page_path: path,
       page_title: document.title,
       page_url: globalThis.location.href,
