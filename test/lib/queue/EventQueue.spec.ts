@@ -57,7 +57,7 @@ describe("EventQueue Deduplication", () => {
     
     // Create a new EventQueue instance for each test
     eventQueue = new EventQueue(mockWriteKey, {
-      url: "https://api.test.com/events",
+      apiHost: "https://api.test.com/events",
       flushAt: 20,
       flushInterval: 30000, // 30 seconds
       maxQueueSize: 1024 * 500, // 500kB
