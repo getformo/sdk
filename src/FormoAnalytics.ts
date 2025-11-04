@@ -22,7 +22,6 @@ import {
   setConsentFlag,
   getConsentFlag,
   removeConsentFlag,
-  TrafficSource,
 } from "./lib";
 import {
   Address,
@@ -170,14 +169,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         retryCount: options.retryCount,
         maxQueueSize: options.maxQueueSize,
         flushInterval: options.flushInterval,
-      })
+      }),
+      options.referral
     );
-
-    // Initialize and parse traffic sources (referral codes, UTM params, etc.)
-    if (typeof window !== "undefined") {
-      const trafficSource = new TrafficSource(options.referral);
-      trafficSource.parseAndStore(window.location.href);
-    }
 
     // Check consent status on initialization
     if (this.hasOptedOutTracking()) {
