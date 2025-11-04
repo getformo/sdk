@@ -170,7 +170,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         maxQueueSize: options.maxQueueSize,
         flushInterval: options.flushInterval,
       }),
-      options.referral
+      options
     );
 
     // Check consent status on initialization

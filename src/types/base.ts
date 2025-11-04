@@ -150,6 +150,46 @@ export interface AutocaptureOptions {
 
 /**
  * Configuration options for referral parameter parsing
+ * 
+ * @example
+ * // Example 1: Custom query parameters
+ * FormoAnalytics.init(writeKey, {
+ *   referral: {
+ *     queryParams: ["via", "source"]
+ *   }
+ * });
+ * // Captures: ?via=CODE or ?source=CODE
+ * 
+ * @example
+ * // Example 2: URL path patterns
+ * FormoAnalytics.init(writeKey, {
+ *   referral: {
+ *     pathPatterns: ["/r/([^/]+)", "/invite/([^/]+)"]
+ *   }
+ * });
+ * // Captures: /r/ABC123 or /invite/XYZ789
+ * 
+ * @example
+ * // Example 3: Combined query params and path patterns
+ * FormoAnalytics.init(writeKey, {
+ *   referral: {
+ *     queryParams: ["via", "ref"],
+ *     pathPatterns: ["/r/([^/]+)"]
+ *   }
+ * });
+ * // Captures: ?via=CODE, ?ref=CODE, or /r/CODE
+ * 
+ * @example
+ * // Example 4: Complex path patterns
+ * FormoAnalytics.init(writeKey, {
+ *   referral: {
+ *     pathPatterns: [
+ *       "/refer/([a-zA-Z0-9]+)",        // /refer/ABC123
+ *       "/join/([^/]+)/team",            // /join/CODE/team
+ *       "/promo/([0-9A-Z]{6})"          // /promo/XYZ789
+ *     ]
+ *   }
+ * });
  */
 export interface ReferralOptions {
   /**

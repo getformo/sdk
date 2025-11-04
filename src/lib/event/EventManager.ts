@@ -1,4 +1,4 @@
-import { Address, APIEvent, ReferralOptions } from "../../types";
+import { Address, APIEvent, Options } from "../../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
 import { EventFactory } from "./EventFactory";
@@ -15,11 +15,11 @@ class EventManager implements IEventManager {
   /**
    *
    * @param eventQueue Event queue instance
-   * @param referralOptions Optional referral parsing configuration
+   * @param options Optional configuration (referral parsing, etc.)
    */
-  constructor(eventQueue: IEventQueue, referralOptions?: ReferralOptions) {
+  constructor(eventQueue: IEventQueue, options?: Options) {
     this.eventQueue = eventQueue;
-    this.eventFactory = new EventFactory(referralOptions);
+    this.eventFactory = new EventFactory(options);
   }
 
   /**

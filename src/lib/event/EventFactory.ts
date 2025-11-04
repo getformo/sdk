@@ -12,7 +12,7 @@ import {
   IFormoEventProperties,
   ITrafficSource,
   Nullable,
-  ReferralOptions,
+  Options,
   SignatureStatus,
   TransactionStatus,
   UTMParameters,
@@ -31,10 +31,10 @@ import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
 
 class EventFactory implements IEventFactory {
-  private referralOptions?: ReferralOptions;
+  private options?: Options;
 
-  constructor(referralOptions?: ReferralOptions) {
-    this.referralOptions = referralOptions;
+  constructor(options?: Options) {
+    this.options = options;
   }
   private getTimezone(): string {
     try {
@@ -98,7 +98,7 @@ class EventFactory implements IEventFactory {
     // Get query parameter names to check (default or custom)
     const defaultParams = ["ref", "referral", "refcode"];
     const referralParams =
-      this.referralOptions?.queryParams || defaultParams;
+      this.options?.referral?.queryParams || defaultParams;
 
     // Check query parameters first
     for (const param of referralParams) {
@@ -107,9 +107,9 @@ class EventFactory implements IEventFactory {
     }
 
     // Check URL path patterns if configured
-    if (this.referralOptions?.pathPatterns?.length) {
+    if (this.options?.referral?.pathPatterns?.length) {
       const pathname = urlObj.pathname;
-      for (const pattern of this.referralOptions.pathPatterns) {
+      for (const pattern of this.options.referral.pathPatterns) {
         try {
           const regex = new RegExp(pattern);
           const match = pathname.match(regex);
