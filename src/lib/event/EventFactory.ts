@@ -95,12 +95,16 @@ class EventFactory implements IEventFactory {
   };
 
   private extractReferralParameter = (urlObj: URL): string => {
-    // Get query parameter names to check (default or custom)
+    // Determine which query params to check:
+    // - If no referral config exists → use defaults
+    // - If referral config exists but queryParams is undefined → use empty array (skip query params)
+    // - If referral config exists with queryParams → use those
     const defaultParams = ["ref", "referral", "refcode"];
-    const referralParams =
-      this.options?.referral?.queryParams || defaultParams;
+    const referralParams = !this.options?.referral
+      ? defaultParams  // No referral config at all → use defaults
+      : (this.options.referral.queryParams || []);  // Has config → use queryParams or empty array
 
-    // Check query parameters first
+    // Check query parameters (if any configured)
     for (const param of referralParams) {
       const value = urlObj.searchParams.get(param)?.trim();
       if (value) return value;
