@@ -32,9 +32,20 @@ import { detectBrowser } from "../browser/browsers";
 
 class EventFactory implements IEventFactory {
   private options?: Options;
+  private compiledPathPattern?: RegExp;
 
   constructor(options?: Options) {
     this.options = options;
+    // Compile regex pattern once for better performance
+    if (options?.referral?.pathPattern) {
+      try {
+        this.compiledPathPattern = new RegExp(options.referral.pathPattern);
+      } catch (error) {
+        logger.warn(
+          `Invalid referral path pattern: ${options.referral.pathPattern}. Error: ${error}`
+        );
+      }
+    }
   }
   private getTimezone(): string {
     try {
@@ -112,19 +123,12 @@ class EventFactory implements IEventFactory {
     }
 
     // Check URL path pattern if configured
-    if (this.options?.referral?.pathPattern) {
+    if (this.compiledPathPattern) {
       const pathname = urlObj.pathname;
-      try {
-        const regex = new RegExp(this.options.referral.pathPattern);
-        const match = pathname.match(regex);
-        if (match && match[1]) {
-          const referralCode = match[1].trim();
-          if (referralCode) return referralCode;
-        }
-      } catch (error) {
-        logger.warn(
-          `Invalid referral path pattern: ${this.options.referral.pathPattern}. Error: ${error}`
-        );
+      const match = pathname.match(this.compiledPathPattern);
+      if (match && match[1]) {
+        const referralCode = match[1].trim();
+        if (referralCode) return referralCode;
       }
     }
 
