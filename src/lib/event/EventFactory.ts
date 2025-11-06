@@ -95,7 +95,8 @@ class EventFactory implements IEventFactory {
   };
 
   private extractReferralParameter = (urlObj: URL): string => {
-    // Determine which query params to check:
+    // Strategy: Check query params first, then check path pattern if configured
+    // Query params logic:
     // - If no referral config exists → use defaults
     // - If referral config exists but queryParams is undefined → use defaults
     // - If referral config exists with queryParams → use those
@@ -110,22 +111,20 @@ class EventFactory implements IEventFactory {
       if (value) return value;
     }
 
-    // Check URL path patterns if configured
-    if (this.options?.referral?.pathPatterns?.length) {
+    // Check URL path pattern if configured
+    if (this.options?.referral?.pathPattern) {
       const pathname = urlObj.pathname;
-      for (const pattern of this.options.referral.pathPatterns) {
-        try {
-          const regex = new RegExp(pattern);
-          const match = pathname.match(regex);
-          if (match && match[1]) {
-            const referralCode = match[1].trim();
-            if (referralCode) return referralCode;
-          }
-        } catch (error) {
-          logger.warn(
-            `Invalid referral path pattern: ${pattern}. Error: ${error}`
-          );
+      try {
+        const regex = new RegExp(this.options.referral.pathPattern);
+        const match = pathname.match(regex);
+        if (match && match[1]) {
+          const referralCode = match[1].trim();
+          if (referralCode) return referralCode;
         }
+      } catch (error) {
+        logger.warn(
+          `Invalid referral path pattern: ${this.options.referral.pathPattern}. Error: ${error}`
+        );
       }
     }
 

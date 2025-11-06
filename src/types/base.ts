@@ -161,35 +161,23 @@ export interface AutocaptureOptions {
  * // Captures: ?via=CODE or ?source=CODE
  * 
  * @example
- * // Example 2: URL path patterns
+ * // Example 2: URL path pattern
  * FormoAnalytics.init(writeKey, {
  *   referral: {
- *     pathPatterns: ["/r/([^/]+)", "/invite/([^/]+)"]
+ *     pathPattern: "/r/([^/]+)"
  *   }
  * });
- * // Captures: /r/ABC123 or /invite/XYZ789
+ * // Captures: /r/ABC123
  * 
  * @example
- * // Example 3: Combined query params and path patterns
+ * // Example 3: Combined query params and path pattern
  * FormoAnalytics.init(writeKey, {
  *   referral: {
  *     queryParams: ["via", "ref"],
- *     pathPatterns: ["/r/([^/]+)"]
+ *     pathPattern: "/r/([^/]+)"
  *   }
  * });
  * // Captures: ?via=CODE, ?ref=CODE, or /r/CODE
- * 
- * @example
- * // Example 4: Complex path patterns
- * FormoAnalytics.init(writeKey, {
- *   referral: {
- *     pathPatterns: [
- *       "/refer/([a-zA-Z0-9]+)",        // /refer/ABC123
- *       "/join/([^/]+)/team",            // /join/CODE/team
- *       "/promo/([0-9A-Z]{6})"          // /promo/XYZ789
- *     ]
- *   }
- * });
  */
 export interface ReferralOptions {
   /**
@@ -200,13 +188,12 @@ export interface ReferralOptions {
   queryParams?: string[];
 
   /**
-   * URL path patterns to extract referral codes from
-   * Each pattern should be a regex string that matches the path segment containing the referral code
+   * URL path pattern to extract referral code from
+   * Should be a regex string that matches the path segment containing the referral code
    * The first capture group will be used as the referral code
-   * @example ["/r/([^/]+)"] - will extract "01K17FKB" from "https://glider.fi/r/01K17FKB"
-   * @example ["/referral/([^/]+)", "/ref/([^/]+)"] - will match multiple patterns
+   * @example "/r/([^/]+)" - will extract "01K17FKB" from "https://glider.fi/r/01K17FKB"
    */
-  pathPatterns?: string[];
+  pathPattern?: string;
 }
 
 export interface Options {
@@ -240,7 +227,7 @@ export interface Options {
   /**
    * Configuration for referral parameter parsing from URLs
    * Allows customizing how referral codes are detected from query parameters and URL paths
-   * @example { queryParams: ["via"], pathPatterns: ["/r/([^/]+)"] }
+   * @example { queryParams: ["via"], pathPattern: "/r/([^/]+)" }
    */
   referral?: ReferralOptions;
   ready?: (formo: IFormoAnalytics) => void;
