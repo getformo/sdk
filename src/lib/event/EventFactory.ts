@@ -12,6 +12,7 @@ import {
   IFormoEventProperties,
   ITrafficSource,
   Nullable,
+  Options,
   SignatureStatus,
   TransactionStatus,
   UTMParameters,
@@ -30,6 +31,22 @@ import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
 
 class EventFactory implements IEventFactory {
+  private options?: Options;
+  private compiledPathPattern?: RegExp;
+
+  constructor(options?: Options) {
+    this.options = options;
+    // Compile regex pattern once for better performance
+    if (options?.referral?.pathPattern) {
+      try {
+        this.compiledPathPattern = new RegExp(options.referral.pathPattern);
+      } catch (error) {
+        logger.warn(
+          `Invalid referral path pattern: ${options.referral.pathPattern}. Error: ${error}`
+        );
+      }
+    }
+  }
   private getTimezone(): string {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -89,11 +106,30 @@ class EventFactory implements IEventFactory {
   };
 
   private extractReferralParameter = (urlObj: URL): string => {
-    const referralParams = ["ref", "referral", "refcode"];
+    // Strategy: Check query params first, then check path pattern if configured
+    // Query params logic:
+    // - If no referral config exists → use defaults
+    // - If referral config exists but queryParams is undefined → use defaults
+    // - If referral config exists with queryParams → use those
+    const defaultParams = ["ref", "referral", "refcode"];
+    const referralParams = !this.options?.referral
+      ? defaultParams  // No referral config at all → use defaults
+      : (this.options.referral.queryParams ?? defaultParams);  // Has config → use queryParams or defaults
 
+    // Check query parameters (if any configured)
     for (const param of referralParams) {
       const value = urlObj.searchParams.get(param)?.trim();
       if (value) return value;
+    }
+
+    // Check URL path pattern if configured
+    if (this.compiledPathPattern) {
+      const pathname = urlObj.pathname;
+      const match = pathname.match(this.compiledPathPattern);
+      if (match && match[1]) {
+        const referralCode = match[1].trim();
+        if (referralCode) return referralCode;
+      }
     }
 
     return "";
@@ -151,6 +187,37 @@ class EventFactory implements IEventFactory {
     return finalTrafficSources;
   };
 
+  // Get screen dimensions and pixel density
+  // Returns safe defaults if any error occurs to ensure event creation continues
+  private getScreen(): {
+    screen_width: number;
+    screen_height: number;
+    screen_density: number;
+    viewport_width: number;
+    viewport_height: number;
+  } {
+    const safeDefaults = {
+      screen_width: 0,
+      screen_height: 0,
+      screen_density: 1,
+      viewport_width: 0,
+      viewport_height: 0,
+    };
+
+    try {
+      return {
+        screen_width: globalThis.screen?.width || 0,
+        screen_height: globalThis.screen?.height || 0,
+        screen_density: globalThis.devicePixelRatio || 1,
+        viewport_width: globalThis.innerWidth || 0,
+        viewport_height: globalThis.innerHeight || 0,
+      };
+    } catch (error) {
+      logger.error("Error resolving screen properties:", error);
+      return safeDefaults;
+    }
+  }
+
   // Contextual fields that are automatically collected and populated by the Formo SDK
   private async generateContext(
     context?: IFormoEventContext
@@ -175,6 +242,7 @@ class EventFactory implements IEventFactory {
       library_name: "Formo Web SDK",
       library_version,
       browser: browserName,
+      ...this.getScreen(),
     };
 
     const mergedContext = mergeDeepRight(
