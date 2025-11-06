@@ -12,6 +12,7 @@ import {
   IFormoEventProperties,
   ITrafficSource,
   Nullable,
+  Options,
   SignatureStatus,
   TransactionStatus,
   UTMParameters,
@@ -30,6 +31,22 @@ import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
 
 class EventFactory implements IEventFactory {
+  private options?: Options;
+  private compiledPathPattern?: RegExp;
+
+  constructor(options?: Options) {
+    this.options = options;
+    // Compile regex pattern once for better performance
+    if (options?.referral?.pathPattern) {
+      try {
+        this.compiledPathPattern = new RegExp(options.referral.pathPattern);
+      } catch (error) {
+        logger.warn(
+          `Invalid referral path pattern: ${options.referral.pathPattern}. Error: ${error}`
+        );
+      }
+    }
+  }
   private getTimezone(): string {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -89,11 +106,30 @@ class EventFactory implements IEventFactory {
   };
 
   private extractReferralParameter = (urlObj: URL): string => {
-    const referralParams = ["ref", "referral", "refcode"];
+    // Strategy: Check query params first, then check path pattern if configured
+    // Query params logic:
+    // - If no referral config exists → use defaults
+    // - If referral config exists but queryParams is undefined → use defaults
+    // - If referral config exists with queryParams → use those
+    const defaultParams = ["ref", "referral", "refcode"];
+    const referralParams = !this.options?.referral
+      ? defaultParams  // No referral config at all → use defaults
+      : (this.options.referral.queryParams ?? defaultParams);  // Has config → use queryParams or defaults
 
+    // Check query parameters (if any configured)
     for (const param of referralParams) {
       const value = urlObj.searchParams.get(param)?.trim();
       if (value) return value;
+    }
+
+    // Check URL path pattern if configured
+    if (this.compiledPathPattern) {
+      const pathname = urlObj.pathname;
+      const match = pathname.match(this.compiledPathPattern);
+      if (match && match[1]) {
+        const referralCode = match[1].trim();
+        if (referralCode) return referralCode;
+      }
     }
 
     return "";

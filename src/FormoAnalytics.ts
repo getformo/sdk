@@ -169,7 +169,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         retryCount: options.retryCount,
         maxQueueSize: options.maxQueueSize,
         flushInterval: options.flushInterval,
-      })
+      }),
+      options
     );
 
     // Check consent status on initialization
