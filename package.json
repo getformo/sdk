@@ -1,6 +1,7 @@
 {
   "name": "@formo/analytics",
   "version": "1.24.0",
+  "packageManager": "pnpm@9.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/getformo/sdk.git"
@@ -36,12 +37,10 @@
     "@babel/core": "^7.x",
     "@babel/plugin-syntax-flow": "^7.14.5",
     "@babel/plugin-transform-react-jsx": "^7.14.9",
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.27.0",
     "@commitlint/cli": "^17.3.0",
     "@commitlint/config-conventional": "^17.3.0",
-    "@semantic-release/exec": "7.1.0",
-    "@semantic-release/git": "10.0.1",
-    "@semantic-release/github": "11.0.3",
-    "@semantic-release/npm": "13.1.1",
     "@size-limit/esbuild": "^11.2.0",
     "@size-limit/file": "^11.2.0",
     "@testing-library/react": "^13.4.0",
@@ -70,8 +69,6 @@
     "prettier": "^2.6.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "semantic-release": "24.2.5",
-    "semantic-release-export-data": "^1.0.1",
     "sinon": "^14.0.0",
     "sinon-chai": "^3.7.0",
     "size-limit": "^11.2.0",
@@ -82,10 +79,10 @@
     "webpack-cli": "^4.10.0"
   },
   "scripts": {
-    "prebuild": "yarn clean",
-    "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production && yarn clean-build",
-    "build-cjs": "yarn tsc --build",
-    "build-esm": "yarn tsc -m es6 --outdir dist/esm",
+    "prebuild": "pnpm clean",
+    "build": "pnpm build-cjs && pnpm build-esm && pnpm webpack --mode=production && pnpm clean-build",
+    "build-cjs": "pnpm tsc --build",
+    "build-esm": "pnpm tsc -m es6 --outdir dist/esm",
     "clean": "rm -rf dist",
     "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\;",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
@@ -93,7 +90,12 @@
     "test-watch": "nodemon --config test.nodemon.json",
     "prepare": "husky install",
     "commit": "git add . && cz",
-    "pub": "yarn build && npm publish",
+    "changeset": "changeset",
+    "version:update": "genversion src/lib/version.ts",
+    "changeset:version": "changeset version && pnpm version:update",
+    "changeset:prepublish": "pnpm version:update && pnpm build",
+    "changeset:publish": "pnpm changeset:prepublish && changeset publish",
+    "release": "pnpm changeset:publish",
     "size": "size-limit"
   },
   "size-limit": [

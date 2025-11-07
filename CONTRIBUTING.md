@@ -6,21 +6,15 @@ If you want to contribute or run a local version of the Formo Analytics SDK, fol
 
 Run the following command to build both CommonJS and ESM versions of the SDK:
 
-```jsx
-yarn build-cjs && yarn build-esm && yarn webpack --mode=production
-```
-
-or if you're using NPM:
-
-```jsx
-npm run build
+```bash
+pnpm build
 ```
 
 ### Testing locally
 
 1. Link the local package to your project
 
-> See [this guide](https://dev.to/one-beyond/different-approaches-to-testing-your-own-packages-locally-npm-link-4hoj) on how to use `npm link` or [this guide](https://classic.yarnpkg.com/lang/en/docs/cli/link/) for `yarn link` to test the package locally.
+> See [pnpm link documentation](https://pnpm.io/cli/link) for more details on linking packages locally.
 
 For example, if I want to test the package with a project that is in the same directory:
 
@@ -33,18 +27,19 @@ For example, if I want to test the package with a project that is in the same di
 Run the following command:
 
 ```bash
-# ~/formo-analytics-example-next
-npm link ../sdk
-OR
-yarn link ../sdk
+# In ~/sdk (the package you want to link)
+pnpm link --global
+
+# In ~/formo-analytics-example-next (your test project)
+pnpm link --global @formo/analytics
 ```
 
 Any changes you make to your local package will be reflected in the project you linked it to.
 However, you have to run `build` to apply the changes you made to the local package:
 
-```
-# ~/sdk
-npm run build
+```bash
+# In ~/sdk
+pnpm build
 ```
 
 The new change will be reflected in the project you linked it to.
@@ -53,31 +48,57 @@ To unlink the package, run the following command:
 
 ```bash
 # In ~/formo-analytics-example-next
-npm unlink ../sdk
-OR
-yarn unlink ../sdk
+pnpm unlink --global @formo/analytics
+
+# In ~/sdk (optional: remove the global link)
+pnpm unlink --global
 ```
 
 ## Troubleshooting
 
-- Remove your `node_modules` and `yarn link` and run `yarn link` and `yarn install` again.
-- Try running `yarn build` in the SDK directory to ensure the changes are applied.
-- Try running `yarn unlink` and `yarn link` again.
+- Remove your `node_modules` and re-link: `pnpm unlink --global && pnpm link --global && pnpm install`
+- Try running `pnpm build` in the SDK directory to ensure the changes are applied.
+- Try unlinking and relinking again.
 
-# Commit message format
+# Making Changes and Releases
 
-**semantic-release** uses the commit messages to determine the consumer impact of changes in the codebase.
-Following formalized conventions for commit messages, **semantic-release** automatically determines the next [semantic version](https://semver.org) number, generates a changelog and publishes the release.
+This project uses [Changesets](https://github.com/changesets/changesets) for version management and releases.
 
-By default, **semantic-release** uses [Angular Commit Message Conventions](https://github.com/angular/angular/blob/main/contributing-docs/commit-message-guidelines.md).
-The commit message format can be changed with the [`preset` or `config` options](docs/usage/configuration.md#options) of the [@semantic-release/commit-analyzer](https://github.com/semantic-release/commit-analyzer#options) and [@semantic-release/release-notes-generator](https://github.com/semantic-release/release-notes-generator#options) plugins.
+## Adding a Changeset
 
-Tools such as [commitizen](https://github.com/commitizen/cz-cli) or [commitlint](https://github.com/conventional-changelog/commitlint) can be used to help contributors and enforce valid commit messages.
+When you make a change that should be included in the release notes, you need to add a changeset:
 
-The table below shows which commit message gets you which release type when `semantic-release` runs (using the default configuration):
+```bash
+pnpm changeset
+```
 
-| Commit message                                                                                                                                                                                   | Release type                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `fix(pencil): stop graphite breaking when too much pressure applied`                                                                                                                             | ~~Patch~~ Fix Release                                                                                           |
-| `feat(pencil): add 'graphiteWidth' option`                                                                                                                                                       | ~~Minor~~ Feature Release                                                                                       |
-| `perf(pencil): remove graphiteWidth option`<br><br>`BREAKING CHANGE: The graphiteWidth option has been removed.`<br>`The default graphite width of 10mm is always used for performance reasons.` | ~~Major~~ Breaking Release <br /> (Note that the `BREAKING CHANGE: ` token must be in the footer of the commit) |
+This will prompt you to:
+1. Select the type of change (major, minor, or patch)
+2. Write a summary of your changes
+
+The command will create a new file in the `.changeset` directory. Commit this file along with your changes.
+
+### When to Add a Changeset
+
+- ✅ **New features** - Add a changeset with a `minor` bump
+- ✅ **Bug fixes** - Add a changeset with a `patch` bump
+- ✅ **Breaking changes** - Add a changeset with a `major` bump
+- ✅ **User-facing changes** - Any change that affects users
+- ❌ **Documentation** - Usually doesn't need a changeset
+- ❌ **Tests** - Usually doesn't need a changeset
+- ❌ **Internal refactoring** - Usually doesn't need a changeset (unless it affects the API)
+
+### Release Types
+
+| Change Type | Version Bump | Example |
+| ----------- | ------------ | ------- |
+| Breaking change | Major (1.0.0 → 2.0.0) | Removing or changing existing APIs |
+| New feature | Minor (1.0.0 → 1.1.0) | Adding new functionality |
+| Bug fix | Patch (1.0.0 → 1.0.1) | Fixing existing functionality |
+
+## Release Process
+
+Releases are automated via GitHub Actions:
+1. When changes with changesets are merged to `main`, a "Version Packages" PR is automatically created
+2. This PR updates the version in `package.json` and `CHANGELOG.md`
+3. When the "Version Packages" PR is merged, the package is automatically published to npm with provenance
