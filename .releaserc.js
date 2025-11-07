@@ -22,7 +22,14 @@ module.exports = {
       },
     ],
     "@semantic-release/release-notes-generator",
-    "@semantic-release/npm",
+    [
+      "@semantic-release/npm",
+      {
+        npmPublish: true,
+        pkgRoot: ".",
+        tarballDir: "dist",
+      },
+    ],
     // Uncomment if you want to commit version bump to package.json
     // [
     //   "@semantic-release/git",

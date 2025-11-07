@@ -53,5 +53,5 @@ jobs:
         run: ${{ steps.detect-package-manager.outputs.runner }} semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
-          # NPM_TOKEN removed - using trusted publishing via OIDC
+          # Using npm provenance with OIDC - no NPM_TOKEN needed
+          # registry-url + id-token permission enables trusted publishing
