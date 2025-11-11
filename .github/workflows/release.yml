@@ -53,11 +53,10 @@ jobs:
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ""
-          # Workaround for npm provenance without token
-          # See: https://github.com/changesets/changesets/issues/1152
-          # Using npm provenance with OIDC - no NPM_TOKEN needed
-          # registry-url + id-token permission enables trusted publishing
+          # NODE_AUTH_TOKEN is used by setup-node with registry-url
+          # For OIDC trusted publishing, this can be empty as it uses id-token permission
+          # For traditional publishing, set NPM_TOKEN secret with automation token
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       
       - name: Generate and Add SRI to GitHub Release
         if: steps.changesets.outputs.published == 'true'
