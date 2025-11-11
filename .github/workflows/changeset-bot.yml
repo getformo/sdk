@@ -70,14 +70,14 @@ Then commit the generated file. If this PR doesn't need a changeset (e.g., docs,
 Learn more about [changesets](https://github.com/changesets/changesets).`;
             
             if (botComment) {
-              github.rest.issues.updateComment({
+              await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: botComment.id,
                 body: commentBody
               });
             } else {
-              github.rest.issues.createComment({
+              await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
