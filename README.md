@@ -17,7 +17,7 @@
 
 ## Installation
 
-The Formo Web SDK is a Javascript library that allows you to track and analyze user interactions on your dapp. 
+The Formo Web SDK is a Javascript library that allows you to track user event data from your website and app. 
 
 You can install Formo on:
 - [Websites](https://docs.formo.so/install#website)
