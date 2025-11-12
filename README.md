@@ -71,7 +71,13 @@ This project uses **OIDC Trusted Publishing** for secure, automated npm releases
 
 #### Release Process
 
-1. **Update the version** in `package.json`:
+1. **(Optional) Preview release notes**:
+   ```bash
+   pnpm preview-release
+   ```
+   This shows what the release notes will look like based on commits since the last tag.
+
+2. **Update the version** in `package.json`:
    ```bash
    npm version patch  # For bug fixes (1.24.0 → 1.24.1)
    npm version minor  # For new features (1.24.0 → 1.25.0)
@@ -84,7 +90,7 @@ This project uses **OIDC Trusted Publishing** for secure, automated npm releases
    > - Creates a git commit with the changes
    > - Creates a version tag (e.g., `v1.24.1`)
 
-2. **Push the commit and tag**:
+3. **Push the commit and tag**:
    ```bash
    git push --follow-tags
    # or separately:
@@ -93,7 +99,7 @@ This project uses **OIDC Trusted Publishing** for secure, automated npm releases
    
    > **Important**: You must push both the commit AND the tag. Use `--follow-tags` to push both in one command.
 
-3. **Automatic workflow execution**:
+4. **Automatic workflow execution**:
    - GitHub Actions workflow triggers on the `v*` tag
    - Builds and tests the package
    - Publishes to npm using OIDC (no tokens needed!)

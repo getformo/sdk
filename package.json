@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.24.0",
+  "version": "1.23.0",
   "packageManager": "pnpm@9.0.0",
   "repository": {
     "type": "git",
@@ -81,7 +81,8 @@
     "test": "mocha --require ts-node/register --project tsconfig.test.json test/**/*.ts",
     "test-watch": "nodemon --config test.nodemon.json",
     "size": "size-limit",
-    "version": "node scripts/update-version.js && git add src/version.ts"
+    "version": "node scripts/update-version.js && git add src/version.ts",
+    "preview-release": "bash scripts/preview-release-notes.sh"
   },
   "size-limit": [
     {

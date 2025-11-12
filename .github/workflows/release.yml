@@ -66,39 +66,109 @@ jobs:
           # Get previous tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           
-          # Generate changelog
+          # Get current date
+          RELEASE_DATE=$(date +%Y-%m-%d)
+          VERSION=${{ steps.version.outputs.version }}
+          
+          # Generate changelog with PR links
           if [ -n "$PREV_TAG" ]; then
             echo "Generating changelog from $PREV_TAG to $GITHUB_REF_NAME"
-            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+            # Extract commits with PR numbers and format them
+            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s;;%h" --no-merges)
           else
             echo "No previous tag found, using all commits"
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+            COMMITS=$(git log --pretty=format:"%s;;%h" --no-merges)
           fi
           
+          # Process commits and categorize them
+          FEATURES=""
+          FIXES=""
+          OTHER=""
+          
+          while IFS=';' read -r message _ hash || [ -n "$message" ]; do
+            # Skip empty lines
+            [ -z "$message" ] && continue
+            
+            # Extract PR number if exists
+            if [[ $message =~ \(#([0-9]+)\) ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              PR_LINK="[#$PR_NUM](https://github.com/${{ github.repository }}/pull/$PR_NUM)"
+              COMMIT_LINK="[$hash](https://github.com/${{ github.repository }}/commit/$hash)"
+              ITEM="$message ($PR_LINK) ($COMMIT_LINK)"
+            else
+              COMMIT_LINK="[$hash](https://github.com/${{ github.repository }}/commit/$hash)"
+              ITEM="$message ($COMMIT_LINK)"
+            fi
+            
+            # Categorize by prefix
+            if [[ $message =~ ^feat ]]; then
+              FEATURES="${FEATURES}- ${ITEM#feat: }
+          "
+            elif [[ $message =~ ^fix ]]; then
+              FIXES="${FIXES}- ${ITEM#fix: }
+          "
+            else
+              OTHER="${OTHER}- ${ITEM}
+          "
+            fi
+          done < <(echo "$COMMITS")
+          
           # Create release notes
-          RELEASE_NOTES=$(cat <<EOF
-          ## 📦 Version ${{ steps.version.outputs.version }}
+          cat > release_notes.md <<EOF
+          $VERSION ($RELEASE_DATE)
+          EOF
           
-          ### Changes
+          # Add Features section if exists
+          if [ -n "$FEATURES" ]; then
+            cat >> release_notes.md <<EOF
           
-          ${CHANGELOG}
+          ## Features
           
-          ### Installation
+          $FEATURES
+          EOF
+          fi
           
-          \`\`\`bash
-          npm install @formo/analytics@${{ steps.version.outputs.version }}
-          \`\`\`
+          # Add Fixes section if exists
+          if [ -n "$FIXES" ]; then
+            cat >> release_notes.md <<EOF
           
-          ### CDN Usage
+          ## Bug Fixes
+          
+          $FIXES
+          EOF
+          fi
+          
+          # Add Other changes if exists and no features/fixes
+          if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -n "$OTHER" ]; then
+            cat >> release_notes.md <<EOF
+          
+          ## Changes
+          
+          $OTHER
+          EOF
+          fi
+          
+          # Add npm package link
+          cat >> release_notes.md <<EOF
+          
+          ## Install
+          
+          This release is available on NPM and CDN.
+          
+          ### NPM
+          
+          [npm package](https://www.npmjs.com/package/@formo/analytics/v/$VERSION) (@latest dist-tag)
+          
+          ### CDN
           
           \`\`\`html
-          <script src="https://cdn.formo.so/analytics@${{ steps.version.outputs.version }}"></script>
+          <script 
+            src="https://cdn.formo.so/analytics@$VERSION"
+            integrity="sha384-[HASH_WILL_BE_GENERATED_AFTER_PUBLISH]"
+            crossorigin="anonymous"
+          ></script>
           \`\`\`
           EOF
-          )
-          
-          # Save to file for GitHub release
-          echo "$RELEASE_NOTES" > release_notes.md
           
       - name: Publish to npm
         run: npm publish --provenance
