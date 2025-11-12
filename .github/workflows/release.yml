@@ -1,19 +1,16 @@
-name: Release package
+name: Publish Package
 
-# Runs when a PR to main is merged, main branch is protected, so that only PRs to main are merged
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write  # Required for OIDC trusted publishing
+  contents: read
 
 jobs:
-  release:
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      id-token: write
-
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,9 +35,10 @@ jobs:
       - name: Build SDK
         run: pnpm build
         
-      - name: Release
-        run: npx semantic-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # Using npm provenance with OIDC - registry-url + id-token permission enables trusted publishing
+      - name: Run tests
+        run: pnpm test
+        
+      - name: Publish to npm
+        run: npm publish
+        # No NODE_AUTH_TOKEN needed - uses OIDC trusted publishing
+        # Provenance is automatically generated with trusted publishing
