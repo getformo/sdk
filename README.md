@@ -36,7 +36,80 @@ Learn how Formo handles [onchain attribution](https://docs.formo.so/data/attribu
 
 Join the [Formo community Slack channel](https://formo.so/slack) for help and questions.
 
+## Development
+
+### Building the SDK
+
+```bash
+pnpm install
+pnpm build
+```
+
+### Running Tests
+
+```bash
+pnpm test
+```
+
+### Publishing a New Release
+
+This project uses **OIDC Trusted Publishing** for secure, automated npm releases. No manual token management required!
+
+#### Prerequisites
+
+1. **Configure Trusted Publisher** (one-time setup):
+   - Go to [npmjs.com](https://www.npmjs.com/package/@formo/analytics) package settings
+   - Navigate to "Publishing access"
+   - Add GitHub Actions as trusted publisher:
+     - Repository: `getformo/sdk`
+     - Workflow file: `.github/workflows/release.yml`
+
+2. **Recommended Security**: Restrict token-based publishing
+   - In package settings → "Publishing access"
+   - Select "Require two-factor authentication and disallow tokens"
+   - This ensures only the GitHub workflow can publish
+
+#### Release Process
+
+1. **Update the version** in `package.json`:
+   ```bash
+   npm version patch  # For bug fixes (1.24.0 → 1.24.1)
+   npm version minor  # For new features (1.24.0 → 1.25.0)
+   npm version major  # For breaking changes (1.24.0 → 2.0.0)
+   ```
+
+2. **Push the version tag**:
+   ```bash
+   git push origin v1.24.1  # Replace with your version
+   ```
+
+3. **Automatic workflow execution**:
+   - GitHub Actions workflow triggers on the `v*` tag
+   - Builds and tests the package
+   - Publishes to npm using OIDC (no tokens needed!)
+   - Creates a GitHub release with:
+     - Changelog from git commits
+     - Installation instructions
+     - CDN usage examples
+     - SRI hash for secure CDN usage
+
+#### What Gets Published
+
+- **npm**: `@formo/analytics@<version>`
+- **GitHub Release**: Tagged release with changelog and SRI hash
+- **CDN**: `https://cdn.formo.so/analytics@<version>`
+- **Provenance**: Automatically generated cryptographic attestations
+
+#### Security Features
+
+✅ **OIDC Trusted Publishing** - No long-lived tokens  
+✅ **Automatic Provenance** - Cryptographic proof of build authenticity  
+✅ **SRI Hash** - Subresource integrity for CDN usage  
+✅ **Secure by Default** - Short-lived, workflow-specific credentials
+
+Learn more: [npm Trusted Publishing Documentation](https://docs.npmjs.com/trusted-publishers)
+
 ## Contributing
 
-[Contributions](https://github.com/getformo/sdk/blob/main/CONTRIBUTING.md) are welcome! Feel free to open fixes and feature suggestions.
+Contributions are welcome! Feel free to open fixes and feature suggestions.
 
