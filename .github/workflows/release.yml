@@ -74,10 +74,11 @@ jobs:
           if [ -n "$PREV_TAG" ]; then
             echo "Generating changelog from $PREV_TAG to $GITHUB_REF_NAME"
             # Extract commits with PR numbers and format them
-            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s;;%h" --no-merges)
+            # Use tab as delimiter to safely handle semicolons and special characters
+            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s	%h" --no-merges)
           else
             echo "No previous tag found, using all commits"
-            COMMITS=$(git log --pretty=format:"%s;;%h" --no-merges)
+            COMMITS=$(git log --pretty=format:"%s	%h" --no-merges)
           fi
           
           # Process commits and categorize them
@@ -85,7 +86,7 @@ jobs:
           FIXES=""
           OTHER=""
           
-          while IFS=';' read -r message _ hash || [ -n "$message" ]; do
+          while IFS=$'\t' read -r message hash; do
             # Skip empty lines
             [ -z "$message" ] && continue
             
@@ -100,18 +101,22 @@ jobs:
               ITEM="$message ($COMMIT_LINK)"
             fi
             
-            # Categorize by prefix
-            if [[ $message =~ ^feat ]]; then
-              FEATURES="${FEATURES}- ${ITEM#feat: }
+            # Categorize by prefix and strip conventional commit prefix
+            if [[ $message =~ ^feat(\([^\)]+\))?: ]]; then
+              # Strip "feat:" or "feat(scope):" from the beginning of ITEM
+              STRIPPED_ITEM=$(echo "$ITEM" | sed -E 's/^feat(\([^)]+\))?: //')
+              FEATURES="${FEATURES}- ${STRIPPED_ITEM}
           "
-            elif [[ $message =~ ^fix ]]; then
-              FIXES="${FIXES}- ${ITEM#fix: }
+            elif [[ $message =~ ^fix(\([^\)]+\))?: ]]; then
+              # Strip "fix:" or "fix(scope):" from the beginning of ITEM
+              STRIPPED_ITEM=$(echo "$ITEM" | sed -E 's/^fix(\([^)]+\))?: //')
+              FIXES="${FIXES}- ${STRIPPED_ITEM}
           "
             else
               OTHER="${OTHER}- ${ITEM}
           "
             fi
-          done < <(echo "$COMMITS")
+          done <<< "$COMMITS"
           
           # Create release notes
           cat > release_notes.md <<EOF

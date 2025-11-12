@@ -38,13 +38,14 @@ RELEASE_DATE=$(date +%Y-%m-%d)
 VERSION=$NEXT_PATCH
 
 # Generate changelog with categorization
-COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s;;%h" --no-merges)
+# Use tab as delimiter to safely handle semicolons and special characters
+COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s	%h" --no-merges)
 
 if [ -z "$COMMITS" ]; then
     echo "⚠️  No new commits since $PREV_TAG"
     echo ""
     echo "Using last 5 commits as example:"
-    COMMITS=$(git log --pretty=format:"%s;;%h" --no-merges -5)
+    COMMITS=$(git log --pretty=format:"%s	%h" --no-merges -5)
 fi
 
 # Process commits and categorize
@@ -52,7 +53,7 @@ FEATURES=""
 FIXES=""
 OTHER=""
 
-while IFS=';' read -r message _ hash || [ -n "$message" ]; do
+while IFS=$'\t' read -r message hash; do
     # Skip empty lines
     [ -z "$message" ] && continue
     
@@ -64,18 +65,22 @@ while IFS=';' read -r message _ hash || [ -n "$message" ]; do
         ITEM="$message ([$hash](https://github.com/getformo/sdk/commit/$hash))"
     fi
     
-    # Categorize by prefix
-    if [[ $message =~ ^feat ]]; then
-        FEATURES="${FEATURES}- ${ITEM#feat: }
+    # Categorize by prefix and strip conventional commit prefix
+    if [[ $message =~ ^feat(\([^\)]+\))?: ]]; then
+        # Strip "feat:" or "feat(scope):" from the beginning of ITEM
+        STRIPPED_ITEM=$(echo "$ITEM" | sed -E 's/^feat(\([^)]+\))?: //')
+        FEATURES="${FEATURES}- ${STRIPPED_ITEM}
 "
-    elif [[ $message =~ ^fix ]]; then
-        FIXES="${FIXES}- ${ITEM#fix: }
+    elif [[ $message =~ ^fix(\([^\)]+\))?: ]]; then
+        # Strip "fix:" or "fix(scope):" from the beginning of ITEM
+        STRIPPED_ITEM=$(echo "$ITEM" | sed -E 's/^fix(\([^)]+\))?: //')
+        FIXES="${FIXES}- ${STRIPPED_ITEM}
 "
     else
         OTHER="${OTHER}- ${ITEM}
 "
     fi
-done < <(echo "$COMMITS")
+done <<< "$COMMITS"
 
 # Create preview
 cat <<EOF
