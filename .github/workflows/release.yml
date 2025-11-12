@@ -47,6 +47,19 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing version: $VERSION"
         
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION=${{ steps.version.outputs.version }}
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "❌ Error: Tag version (v$TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            echo "Please ensure package.json version is updated before creating the tag"
+            exit 1
+          fi
+          
+          echo "✅ Version match confirmed: $TAG_VERSION"
+        
       - name: Generate release notes
         id: release_notes
         run: |
@@ -88,9 +101,9 @@ jobs:
           echo "$RELEASE_NOTES" > release_notes.md
           
       - name: Publish to npm
-        run: npm publish
-        # No NODE_AUTH_TOKEN needed - uses OIDC trusted publishing
-        # Provenance is automatically generated with trusted publishing
+        run: npm publish --provenance
+        # Explicitly use --provenance flag for clarity
+        # OIDC trusted publishing (id-token: write) enables automatic provenance generation
         
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1

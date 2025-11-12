@@ -78,9 +78,10 @@
   },
   "scripts": {
     "prebuild": "pnpm clean",
-    "build": "pnpm build-cjs && pnpm build-esm && pnpm webpack --mode=production && pnpm clean-build",
-    "build-cjs": "pnpm tsc --build",
-    "build-esm": "pnpm tsc -m es6 --outdir dist/esm",
+    "build": "pnpm build-cjs && pnpm build-esm && pnpm run webpack:prod && pnpm clean-build",
+    "build-cjs": "tsc --build",
+    "build-esm": "tsc -m es6 --outdir dist/esm",
+    "webpack:prod": "webpack --mode=production",
     "clean": "rm -rf dist",
     "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\;",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
@@ -88,7 +89,7 @@
     "test-watch": "nodemon --config test.nodemon.json",
     "prepare": "husky install",
     "commit": "git add . && cz",
-    "version:update": "genversion src/lib/version.ts",
+    "version:update": "genversion --esm --semi src/lib/version.ts",
     "size": "size-limit"
   },
   "size-limit": [

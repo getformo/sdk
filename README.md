@@ -77,11 +77,17 @@ This project uses **OIDC Trusted Publishing** for secure, automated npm releases
    npm version minor  # For new features (1.24.0 → 1.25.0)
    npm version major  # For breaking changes (1.24.0 → 2.0.0)
    ```
+   
+   > **Note**: `npm version` automatically creates a git commit and tag. It updates `package.json`, commits the change, and creates a version tag (e.g., `v1.24.1`).
 
-2. **Push the version tag**:
+2. **Push the commit and tag**:
    ```bash
-   git push origin v1.24.1  # Replace with your version
+   git push --follow-tags
+   # or separately:
+   # git push && git push --tags
    ```
+   
+   > **Important**: You must push both the commit AND the tag. Use `--follow-tags` to push both in one command.
 
 3. **Automatic workflow execution**:
    - GitHub Actions workflow triggers on the `v*` tag
