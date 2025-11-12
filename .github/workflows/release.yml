@@ -1,17 +1,16 @@
 name: Release package
 
+# Runs when a PR to main is merged, main branch is protected, so that only PRs to main are merged
 on:
   push:
     branches:
       - main
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}
-
 jobs:
   release:
-    name: Release
     permissions:
       contents: write
+      issues: write
       pull-requests: write
       id-token: write
 
@@ -19,62 +18,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # This makes Actions fetch all Git history so that Changesets can generate changelogs with the correct commits
-          fetch-depth: 0
-
+        
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-
+        
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
-
+          
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
-
+        
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
+        
       - name: Build SDK
         run: pnpm build
-
-      - name: Create Release Pull Request or Publish to npm
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          version: pnpm changeset:version
-          publish: pnpm release
-          title: "chore: version packages"
-          commit: "chore: version packages"
-          createGithubReleases: true
+        
+      - name: Release
+        run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ""
-          # Workaround for npm provenance without token
-          # See: https://github.com/changesets/changesets/issues/1152
-          # Using npm provenance with OIDC - no NPM_TOKEN needed
-          # registry-url + id-token permission enables trusted publishing
-      
-      - name: Generate and Add SRI to GitHub Release
-        if: steps.changesets.outputs.published == 'true'
-        run: |
-          # Extract version from published packages
-          PUBLISHED_PACKAGES='${{ steps.changesets.outputs.publishedPackages }}'
-          VERSION=$(echo "$PUBLISHED_PACKAGES" | jq -r '.[0].version')
-          
-          echo "Published version: $VERSION"
-          
-          # Wait a moment for the release to be fully created
-          sleep 5
-          
-          if [ -f "scripts/generate-sri.sh" ]; then
-            bash scripts/generate-sri.sh "$VERSION"
-          else
-            echo "⚠️ SRI script not found at scripts/generate-sri.sh"
-          fi
-        env:
-          GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Using npm provenance with OIDC - registry-url + id-token permission enables trusted publishing

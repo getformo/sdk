@@ -37,8 +37,6 @@
     "@babel/core": "^7.x",
     "@babel/plugin-syntax-flow": "^7.14.5",
     "@babel/plugin-transform-react-jsx": "^7.14.9",
-    "@changesets/changelog-github": "^0.5.0",
-    "@changesets/cli": "^2.27.0",
     "@commitlint/cli": "^17.3.0",
     "@commitlint/config-conventional": "^17.3.0",
     "@size-limit/esbuild": "^11.2.0",
@@ -90,12 +88,7 @@
     "test-watch": "nodemon --config test.nodemon.json",
     "prepare": "husky install",
     "commit": "git add . && cz",
-    "changeset": "changeset",
     "version:update": "genversion src/lib/version.ts",
-    "changeset:version": "changeset version && pnpm version:update",
-    "changeset:prepublish": "pnpm version:update && pnpm build",
-    "changeset:publish": "pnpm changeset:prepublish && changeset publish",
-    "release": "pnpm changeset:publish",
     "size": "size-limit"
   },
   "size-limit": [
