@@ -7,14 +7,16 @@ on:
 
 permissions:
   id-token: write  # Required for OIDC trusted publishing
-  contents: read
-
+  contents: write  # Required for creating GitHub releases
+  
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for changelog generation
         
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -38,7 +40,81 @@ jobs:
       - name: Run tests
         run: pnpm test
         
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+        
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          # Generate changelog
+          if [ -n "$PREV_TAG" ]; then
+            echo "Generating changelog from $PREV_TAG to $GITHUB_REF_NAME"
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          else
+            echo "No previous tag found, using all commits"
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          fi
+          
+          # Create release notes
+          RELEASE_NOTES=$(cat <<EOF
+          ## 📦 Version ${{ steps.version.outputs.version }}
+          
+          ### Changes
+          
+          ${CHANGELOG}
+          
+          ### Installation
+          
+          \`\`\`bash
+          npm install @formo/analytics@${{ steps.version.outputs.version }}
+          \`\`\`
+          
+          ### CDN Usage
+          
+          \`\`\`html
+          <script src="https://cdn.formo.so/analytics@${{ steps.version.outputs.version }}"></script>
+          \`\`\`
+          EOF
+          )
+          
+          # Save to file for GitHub release
+          echo "$RELEASE_NOTES" > release_notes.md
+          
       - name: Publish to npm
         run: npm publish
         # No NODE_AUTH_TOKEN needed - uses OIDC trusted publishing
         # Provenance is automatically generated with trusted publishing
+        
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Generate and Add SRI to GitHub Release
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          
+          echo "Published version: $VERSION"
+          
+          # Wait for npm CDN to propagate
+          echo "Waiting 30 seconds for CDN propagation..."
+          sleep 30
+          
+          if [ -f "scripts/generate-sri.sh" ]; then
+            bash scripts/generate-sri.sh "$VERSION"
+          else
+            echo "⚠️ SRI script not found at scripts/generate-sri.sh"
+          fi
+        env:
+          GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
