@@ -39,9 +39,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build SDK
-        run: pnpm build
-
       - name: Create Release Pull Request or Publish to npm
         id: changesets
         uses: changesets/action@v1
