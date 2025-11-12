@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: "22.14.0"
           cache: 'pnpm'
-          registry-url: 'https://registry.npmjs.org'
+          # No registry-url - using OIDC trusted publishing instead
           
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
