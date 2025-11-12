@@ -5,7 +5,5 @@ echo "Running pre-commit process..."
 
 npm run build
 
-npx genversion --esm --semi src/lib/version.ts
-
 # Add modified files to Git staging
 git add .

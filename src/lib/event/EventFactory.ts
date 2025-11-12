@@ -24,7 +24,7 @@ import { isUndefined } from "../../validators";
 import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
 import { session } from "../storage";
-import { version } from "../version";
+import { version } from "../../../package.json";
 import { CHANNEL, VERSION } from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
