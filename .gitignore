@@ -36,6 +36,19 @@ node_modules/
 #Build output
 dist
 
+# Compiled webpack config (use webpack.config.ts instead)
+webpack.config.js
+
+# TypeScript build artifacts
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Compiled JS files in src (TypeScript source only)
+src/**/*.js
+test/**/*.js
+!src/**/*.spec.js
+!test/**/*.spec.js
+
 # Optional npm cache directory
 .npm
 

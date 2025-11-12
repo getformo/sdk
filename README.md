@@ -78,7 +78,11 @@ This project uses **OIDC Trusted Publishing** for secure, automated npm releases
    npm version major  # For breaking changes (1.24.0 → 2.0.0)
    ```
    
-   > **Note**: `npm version` automatically creates a git commit and tag. It updates `package.json`, commits the change, and creates a version tag (e.g., `v1.24.1`).
+   > **Note**: `npm version` automatically:
+   > - Updates `package.json` with the new version
+   > - Updates `src/version.ts` with the new version (via the `version` script)
+   > - Creates a git commit with the changes
+   > - Creates a version tag (e.g., `v1.24.1`)
 
 2. **Push the commit and tag**:
    ```bash
