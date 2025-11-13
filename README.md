@@ -55,22 +55,6 @@ pnpm test
 
 This project uses **OIDC Trusted Publishing** for secure, automated npm releases. No manual token management required!
 
-#### Prerequisites
-
-1. **Configure Trusted Publisher** (one-time setup):
-   - Go to [npmjs.com](https://www.npmjs.com/package/@formo/analytics) package settings
-   - Navigate to "Publishing access"
-   - Add GitHub Actions as trusted publisher:
-     - Repository: `getformo/sdk`
-     - Workflow file: `.github/workflows/release.yml`
-
-2. **Recommended Security**: Restrict token-based publishing
-   - In package settings → "Publishing access"
-   - Select "Require two-factor authentication and disallow tokens"
-   - This ensures only the GitHub workflow can publish
-
-#### Release Process
-
 1. **(Optional) Preview release notes**:
    ```bash
    pnpm preview-release

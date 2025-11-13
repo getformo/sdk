@@ -11,15 +11,6 @@ echo ""
 # Get current version from package.json
 CURRENT_VERSION=$(node -p "require('./package.json').version")
 echo "Current version in package.json: $CURRENT_VERSION"
-
-# Simulate what the next version would be
-NEXT_PATCH=$(echo $CURRENT_VERSION | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
-NEXT_MINOR=$(echo $CURRENT_VERSION | awk -F. '{$(NF-1) = $(NF-1) + 1; $NF = 0;} 1' | sed 's/ /./g')
-NEXT_MAJOR=$(echo $CURRENT_VERSION | awk -F. '{$1 = $1 + 1; $2 = 0; $NF = 0;} 1' | sed 's/ /./g')
-
-echo "Next patch would be: $NEXT_PATCH"
-echo "Next minor would be: $NEXT_MINOR"
-echo "Next major would be: $NEXT_MAJOR"
 echo ""
 
 # Get previous tag
@@ -35,7 +26,7 @@ echo ""
 
 # Get release date
 RELEASE_DATE=$(date +%Y-%m-%d)
-VERSION=$NEXT_PATCH
+VERSION=$CURRENT_VERSION
 
 # Generate changelog with categorization
 # Use tab as delimiter to safely handle semicolons and special characters
