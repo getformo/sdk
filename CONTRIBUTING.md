@@ -1,4 +1,4 @@
-# Development Guide
+# How to contribute
 
 If you want to contribute or run a local version of the Formo Analytics SDK, follow these steps:
 
@@ -7,27 +7,16 @@ If you want to contribute or run a local version of the Formo Analytics SDK, fol
 Run the following command to build both CommonJS and ESM versions of the SDK:
 
 ```bash
+pnpm install
 pnpm build
+pnpm test
 ```
-
-or if you're using NPM:
-
-```bash
-npm run build
-```
-
-The build process will:
-1. Clean the `dist` directory
-2. Build CommonJS version with TypeScript
-3. Build ESM version with TypeScript
-4. Bundle UMD version with Webpack
-5. Clean up temporary build artifacts
 
 ## Testing Locally
 
 ### Link the Local Package
 
-To test your changes in another project, you can link the package locally using `npm link` or `pnpm link`.
+To test your SDK changes in a a test app, you can link the package locally using `npm link` or `pnpm link`.
 
 For example, if your projects are in the same directory:
 
@@ -40,21 +29,15 @@ For example, if your projects are in the same directory:
 Run the following commands:
 
 ```bash
-# In ~/sdk
-pnpm link --global
-
 # In ~/formo-analytics-example-next
-pnpm link --global @formo/analytics
+pnpm link ../sdk
 ```
 
 Or with npm:
 
 ```bash
-# In ~/sdk
-npm link
-
 # In ~/formo-analytics-example-next
-npm link @formo/analytics
+npm link ../sdk
 ```
 
 ### Apply Changes
@@ -74,20 +57,14 @@ To remove the link:
 
 ```bash
 # In ~/formo-analytics-example-next
-pnpm unlink --global @formo/analytics
-
-# In ~/sdk
-pnpm unlink --global
+pnpm unlink ../sdk
 ```
 
 Or with npm:
 
 ```bash
 # In ~/formo-analytics-example-next
-npm unlink @formo/analytics
-
-# In ~/sdk
-npm unlink
+npm unlink ../sdk
 ```
 
 ## Running Tests
@@ -98,12 +75,6 @@ Run the test suite:
 pnpm test
 ```
 
-For continuous testing during development:
-
-```bash
-pnpm test-watch
-```
-
 ## Linting
 
 Check code style:
@@ -111,24 +82,16 @@ Check code style:
 ```bash
 pnpm lint
 ```
-
-## Troubleshooting
-
-- Remove your `node_modules` and reinstall dependencies:
-  ```bash
-  rm -rf node_modules pnpm-lock.yaml
-  pnpm install
-  ```
-- Ensure you've built the SDK after making changes: `pnpm build`
-- Try unlinking and relinking the package if changes aren't reflected
-
 ## Publishing
 
-See the [README](./README.md#development) for detailed publishing instructions.
+1. **Preview release notes**:
+   ```bash
+   pnpm preview-release
+   ```
+   This shows what the release notes will look like based on commits since the last tag.
 
-In summary:
 
-1. **Update the version** using npm:
+2. **Update the version** using npm:
    ```bash
    npm version patch  # For bug fixes
    npm version minor  # For new features
@@ -141,10 +104,17 @@ In summary:
    - Creates a git commit with both changes
    - Creates a version tag (e.g., `v1.24.1`)
 
-2. **Push the commit and tag**:
+3. **Push the commit and tag**:
    ```bash
    git push --follow-tags
    ```
 
-3. The GitHub Actions workflow will automatically publish to npm using OIDC trusted publishing.
-
+4. **Automatic workflow execution**:
+   - GitHub Actions workflow triggers on the `v*` tag
+   - Builds and tests the package
+   - Publishes to npm using OIDC (no tokens needed!)
+   - Creates a GitHub release with:
+     - Changelog from git commits
+     - Installation instructions
+     - CDN usage examples
+     - SRI hash for secure CDN usage
