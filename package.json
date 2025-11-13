@@ -1,6 +1,7 @@
 {
   "name": "@formo/analytics",
-  "version": "1.24.0",
+  "version": "1.23.0",
+  "packageManager": "pnpm@9.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/getformo/sdk.git"
@@ -36,12 +37,6 @@
     "@babel/core": "^7.x",
     "@babel/plugin-syntax-flow": "^7.14.5",
     "@babel/plugin-transform-react-jsx": "^7.14.9",
-    "@commitlint/cli": "^17.3.0",
-    "@commitlint/config-conventional": "^17.3.0",
-    "@semantic-release/exec": "7.1.0",
-    "@semantic-release/git": "10.0.1",
-    "@semantic-release/github": "11.0.3",
-    "@semantic-release/npm": "13.1.1",
     "@size-limit/esbuild": "^11.2.0",
     "@size-limit/file": "^11.2.0",
     "@testing-library/react": "^13.4.0",
@@ -55,14 +50,9 @@
     "@typescript-eslint/eslint-plugin": "^5.30.4",
     "@typescript-eslint/parser": "^5.30.4",
     "chai": "^4.3.6",
-    "commitizen": "^4.2.5",
-    "conventional-changelog-conventionalcommits": "9.0.0",
-    "cz-conventional-changelog": "3.3.0",
     "eslint": "^8.19.0",
     "eslint-config-react-app": "^7.0.1",
-    "genversion": "^3.2.0",
     "global-jsdom": "^8.6.0",
-    "husky": "^8.0.0",
     "jsdom": "^21.1.0",
     "mocha": "^10.0.0",
     "nodemon": "^2.0.20",
@@ -70,8 +60,6 @@
     "prettier": "^2.6.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "semantic-release": "24.2.5",
-    "semantic-release-export-data": "^1.0.1",
     "sinon": "^14.0.0",
     "sinon-chai": "^3.7.0",
     "size-limit": "^11.2.0",
@@ -82,33 +70,28 @@
     "webpack-cli": "^4.10.0"
   },
   "scripts": {
-    "prebuild": "yarn clean",
-    "build": "yarn build-cjs && yarn build-esm && yarn webpack --mode=production && yarn clean-build",
-    "build-cjs": "yarn tsc --build",
-    "build-esm": "yarn tsc -m es6 --outdir dist/esm",
+    "prebuild": "pnpm clean",
+    "build": "pnpm build-cjs && pnpm build-esm && pnpm run webpack:prod && pnpm clean-build",
+    "build-cjs": "tsc --build",
+    "build-esm": "tsc -m es6 --outdir dist/esm",
+    "webpack:prod": "webpack --mode=production",
     "clean": "rm -rf dist",
     "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\;",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
     "test": "mocha --require ts-node/register --project tsconfig.test.json test/**/*.ts",
     "test-watch": "nodemon --config test.nodemon.json",
-    "prepare": "husky install",
-    "commit": "git add . && cz",
-    "pub": "yarn build && npm publish",
-    "size": "size-limit"
+    "size": "size-limit",
+    "version": "node scripts/update-version.js && git add src/version.ts",
+    "preview-release": "bash scripts/preview-release-notes.sh"
   },
   "size-limit": [
     {
       "path": "dist/index.umd.min.js",
-      "limit": "36 KB"
+      "limit": "37 KB"
     }
   ],
   "peerDependencies": {
     "@types/react": ">=16.14.34",
     "react": ">=16.14.0"
-  },
-  "config": {
-    "commitizen": {
-      "path": "./node_modules/cz-conventional-changelog"
-    }
   }
 }

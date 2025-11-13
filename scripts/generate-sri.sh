@@ -32,17 +32,8 @@ CURRENT_BODY=$(curl -s -H "Authorization: Bearer $GH_RELEASE_TOKEN" \
   https://api.github.com/repos/${REPO}/releases/$RELEASE_ID \
   | jq -r '.body')
 
-# Append SRI snippet
-UPDATED_BODY=$(cat <<EOF
-${CURRENT_BODY}
-
-🔒 **Subresource Integrity Snippet**
-
-\`\`\`html
-${SNIPPET}
-\`\`\`
-EOF
-)
+# Replace the placeholder hash with the actual hash
+UPDATED_BODY="${CURRENT_BODY//\[HASH_WILL_BE_GENERATED_AFTER_PUBLISH\]/$HASH}"
 
 # Patch the release body
 curl -s -X PATCH \

@@ -1,57 +1,208 @@
-name: Release package
+name: Publish Package
 
-# Runs when a PR to main is merged, main branch is protected, so that only PRs to main are merged
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 
+permissions:
+  id-token: write  # Required for OIDC trusted publishing
+  contents: write  # Required for creating GitHub releases
+  
 jobs:
-  release:
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      id-token: write
-
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Detect package manager
-        id: detect-package-manager
-        run: |
-          if [ -f "${{ github.workspace }}/yarn.lock" ]; then
-            echo "manager=yarn" >> $GITHUB_OUTPUT
-            echo "command=install" >> $GITHUB_OUTPUT
-            echo "build_command=build" >> $GITHUB_OUTPUT
-            echo "runner=yarn" >> $GITHUB_OUTPUT
-            exit 0
-          elif [ -f "${{ github.workspace }}/package.json" ]; then
-            echo "manager=npm" >> $GITHUB_OUTPUT
-            echo "command=ci" >> $GITHUB_OUTPUT
-            echo "build_command=run build" >> $GITHUB_OUTPUT
-            echo "runner=npx --no-install" >> $GITHUB_OUTPUT
-            exit 0
-          else
-            echo "Unable to determine package manager"
-            exit 1
-          fi
+        with:
+          fetch-depth: 0  # Fetch all history for changelog generation
+        
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
-          cache: ${{ steps.detect-package-manager.outputs.manager }}
-          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+          # No registry-url - using OIDC trusted publishing instead
+          
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
+        
       - name: Install dependencies
-        run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
+        run: pnpm install --frozen-lockfile
+        
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+        
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION=${{ steps.version.outputs.version }}
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "❌ Error: Tag version (v$TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            echo "Please ensure package.json version is updated before creating the tag"
+            exit 1
+          fi
+          
+          echo "✅ Version match confirmed: $TAG_VERSION"
+        
       - name: Build SDK
-        run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.build_command }}
-      - name: Release
-        run: ${{ steps.detect-package-manager.outputs.runner }} semantic-release
+        run: pnpm build
+        
+      - name: Run tests
+        run: pnpm test
+        
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          # Get current date
+          RELEASE_DATE=$(date +%Y-%m-%d)
+          VERSION=${{ steps.version.outputs.version }}
+          
+          # Generate changelog with PR links
+          if [ -n "$PREV_TAG" ]; then
+            echo "Generating changelog from $PREV_TAG to $GITHUB_REF_NAME"
+            # Extract commits with PR numbers and format them
+            # Use tab as delimiter to safely handle semicolons and special characters
+            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s	%h" --no-merges)
+          else
+            echo "No previous tag found, using all commits"
+            COMMITS=$(git log --pretty=format:"%s	%h" --no-merges)
+          fi
+          
+          # Process commits and categorize them
+          FEATURES=""
+          FIXES=""
+          OTHER=""
+          
+          while IFS=$'\t' read -r message hash; do
+            # Skip empty lines
+            [ -z "$message" ] && continue
+            
+            # Extract PR number if exists
+            if [[ $message =~ \(#([0-9]+)\) ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              PR_LINK="[#$PR_NUM](https://github.com/${{ github.repository }}/pull/$PR_NUM)"
+              COMMIT_LINK="[$hash](https://github.com/${{ github.repository }}/commit/$hash)"
+              ITEM="$message ($PR_LINK) ($COMMIT_LINK)"
+            else
+              COMMIT_LINK="[$hash](https://github.com/${{ github.repository }}/commit/$hash)"
+              ITEM="$message ($COMMIT_LINK)"
+            fi
+            
+            # Categorize by prefix and strip conventional commit prefix
+            if [[ $message =~ ^feat(\([^\)]+\))?: ]]; then
+              # Strip "feat:" or "feat(scope):" from the beginning of ITEM
+              STRIPPED_ITEM=$(echo "$ITEM" | sed -E 's/^feat(\([^)]+\))?: //')
+              FEATURES="${FEATURES}- ${STRIPPED_ITEM}
+          "
+            elif [[ $message =~ ^fix(\([^\)]+\))?: ]]; then
+              # Strip "fix:" or "fix(scope):" from the beginning of ITEM
+              STRIPPED_ITEM=$(echo "$ITEM" | sed -E 's/^fix(\([^)]+\))?: //')
+              FIXES="${FIXES}- ${STRIPPED_ITEM}
+          "
+            else
+              OTHER="${OTHER}- ${ITEM}
+          "
+            fi
+          done <<< "$COMMITS"
+          
+          # Create release notes
+          cat > release_notes.md <<EOF
+          $VERSION ($RELEASE_DATE)
+          EOF
+          
+          # Add Features section if exists
+          if [ -n "$FEATURES" ]; then
+            cat >> release_notes.md <<EOF
+          
+          ## Features
+          
+          $FEATURES
+          EOF
+          fi
+          
+          # Add Fixes section if exists
+          if [ -n "$FIXES" ]; then
+            cat >> release_notes.md <<EOF
+          
+          ## Bug Fixes
+          
+          $FIXES
+          EOF
+          fi
+          
+          # Add Other changes if exists and no features/fixes
+          if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -n "$OTHER" ]; then
+            cat >> release_notes.md <<EOF
+          
+          ## Changes
+          
+          $OTHER
+          EOF
+          fi
+          
+          # Add npm package link
+          cat >> release_notes.md <<EOF
+          
+          ## Install
+          
+          This release is available on NPM and CDN.
+          
+          ### NPM
+          
+          [npm package](https://www.npmjs.com/package/@formo/analytics/v/$VERSION) (@latest dist-tag)
+          
+          ### CDN
+          
+          \`\`\`html
+          <script 
+            src="https://cdn.formo.so/analytics@$VERSION"
+            integrity="sha384-[HASH_WILL_BE_GENERATED_AFTER_PUBLISH]"
+            crossorigin="anonymous"
+          ></script>
+          \`\`\`
+          EOF
+          
+      - name: Publish to npm
+        run: npm publish --provenance
+        # Explicitly use --provenance flag for clarity
+        # OIDC trusted publishing (id-token: write) enables automatic provenance generation
+        
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
-          # NPM_TOKEN removed - using trusted publishing via OIDC
+          
+      - name: Generate and Add SRI to GitHub Release
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          
+          echo "Published version: $VERSION"
+          
+          # Wait for npm CDN to propagate
+          echo "Waiting 30 seconds for CDN propagation..."
+          sleep 30
+          
+          if [ -f "scripts/generate-sri.sh" ]; then
+            bash scripts/generate-sri.sh "$VERSION"
+          else
+            echo "⚠️ SRI script not found at scripts/generate-sri.sh"
+          fi
+        env:
+          GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
