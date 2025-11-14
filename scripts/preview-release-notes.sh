@@ -51,8 +51,8 @@ while IFS=$'\t' read -r message hash; do
     # Extract PR number if exists
     if [[ $message =~ \(#([0-9]+)\) ]]; then
         PR_NUM="${BASH_REMATCH[1]}"
-        # Remove the (#PR_NUM) from message to avoid duplication
-        CLEAN_MESSAGE=$(echo "$message" | sed -E 's/ \(#[0-9]+\)//')
+        # Remove the (#PR_NUM) from message to avoid duplication (handles with or without space)
+        CLEAN_MESSAGE=$(echo "$message" | sed -E 's/ ?\(#[0-9]+\)//')
         ITEM="$CLEAN_MESSAGE ([#$PR_NUM](https://github.com/getformo/sdk/pull/$PR_NUM)) ([$hash](https://github.com/getformo/sdk/commit/$hash))"
     else
         ITEM="$message ([$hash](https://github.com/getformo/sdk/commit/$hash))"

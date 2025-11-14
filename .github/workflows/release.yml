@@ -93,8 +93,8 @@ jobs:
             # Extract PR number if exists
             if [[ $message =~ \(#([0-9]+)\) ]]; then
               PR_NUM="${BASH_REMATCH[1]}"
-              # Remove the (#PR_NUM) from message to avoid duplication
-              CLEAN_MESSAGE=$(echo "$message" | sed -E 's/ \(#[0-9]+\)//')
+              # Remove the (#PR_NUM) from message to avoid duplication (handles with or without space)
+              CLEAN_MESSAGE=$(echo "$message" | sed -E 's/ ?\(#[0-9]+\)//')
               PR_LINK="[#$PR_NUM](https://github.com/${{ github.repository }}/pull/$PR_NUM)"
               COMMIT_LINK="[$hash](https://github.com/${{ github.repository }}/commit/$hash)"
               ITEM="$CLEAN_MESSAGE ($PR_LINK) ($COMMIT_LINK)"
