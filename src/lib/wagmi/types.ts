@@ -73,6 +73,7 @@ export interface Mutation {
     mutationKey?: readonly unknown[];
     [key: string]: any;
   };
+  mutationId: number;
 }
 
 /**

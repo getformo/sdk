@@ -27,6 +27,12 @@ export class WagmiEventHandler {
   private trackingState: WagmiTrackingState = {
     isProcessing: false,
   };
+  
+  /**
+   * Track processed mutation states to prevent duplicate event emissions
+   * Key format: `${mutationId}:${status}`
+   */
+  private processedMutations = new Set<string>();
 
   constructor(
     formoAnalytics: FormoAnalytics,
@@ -220,9 +226,26 @@ export class WagmiEventHandler {
 
     const mutationType = mutationKey[0] as string;
     const state = mutation.state;
+    
+    // Create a unique key for this mutation state to prevent duplicate processing
+    const mutationStateKey = `${mutation.mutationId}:${state.status}`;
+    
+    // Skip if we've already processed this mutation state
+    if (this.processedMutations.has(mutationStateKey)) {
+      logger.debug("WagmiEventHandler: Skipping duplicate mutation event", {
+        mutationType,
+        mutationId: mutation.mutationId,
+        status: state.status,
+      });
+      return;
+    }
+    
+    // Mark this mutation state as processed
+    this.processedMutations.add(mutationStateKey);
 
     logger.debug("WagmiEventHandler: Mutation event", {
       mutationType,
+      mutationId: mutation.mutationId,
       status: state.status,
     });
 
@@ -234,6 +257,16 @@ export class WagmiEventHandler {
     // Handle transaction mutations
     if (mutationType === "sendTransaction" || mutationType === "writeContract") {
       this.handleTransactionMutation(mutationType as WagmiMutationKey, mutation);
+    }
+    
+    // Clean up old processed mutations to prevent memory leaks
+    // Keep only recent mutations (max 1000 entries)
+    if (this.processedMutations.size > 1000) {
+      const entries = Array.from(this.processedMutations);
+      // Remove oldest 500 entries
+      for (let i = 0; i < 500; i++) {
+        this.processedMutations.delete(entries[i]);
+      }
     }
   }
 
@@ -413,6 +446,7 @@ export class WagmiEventHandler {
     }
     
     this.unsubscribers = [];
+    this.processedMutations.clear();
     logger.info("WagmiEventHandler: Cleanup complete");
   }
 }
