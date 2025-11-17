@@ -47,6 +47,7 @@ import { toChecksumAddress } from "./utils";
 import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
+import { WagmiEventHandler } from "./lib/wagmi/WagmiEventHandler";
 
 /**
  * Interface for wallet provider flags to avoid multiple any type assertions
@@ -102,6 +103,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   // Set to efficiently track seen providers for deduplication and O(1) lookup
   private _seenProviders: Set<EIP1193Provider> = new Set();
 
+  /**
+   * Wagmi event handler for tracking wallet events via Wagmi v2
+   * Only initialized when options.wagmi is provided
+   */
+  private wagmiHandler?: WagmiEventHandler;
+
+  /**
+   * Flag indicating if Wagmi mode is enabled
+   * When true, EIP-1193 provider wrapping is skipped
+   */
+  private isWagmiMode: boolean = false;
+
   config: Config;
   currentChainId?: ChainID;
   currentAddress?: Address;
@@ -142,6 +155,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
     this.options = options;
 
+    // Check if Wagmi mode is enabled
+    this.isWagmiMode = !!options.wagmi;
+
     this.session = new FormoAnalyticsSession();
     this.currentUserId =
       (cookie().get(SESSION_USER_ID_KEY) as string) || undefined;
@@ -178,17 +194,27 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info("User has previously opted out of tracking");
     }
 
-    // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
-    let provider: EIP1193Provider | undefined = undefined;
-    const optProvider = options.provider as EIP1193Provider | undefined;
-    if (optProvider) {
-      provider = optProvider;
-    } else if (typeof window !== "undefined" && window.ethereum) {
-      provider = window.ethereum;
-    }
+    // Initialize Wagmi handler if Wagmi mode is enabled
+    if (this.isWagmiMode && options.wagmi) {
+      logger.info("FormoAnalytics: Initializing in Wagmi mode");
+      this.wagmiHandler = new WagmiEventHandler(
+        this,
+        options.wagmi.config,
+        options.wagmi.queryClient
+      );
+    } else {
+      // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
+      let provider: EIP1193Provider | undefined = undefined;
+      const optProvider = options.provider as EIP1193Provider | undefined;
+      if (optProvider) {
+        provider = optProvider;
+      } else if (typeof window !== "undefined" && window.ethereum) {
+        provider = window.ethereum;
+      }
 
-    if (provider) {
-      this.trackProvider(provider);
+      if (provider) {
+        this.trackProvider(provider);
+      }
     }
 
     this.trackPageHit();
@@ -202,10 +228,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Auto-detect wallet provider
-    analytics._providers = await analytics.getProviders();
-    await analytics.detectWallets(analytics._providers);
-    analytics.trackProviders(analytics._providers);
+    // Skip provider detection in Wagmi mode
+    if (!analytics.isWagmiMode) {
+      // Auto-detect wallet provider
+      analytics._providers = await analytics.getProviders();
+      await analytics.detectWallets(analytics._providers);
+      analytics.trackProviders(analytics._providers);
+    } else {
+      logger.info("FormoAnalytics: Skipping provider detection (Wagmi mode)");
+    }
 
     return analytics;
   }
@@ -243,6 +274,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
+  }
+
+  /**
+   * Clean up resources and event listeners
+   * Call this when destroying the analytics instance
+   * @returns {void}
+   */
+  public cleanup(): void {
+    logger.info("FormoAnalytics: Cleaning up resources");
+    
+    // Clean up Wagmi handler if present
+    if (this.wagmiHandler) {
+      this.wagmiHandler.cleanup();
+      this.wagmiHandler = undefined;
+    }
+    
+    // Clean up EIP-1193 providers if not in Wagmi mode
+    if (!this.isWagmiMode) {
+      for (const provider of Array.from(this._trackedProviders)) {
+        this.untrackProvider(provider);
+      }
+    }
+    
+    logger.info("FormoAnalytics: Cleanup complete");
   }
 
   /**
@@ -777,6 +832,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private trackProvider(provider: EIP1193Provider): void {
     logger.info("trackProvider", provider);
+    
+    // Skip provider tracking in Wagmi mode
+    if (this.isWagmiMode) {
+      logger.debug("TrackProvider: Skipping provider tracking (Wagmi mode)");
+      return;
+    }
+    
     try {
       if (!provider) return;
       if (this._trackedProviders.has(provider)) {

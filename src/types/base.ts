@@ -25,6 +25,7 @@ export interface IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
   reset(): void;
+  cleanup(): void;
   detect(
     params: { rdns: string; providerName: string },
     properties?: IFormoEventProperties,
@@ -168,6 +169,25 @@ export interface ReferralOptions {
   pathPattern?: string;
 }
 
+/**
+ * Configuration options for Wagmi integration
+ * Allows the SDK to hook into Wagmi v2 wallet events instead of wrapping EIP-1193 providers
+ */
+export interface WagmiOptions {
+  /**
+   * Wagmi config instance from createConfig()
+   * The SDK will subscribe to this config's state changes to track wallet events
+   */
+  config: any;
+
+  /**
+   * Optional QueryClient instance from @tanstack/react-query
+   * Required for tracking signature and transaction events via mutation cache
+   * If not provided, only connection/disconnection/chain events will be tracked
+   */
+  queryClient?: any;
+}
+
 export interface Options {
   provider?: EIP1193Provider;
   tracking?: boolean | TrackingOptions;
@@ -179,6 +199,14 @@ export interface Options {
    * @default true
    */
   autocapture?: boolean | AutocaptureOptions;
+  /**
+   * Wagmi integration configuration
+   * When provided, the SDK will hook into Wagmi's event system instead of wrapping EIP-1193 providers
+   * This replaces the default provider tracking with Wagmi's config.subscribe() and MutationCache
+   * @requires wagmi@>=2.0.0
+   * @requires @tanstack/react-query@>=5.0.0 (for mutation tracking)
+   */
+  wagmi?: WagmiOptions;
   /**
    * Custom API host for sending events through your own domain to bypass ad blockers
    * - If not provided, events are sent directly to events.formo.so
