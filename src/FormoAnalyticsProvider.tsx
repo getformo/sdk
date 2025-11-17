@@ -7,6 +7,7 @@ const defaultContext: IFormoAnalytics = {
   chain: () => Promise.resolve(),
   page: () => Promise.resolve(),
   reset: () => {},
+  cleanup: () => {},
   detect: () => Promise.resolve(),
   connect: () => Promise.resolve(),
   disconnect: () => Promise.resolve(),

@@ -594,7 +594,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           this._providers.map((p) => p.info.name)
         );
         for (const providerDetail of this._providers) {
-          const provider = providerDetail.provider;
+          const provider = providerDetail.provider as EIP1193Provider;
           if (!provider) continue;
 
           try {
@@ -1752,7 +1752,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param eventType The wallet event type to check
    * @returns {boolean} True if the event type should be autocaptured
    */
-  private isAutocaptureEnabled(
+  public isAutocaptureEnabled(
     eventType: "connect" | "disconnect" | "signature" | "transaction" | "chain"
   ): boolean {
     // If no configuration provided, default to enabled
@@ -1877,7 +1877,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Process newly added providers with proper deduplication
       const newlyAddedDetails = providerDetails.filter((detail) => {
-        const provider = detail?.provider;
+        const provider = detail?.provider as EIP1193Provider | undefined;
         return provider && !this._seenProviders.has(provider);
       });
 
@@ -1958,7 +1958,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Initialize providers array with discovered providers, avoiding duplicates
     const uniqueProviders = providers.filter(
       (detail: EIP6963ProviderDetail) => {
-        const provider = detail?.provider;
+        const provider = detail?.provider as EIP1193Provider | undefined;
         return provider && !this._seenProviders.has(provider);
       }
     );
@@ -2239,7 +2239,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private cleanupUnavailableProviders(): void {
     // Remove providers that are no longer in the current providers list
     const currentProviderInstances = new Set(
-      this._providers.map((detail) => detail.provider)
+      this._providers.map((detail) => detail.provider as EIP1193Provider)
     );
 
     for (const provider of Array.from(this._trackedProviders)) {
@@ -2309,7 +2309,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns true if the provider was added, false if it was already present
    */
   private safeAddProviderDetail(detail: EIP6963ProviderDetail): boolean {
-    const provider = detail?.provider;
+    const provider = detail?.provider as EIP1193Provider | undefined;
     if (!provider) return false;
 
     // Check if provider already exists in _providers array
