@@ -136,7 +136,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param provider The provider to validate
    * @returns true if the provider is in a valid state
    */
-  private isProviderInValidState(provider: EIP1193Provider): boolean {
+  private isValidProvider(provider: EIP1193Provider): boolean {
     // Basic validation: ensure provider exists and has required methods
     return (
       provider &&
@@ -213,7 +213,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       if (provider) {
-        this.trackProvider(provider);
+        this.trackEIP1193Provider(provider);
       }
     }
 
@@ -830,19 +830,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     SDK tracking and event listener functions
   */
 
-  private trackProvider(provider: EIP1193Provider): void {
-    logger.info("trackProvider", provider);
+  /**
+   * Track an EIP-1193 provider by wrapping its request method and adding event listeners
+   * Note: This is only used in non-Wagmi mode. When Wagmi is enabled, all tracking
+   * happens through Wagmi's connector system instead of EIP-1193/EIP-6963.
+   * @param provider The EIP-1193 provider to track
+   */
+  private trackEIP1193Provider(provider: EIP1193Provider): void {
+    logger.info("trackEIP1193Provider", provider);
     
     // Skip provider tracking in Wagmi mode
     if (this.isWagmiMode) {
-      logger.debug("TrackProvider: Skipping provider tracking (Wagmi mode)");
+      logger.debug("trackEIP1193Provider: Skipping EIP-1193 provider tracking (Wagmi mode - using connector system instead)");
       return;
     }
     
     try {
-      if (!provider) return;
+      // Validate provider exists and has required methods
+      if (!this.isValidProvider(provider)) {
+        logger.warn("trackEIP1193Provider: Invalid provider - missing required methods");
+        return;
+      }
+      
       if (this._trackedProviders.has(provider)) {
-        logger.warn("TrackProvider: Provider already tracked.");
+        logger.warn("trackEIP1193Provider: Provider already tracked");
         return;
       }
 
@@ -884,7 +895,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           | EIP1193Provider
           | undefined;
         if (provider && !this._trackedProviders.has(provider)) {
-          this.trackProvider(provider);
+          this.trackEIP1193Provider(provider);
         }
       }
     } catch (error) {
@@ -1920,7 +1931,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         ) {
           // Ensure it's tracked
           if (!this._trackedProviders.has(injected)) {
-            this.trackProvider(injected);
+            this.trackEIP1193Provider(injected);
           }
           // Merge with existing providers instead of overwriting
           if (
@@ -1936,7 +1947,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         // Re-check if the injected provider is already tracked just before tracking
         if (!this._trackedProviders.has(injected)) {
-          this.trackProvider(injected);
+          this.trackEIP1193Provider(injected);
         }
 
         // Create a mock EIP6963ProviderDetail for the injected provider
