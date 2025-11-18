@@ -5,11 +5,8 @@ import {
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
-  SESSION_WALLET_DETECTED_KEY,
-  SESSION_WALLET_IDENTIFIED_KEY,
-  TEventType,
-  DEFAULT_PROVIDER_ICON,
   CONSENT_OPT_OUT_KEY,
+  TEventType,
 } from "./constants";
 import {
   cookie,
@@ -22,6 +19,11 @@ import {
   setConsentFlag,
   getConsentFlag,
   removeConsentFlag,
+  detectInjectedProviderInfo,
+  isValidProvider,
+  FormoAnalyticsSession,
+  SESSION_WALLET_DETECTED_KEY,
+  SESSION_WALLET_IDENTIFIED_KEY,
 } from "./lib";
 import {
   Address,
@@ -48,18 +50,6 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./lib/wagmi/WagmiEventHandler";
-
-/**
- * Interface for wallet provider flags to avoid multiple any type assertions
- */
-interface WalletProviderFlags {
-  isMetaMask?: boolean;
-  isCoinbaseWallet?: boolean;
-  isWalletConnect?: boolean;
-  isTrust?: boolean;
-  isBraveWallet?: boolean;
-  isPhantom?: boolean;
-}
 
 /**
  * Constants for provider switching reasons
@@ -129,21 +119,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Only consider it a mismatch if we have an active provider AND the provider is different
     // This allows legitimate provider switching while preventing race conditions
     return this._provider != null && this._provider !== provider;
-  }
-
-  /**
-   * Check if a provider is in a valid state for switching
-   * @param provider The provider to validate
-   * @returns true if the provider is in a valid state
-   */
-  private isValidProvider(provider: EIP1193Provider): boolean {
-    // Basic validation: ensure provider exists and has required methods
-    return (
-      provider &&
-      typeof provider.request === "function" &&
-      typeof provider.on === "function" &&
-      typeof provider.removeListener === "function"
-    );
   }
 
   private constructor(
@@ -847,7 +822,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     
     try {
       // Validate provider exists and has required methods
-      if (!this.isValidProvider(provider)) {
+      if (!isValidProvider(provider)) {
         logger.warn("trackEIP1193Provider: Invalid provider - missing required methods");
         return;
       }
@@ -1815,67 +1790,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // Fallback to injected provider detection
-    const injectedInfo = this.detectInjectedProviderInfo(provider);
+    const injectedInfo = detectInjectedProviderInfo(provider);
     return {
       name: injectedInfo.name,
       rdns: injectedInfo.rdns,
-    };
-  }
-
-  /**
-   * Attempts to detect information about an injected provider
-   * @param provider The injected provider to analyze
-   * @returns Provider information with fallback values
-   */
-  private detectInjectedProviderInfo(provider: EIP1193Provider): {
-    name: string;
-    rdns: string;
-    uuid: string;
-    icon: `data:image/${string}`;
-  } {
-    // Try to detect provider type from common properties
-    let name = "Injected Provider";
-    let rdns = "io.injected.provider";
-
-    // Use WalletProviderFlags interface for type safety
-    const flags = provider as WalletProviderFlags;
-
-    // Check if it's MetaMask
-    if (flags.isMetaMask) {
-      name = "MetaMask";
-      rdns = "io.metamask";
-    }
-    // Check if it's Coinbase Wallet
-    else if (flags.isCoinbaseWallet) {
-      name = "Coinbase Wallet";
-      rdns = "com.coinbase.wallet";
-    }
-    // Check if it's WalletConnect
-    else if (flags.isWalletConnect) {
-      name = "WalletConnect";
-      rdns = "com.walletconnect";
-    }
-    // Check if it's Trust Wallet
-    else if (flags.isTrust) {
-      name = "Trust Wallet";
-      rdns = "com.trustwallet";
-    }
-    // Check if it's Brave Wallet
-    else if (flags.isBraveWallet) {
-      name = "Brave Wallet";
-      rdns = "com.brave.wallet";
-    }
-    // Check if it's Phantom
-    else if (flags.isPhantom) {
-      name = "Phantom";
-      rdns = "app.phantom";
-    }
-
-    return {
-      name,
-      rdns,
-      uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, "-")}`,
-      icon: DEFAULT_PROVIDER_ICON,
     };
   }
 
@@ -1951,7 +1869,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
 
         // Create a mock EIP6963ProviderDetail for the injected provider
-        const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
+        const injectedProviderInfo = detectInjectedProviderInfo(injected);
         const injectedDetail: EIP6963ProviderDetail = {
           provider: injected,
           info: injectedProviderInfo,
@@ -2337,75 +2255,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Ensure provider is marked as seen even if it already exists in _providers
       this._seenProviders.add(provider);
       return false;
-    }
-  }
-}
-
-interface IFormoAnalyticsSession {
-  isWalletDetected(rdns: string): boolean;
-  markWalletDetected(rdns: string): void;
-  isWalletIdentified(address: string, rdns: string): boolean;
-  markWalletIdentified(address: string, rdns: string): void;
-}
-
-class FormoAnalyticsSession implements IFormoAnalyticsSession {
-  private generateIdentificationKey(address: string, rdns: string): string {
-    // If rdns is missing, use address-only key as fallback for empty identifies
-    return rdns ? `${address}:${rdns}` : address;
-  }
-
-  public isWalletDetected(rdns: string): boolean {
-    const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
-    return rdnses.includes(rdns);
-  }
-
-  public markWalletDetected(rdns: string): void {
-    const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
-    if (!rdnses.includes(rdns)) {
-      rdnses.push(rdns);
-      cookie().set(SESSION_WALLET_DETECTED_KEY, rdnses.join(","), {
-        // by the end of the day
-        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
-        path: "/",
-      });
-    }
-  }
-
-  public isWalletIdentified(address: string, rdns: string): boolean {
-    const identifiedKey = this.generateIdentificationKey(address, rdns);
-    const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
-    const identifiedWallets = cookieValue?.split(",") || [];
-    const isIdentified = identifiedWallets.includes(identifiedKey);
-    logger.debug("Session: Checking wallet identification", {
-      identifiedKey,
-      isIdentified,
-      hasRdns: !!rdns,
-    });
-    return isIdentified;
-  }
-
-  public markWalletIdentified(address: string, rdns: string): void {
-    const identifiedKey = this.generateIdentificationKey(address, rdns);
-    const identifiedWallets =
-      cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
-    if (!identifiedWallets.includes(identifiedKey)) {
-      identifiedWallets.push(identifiedKey);
-      const newValue = identifiedWallets.join(",");
-      cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
-        // by the end of the day
-        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
-        path: "/",
-      });
-      logger.debug("Session: Marked wallet as identified", {
-        identifiedKey,
-        hasRdns: !!rdns,
-      });
-    } else {
-      logger.info("Session: Wallet already marked as identified", {
-        identifiedKey,
-        existingWallets: identifiedWallets,
-        hasRdns: !!rdns,
-      });
     }
   }
 }
