@@ -67,6 +67,14 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
     };
 
     initialize();
+
+    // Cleanup function to prevent memory leaks
+    return () => {
+      if (sdk && sdk !== defaultContext) {
+        logger.log("Cleaning up FormoAnalytics SDK instance");
+        sdk.cleanup();
+      }
+    };
   }, [writeKey, options]);
 
   return (
