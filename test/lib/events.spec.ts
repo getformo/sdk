@@ -1,6 +1,6 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import { getCookieDomain } from "../../src/lib/event/utils";
+import { getCookieDomain } from "../../src/event/utils";
 
 describe("getCookieDomain", () => {
   it("should return the cookie domain format", () => {

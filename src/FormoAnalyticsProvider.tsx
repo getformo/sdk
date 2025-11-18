@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, ReactNode, FC } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
-import { initStorageManager, logger } from "./lib";
+import { initStorageManager } from "./storage";
+import { logger } from "./logger";
 import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
 
 const defaultContext: IFormoAnalytics = {

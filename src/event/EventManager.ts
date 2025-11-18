@@ -1,9 +1,9 @@
-import { Address, APIEvent, Options } from "../../types";
+import { Address, APIEvent, Options } from "../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
 import { EventFactory } from "./EventFactory";
 import { IEventFactory, IEventManager } from "./type";
-import { isBlockedAddress } from "../../utils/address";
+import { isBlockedAddress } from "../utils/address";
 
 /**
  * A service to generate valid event payloads and queue them for processing

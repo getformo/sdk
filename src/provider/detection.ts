@@ -2,7 +2,7 @@
  * Provider detection utilities for identifying wallet providers
  */
 
-import { EIP1193Provider } from "../../types";
+import { EIP1193Provider } from "../types";
 
 /**
  * Default icon for providers without custom icons

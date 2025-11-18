@@ -1,4 +1,4 @@
-import { Address, APIEvent, IFormoEvent } from "../../types";
+import { Address, APIEvent, IFormoEvent } from "../types";
 
 export interface IEventManager {
   addEvent(event: APIEvent, address?: Address, userId?: string): Promise<void>;

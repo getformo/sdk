@@ -6,8 +6,8 @@
  * wrapping approach when Wagmi mode is enabled.
  */
 
-import { FormoAnalytics } from "../../FormoAnalytics";
-import { SignatureStatus, TransactionStatus } from "../../types/events";
+import { FormoAnalytics } from "../FormoAnalytics";
+import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import {
   WagmiConfig,

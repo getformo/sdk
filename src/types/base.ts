@@ -1,4 +1,4 @@
-import { LogLevel } from "../lib";
+import { LogLevel } from "../logger";
 import {
   IFormoEventContext,
   IFormoEventProperties,

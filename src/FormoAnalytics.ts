@@ -8,23 +8,21 @@ import {
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
+import { cookie, initStorageManager } from "./storage";
+import { EventManager, IEventManager } from "./event";
+import { EventQueue } from "./queue";
+import { logger, Logger } from "./logger";
 import {
-  cookie,
-  EventManager,
-  EventQueue,
-  IEventManager,
-  initStorageManager,
-  logger,
-  Logger,
   setConsentFlag,
   getConsentFlag,
   removeConsentFlag,
-  detectInjectedProviderInfo,
-  isValidProvider,
+} from "./consent";
+import { detectInjectedProviderInfo, isValidProvider } from "./provider";
+import {
   FormoAnalyticsSession,
   SESSION_WALLET_DETECTED_KEY,
   SESSION_WALLET_IDENTIFIED_KEY,
-} from "./lib";
+} from "./session";
 import {
   Address,
   ChainID,
@@ -49,7 +47,7 @@ import { toChecksumAddress } from "./utils";
 import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
-import { WagmiEventHandler } from "./lib/wagmi/WagmiEventHandler";
+import { WagmiEventHandler } from "./wagmi/WagmiEventHandler";
 
 /**
  * Constants for provider switching reasons

@@ -1,6 +1,6 @@
 import { KEY_PREFIX } from "../constant";
 import { CookieOptions, IStorage } from "../type";
-import { secureHash } from "../../../utils/hash";
+import { secureHash } from "../../utils/hash";
 
 abstract class StorageBlueprint implements IStorage {
   constructor(private readonly writeKey: string) {}
