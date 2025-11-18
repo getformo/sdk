@@ -49,6 +49,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
   children,
 }) => {
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
+  const sdkRef = useRef<IFormoAnalytics>(defaultContext);
   const initializedStartedRef = useRef(false);
   initStorageManager(writeKey);
 
@@ -60,6 +61,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
       try {
         const sdkInstance = await FormoAnalytics.init(writeKey, options);
         setSdk(sdkInstance);
+        sdkRef.current = sdkInstance; // Store in ref for cleanup
         logger.log("Successfully initialized");
       } catch (error) {
         logger.error("Failed to initialize", error);
@@ -69,10 +71,11 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
     initialize();
 
     // Cleanup function to prevent memory leaks
+    // Using ref ensures we clean up the actual SDK instance, not the stale closure value
     return () => {
-      if (sdk && sdk !== defaultContext) {
+      if (sdkRef.current && sdkRef.current !== defaultContext) {
         logger.log("Cleaning up FormoAnalytics SDK instance");
-        sdk.cleanup();
+        sdkRef.current.cleanup();
       }
     };
   }, [writeKey, options]);

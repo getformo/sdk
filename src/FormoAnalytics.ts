@@ -47,7 +47,7 @@ import { toChecksumAddress } from "./utils";
 import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
-import { WagmiEventHandler } from "./wagmi/WagmiEventHandler";
+import { WagmiEventHandler } from "./wagmi";
 
 /**
  * Constants for provider switching reasons
@@ -812,7 +812,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   private trackEIP1193Provider(provider: EIP1193Provider): void {
     logger.info("trackEIP1193Provider", provider);
     
-    // Skip provider tracking in Wagmi mode
+    // Defensive check: Skip provider tracking in Wagmi mode
+    // This should never be called in Wagmi mode due to guards in init(),
+    // but we check here for safety in case of future code changes
     if (this.isWagmiMode) {
       logger.debug("trackEIP1193Provider: Skipping EIP-1193 provider tracking (Wagmi mode - using connector system instead)");
       return;
