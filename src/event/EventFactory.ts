@@ -2,7 +2,7 @@ import {
   COUNTRY_LIST,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_TRAFFIC_SOURCE_KEY,
-} from "../../constants";
+} from "../constants";
 import {
   Address,
   APIEvent,
@@ -16,15 +16,15 @@ import {
   SignatureStatus,
   TransactionStatus,
   UTMParameters,
-} from "../../types";
-import { toChecksumAddress, toSnakeCase } from "../../utils";
-import { getValidAddress } from "../../utils/address";
-import { getCurrentTimeFormatted } from "../../utils/timestamp";
-import { isUndefined } from "../../validators";
+} from "../types";
+import { toChecksumAddress, toSnakeCase } from "../utils";
+import { getValidAddress } from "../utils/address";
+import { getCurrentTimeFormatted } from "../utils/timestamp";
+import { isUndefined } from "../validators";
 import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
 import { session } from "../storage";
-import { version } from "../../version";
+import { version } from "../version";
 import { CHANNEL, VERSION, PAGE_PROPERTIES_EXCLUDED_FIELDS } from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";

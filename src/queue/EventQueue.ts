@@ -1,14 +1,14 @@
-import { isNetworkError } from "../../validators";
-import { IFormoEvent, IFormoEventPayload } from "../../types";
+import { isNetworkError } from "../validators";
+import { IFormoEvent, IFormoEventPayload } from "../types";
 import {
   clampNumber,
   getActionDescriptor,
   hash,
   millisecondsToSecond,
   toDateHourMinute,
-} from "../../utils";
+} from "../utils";
 import { logger } from "../logger";
-import { EVENTS_API_REQUEST_HEADER } from "../../constants";
+import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch from "../fetch";
 import { IEventQueue } from "./type";
 const noop = () => {};
