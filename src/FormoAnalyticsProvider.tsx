@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, ReactNode, FC } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, ReactNode, FC } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { initStorageManager } from "./storage";
 import { logger } from "./logger";
@@ -50,21 +50,43 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
 }) => {
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
   const sdkRef = useRef<IFormoAnalytics>(defaultContext);
-  const initializedStartedRef = useRef(false);
   initStorageManager(writeKey);
 
+  // Serialize options to a stable reference to prevent unnecessary re-initializations
+  // Only re-initialize if the actual options content changes, not just the object reference
+  const optionsKey = useMemo(() => {
+    return JSON.stringify(options);
+  }, [options]);
+
   useEffect(() => {
+    let isCleanedUp = false;
+
     const initialize = async () => {
-      if (initializedStartedRef.current) return;
-      initializedStartedRef.current = true;
+      // Clean up existing SDK instance before creating a new one
+      if (sdkRef.current && sdkRef.current !== defaultContext) {
+        logger.log("Cleaning up existing FormoAnalytics SDK instance before re-initialization");
+        sdkRef.current.cleanup();
+        sdkRef.current = defaultContext;
+        setSdk(defaultContext);
+      }
 
       try {
         const sdkInstance = await FormoAnalytics.init(writeKey, options);
-        setSdk(sdkInstance);
-        sdkRef.current = sdkInstance; // Store in ref for cleanup
-        logger.log("Successfully initialized");
+        
+        // Only set SDK if the component hasn't been cleaned up during async initialization
+        if (!isCleanedUp) {
+          setSdk(sdkInstance);
+          sdkRef.current = sdkInstance;
+          logger.log("Successfully initialized FormoAnalytics SDK");
+        } else {
+          // Component was unmounted during initialization, clean up immediately
+          logger.log("Component unmounted during initialization, cleaning up SDK");
+          sdkInstance.cleanup();
+        }
       } catch (error) {
-        logger.error("Failed to initialize", error);
+        if (!isCleanedUp) {
+          logger.error("Failed to initialize FormoAnalytics SDK", error);
+        }
       }
     };
 
@@ -73,12 +95,15 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
     // Cleanup function to prevent memory leaks
     // Using ref ensures we clean up the actual SDK instance, not the stale closure value
     return () => {
+      isCleanedUp = true;
+      
       if (sdkRef.current && sdkRef.current !== defaultContext) {
         logger.log("Cleaning up FormoAnalytics SDK instance");
         sdkRef.current.cleanup();
+        sdkRef.current = defaultContext;
       }
     };
-  }, [writeKey, options]);
+  }, [writeKey, optionsKey]);
 
   return (
     <FormoAnalyticsContext.Provider value={sdk}>
