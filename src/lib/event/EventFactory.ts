@@ -272,7 +272,7 @@ class EventFactory implements IEventFactory {
     }
 
     if (isUndefined(pageProps.hash)) {
-      pageProps.hash = globalThis.location.hash.slice(1);
+      pageProps.hash = globalThis.location.hash;
     }
 
     // Add query string without the '?' prefix
@@ -281,8 +281,9 @@ class EventFactory implements IEventFactory {
     }
 
     // Parse query parameters and add as individual properties (don't overwrite existing)
-    // Skip fields that are already captured in context to avoid duplication
-    const contextFields = new Set([
+    // Skip fields that are already captured in context or are semantic event properties
+    const excludedFields = new Set([
+      // Context fields (already captured in event context)
       'utm_source',
       'utm_medium',
       'utm_campaign',
@@ -292,13 +293,20 @@ class EventFactory implements IEventFactory {
       'referral',
       'refcode',
       'referrer',
+      // Semantic event properties (should not be overridden by URL params)
+      'category',
+      'name',
+      'url',
+      'path',
+      'hash',
+      'query',
     ]);
 
     try {
       const urlObj = new URL(globalThis.location.href);
       urlObj.searchParams.forEach((value, key) => {
-        // Only add if the property doesn't already exist and is not in context
-        if (isUndefined(pageProps[key]) && !contextFields.has(key)) {
+        // Only add if the property doesn't already exist and is not excluded
+        if (isUndefined(pageProps[key]) && !excludedFields.has(key)) {
           pageProps[key] = value;
         }
       });
