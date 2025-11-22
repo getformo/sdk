@@ -271,11 +271,6 @@ class EventFactory implements IEventFactory {
       pageProps.path = globalThis.location.pathname;
     }
 
-    if (isUndefined(pageProps.fragment)) {
-      pageProps.fragment = globalThis.location.hash.slice(1);
-    }
-
-    // Keep 'hash' for backward compatibility
     if (isUndefined(pageProps.hash)) {
       pageProps.hash = globalThis.location.hash.slice(1);
     }
@@ -286,11 +281,24 @@ class EventFactory implements IEventFactory {
     }
 
     // Parse query parameters and add as individual properties (don't overwrite existing)
+    // Skip fields that are already captured in context to avoid duplication
+    const contextFields = new Set([
+      'utm_source',
+      'utm_medium',
+      'utm_campaign',
+      'utm_term',
+      'utm_content',
+      'ref',
+      'referral',
+      'refcode',
+      'referrer',
+    ]);
+
     try {
       const urlObj = new URL(globalThis.location.href);
       urlObj.searchParams.forEach((value, key) => {
-        // Only add if the property doesn't already exist
-        if (isUndefined(pageProps[key])) {
+        // Only add if the property doesn't already exist and is not in context
+        if (isUndefined(pageProps[key]) && !contextFields.has(key)) {
           pageProps[key] = value;
         }
       });
