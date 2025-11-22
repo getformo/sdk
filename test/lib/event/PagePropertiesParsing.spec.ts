@@ -545,5 +545,44 @@ describe("Page Event Property Parsing", () => {
       expect(props.category).to.not.include("script");
     });
   });
+
+  describe("Properties object mutation", () => {
+    it("should not mutate the original properties object", async () => {
+      setMockLocation("https://formo.so/blog?foo=bar#intro");
+
+      const originalProps = { category: "test", custom: "value" };
+      const originalPropsCopy = { ...originalProps };
+
+      await getPageProperties(originalProps);
+
+      // Original object should be unchanged
+      expect(originalProps).to.deep.equal(originalPropsCopy);
+      expect((originalProps as any).url).to.be.undefined;
+      expect((originalProps as any).path).to.be.undefined;
+      expect((originalProps as any).hash).to.be.undefined;
+      expect((originalProps as any).query).to.be.undefined;
+      expect((originalProps as any).foo).to.be.undefined;
+    });
+
+    it("should allow reusing properties object across multiple calls", async () => {
+      const reusableProps = { category: "page_view" };
+
+      // First call with one URL
+      setMockLocation("https://formo.so/page1?param1=value1");
+      const props1 = await getPageProperties(reusableProps);
+
+      expect(props1.path).to.equal("/page1");
+      expect(props1.param1).to.equal("value1");
+
+      // Second call with different URL - should get new values
+      setMockLocation("https://formo.so/page2?param2=value2");
+      const props2 = await getPageProperties(reusableProps);
+
+      expect(props2.path).to.equal("/page2");
+      expect(props2.param2).to.equal("value2");
+      // Should not have param1 from first call
+      expect((props2 as any).param1).to.be.undefined;
+    });
+  });
 });
 

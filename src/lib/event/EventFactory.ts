@@ -259,7 +259,8 @@ class EventFactory implements IEventFactory {
   private getPageProperties = (
     properties: IFormoEventProperties
   ): IFormoEventProperties => {
-    const pageProps = properties;
+    // Create a copy to avoid mutating the original properties object
+    const pageProps = { ...properties };
 
     if (isUndefined(pageProps.url)) {
       pageProps.url = new URL(globalThis.location.href).href;
@@ -340,7 +341,8 @@ class EventFactory implements IEventFactory {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ): Promise<IFormoEvent> {
-    let props = properties ?? {};
+    // Create a copy to avoid mutating the original properties object
+    let props = { ...(properties ?? {}) };
     props.category = category;
     props.name = name;
     props = this.getPageProperties(props);
