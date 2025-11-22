@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.24.0",
+  "version": "1.25.0",
   "packageManager": "pnpm@9.0.0",
   "repository": {
     "type": "git",
@@ -78,7 +78,7 @@
     "clean": "rm -rf dist",
     "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\;",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
-    "test": "mocha --require ts-node/register --project tsconfig.test.json test/**/*.ts",
+    "test": "mocha --require ts-node/register --project tsconfig.test.json 'test/**/*.ts'",
     "test-watch": "nodemon --config test.nodemon.json",
     "size": "size-limit",
     "version": "node scripts/update-version.js && git add src/version.ts",

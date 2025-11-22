@@ -25,7 +25,7 @@ import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
 import { session } from "../storage";
 import { version } from "../version";
-import { CHANNEL, VERSION } from "./constants";
+import { CHANNEL, VERSION, PAGE_PROPERTIES_EXCLUDED_FIELDS } from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
@@ -222,7 +222,6 @@ class EventFactory implements IEventFactory {
   private async generateContext(
     context?: IFormoEventContext
   ): Promise<IFormoEventContext> {
-    const path = globalThis.location.pathname;
     const browserName = await detectBrowser();
     const language = this.getLanguage();
     const timezone = this.getTimezone();
@@ -236,7 +235,6 @@ class EventFactory implements IEventFactory {
       timezone,
       location,
       ...this.getTrafficSources(globalThis.location.href),
-      page_path: path,
       page_title: document.title,
       page_url: globalThis.location.href,
       library_name: "Formo Web SDK",
@@ -261,7 +259,8 @@ class EventFactory implements IEventFactory {
   private getPageProperties = (
     properties: IFormoEventProperties
   ): IFormoEventProperties => {
-    const pageProps = properties;
+    // Create a copy to avoid mutating the original properties object
+    const pageProps = { ...properties };
 
     if (isUndefined(pageProps.url)) {
       pageProps.url = new URL(globalThis.location.href).href;
@@ -273,6 +272,25 @@ class EventFactory implements IEventFactory {
 
     if (isUndefined(pageProps.hash)) {
       pageProps.hash = globalThis.location.hash;
+    }
+
+    // Add query string without the '?' prefix
+    if (isUndefined(pageProps.query)) {
+      pageProps.query = globalThis.location.search.slice(1);
+    }
+
+    // Parse query parameters and add as individual properties (don't overwrite existing)
+    // Skip fields that are already captured in context or are semantic event properties
+    try {
+      const urlObj = new URL(globalThis.location.href);
+      urlObj.searchParams.forEach((value, key) => {
+        // Only add if the property doesn't already exist and is not excluded
+        if (isUndefined(pageProps[key]) && !PAGE_PROPERTIES_EXCLUDED_FIELDS.has(key)) {
+          pageProps[key] = value;
+        }
+      });
+    } catch (error) {
+      logger.error("Error parsing query parameters for page properties:", error);
     }
 
     return pageProps;
@@ -323,7 +341,8 @@ class EventFactory implements IEventFactory {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ): Promise<IFormoEvent> {
-    let props = properties ?? {};
+    // Create a copy to avoid mutating the original properties object
+    let props = { ...(properties ?? {}) };
     props.category = category;
     props.name = name;
     props = this.getPageProperties(props);
