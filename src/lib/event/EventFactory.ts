@@ -25,7 +25,7 @@ import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
 import { session } from "../storage";
 import { version } from "../../version";
-import { CHANNEL, VERSION } from "./constants";
+import { CHANNEL, VERSION, PAGE_PROPERTIES_EXCLUDED_FIELDS } from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
@@ -282,31 +282,11 @@ class EventFactory implements IEventFactory {
 
     // Parse query parameters and add as individual properties (don't overwrite existing)
     // Skip fields that are already captured in context or are semantic event properties
-    const excludedFields = new Set([
-      // Context fields (already captured in event context)
-      'utm_source',
-      'utm_medium',
-      'utm_campaign',
-      'utm_term',
-      'utm_content',
-      'ref',
-      'referral',
-      'refcode',
-      'referrer',
-      // Semantic event properties (should not be overridden by URL params)
-      'category',
-      'name',
-      'url',
-      'path',
-      'hash',
-      'query',
-    ]);
-
     try {
       const urlObj = new URL(globalThis.location.href);
       urlObj.searchParams.forEach((value, key) => {
         // Only add if the property doesn't already exist and is not excluded
-        if (isUndefined(pageProps[key]) && !excludedFields.has(key)) {
+        if (isUndefined(pageProps[key]) && !PAGE_PROPERTIES_EXCLUDED_FIELDS.has(key)) {
           pageProps[key] = value;
         }
       });
