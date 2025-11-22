@@ -222,7 +222,6 @@ class EventFactory implements IEventFactory {
   private async generateContext(
     context?: IFormoEventContext
   ): Promise<IFormoEventContext> {
-    const path = globalThis.location.pathname;
     const browserName = await detectBrowser();
     const language = this.getLanguage();
     const timezone = this.getTimezone();
@@ -236,7 +235,6 @@ class EventFactory implements IEventFactory {
       timezone,
       location,
       ...this.getTrafficSources(globalThis.location.href),
-      page_path: path,
       page_title: document.title,
       page_url: globalThis.location.href,
       library_name: "Formo Web SDK",
