@@ -271,8 +271,31 @@ class EventFactory implements IEventFactory {
       pageProps.path = globalThis.location.pathname;
     }
 
+    if (isUndefined(pageProps.fragment)) {
+      pageProps.fragment = globalThis.location.hash.slice(1);
+    }
+
+    // Keep 'hash' for backward compatibility
     if (isUndefined(pageProps.hash)) {
-      pageProps.hash = globalThis.location.hash;
+      pageProps.hash = globalThis.location.hash.slice(1);
+    }
+
+    // Add query string without the '?' prefix
+    if (isUndefined(pageProps.query)) {
+      pageProps.query = globalThis.location.search.slice(1);
+    }
+
+    // Parse query parameters and add as individual properties (don't overwrite existing)
+    try {
+      const urlObj = new URL(globalThis.location.href);
+      urlObj.searchParams.forEach((value, key) => {
+        // Only add if the property doesn't already exist
+        if (isUndefined(pageProps[key])) {
+          pageProps[key] = value;
+        }
+      });
+    } catch (error) {
+      logger.error("Error parsing query parameters for page properties:", error);
     }
 
     return pageProps;
