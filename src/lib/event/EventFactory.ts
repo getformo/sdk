@@ -239,6 +239,8 @@ class EventFactory implements IEventFactory {
       page_path: path,
       page_title: document.title,
       page_url: globalThis.location.href,
+      page_query: globalThis.location.search,
+      page_fragment: globalThis.location.hash,
       library_name: "Formo Web SDK",
       library_version,
       browser: browserName,
