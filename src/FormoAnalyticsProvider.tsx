@@ -52,10 +52,35 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
   const sdkRef = useRef<IFormoAnalytics>(defaultContext);
   initStorageManager(writeKey);
 
-  // Serialize options to a stable reference to prevent unnecessary re-initializations
-  // Only re-initialize if the actual options content changes, not just the object reference
+  // Create a stable key from options that ignores complex objects and functions
+  // We only care about serializable config values that would affect SDK behavior
   const optionsKey = useMemo(() => {
-    return JSON.stringify(options);
+    if (!options) return 'undefined';
+    
+    // Extract only the serializable parts of options
+    const serializableOptions = {
+      tracking: options.tracking,
+      autocapture: options.autocapture,
+      apiHost: options.apiHost,
+      flushAt: options.flushAt,
+      flushInterval: options.flushInterval,
+      retryCount: options.retryCount,
+      maxQueueSize: options.maxQueueSize,
+      logger: options.logger,
+      referral: options.referral,
+      // For complex objects, just track their presence, not their content
+      hasProvider: !!options.provider,
+      hasWagmi: !!options.wagmi,
+      hasReady: !!options.ready,
+    };
+    
+    try {
+      return JSON.stringify(serializableOptions);
+    } catch (error) {
+      // Fallback to timestamp if serialization fails
+      logger.warn('Failed to serialize options, using timestamp', error);
+      return Date.now().toString();
+    }
   }, [options]);
 
   useEffect(() => {
