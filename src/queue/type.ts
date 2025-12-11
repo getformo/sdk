@@ -1,4 +1,4 @@
-import { IFormoEvent } from "../../types";
+import { IFormoEvent } from "../types";
 
 export interface IEventQueue {
   enqueue(event: IFormoEvent, callback?: (...args: any) => void): Promise<void>;

@@ -1,5 +1,5 @@
-import { AnonymousID } from "../../types";
-import { generateNativeUUID } from "../../utils";
+import { AnonymousID } from "../types";
+import { generateNativeUUID } from "../utils";
 import { cookie } from "../storage";
 
 const generateAnonymousId = (key: string): AnonymousID => {
