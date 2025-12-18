@@ -83,7 +83,14 @@ describe("Page Event Property Parsing", () => {
       writable: true,
       configurable: true,
     });
-    
+    Object.defineProperty(global, 'crypto', {
+      value: {
+        randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      },
+      writable: true,
+      configurable: true,
+    });
+
     // Initialize StorageManager
     initStorageManager('test-write-key');
     
@@ -105,7 +112,8 @@ describe("Page Event Property Parsing", () => {
     delete (global as any).Intl;
     delete (global as any).localStorage;
     delete (global as any).sessionStorage;
-    
+    delete (global as any).crypto;
+
     // Clean up JSDOM
     if (jsdom) {
       jsdom.window.close();
