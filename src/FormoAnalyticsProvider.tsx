@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, ReactNode, FC } from "react";
+import { createContext, useContext, useEffect, useRef, useState, FC } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { initStorageManager, logger } from "./lib";
 import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
