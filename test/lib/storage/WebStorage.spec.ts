@@ -2,6 +2,8 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import { JSDOM } from "jsdom";
 import WebStorage from "../../../src/lib/storage/built-in/web";
+import { secureHash } from "../../../src/utils/hash";
+import { JSON_PREFIX, KEY_PREFIX } from "../../../src/lib/storage/constant";
 
 describe("WebStorage", () => {
   let jsdom: JSDOM;
@@ -101,15 +103,19 @@ describe("WebStorage", () => {
     });
 
     it("should return null for 'null' string value", () => {
-      // Directly set "null" string in localStorage
-      jsdom.window.localStorage.setItem("formo_test-write-key_nullKey", "null");
-      const testStorage = new WebStorage("test-write-key", jsdom.window.localStorage);
+      // Directly set "null" string in localStorage using correct key format
+      const writeKey = "test-write-key";
+      const storageKey = `${KEY_PREFIX}_${secureHash(writeKey)}_nullKey`;
+      jsdom.window.localStorage.setItem(storageKey, "null");
+      const testStorage = new WebStorage(writeKey, jsdom.window.localStorage);
       expect(testStorage.get("nullKey")).to.be.null;
     });
 
     it("should return null for 'undefined' string value", () => {
-      jsdom.window.localStorage.setItem("formo_test-write-key_undefinedKey", "undefined");
-      const testStorage = new WebStorage("test-write-key", jsdom.window.localStorage);
+      const writeKey = "test-write-key";
+      const storageKey = `${KEY_PREFIX}_${secureHash(writeKey)}_undefinedKey`;
+      jsdom.window.localStorage.setItem(storageKey, "undefined");
+      const testStorage = new WebStorage(writeKey, jsdom.window.localStorage);
       expect(testStorage.get("undefinedKey")).to.be.null;
     });
 
@@ -147,12 +153,11 @@ describe("WebStorage", () => {
 
   describe("JSON parsing error handling", () => {
     it("should return null when JSON parsing fails", () => {
-      // Directly set malformed JSON with the prefix
-      jsdom.window.localStorage.setItem(
-        "formo_test-write-key_malformedKey",
-        "__FORMO_JSON__{invalid json}"
-      );
-      const testStorage = new WebStorage("test-write-key", jsdom.window.localStorage);
+      // Directly set malformed JSON with the correct prefix and key format
+      const writeKey = "test-write-key";
+      const storageKey = `${KEY_PREFIX}_${secureHash(writeKey)}_malformedKey`;
+      jsdom.window.localStorage.setItem(storageKey, `${JSON_PREFIX}{invalid json}`);
+      const testStorage = new WebStorage(writeKey, jsdom.window.localStorage);
       expect(testStorage.get("malformedKey")).to.be.null;
     });
   });
