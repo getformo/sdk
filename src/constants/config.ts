@@ -3,7 +3,7 @@ export const EVENTS_API_HOST = `${EVENTS_API_ORIGIN}/v0/raw_events`;
 
 export const EVENTS_API_REQUEST_HEADER = (writeKey: string) => ({
   "Content-Type": "application/json",
-  Authorization: `Basic ${writeKey}`,
+  Authorization: `Bearer ${writeKey}`,
 });
 
 export const COUNTRY_LIST = {
