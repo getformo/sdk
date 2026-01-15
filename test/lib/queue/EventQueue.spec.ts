@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
-import { EventQueue } from "../../../src/lib/queue/EventQueue";
+import { EventQueue } from "../../../src/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
 
 describe("EventQueue", () => {

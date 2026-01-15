@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "mocha";
 import { expect } from "chai";
-import MemoryStorage from "../../../src/lib/storage/built-in/memory";
+import MemoryStorage from "../../../src/storage/built-in/memory";
 
 describe("MemoryStorage", () => {
   let storage: MemoryStorage;

@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
-import { Logger } from "../../../src/lib/logger/Logger";
+import { Logger } from "../../../src/logger/Logger";
 
 describe("Logger", () => {
   let consoleDebugStub: sinon.SinonStub;

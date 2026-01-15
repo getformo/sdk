@@ -1,4 +1,4 @@
-// src/lib/browser/browsers.ts
+// src/browser/browsers.ts
 export type BrowserName =
   | "brave"
   | "chrome"

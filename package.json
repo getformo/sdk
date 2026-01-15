@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.25.0",
+  "version": "1.26.0",
   "packageManager": "pnpm@9.0.0",
   "repository": {
     "type": "git",
@@ -87,11 +87,26 @@
   "size-limit": [
     {
       "path": "dist/index.umd.min.js",
-      "limit": "37 KB"
+      "limit": "39 KB"
     }
   ],
   "peerDependencies": {
+    "@tanstack/react-query": ">=5.0.0",
     "@types/react": ">=16.14.34",
-    "react": ">=16.14.0"
+    "react": ">=16.14.0",
+    "wagmi": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@tanstack/react-query": {
+      "optional": true
+    },
+    "wagmi": {
+      "optional": true
+    }
+  },
+  "pnpm": {
+    "overrides": {
+      "hono": ">=4.11.4"
+    }
   }
 }

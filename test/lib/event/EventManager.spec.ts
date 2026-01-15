@@ -2,10 +2,10 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
-import { EventManager } from "../../../src/lib/event/EventManager";
-import { IEventQueue } from "../../../src/lib/queue";
+import { EventManager } from "../../../src/event/EventManager";
+import { IEventQueue } from "../../../src/queue";
 import { APIEvent } from "../../../src/types";
-import { initStorageManager } from "../../../src/lib/storage";
+import { initStorageManager } from "../../../src/storage";
 
 describe("EventManager", () => {
   let jsdom: JSDOM;

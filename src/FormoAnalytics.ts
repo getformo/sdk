@@ -5,24 +5,24 @@ import {
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
-  SESSION_WALLET_DETECTED_KEY,
-  SESSION_WALLET_IDENTIFIED_KEY,
-  TEventType,
-  DEFAULT_PROVIDER_ICON,
   CONSENT_OPT_OUT_KEY,
+  TEventType,
 } from "./constants";
+import { cookie, initStorageManager } from "./storage";
+import { EventManager, IEventManager } from "./event";
+import { EventQueue } from "./queue";
+import { logger, Logger } from "./logger";
 import {
-  cookie,
-  EventManager,
-  EventQueue,
-  IEventManager,
-  initStorageManager,
-  logger,
-  Logger,
   setConsentFlag,
   getConsentFlag,
   removeConsentFlag,
-} from "./lib";
+} from "./consent";
+import { detectInjectedProviderInfo, isValidProvider } from "./provider";
+import {
+  FormoAnalyticsSession,
+  SESSION_WALLET_DETECTED_KEY,
+  SESSION_WALLET_IDENTIFIED_KEY,
+} from "./session";
 import {
   Address,
   ChainID,
@@ -47,18 +47,7 @@ import { toChecksumAddress } from "./utils";
 import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
-
-/**
- * Interface for wallet provider flags to avoid multiple any type assertions
- */
-interface WalletProviderFlags {
-  isMetaMask?: boolean;
-  isCoinbaseWallet?: boolean;
-  isWalletConnect?: boolean;
-  isTrust?: boolean;
-  isBraveWallet?: boolean;
-  isPhantom?: boolean;
-}
+import { WagmiEventHandler } from "./wagmi";
 
 /**
  * Constants for provider switching reasons
@@ -102,6 +91,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   // Set to efficiently track seen providers for deduplication and O(1) lookup
   private _seenProviders: Set<EIP1193Provider> = new Set();
 
+  /**
+   * Wagmi event handler for tracking wallet events via Wagmi v2
+   * Only initialized when options.wagmi is provided
+   */
+  private wagmiHandler?: WagmiEventHandler;
+
+  /**
+   * Flag indicating if Wagmi mode is enabled
+   * When true, EIP-1193 provider wrapping is skipped
+   */
+  private isWagmiMode: boolean = false;
+
   config: Config;
   currentChainId?: ChainID;
   currentAddress?: Address;
@@ -118,21 +119,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._provider != null && this._provider !== provider;
   }
 
-  /**
-   * Check if a provider is in a valid state for switching
-   * @param provider The provider to validate
-   * @returns true if the provider is in a valid state
-   */
-  private isProviderInValidState(provider: EIP1193Provider): boolean {
-    // Basic validation: ensure provider exists and has required methods
-    return (
-      provider &&
-      typeof provider.request === "function" &&
-      typeof provider.on === "function" &&
-      typeof provider.removeListener === "function"
-    );
-  }
-
   private constructor(
     public readonly writeKey: string,
     public options: Options = {}
@@ -141,6 +127,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       writeKey,
     };
     this.options = options;
+
+    // Check if Wagmi mode is enabled
+    this.isWagmiMode = !!options.wagmi;
 
     this.session = new FormoAnalyticsSession();
     this.currentUserId =
@@ -178,17 +167,27 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info("User has previously opted out of tracking");
     }
 
-    // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
-    let provider: EIP1193Provider | undefined = undefined;
-    const optProvider = options.provider as EIP1193Provider | undefined;
-    if (optProvider) {
-      provider = optProvider;
-    } else if (typeof window !== "undefined" && window.ethereum) {
-      provider = window.ethereum;
-    }
+    // Initialize Wagmi handler if Wagmi mode is enabled
+    if (this.isWagmiMode && options.wagmi) {
+      logger.info("FormoAnalytics: Initializing in Wagmi mode");
+      this.wagmiHandler = new WagmiEventHandler(
+        this,
+        options.wagmi.config,
+        options.wagmi.queryClient
+      );
+    } else {
+      // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
+      let provider: EIP1193Provider | undefined = undefined;
+      const optProvider = options.provider as EIP1193Provider | undefined;
+      if (optProvider) {
+        provider = optProvider;
+      } else if (typeof window !== "undefined" && window.ethereum) {
+        provider = window.ethereum;
+      }
 
-    if (provider) {
-      this.trackProvider(provider);
+      if (provider) {
+        this.trackEIP1193Provider(provider);
+      }
     }
 
     this.trackPageHit();
@@ -202,10 +201,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Auto-detect wallet provider
-    analytics._providers = await analytics.getProviders();
-    await analytics.detectWallets(analytics._providers);
-    analytics.trackProviders(analytics._providers);
+    // Skip provider detection in Wagmi mode
+    if (!analytics.isWagmiMode) {
+      // Auto-detect wallet provider
+      analytics._providers = await analytics.getProviders();
+      await analytics.detectWallets(analytics._providers);
+      analytics.trackProviders(analytics._providers);
+    } else {
+      logger.info("FormoAnalytics: Skipping provider detection (Wagmi mode)");
+    }
 
     return analytics;
   }
@@ -243,6 +247,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
+  }
+
+  /**
+   * Clean up resources and event listeners
+   * Call this when destroying the analytics instance
+   * @returns {void}
+   */
+  public cleanup(): void {
+    logger.info("FormoAnalytics: Cleaning up resources");
+    
+    // Clean up Wagmi handler if present
+    if (this.wagmiHandler) {
+      this.wagmiHandler.cleanup();
+      this.wagmiHandler = undefined;
+    }
+    
+    // Clean up EIP-1193 providers if not in Wagmi mode
+    if (!this.isWagmiMode) {
+      for (const provider of Array.from(this._trackedProviders)) {
+        this.untrackProvider(provider);
+      }
+    }
+    
+    logger.info("FormoAnalytics: Cleanup complete");
   }
 
   /**
@@ -539,7 +567,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           this._providers.map((p) => p.info.name)
         );
         for (const providerDetail of this._providers) {
-          const provider = providerDetail.provider;
+          const provider = providerDetail.provider as EIP1193Provider;
           if (!provider) continue;
 
           try {
@@ -775,12 +803,32 @@ export class FormoAnalytics implements IFormoAnalytics {
     SDK tracking and event listener functions
   */
 
-  private trackProvider(provider: EIP1193Provider): void {
-    logger.info("trackProvider", provider);
+  /**
+   * Track an EIP-1193 provider by wrapping its request method and adding event listeners
+   * Note: This is only used in non-Wagmi mode. When Wagmi is enabled, all tracking
+   * happens through Wagmi's connector system instead of EIP-1193/EIP-6963.
+   * @param provider The EIP-1193 provider to track
+   */
+  private trackEIP1193Provider(provider: EIP1193Provider): void {
+    logger.info("trackEIP1193Provider", provider);
+    
+    // Defensive check: Skip provider tracking in Wagmi mode
+    // This should never be called in Wagmi mode due to guards in init(),
+    // but we check here for safety in case of future code changes
+    if (this.isWagmiMode) {
+      logger.debug("trackEIP1193Provider: Skipping EIP-1193 provider tracking (Wagmi mode - using connector system instead)");
+      return;
+    }
+    
     try {
-      if (!provider) return;
+      // Validate provider exists and has required methods
+      if (!isValidProvider(provider)) {
+        logger.warn("trackEIP1193Provider: Invalid provider - missing required methods");
+        return;
+      }
+      
       if (this._trackedProviders.has(provider)) {
-        logger.warn("TrackProvider: Provider already tracked.");
+        logger.warn("trackEIP1193Provider: Provider already tracked");
         return;
       }
 
@@ -822,7 +870,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           | EIP1193Provider
           | undefined;
         if (provider && !this._trackedProviders.has(provider)) {
-          this.trackProvider(provider);
+          this.trackEIP1193Provider(provider);
         }
       }
     } catch (error) {
@@ -1690,7 +1738,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param eventType The wallet event type to check
    * @returns {boolean} True if the event type should be autocaptured
    */
-  private isAutocaptureEnabled(
+  public isAutocaptureEnabled(
     eventType: "connect" | "disconnect" | "signature" | "transaction" | "chain"
   ): boolean {
     // If no configuration provided, default to enabled
@@ -1742,67 +1790,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // Fallback to injected provider detection
-    const injectedInfo = this.detectInjectedProviderInfo(provider);
+    const injectedInfo = detectInjectedProviderInfo(provider);
     return {
       name: injectedInfo.name,
       rdns: injectedInfo.rdns,
-    };
-  }
-
-  /**
-   * Attempts to detect information about an injected provider
-   * @param provider The injected provider to analyze
-   * @returns Provider information with fallback values
-   */
-  private detectInjectedProviderInfo(provider: EIP1193Provider): {
-    name: string;
-    rdns: string;
-    uuid: string;
-    icon: `data:image/${string}`;
-  } {
-    // Try to detect provider type from common properties
-    let name = "Injected Provider";
-    let rdns = "io.injected.provider";
-
-    // Use WalletProviderFlags interface for type safety
-    const flags = provider as WalletProviderFlags;
-
-    // Check if it's MetaMask
-    if (flags.isMetaMask) {
-      name = "MetaMask";
-      rdns = "io.metamask";
-    }
-    // Check if it's Coinbase Wallet
-    else if (flags.isCoinbaseWallet) {
-      name = "Coinbase Wallet";
-      rdns = "com.coinbase.wallet";
-    }
-    // Check if it's WalletConnect
-    else if (flags.isWalletConnect) {
-      name = "WalletConnect";
-      rdns = "com.walletconnect";
-    }
-    // Check if it's Trust Wallet
-    else if (flags.isTrust) {
-      name = "Trust Wallet";
-      rdns = "com.trustwallet";
-    }
-    // Check if it's Brave Wallet
-    else if (flags.isBraveWallet) {
-      name = "Brave Wallet";
-      rdns = "com.brave.wallet";
-    }
-    // Check if it's Phantom
-    else if (flags.isPhantom) {
-      name = "Phantom";
-      rdns = "app.phantom";
-    }
-
-    return {
-      name,
-      rdns,
-      uuid: `injected-${rdns.replace(/[^a-zA-Z0-9]/g, "-")}`,
-      icon: DEFAULT_PROVIDER_ICON,
     };
   }
 
@@ -1815,7 +1806,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Process newly added providers with proper deduplication
       const newlyAddedDetails = providerDetails.filter((detail) => {
-        const provider = detail?.provider;
+        const provider = detail?.provider as EIP1193Provider | undefined;
         return provider && !this._seenProviders.has(provider);
       });
 
@@ -1858,7 +1849,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         ) {
           // Ensure it's tracked
           if (!this._trackedProviders.has(injected)) {
-            this.trackProvider(injected);
+            this.trackEIP1193Provider(injected);
           }
           // Merge with existing providers instead of overwriting
           if (
@@ -1874,11 +1865,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         // Re-check if the injected provider is already tracked just before tracking
         if (!this._trackedProviders.has(injected)) {
-          this.trackProvider(injected);
+          this.trackEIP1193Provider(injected);
         }
 
         // Create a mock EIP6963ProviderDetail for the injected provider
-        const injectedProviderInfo = this.detectInjectedProviderInfo(injected);
+        const injectedProviderInfo = detectInjectedProviderInfo(injected);
         const injectedDetail: EIP6963ProviderDetail = {
           provider: injected,
           info: injectedProviderInfo,
@@ -1896,7 +1887,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Initialize providers array with discovered providers, avoiding duplicates
     const uniqueProviders = providers.filter(
       (detail: EIP6963ProviderDetail) => {
-        const provider = detail?.provider;
+        const provider = detail?.provider as EIP1193Provider | undefined;
         return provider && !this._seenProviders.has(provider);
       }
     );
@@ -2177,7 +2168,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private cleanupUnavailableProviders(): void {
     // Remove providers that are no longer in the current providers list
     const currentProviderInstances = new Set(
-      this._providers.map((detail) => detail.provider)
+      this._providers.map((detail) => detail.provider as EIP1193Provider)
     );
 
     for (const provider of Array.from(this._trackedProviders)) {
@@ -2247,7 +2238,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns true if the provider was added, false if it was already present
    */
   private safeAddProviderDetail(detail: EIP6963ProviderDetail): boolean {
-    const provider = detail?.provider;
+    const provider = detail?.provider as EIP1193Provider | undefined;
     if (!provider) return false;
 
     // Check if provider already exists in _providers array
@@ -2264,75 +2255,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Ensure provider is marked as seen even if it already exists in _providers
       this._seenProviders.add(provider);
       return false;
-    }
-  }
-}
-
-interface IFormoAnalyticsSession {
-  isWalletDetected(rdns: string): boolean;
-  markWalletDetected(rdns: string): void;
-  isWalletIdentified(address: string, rdns: string): boolean;
-  markWalletIdentified(address: string, rdns: string): void;
-}
-
-class FormoAnalyticsSession implements IFormoAnalyticsSession {
-  private generateIdentificationKey(address: string, rdns: string): string {
-    // If rdns is missing, use address-only key as fallback for empty identifies
-    return rdns ? `${address}:${rdns}` : address;
-  }
-
-  public isWalletDetected(rdns: string): boolean {
-    const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
-    return rdnses.includes(rdns);
-  }
-
-  public markWalletDetected(rdns: string): void {
-    const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
-    if (!rdnses.includes(rdns)) {
-      rdnses.push(rdns);
-      cookie().set(SESSION_WALLET_DETECTED_KEY, rdnses.join(","), {
-        // by the end of the day
-        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
-        path: "/",
-      });
-    }
-  }
-
-  public isWalletIdentified(address: string, rdns: string): boolean {
-    const identifiedKey = this.generateIdentificationKey(address, rdns);
-    const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
-    const identifiedWallets = cookieValue?.split(",") || [];
-    const isIdentified = identifiedWallets.includes(identifiedKey);
-    logger.debug("Session: Checking wallet identification", {
-      identifiedKey,
-      isIdentified,
-      hasRdns: !!rdns,
-    });
-    return isIdentified;
-  }
-
-  public markWalletIdentified(address: string, rdns: string): void {
-    const identifiedKey = this.generateIdentificationKey(address, rdns);
-    const identifiedWallets =
-      cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
-    if (!identifiedWallets.includes(identifiedKey)) {
-      identifiedWallets.push(identifiedKey);
-      const newValue = identifiedWallets.join(",");
-      cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
-        // by the end of the day
-        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
-        path: "/",
-      });
-      logger.debug("Session: Marked wallet as identified", {
-        identifiedKey,
-        hasRdns: !!rdns,
-      });
-    } else {
-      logger.info("Session: Wallet already marked as identified", {
-        identifiedKey,
-        existingWallets: identifiedWallets,
-        hasRdns: !!rdns,
-      });
     }
   }
 }

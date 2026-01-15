@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import { JSDOM } from "jsdom";
-import CookieStorage from "../../../src/lib/storage/built-in/cookie";
+import CookieStorage from "../../../src/storage/built-in/cookie";
 
 describe("CookieStorage", () => {
   let jsdom: JSDOM;

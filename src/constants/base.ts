@@ -1,6 +1,6 @@
 export const SESSION_TRAFFIC_SOURCE_KEY = "traffic-source";
-export const SESSION_WALLET_DETECTED_KEY = "wallet-detected";
-export const SESSION_WALLET_IDENTIFIED_KEY = "wallet-identified";
+// SESSION_WALLET_DETECTED_KEY and SESSION_WALLET_IDENTIFIED_KEY
+// are now defined in src/session/index.ts
 export const SESSION_CURRENT_URL_KEY = "analytics-current-url";
 export const SESSION_USER_ID_KEY = "user-id";
 
