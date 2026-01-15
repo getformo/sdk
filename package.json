@@ -103,5 +103,10 @@
     "wagmi": {
       "optional": true
     }
+  },
+  "pnpm": {
+    "overrides": {
+      "hono": ">=4.11.4"
+    }
   }
 }

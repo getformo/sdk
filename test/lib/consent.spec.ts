@@ -5,7 +5,7 @@ import {
   setConsentFlag,
   getConsentFlag,
   removeConsentFlag,
-} from "../../src/lib/consent";
+} from "../../src/consent";
 
 describe("Consent Management", () => {
   let jsdom: JSDOM;

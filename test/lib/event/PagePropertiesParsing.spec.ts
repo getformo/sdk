@@ -1,8 +1,8 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import { JSDOM } from "jsdom";
-import { EventFactory } from "../../../src/lib/event/EventFactory";
-import { initStorageManager } from "../../../src/lib/storage";
+import { EventFactory } from "../../../src/event/EventFactory";
+import { initStorageManager } from "../../../src/storage";
 
 /**
  * Test suite for page event property parsing functionality

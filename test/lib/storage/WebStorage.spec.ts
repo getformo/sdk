@@ -1,9 +1,9 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import { JSDOM } from "jsdom";
-import WebStorage from "../../../src/lib/storage/built-in/web";
+import WebStorage from "../../../src/storage/built-in/web";
 import { secureHash } from "../../../src/utils/hash";
-import { JSON_PREFIX, KEY_PREFIX } from "../../../src/lib/storage/constant";
+import { JSON_PREFIX, KEY_PREFIX } from "../../../src/storage/constant";
 
 describe("WebStorage", () => {
   let jsdom: JSDOM;

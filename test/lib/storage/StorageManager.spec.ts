@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
-import { StorageManager } from "../../../src/lib/storage/StorageManager";
+import { StorageManager } from "../../../src/storage/StorageManager";
 
 describe("StorageManager", () => {
   let jsdom: JSDOM;

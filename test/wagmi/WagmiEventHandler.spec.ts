@@ -160,7 +160,7 @@ describe("WagmiEventHandler", () => {
       const connectedState = createConnectedState();
       (mockWagmiConfig as any).setState(connectedState);
 
-      const handler = new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
 
       // First connect
       if (statusListener) {
