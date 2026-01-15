@@ -38,7 +38,12 @@ export interface WagmiConnector {
 
 /**
  * Wagmi config interface
- * This is the config object returned by createConfig()
+ * This is the config object returned by createConfig() or getDefaultConfig() (RainbowKit)
+ *
+ * Note: Different Wagmi wrappers (RainbowKit, etc.) may expose state differently:
+ * - Some use getState() method
+ * - Some expose state as a direct property
+ * We support both patterns for maximum compatibility.
  */
 export interface WagmiConfig {
   subscribe<TData>(
@@ -49,8 +54,16 @@ export interface WagmiConfig {
       fireImmediately?: boolean;
     }
   ): () => void;
-  
-  getState(): WagmiState;
+
+  /**
+   * Get state method - available in some Wagmi versions
+   */
+  getState?(): WagmiState;
+
+  /**
+   * Direct state property - available in RainbowKit and some Wagmi setups
+   */
+  state?: WagmiState;
 }
 
 /**

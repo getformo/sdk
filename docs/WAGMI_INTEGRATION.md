@@ -37,7 +37,7 @@ User's Wagmi Config + QueryClient
 
 ### Key Components
 
-#### 1. **WagmiEventHandler** (`src/lib/wagmi/WagmiEventHandler.ts`)
+#### 1. **WagmiEventHandler** (`src/wagmi/WagmiEventHandler.ts`)
 
 The core orchestrator that hooks into Wagmi's event system:
 
@@ -47,7 +47,7 @@ The core orchestrator that hooks into Wagmi's event system:
 - **Deduplication**: Prevents duplicate event emissions using mutation state tracking
 - **Lifecycle Management**: Proper cleanup of all subscriptions
 
-#### 2. **Type Definitions** (`src/lib/wagmi/types.ts`)
+#### 2. **Type Definitions** (`src/wagmi/types.ts`)
 
 Comprehensive TypeScript interfaces for Wagmi integration:
 

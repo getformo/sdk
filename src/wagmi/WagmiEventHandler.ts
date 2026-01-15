@@ -27,7 +27,7 @@ export class WagmiEventHandler {
   private trackingState: WagmiTrackingState = {
     isProcessing: false,
   };
-  
+
   /**
    * Track processed mutation states to prevent duplicate event emissions
    * Key format: `${mutationId}:${status}`
@@ -101,7 +101,7 @@ export class WagmiEventHandler {
     this.trackingState.isProcessing = true;
 
     try {
-      const state = this.wagmiConfig.getState();
+      const state = this.getState();
       const address = this.getConnectedAddress(state);
       const chainId = state.chainId;
 
@@ -162,7 +162,7 @@ export class WagmiEventHandler {
     }
 
     // Only track chain changes when connected
-    const state = this.wagmiConfig.getState();
+    const state = this.getState();
     if (state.status !== "connected") {
       return;
     }
@@ -401,6 +401,34 @@ export class WagmiEventHandler {
     } catch (error) {
       logger.error("WagmiEventHandler: Error handling transaction mutation:", error);
     }
+  }
+
+  /**
+   * Get the current Wagmi state
+   * Supports both getState() method and direct state property access
+   * for compatibility with different Wagmi wrappers (RainbowKit, etc.)
+   */
+  private getState(): WagmiState {
+    // Try getState() method first (standard Wagmi API)
+    if (typeof this.wagmiConfig.getState === "function") {
+      return this.wagmiConfig.getState();
+    }
+
+    // Fall back to direct state property (RainbowKit and some Wagmi setups)
+    if (this.wagmiConfig.state) {
+      return this.wagmiConfig.state;
+    }
+
+    // Return a default disconnected state if neither is available
+    logger.warn(
+      "WagmiEventHandler: Unable to get state from config, returning default state"
+    );
+    return {
+      status: "disconnected",
+      connections: new Map(),
+      current: undefined,
+      chainId: undefined,
+    };
   }
 
   /**
