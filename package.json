@@ -27,6 +27,7 @@
     "access": "public",
     "provenance": true
   },
+  "author": "Yos Riady",
   "license": "MIT",
   "dependencies": {
     "ethereum-cryptography": "3.2.0",
