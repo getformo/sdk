@@ -13,8 +13,16 @@ CURRENT_VERSION=$(node -p "require('./package.json').version")
 echo "Current version in package.json: $CURRENT_VERSION"
 echo ""
 
-# Get previous tag
-PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+# Get the most recent version tag by version order
+PREV_TAG=$(git tag -l 'v*' --sort=-version:refname | head -1)
+
+# Check if current version already has a tag
+if git tag -l "v${CURRENT_VERSION}" | grep -q .; then
+    echo "ℹ️  Version v${CURRENT_VERSION} is already tagged."
+    echo "   Showing what changed since the previous release."
+    # Get the tag immediately before v${CURRENT_VERSION} in version order
+    PREV_TAG=$(git tag -l 'v*' --sort=-version:refname | grep -A1 "^v${CURRENT_VERSION}$" | tail -1)
+fi
 
 if [ -z "$PREV_TAG" ]; then
     echo "❌ No previous tag found"
