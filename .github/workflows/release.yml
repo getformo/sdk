@@ -75,8 +75,16 @@ jobs:
       - name: Generate release notes
         id: release_notes
         run: |
-          # Get previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          # Get the previous version tag (second most recent v* tag by version order)
+          # This is more reliable than using git describe which follows commit ancestry
+          CURRENT_TAG=${{ github.ref_name }}
+          PREV_TAG=$(git tag -l 'v*' --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -1)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found"
+          else
+            echo "Previous tag: $PREV_TAG"
+          fi
           
           # Get current date
           RELEASE_DATE=$(date +%Y-%m-%d)
