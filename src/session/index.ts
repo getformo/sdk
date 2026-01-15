@@ -10,9 +10,11 @@ import { logger } from "../logger";
 
 /**
  * Cookie keys for session tracking
+ * NOTE: These values must match the original constants in constants/base.ts
+ * to maintain backward compatibility with existing user sessions
  */
-export const SESSION_WALLET_DETECTED_KEY = "__formo_wallet_detected";
-export const SESSION_WALLET_IDENTIFIED_KEY = "__formo_wallet_identified";
+export const SESSION_WALLET_DETECTED_KEY = "wallet-detected";
+export const SESSION_WALLET_IDENTIFIED_KEY = "wallet-identified";
 
 /**
  * Interface for session management operations
