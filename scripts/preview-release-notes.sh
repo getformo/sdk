@@ -20,8 +20,8 @@ PREV_TAG=$(git tag -l 'v*' --sort=-version:refname | head -1)
 if git tag -l "v${CURRENT_VERSION}" | grep -q .; then
     echo "ℹ️  Version v${CURRENT_VERSION} is already tagged."
     echo "   Showing what changed since the previous release."
-    # Get the second most recent tag (the one before current)
-    PREV_TAG=$(git tag -l 'v*' --sort=-version:refname | sed -n '2p')
+    # Get the tag immediately before v${CURRENT_VERSION} in version order
+    PREV_TAG=$(git tag -l 'v*' --sort=-version:refname | grep -A1 "^v${CURRENT_VERSION}$" | tail -1)
 fi
 
 if [ -z "$PREV_TAG" ]; then

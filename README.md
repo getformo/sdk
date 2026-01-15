@@ -17,12 +17,14 @@
 
 ## Installation
 
-The Formo Web SDK is a Javascript library that allows you to track user event data from your website and app. 
+The Formo Web SDK is a Javascript library that allows you to track user event data from your website and app.
 
 You can install Formo on:
-- [Websites](https://docs.formo.so/install#website)
-- [React apps](https://docs.formo.so/install#react)
-- [Next.js apps](https://docs.formo.so/install#next-js-app-router)
+- [Wagmi](https://docs.formo.so/install#wagmi) (recommended)
+- [HTML Snippet](https://docs.formo.so/install#html-snippet)
+- [React](https://docs.formo.so/install#react)
+- [Next.js app router](https://docs.formo.so/install#next-js-app-router)
+- [Next.js pages router](https://docs.formo.so/install#next-js-pages-router)
 
 ## Configuration
 
