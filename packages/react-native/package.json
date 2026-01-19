@@ -1,0 +1,95 @@
+{
+  "name": "@formo/react-native-analytics",
+  "version": "1.0.0",
+  "description": "Formo Analytics SDK for React Native - Track wallet events and user analytics in mobile dApps",
+  "packageManager": "pnpm@9.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getformo/sdk.git",
+    "directory": "packages/react-native"
+  },
+  "main": "lib/commonjs/index.js",
+  "module": "lib/module/index.js",
+  "types": "lib/typescript/src/index.d.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "files": [
+    "src",
+    "lib",
+    "!**/__tests__",
+    "!**/__fixtures__",
+    "!**/__mocks__"
+  ],
+  "exports": {
+    ".": {
+      "import": "./lib/module/index.js",
+      "require": "./lib/commonjs/index.js",
+      "types": "./lib/typescript/src/index.d.ts"
+    }
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "author": "Formo <hello@formo.so>",
+  "license": "MIT",
+  "keywords": [
+    "react-native",
+    "analytics",
+    "crypto",
+    "web3",
+    "wallet",
+    "ethereum",
+    "wagmi",
+    "mobile",
+    "formo"
+  ],
+  "scripts": {
+    "build": "bob build",
+    "clean": "rm -rf lib",
+    "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@react-native-async-storage/async-storage": ">=1.17.0",
+    "@tanstack/react-query": ">=5.0.0",
+    "react": ">=18.0.0",
+    "react-native": ">=0.70.0",
+    "wagmi": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@react-native-async-storage/async-storage": {
+      "optional": false
+    },
+    "@tanstack/react-query": {
+      "optional": true
+    },
+    "wagmi": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@react-native-async-storage/async-storage": "^1.21.0",
+    "@types/react": "^18.0.25",
+    "react": "^18.3.1",
+    "react-native": "^0.73.0",
+    "react-native-builder-bob": "^0.23.0",
+    "typescript": "^5.7.3"
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      "commonjs",
+      "module",
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json"
+        }
+      ]
+    ]
+  }
+}
