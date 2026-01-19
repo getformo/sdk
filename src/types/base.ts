@@ -7,6 +7,7 @@ import {
 } from "./events";
 import { EIP1193Provider } from "./provider";
 import { ReactNode } from "react";
+import { SolanaOptions } from "../solana/types";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID
@@ -207,6 +208,13 @@ export interface Options {
    * @requires @tanstack/react-query@>=5.0.0 (for mutation tracking)
    */
   wagmi?: WagmiOptions;
+  /**
+   * Solana wallet adapter integration configuration
+   * When provided, the SDK will track Solana wallet events alongside EVM wallet events
+   * This allows tracking both Solana and EVM wallets in the same application
+   * @requires @solana/wallet-adapter-react@>=0.15.0
+   */
+  solana?: SolanaOptions;
   /**
    * Custom API host for sending events through your own domain to bypass ad blockers
    * - If not provided, events are sent directly to events.formo.so

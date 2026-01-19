@@ -48,6 +48,7 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
+import { SolanaEventHandler } from "./solana";
 
 /**
  * Constants for provider switching reasons
@@ -96,6 +97,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Only initialized when options.wagmi is provided
    */
   private wagmiHandler?: WagmiEventHandler;
+
+  /**
+   * Solana wallet adapter event handler for tracking Solana wallet events
+   * Only initialized when options.solana is provided
+   * Can be used alongside Wagmi handler for multi-chain applications
+   */
+  private solanaHandler?: SolanaEventHandler;
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -175,7 +183,23 @@ export class FormoAnalytics implements IFormoAnalytics {
         options.wagmi.config,
         options.wagmi.queryClient
       );
-    } else {
+    }
+
+    // Initialize Solana handler if Solana options are provided
+    // This can work alongside Wagmi or EIP-1193 providers for multi-chain apps
+    if (options.solana) {
+      logger.info("FormoAnalytics: Initializing Solana wallet integration");
+      this.solanaHandler = new SolanaEventHandler(
+        this,
+        options.solana.wallet,
+        options.solana.cluster || "mainnet-beta"
+      );
+      if (options.solana.onReady) {
+        options.solana.onReady();
+      }
+    }
+
+    if (!this.isWagmiMode) {
       // Handle initial provider (injected) as fallback; listeners for EIP-6963 are added later
       let provider: EIP1193Provider | undefined = undefined;
       const optProvider = options.provider as EIP1193Provider | undefined;
@@ -256,20 +280,26 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public cleanup(): void {
     logger.info("FormoAnalytics: Cleaning up resources");
-    
+
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
       this.wagmiHandler.cleanup();
       this.wagmiHandler = undefined;
     }
-    
+
+    // Clean up Solana handler if present
+    if (this.solanaHandler) {
+      this.solanaHandler.cleanup();
+      this.solanaHandler = undefined;
+    }
+
     // Clean up EIP-1193 providers if not in Wagmi mode
     if (!this.isWagmiMode) {
       for (const provider of Array.from(this._trackedProviders)) {
         this.untrackProvider(provider);
       }
     }
-    
+
     logger.info("FormoAnalytics: Cleanup complete");
   }
 
