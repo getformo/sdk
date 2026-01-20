@@ -36,18 +36,33 @@ export class SolanaEventHandler {
   };
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private cleanupFns: UnsubscribeFn[] = [];
+  private pollIntervalMs: number;
 
-  /** Polling interval for wallet state changes (ms) */
-  private static readonly POLL_INTERVAL_MS = 500;
+  /** Default polling interval for wallet state changes (ms) */
+  private static readonly DEFAULT_POLL_INTERVAL_MS = 500;
+  /** Minimum polling interval (ms) */
+  private static readonly MIN_POLL_INTERVAL_MS = 100;
+  /** Maximum polling interval (ms) */
+  private static readonly MAX_POLL_INTERVAL_MS = 5000;
 
   constructor(
     formoAnalytics: FormoAnalytics,
     wallet: SolanaWalletAdapter,
-    cluster: SolanaCluster = "mainnet-beta"
+    cluster: SolanaCluster = "mainnet-beta",
+    pollIntervalMs?: number
   ) {
     this.formo = formoAnalytics;
     this.wallet = wallet;
     this.cluster = cluster;
+
+    // Clamp poll interval to valid range
+    this.pollIntervalMs = Math.min(
+      Math.max(
+        pollIntervalMs ?? SolanaEventHandler.DEFAULT_POLL_INTERVAL_MS,
+        SolanaEventHandler.MIN_POLL_INTERVAL_MS
+      ),
+      SolanaEventHandler.MAX_POLL_INTERVAL_MS
+    );
 
     logger.info("SolanaEventHandler: Initializing Solana wallet integration", {
       cluster,
@@ -139,7 +154,7 @@ export class SolanaEventHandler {
     // Start polling for state changes
     this.pollInterval = setInterval(() => {
       this.checkStateChanges();
-    }, SolanaEventHandler.POLL_INTERVAL_MS);
+    }, this.pollIntervalMs);
 
     logger.info("SolanaEventHandler: State polling started");
   }

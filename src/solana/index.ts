@@ -27,6 +27,7 @@
  */
 
 export { SolanaEventHandler } from "./SolanaEventHandler";
+export { useSolanaFormo } from "./useSolanaFormo";
 export type {
   SolanaOptions,
   SolanaCluster,
@@ -35,4 +36,8 @@ export type {
   SolanaSignatureParams,
   SolanaTransactionParams,
 } from "./types";
+export type {
+  UseSolanaFormoOptions,
+  UseSolanaFormoReturn,
+} from "./useSolanaFormo";
 export { SOLANA_CHAIN_IDS, KNOWN_SOLANA_WALLETS } from "./types";

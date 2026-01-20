@@ -91,6 +91,15 @@ export interface SolanaOptions {
   cluster?: SolanaCluster;
 
   /**
+   * Polling interval in milliseconds for detecting wallet state changes
+   * Lower values provide faster detection but use more resources
+   * @default 500
+   * @minimum 100
+   * @maximum 5000
+   */
+  pollIntervalMs?: number;
+
+  /**
    * Optional callback when Solana handler is ready
    */
   onReady?: () => void;

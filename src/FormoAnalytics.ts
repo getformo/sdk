@@ -192,7 +192,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.solanaHandler = new SolanaEventHandler(
         this,
         options.solana.wallet,
-        options.solana.cluster || "mainnet-beta"
+        options.solana.cluster || "mainnet-beta",
+        options.solana.pollIntervalMs
       );
       if (options.solana.onReady) {
         options.solana.onReady();
