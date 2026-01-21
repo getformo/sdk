@@ -17,7 +17,6 @@ import {
   getValidAddress,
   toSnakeCase,
   mergeDeepRight,
-  isUndefined,
 } from "../../utils";
 import { getCurrentTimeFormatted } from "../../utils/timestamp";
 import { generateUUID } from "../../utils/hash";

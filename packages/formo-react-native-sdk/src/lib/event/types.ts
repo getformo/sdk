@@ -5,7 +5,6 @@ import {
   IFormoEventContext,
   IFormoEventProperties,
   Nullable,
-  Options,
   SignatureStatus,
   TransactionStatus,
   ChainID,

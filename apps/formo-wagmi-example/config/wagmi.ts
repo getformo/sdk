@@ -1,6 +1,5 @@
-import { createConfig, http } from "wagmi";
 import { mainnet, polygon, arbitrum, optimism, base } from "wagmi/chains";
-import { createAppKit, defaultWagmiConfig } from "@reown/appkit";
+import { createAppKit } from "@reown/appkit";
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
 import { QueryClient } from "@tanstack/react-query";
 

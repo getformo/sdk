@@ -8,7 +8,7 @@ import {
   Alert,
 } from "react-native";
 import { useFormo } from "@formo/react-native-analytics";
-import { useAccount, useConnect, useDisconnect, useChainId, useSwitchChain } from "wagmi";
+import { useAccount, useDisconnect, useChainId, useSwitchChain } from "wagmi";
 import { useAppKit } from "@reown/appkit/react";
 import { chains } from "@/config/wagmi";
 

@@ -1,5 +1,4 @@
 import { storage } from "../storage";
-import { hash } from "../../utils/hash";
 import { logger } from "../logger";
 
 /**

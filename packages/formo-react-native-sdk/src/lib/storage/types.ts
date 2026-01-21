@@ -15,7 +15,9 @@ export interface AsyncStorageInterface {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
   removeItem(key: string): Promise<void>;
-  multiGet?(keys: string[]): Promise<readonly [string, string | null][]>;
+  getAllKeys(): Promise<readonly string[]>;
+  multiGet(keys: readonly string[]): Promise<readonly [string, string | null][]>;
   multiSet?(keyValuePairs: [string, string][]): Promise<void>;
-  multiRemove?(keys: string[]): Promise<void>;
+  multiRemove(keys: readonly string[]): Promise<void>;
+  clear?(): Promise<void>;
 }

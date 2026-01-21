@@ -19,10 +19,36 @@ class AsyncStorageAdapter extends StorageBlueprint {
   }
 
   /**
-   * Initialize with AsyncStorage instance
+   * Initialize with AsyncStorage instance and preload all Formo keys
+   * This ensures consent flags and other critical data are available synchronously
    */
   public async initialize(asyncStorage: AsyncStorageInterface): Promise<void> {
     this.asyncStorage = asyncStorage;
+
+    // Preload all Formo keys into cache for synchronous access
+    // This is critical for consent checks on cold start (GDPR compliance)
+    try {
+      const allKeys = await asyncStorage.getAllKeys();
+      const formoPrefix = this.getKey("").slice(0, -1); // Get prefix without trailing key
+
+      // Filter to only our keys
+      const formoKeys = allKeys.filter((key) => key.startsWith(formoPrefix));
+
+      if (formoKeys.length > 0) {
+        const pairs = await asyncStorage.multiGet(formoKeys);
+        for (const [key, value] of pairs) {
+          if (value !== null) {
+            this.cache.set(key, value);
+          }
+        }
+        logger.debug(
+          `AsyncStorageAdapter: Preloaded ${formoKeys.length} keys into cache`
+        );
+      }
+    } catch (error) {
+      logger.error("AsyncStorageAdapter: Failed to preload keys", error);
+    }
+
     this.initialized = true;
     logger.debug("AsyncStorageAdapter: Initialized");
   }
