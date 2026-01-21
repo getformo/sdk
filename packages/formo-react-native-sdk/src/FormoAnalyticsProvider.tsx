@@ -40,6 +40,20 @@ export interface FormoAnalyticsProviderPropsWithStorage
    * Required for persistent storage
    */
   asyncStorage?: AsyncStorageInterface;
+  /**
+   * Callback when SDK is ready
+   * Note: Use useCallback to avoid re-initialization on every render
+   */
+  onReady?: (sdk: IFormoAnalytics) => void;
+  /**
+   * Callback when SDK initialization fails
+   * Note: Use useCallback to avoid re-initialization on every render
+   */
+  onError?: (error: Error) => void;
+  /**
+   * Enable debug logging
+   */
+  debug?: boolean;
 }
 
 /**
@@ -87,13 +101,30 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
   writeKey,
   options,
   asyncStorage,
+  onReady,
+  onError,
+  debug,
   children,
 }) => {
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
   const sdkRef = useRef<IFormoAnalytics>(defaultContext);
   initStorageManager(writeKey);
 
-  // Create stable key from options
+  // Store callbacks in refs to avoid re-initialization when they change
+  // This fixes the issue where inline arrow functions cause repeated SDK init
+  const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
+
+  // Update refs when callbacks change (without triggering effect)
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  // Create stable key from options (excluding callbacks and non-serializable values)
   const optionsKey = useMemo(() => {
     if (!options) return "undefined";
 
@@ -142,6 +173,9 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
           setSdk(sdkInstance);
           sdkRef.current = sdkInstance;
           logger.log("Successfully initialized FormoAnalytics SDK");
+
+          // Call onReady callback using the ref (stable reference)
+          onReadyRef.current?.(sdkInstance);
         } else {
           logger.log("Component unmounted during initialization, cleaning up");
           sdkInstance.cleanup();
@@ -149,6 +183,8 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
       } catch (error) {
         if (!isCleanedUp) {
           logger.error("Failed to initialize FormoAnalytics SDK", error);
+          // Call onError callback using the ref (stable reference)
+          onErrorRef.current?.(error instanceof Error ? error : new Error(String(error)));
         }
       }
     };
@@ -164,7 +200,9 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
         sdkRef.current = defaultContext;
       }
     };
-  }, [writeKey, optionsKey, asyncStorage]);
+    // Note: onReady and onError are NOT in the dependency array
+    // They are accessed via refs to prevent re-initialization
+  }, [writeKey, optionsKey, asyncStorage, debug]);
 
   return (
     <FormoAnalyticsContext.Provider value={sdk}>
