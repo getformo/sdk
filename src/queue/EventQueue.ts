@@ -9,7 +9,7 @@ import {
 } from "../utils";
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
-import fetch from "../fetch";
+import fetch, { FetchRetryError } from "../fetch";
 import { IEventQueue } from "./type";
 const noop = () => {};
 
@@ -196,7 +196,7 @@ export class EventQueue implements IEventQueue {
       keepalive: true,
       retries: this.retryCount,
       retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
-      retryOn: (_, error) => this.isErrorRetryable(error),
+      retryOn: (_, error, response) => this.isErrorRetryable(error, response),
     })
       .then(() => {
         done();
@@ -220,19 +220,19 @@ export class EventQueue implements IEventQueue {
   }
 
   //#region Utility functions
-  private isErrorRetryable(error: any) {
+  private isErrorRetryable(error: FetchRetryError | null, response: Response | null) {
     // Retry Network Errors.
-    if (isNetworkError(error)) return true;
+    if (error && isNetworkError(error)) return true;
 
-    // Cannot determine if the request can be retried
-    if (!error?.response) return false;
+    // Check response status if available
+    const status = response?.status ?? error?.response?.status;
+    if (!status) return false;
 
     // Retry Server Errors (5xx).
-    if (error?.response?.status >= 500 && error?.response?.status <= 599)
-      return true;
+    if (status >= 500 && status <= 599) return true;
 
     // Retry if rate limited.
-    if (error?.response?.status === 429) return true;
+    if (status === 429) return true;
 
     return false;
   }

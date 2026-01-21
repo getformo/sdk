@@ -31,7 +31,6 @@
   "license": "MIT",
   "dependencies": {
     "ethereum-cryptography": "3.2.0",
-    "fetch-retry": "6.0.0",
     "mipd": "0.0.7"
   },
   "devDependencies": {
