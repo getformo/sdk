@@ -50,10 +50,6 @@ export interface FormoAnalyticsProviderPropsWithStorage
    * Note: Use useCallback to avoid re-initialization on every render
    */
   onError?: (error: Error) => void;
-  /**
-   * Enable debug logging
-   */
-  debug?: boolean;
 }
 
 /**
@@ -103,7 +99,6 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
   asyncStorage,
   onReady,
   onError,
-  debug,
   children,
 }) => {
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
@@ -202,7 +197,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
     };
     // Note: onReady and onError are NOT in the dependency array
     // They are accessed via refs to prevent re-initialization
-  }, [writeKey, optionsKey, asyncStorage, debug]);
+  }, [writeKey, optionsKey, asyncStorage]);
 
   return (
     <FormoAnalyticsContext.Provider value={sdk}>

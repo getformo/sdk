@@ -388,6 +388,13 @@ export class WagmiEventHandler {
       return;
     }
 
+    if (!chainId || chainId === 0) {
+      logger.warn(
+        "WagmiEventHandler: Transaction event but no valid chainId available"
+      );
+      return;
+    }
+
     try {
       let status: TransactionStatus;
       let transactionHash: string | undefined;
@@ -419,7 +426,7 @@ export class WagmiEventHandler {
 
       this.formo.transaction({
         status,
-        chainId: chainId || 0,
+        chainId,
         address,
         ...(data && { data }),
         ...(to && { to }),

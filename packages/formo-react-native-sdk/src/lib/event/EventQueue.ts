@@ -58,7 +58,6 @@ export class EventQueue implements IEventQueue {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private flushAt: number;
   private flushIntervalMs: number;
-  private flushed: boolean;
   private maxQueueSize: number;
   private retryCount: number;
   private pendingFlush: Promise<unknown> | null = null;
@@ -88,8 +87,6 @@ export class EventQueue implements IEventQueue {
       MAX_FLUSH_INTERVAL,
       MIN_FLUSH_INTERVAL
     );
-    this.flushed = true;
-
     // Set up app state listener for React Native
     this.setupAppStateListener();
   }
@@ -168,12 +165,6 @@ export class EventQueue implements IEventQueue {
     logger.log(
       `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
     );
-
-    if (!this.flushed) {
-      this.flushed = true;
-      this.flush();
-      return;
-    }
 
     const hasReachedFlushAt = this.queue.length >= this.flushAt;
     const hasReachedQueueSize =
