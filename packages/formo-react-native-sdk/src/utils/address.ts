@@ -1,32 +1,19 @@
 /**
  * Address validation and checksum utilities
+ *
+ * Uses ethereum-cryptography for proper EIP-55 checksum computation
  */
 
-const HEX_CHARS = "0123456789abcdef";
+import { keccak256 } from "ethereum-cryptography/keccak.js";
+import { utf8ToBytes } from "ethereum-cryptography/utils.js";
 
 /**
- * Simple keccak256 hash implementation for address checksumming
- * Uses the same algorithm as web3.js
+ * Convert Uint8Array to hex string
  */
-function keccak256(input: string): string {
-  // For React Native, we'll use a simplified approach
-  // This uses the native crypto module or a polyfill
-  const encoder = new TextEncoder();
-  const data = encoder.encode(input);
-
-  // Simple hash function for checksum (matches Ethereum's approach)
-  let hash = 0;
-  for (let i = 0; i < data.length; i++) {
-    hash = ((hash << 5) - hash + data[i]) | 0;
-  }
-
-  // Convert to hex
-  let result = "";
-  for (let i = 0; i < 40; i++) {
-    const byte = (hash >> (i % 32)) & 0xf;
-    result += HEX_CHARS[Math.abs(byte)];
-  }
-  return result;
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /**
@@ -41,7 +28,10 @@ export function isValidAddress(address: string): boolean {
 }
 
 /**
- * Convert address to checksum format
+ * Convert address to EIP-55 checksum format
+ *
+ * Uses keccak256 from ethereum-cryptography for correct checksumming
+ * See: https://eips.ethereum.org/EIPS/eip-55
  */
 export function toChecksumAddress(address: string): string {
   if (!isValidAddress(address)) {
@@ -49,7 +39,8 @@ export function toChecksumAddress(address: string): string {
   }
 
   const lowercaseAddress = address.toLowerCase().replace("0x", "");
-  const hash = keccak256(lowercaseAddress);
+  const hash = toHex(keccak256(utf8ToBytes(lowercaseAddress)));
+
   let checksumAddress = "0x";
 
   for (let i = 0; i < lowercaseAddress.length; i++) {
@@ -67,19 +58,27 @@ export function toChecksumAddress(address: string): string {
 /**
  * Get valid address or null
  */
-export function getValidAddress(address: string | undefined | null): string | null {
+export function getValidAddress(
+  address: string | undefined | null
+): string | null {
   if (!address) return null;
-  if (!isValidAddress(address)) return null;
-  return address;
+  const trimmed = typeof address === "string" ? address.trim() : address;
+  if (!isValidAddress(trimmed)) return null;
+  return trimmed;
 }
+
+/**
+ * Blocked addresses that should not emit events
+ * (zero address, dead address)
+ */
+const BLOCKED_ADDRESSES = new Set<string>([
+  "0x0000000000000000000000000000000000000000",
+  "0x000000000000000000000000000000000000dead",
+]);
 
 /**
  * Check if address is in blocked list
  */
-const BLOCKED_ADDRESSES = new Set<string>([
-  // Add any blocked addresses here
-]);
-
 export function isBlockedAddress(address: string): boolean {
   return BLOCKED_ADDRESSES.has(address.toLowerCase());
 }
