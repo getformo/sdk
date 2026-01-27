@@ -17,9 +17,6 @@ importers:
       ethereum-cryptography:
         specifier: 3.2.0
         version: 3.2.0
-      fetch-retry:
-        specifier: 6.0.0
-        version: 6.0.0
       mipd:
         specifier: 0.0.7
         version: 0.0.7(typescript@5.9.3)

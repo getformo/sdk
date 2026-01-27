@@ -9,9 +9,10 @@ import {
 } from "../utils";
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
-import fetch from "../fetch";
+import fetch, { FetchRetryError } from "../fetch";
 import { IEventQueue } from "./type";
 const noop = () => {};
+const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...args); } catch { /* swallow */ } };
 
 type QueueItem = {
   message: IFormoEventPayload;
@@ -20,6 +21,12 @@ type QueueItem = {
 
 type IFormoEventFlushPayload = IFormoEventPayload & {
   sent_at: string;
+};
+
+type Batch = {
+  data: IFormoEventFlushPayload[];
+  items: QueueItem[];
+  keepalive: boolean;
 };
 
 type Options = {
@@ -43,6 +50,11 @@ const MIN_FLUSH_AT = 1;
 const DEFAULT_QUEUE_SIZE = 1_024 * 500; // 500kB
 const MAX_QUEUE_SIZE = 1_024 * 500; // 500kB
 const MIN_QUEUE_SIZE = 200; // 200 bytes
+
+// Browsers enforce a 64KB limit on the total body size of in-flight
+// keepalive fetch requests. Payloads exceeding this are silently cancelled,
+// producing a TypeError: Failed to fetch that cannot be resolved by retrying.
+const KEEPALIVE_PAYLOAD_LIMIT = 64 * 1_024; // 64kB
 
 const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 1 MINUTE
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
@@ -100,7 +112,6 @@ export class EventQueue implements IEventQueue {
     });
   }
 
-  //#region Public functions
   private async generateMessageId(event: IFormoEvent): Promise<string> {
     const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
@@ -165,18 +176,13 @@ export class EventQueue implements IEventQueue {
       return Promise.resolve();
     }
 
-    try {
-      if (this.pendingFlush) {
-        await this.pendingFlush;
-      }
-    } catch (err) {
-      this.pendingFlush = null;
-      throw err;
+    if (this.pendingFlush) {
+      await this.pendingFlush;
     }
 
     const items = this.queue.splice(0, this.flushAt);
     this.payloadHashes.clear();
-    
+
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
     const data: IFormoEventFlushPayload[] = items.map((item) => ({
@@ -184,55 +190,142 @@ export class EventQueue implements IEventQueue {
       sent_at: sentAt
     }));
 
-    const done = (err?: Error) => {
-      items.forEach(({ message, callback }) => callback(err, message, data));
-      callback(err, data);
-    };
+    // Split into chunks that fit within the browser's 64KB keepalive limit.
+    const batches = this.splitIntoBatches(items, data);
 
-    return (this.pendingFlush = fetch(`${this.apiHost}`, {
-      headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
-      method: "POST",
-      body: JSON.stringify(data),
-      keepalive: true,
-      retries: this.retryCount,
-      retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
-      retryOn: (_, error) => this.isErrorRetryable(error),
-    })
-      .then(() => {
-        done();
+    return (this.pendingFlush = this.sendBatches(batches, data)
+      .then((firstError) => {
+        if (firstError) {
+          safeCall(callback, firstError, data);
+          if (typeof this.errorHandler === "function") {
+            safeCall(this.errorHandler, firstError);
+          }
+        } else {
+          safeCall(callback, undefined, data);
+        }
         return Promise.resolve(data);
       })
       .catch((err) => {
+        // Defensive: should not be reachable since sendBatches catches
+        // all errors internally, but guard against unexpected failures.
+        safeCall(callback, err, data);
         if (typeof this.errorHandler === "function") {
-          done(err);
-          return this.errorHandler(err);
+          safeCall(this.errorHandler, err);
         }
-
-        if (err.response) {
-          const error = new Error(err.response.statusText);
-          done(error);
-          throw error;
-        }
-
-        done(err);
-        throw err;
+        // Do NOT re-throw — analytics errors should never
+        // propagate as unhandled rejections to the host app
       }));
   }
 
-  //#region Utility functions
-  private isErrorRetryable(error: any) {
-    // Retry Network Errors.
-    if (isNetworkError(error)) return true;
+  /**
+   * Returns the UTF-8 byte length of a string. The browser's keepalive limit
+   * is enforced on the wire (UTF-8 bytes), not on JS string length (UTF-16
+   * code units). Non-ASCII characters (CJK, emoji) can be 2–4x larger in
+   * UTF-8 than their string .length suggests.
+   */
+  private static byteLength(str: string): number {
+    return new TextEncoder().encode(str).byteLength;
+  }
 
-    // Cannot determine if the request can be retried
-    if (!error?.response) return false;
+  /**
+   * Splits events into batches that respect the browser's 64KB keepalive
+   * payload size limit. Each batch pairs its serialized data with the
+   * original queue items (for per-item callback reporting) and a flag
+   * indicating whether keepalive is safe to use.
+   */
+  private splitIntoBatches(items: QueueItem[], data: IFormoEventFlushPayload[]): Batch[] {
+    const serialized = JSON.stringify(data);
+    if (EventQueue.byteLength(serialized) <= KEEPALIVE_PAYLOAD_LIMIT) {
+      return [{ data, items, keepalive: true }];
+    }
+
+    const batches: Batch[] = [];
+    let currentData: IFormoEventFlushPayload[] = [];
+    let currentItems: QueueItem[] = [];
+    let currentSize = 2; // account for JSON array brackets "[]"
+
+    for (let i = 0; i < data.length; i++) {
+      const event = data[i];
+      const eventSize = EventQueue.byteLength(JSON.stringify(event));
+      const sizeWithEvent = currentSize + (currentData.length > 0 ? 1 : 0) + eventSize;
+
+      if (sizeWithEvent > KEEPALIVE_PAYLOAD_LIMIT) {
+        if (currentData.length > 0) {
+          batches.push({ data: currentData, items: currentItems, keepalive: true });
+        }
+
+        // If a single event exceeds the limit, send it without keepalive
+        if (eventSize + 2 > KEEPALIVE_PAYLOAD_LIMIT) {
+          batches.push({ data: [event], items: [items[i]], keepalive: false });
+          currentData = [];
+          currentItems = [];
+          currentSize = 2;
+        } else {
+          currentData = [event];
+          currentItems = [items[i]];
+          currentSize = 2 + eventSize;
+        }
+      } else {
+        currentData.push(event);
+        currentItems.push(items[i]);
+        currentSize = sizeWithEvent;
+      }
+    }
+
+    if (currentData.length > 0) {
+      batches.push({ data: currentData, items: currentItems, keepalive: true });
+    }
+
+    return batches;
+  }
+
+  /**
+   * Sends batches sequentially, notifying per-item callbacks on success/failure.
+   * Returns the first error encountered (if any) so the caller can report it.
+   */
+  private async sendBatches(batches: Batch[], allData: IFormoEventFlushPayload[]): Promise<Error | undefined> {
+    let firstError: Error | undefined;
+
+    for (const batch of batches) {
+      try {
+        const body = JSON.stringify(batch.data);
+        const response = await fetch(`${this.apiHost}`, {
+          headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
+          method: "POST",
+          body,
+          keepalive: batch.keepalive,
+          retries: this.retryCount,
+          retryDelay: (attempt) => Math.pow(2, attempt) * 1_000,
+          retryOn: (_, error, response) => this.isErrorRetryable(error, response),
+        });
+        if (!response.ok) {
+          const error: any = new Error(response.statusText || `HTTP ${response.status}`);
+          error.response = response;
+          throw error;
+        }
+        batch.items.forEach(({ message, callback: cb }) => safeCall(cb, undefined, message, allData));
+      } catch (err: any) {
+        firstError = firstError || err;
+        batch.items.forEach(({ message, callback: cb }) => safeCall(cb, err, message, allData));
+      }
+    }
+
+    return firstError;
+  }
+
+  private isErrorRetryable(error: FetchRetryError | null, response: Response | null) {
+    // Retry Network Errors.
+    if (error && isNetworkError(error)) return true;
+
+    // Check response status if available
+    const status = response?.status ?? error?.response?.status;
+    if (!status) return false;
 
     // Retry Server Errors (5xx).
-    if (error?.response?.status >= 500 && error?.response?.status <= 599)
-      return true;
+    if (status >= 500 && status <= 599) return true;
 
     // Retry if rate limited.
-    if (error?.response?.status === 429) return true;
+    if (status === 429) return true;
 
     return false;
   }
