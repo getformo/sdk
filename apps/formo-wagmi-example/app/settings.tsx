@@ -13,13 +13,12 @@ export default function SettingsScreen() {
   const formo = useFormo();
   const [isOptedOut, setIsOptedOut] = useState(false);
 
+  // Re-run when formo changes from no-op defaultContext to real SDK
+  // so consent state is read correctly and screen view is tracked
   useEffect(() => {
-    // Check initial opt-out status
     setIsOptedOut(formo.hasOptedOutTracking());
-
-    // Track screen view
     formo.screen("Settings");
-  }, []);
+  }, [formo]);
 
   const handleToggleTracking = (value: boolean) => {
     if (value) {

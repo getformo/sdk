@@ -87,12 +87,23 @@ export function SendTransaction() {
       setError(errorMessage);
 
       // Track transaction rejected/failed
+      // Wrap parseEther in try-catch since it may throw on malformed input
+      // (e.g. "1.2.3" passes parseFloat but not parseEther)
+      let safeValue = "0";
+      try {
+        if (amount) {
+          safeValue = parseEther(amount).toString();
+        }
+      } catch {
+        // amount was not parseable by viem, use "0" as fallback
+      }
+
       formo.transaction({
         status: TransactionStatus.REJECTED,
         chainId,
         address,
         to: recipient,
-        value: amount ? parseEther(amount).toString() : "0",
+        value: safeValue,
       });
 
       // Check if user rejected

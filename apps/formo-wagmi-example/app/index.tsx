@@ -14,13 +14,15 @@ export default function HomeScreen() {
   const formo = useFormo();
   const { address, isConnected } = useAccount();
 
-  // Track screen view on mount
+  // Track screen view once SDK is ready
+  // formo starts as a no-op defaultContext and becomes the real SDK async,
+  // so we must include it in deps to re-run when initialization completes.
   useEffect(() => {
     formo.screen("Home", {
       isConnected,
       address: address || null,
     });
-  }, []);
+  }, [formo]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
