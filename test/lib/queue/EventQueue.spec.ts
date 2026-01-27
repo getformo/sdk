@@ -353,6 +353,42 @@ describe("EventQueue", () => {
       await eventQueue.flush();
       expect(errorHandler.calledOnce).to.be.true;
     });
+
+    it("should not produce unhandled rejection when flush callback throws", async () => {
+      fetchStub.resolves({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers(),
+        redirected: false,
+        type: "basic" as ResponseType,
+        url: "",
+        clone() { return this; },
+        body: null,
+        bodyUsed: false,
+        arrayBuffer: async () => new ArrayBuffer(0),
+        blob: async () => new Blob(),
+        formData: async () => new FormData(),
+        json: async () => ({}),
+        text: async () => "",
+        bytes: async () => new Uint8Array(),
+      } as Response);
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      const throwingCallback = () => { throw new Error("callback exploded"); };
+
+      // flush() should resolve without unhandled rejection even if callback throws
+      await eventQueue.flush(throwingCallback);
+    });
   });
 
   describe("keepalive payload splitting", () => {

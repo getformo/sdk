@@ -221,11 +221,15 @@ export class EventQueue implements IEventQueue {
             throw error;
           }
           // Notify items in this batch of success
-          batch.items.forEach(({ message, callback: cb }) => cb(undefined, message, data));
+          batch.items.forEach(({ message, callback: cb }) => {
+            try { cb(undefined, message, data); } catch { /* swallow */ }
+          });
         } catch (err: any) {
           firstError = firstError || err;
           // Notify items in this batch of failure
-          batch.items.forEach(({ message, callback: cb }) => cb(err, message, data));
+          batch.items.forEach(({ message, callback: cb }) => {
+            try { cb(err, message, data); } catch { /* swallow */ }
+          });
         }
       }
 
@@ -235,7 +239,7 @@ export class EventQueue implements IEventQueue {
     return (this.pendingFlush = sendBatches()
       .then((firstError) => {
         if (firstError) {
-          callback(firstError, data);
+          try { callback(firstError, data); } catch { /* swallow */ }
           if (typeof this.errorHandler === "function") {
             try {
               this.errorHandler(firstError);
@@ -245,14 +249,14 @@ export class EventQueue implements IEventQueue {
             }
           }
         } else {
-          callback(undefined, data);
+          try { callback(undefined, data); } catch { /* swallow */ }
         }
         return Promise.resolve(data);
       })
       .catch((err) => {
         // Defensive: should not be reachable since sendBatches catches
         // all errors internally, but guard against unexpected failures.
-        callback(err, data);
+        try { callback(err, data); } catch { /* swallow */ }
         if (typeof this.errorHandler === "function") {
           try {
             this.errorHandler(err);
