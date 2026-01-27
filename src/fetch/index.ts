@@ -20,24 +20,27 @@ function createFetchWithRetry(fetchFn: typeof fetch): FetchWithRetry {
   ): Promise<Response> {
     const { retries = 0, retryDelay, retryOn, ...fetchInit } = init || {};
 
-    let lastError: FetchRetryError | null = null;
-    let lastResponse: Response | null = null;
-
     for (let attempt = 0; attempt <= retries; attempt++) {
+      const isLastAttempt = attempt === retries;
+
       try {
         const response = await fetchFn(input, fetchInit);
-        lastResponse = response;
 
         if (response.ok) {
           return response;
         }
 
-        // Create an error with the response attached for non-ok responses
+        // On the last attempt, return whatever we got
+        if (isLastAttempt) {
+          return response;
+        }
+
+        // Create an error with the response attached for retryOn check
         const responseError: FetchRetryError = new Error(response.statusText);
         responseError.response = response;
 
         // Check if we should retry on this response
-        if (attempt < retries && retryOn?.(attempt, responseError, response)) {
+        if (retryOn?.(attempt, responseError, response)) {
           if (retryDelay) {
             await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
           }
@@ -46,10 +49,13 @@ function createFetchWithRetry(fetchFn: typeof fetch): FetchWithRetry {
 
         return response;
       } catch (error) {
-        lastError = error as FetchRetryError;
+        // On the last attempt, throw immediately
+        if (isLastAttempt) {
+          throw error;
+        }
 
         // Check if we should retry on this error
-        if (attempt < retries && retryOn?.(attempt, lastError, null)) {
+        if (retryOn?.(attempt, error as FetchRetryError, null)) {
           if (retryDelay) {
             await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
           }
@@ -60,13 +66,9 @@ function createFetchWithRetry(fetchFn: typeof fetch): FetchWithRetry {
       }
     }
 
-    // If we've exhausted retries and have a response, return it
-    if (lastResponse) {
-      return lastResponse;
-    }
-
-    // Otherwise throw the last error
-    throw lastError;
+    // Unreachable — the loop always returns or throws on the last attempt.
+    // Required to satisfy TypeScript's control flow analysis.
+    throw new Error("Unexpected: retry loop exited without returning or throwing");
   };
 }
 
