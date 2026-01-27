@@ -230,6 +230,12 @@ export interface Options {
    * @example { queryParams: ["via"], pathPattern: "/r/([^/]+)" }
    */
   referral?: ReferralOptions;
+  /**
+   * Optional error handler for analytics network failures.
+   * Called when event flush fails after all retries.
+   * If not provided, errors are silently swallowed.
+   */
+  errorHandler?: (err: Error) => void;
   ready?: (formo: IFormoAnalytics) => void;
 }
 

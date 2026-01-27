@@ -169,9 +169,8 @@ export class EventQueue implements IEventQueue {
       if (this.pendingFlush) {
         await this.pendingFlush;
       }
-    } catch (err) {
+    } catch {
       this.pendingFlush = null;
-      throw err;
     }
 
     const items = this.queue.splice(0, this.flushAt);
@@ -203,19 +202,12 @@ export class EventQueue implements IEventQueue {
         return Promise.resolve(data);
       })
       .catch((err) => {
-        if (typeof this.errorHandler === "function") {
-          done(err);
-          return this.errorHandler(err);
-        }
-
-        if (err.response) {
-          const error = new Error(err.response.statusText);
-          done(error);
-          throw error;
-        }
-
         done(err);
-        throw err;
+        if (typeof this.errorHandler === "function") {
+          this.errorHandler(err);
+        }
+        // Do NOT re-throw — analytics errors should never
+        // propagate as unhandled rejections to the host app
       }));
   }
 
