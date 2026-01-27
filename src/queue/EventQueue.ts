@@ -197,7 +197,12 @@ export class EventQueue implements IEventQueue {
       retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
       retryOn: (_, error, response) => this.isErrorRetryable(error, response),
     })
-      .then(() => {
+      .then((response) => {
+        if (!response.ok) {
+          const error: any = new Error(response.statusText || `HTTP ${response.status}`);
+          error.response = response;
+          throw error;
+        }
         done();
         return Promise.resolve(data);
       })
