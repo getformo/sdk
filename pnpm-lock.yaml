@@ -17,9 +17,6 @@ importers:
       ethereum-cryptography:
         specifier: 3.2.0
         version: 3.2.0
-      fetch-retry:
-        specifier: 6.0.0
-        version: 6.0.0
       mipd:
         specifier: 0.0.7
         version: 0.0.7(typescript@5.9.3)
@@ -2904,9 +2901,6 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
-
-  fetch-retry@6.0.0:
-    resolution: {integrity: sha512-BUFj1aMubgib37I3v4q78fYo63Po7t4HUPTpQ6/QE6yK6cIQrP+W43FYToeTEyg5m2Y7eFUtijUuAv/PDlWuag==}
 
   file-entry-cache@6.0.1:
     resolution: {integrity: sha512-7Gps/XWymbLk2QLYK4NzpMOrYjMhdIxXuIvy2QBsLE6ljuodKvdkWs/cpyJJ3CVIVpH0Oi1Hvg1ovbMzLdFBBg==}
@@ -9280,8 +9274,6 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.3):
     optionalDependencies:
       picomatch: 4.0.3
-
-  fetch-retry@6.0.0: {}
 
   file-entry-cache@6.0.1:
     dependencies:

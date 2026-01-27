@@ -4,6 +4,7 @@ import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { EventQueue } from "../../../src/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
+import * as fetchModule from "../../../src/fetch";
 
 describe("EventQueue", () => {
   let jsdom: JSDOM;
@@ -30,6 +31,61 @@ describe("EventQueue", () => {
     properties: {},
     ...overrides,
   });
+
+  function makeResponse(status: number, statusText: string): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText,
+      headers: new Headers(),
+      redirected: false,
+      type: "basic" as ResponseType,
+      url: "",
+      clone: () => makeResponse(status, statusText),
+      body: null,
+      bodyUsed: false,
+      arrayBuffer: async () => new ArrayBuffer(0),
+      blob: async () => new Blob(),
+      formData: async () => new FormData(),
+      json: async () => ({}),
+      text: async () => "",
+      bytes: async () => new Uint8Array(),
+    } as Response;
+  }
+
+  /** Override crypto.subtle.digest to return unique hashes so events are not deduplicated. */
+  function useUniqueCryptoHashes() {
+    let counter = 0;
+    Object.defineProperty(global, "crypto", {
+      value: {
+        subtle: {
+          digest: async (_algorithm: string, _data: ArrayBuffer) => {
+            const buf = new Uint8Array(32);
+            buf[0] = ++counter;
+            return buf.buffer;
+          },
+        },
+        randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+
+  /** Enqueue multiple large (~10KB each) events to exceed the 64KB keepalive limit. */
+  async function enqueueLargeEvents(queue: EventQueue, count = 8, cb?: sinon.SinonSpy) {
+    const largeProps: Record<string, string> = {};
+    for (let i = 0; i < 50; i++) {
+      largeProps[`field_${i}`] = "x".repeat(200);
+    }
+    for (let i = 0; i < count; i++) {
+      const event = createMockEvent({
+        original_timestamp: new Date(Date.now() + i).toISOString(),
+        properties: { ...largeProps, index: i },
+      });
+      await queue.enqueue(event, cb);
+    }
+  }
 
   beforeEach(() => {
     jsdom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
@@ -164,6 +220,413 @@ describe("EventQueue", () => {
       });
       // Should not throw when flushing empty queue
       expect(() => eventQueue.flush()).to.not.throw();
+    });
+  });
+
+  describe("flush error handling", () => {
+    let fetchStub: sinon.SinonStub;
+
+    beforeEach(async () => {
+      fetchStub = sinon.stub(fetchModule, "default");
+    });
+
+    it("should not throw on network error (fire-and-forget)", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      // flush() should resolve, not reject — errors are swallowed
+      await eventQueue.flush();
+    });
+
+    it("should not throw on non-ok HTTP response", async () => {
+      fetchStub.resolves(makeResponse(500, "Internal Server Error"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      // flush() should resolve, not reject
+      await eventQueue.flush();
+    });
+
+    it("should call errorHandler on network error", async () => {
+      const networkError = new TypeError("Failed to fetch");
+      fetchStub.rejects(networkError);
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(errorHandler.calledOnce).to.be.true;
+      expect(errorHandler.firstCall.args[0]).to.equal(networkError);
+    });
+
+    it("should call errorHandler on non-ok HTTP response", async () => {
+      fetchStub.resolves(makeResponse(500, "Internal Server Error"));
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(errorHandler.calledOnce).to.be.true;
+      const err = errorHandler.firstCall.args[0];
+      expect(err).to.be.an.instanceOf(Error);
+      expect(err.message).to.include("Internal Server Error");
+    });
+
+    it("should call done callback with error on failure", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const itemCallback = sinon.spy();
+      const event = createMockEvent();
+      await eventQueue.enqueue(event, itemCallback);
+
+      await eventQueue.flush();
+
+      expect(itemCallback.calledOnce).to.be.true;
+      // First argument to callback is the error
+      expect(itemCallback.firstCall.args[0]).to.be.an.instanceOf(Error);
+    });
+
+    it("should call done callback without error on success", async () => {
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const itemCallback = sinon.spy();
+      const event = createMockEvent();
+      await eventQueue.enqueue(event, itemCallback);
+
+      await eventQueue.flush();
+
+      expect(itemCallback.calledOnce).to.be.true;
+      // First argument to callback is undefined (no error)
+      expect(itemCallback.firstCall.args[0]).to.be.undefined;
+    });
+
+    it("should not call errorHandler on success", async () => {
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(errorHandler.called).to.be.false;
+    });
+
+    it("should not throw when errorHandler itself throws", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      const errorHandler = sinon.stub().throws(new Error("handler broke"));
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      // flush() should still resolve — errorHandler exception is swallowed
+      await eventQueue.flush();
+      expect(errorHandler.calledOnce).to.be.true;
+    });
+
+    it("should not produce unhandled rejection when flush callback throws", async () => {
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      const throwingCallback = () => { throw new Error("callback exploded"); };
+
+      // flush() should resolve without unhandled rejection even if callback throws
+      await eventQueue.flush(throwingCallback);
+    });
+  });
+
+  describe("keepalive payload splitting", () => {
+    let fetchStub: sinon.SinonStub;
+
+    beforeEach(async () => {
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.resolves(makeResponse(200, "OK"));
+    });
+
+    it("should send small payload with keepalive: true", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(fetchStub.calledOnce).to.be.true;
+      const fetchInit = fetchStub.firstCall.args[1];
+      expect(fetchInit.keepalive).to.be.true;
+    });
+
+    it("should split large payload into multiple requests with keepalive: true", async () => {
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await enqueueLargeEvents(eventQueue);
+      await eventQueue.flush();
+
+      // Should have been split into multiple fetch calls
+      expect(fetchStub.callCount).to.be.greaterThan(1);
+
+      // All sub-batches should use keepalive: true and fit under 64KB
+      for (let i = 0; i < fetchStub.callCount; i++) {
+        const fetchInit = fetchStub.getCall(i).args[1];
+        expect(fetchInit.keepalive).to.be.true;
+        const byteSize = new TextEncoder().encode(fetchInit.body).byteLength;
+        expect(byteSize).to.be.at.most(64 * 1024);
+      }
+    });
+
+    it("should send batches sequentially, not concurrently", async () => {
+      let inFlight = 0;
+      let maxInFlight = 0;
+
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.callsFake(() => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return Promise.resolve().then(() => {
+          inFlight--;
+          return makeResponse(200, "OK");
+        });
+      });
+
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await enqueueLargeEvents(eventQueue);
+      await eventQueue.flush();
+
+      expect(fetchStub.callCount).to.be.greaterThan(1);
+      expect(maxInFlight).to.equal(1);
+    });
+
+    it("should disable keepalive for a single event exceeding 64KB", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      // Create a single event that exceeds 64KB on its own
+      const hugeProps: Record<string, string> = {};
+      for (let i = 0; i < 100; i++) {
+        hugeProps[`field_${i}`] = "x".repeat(700);
+      }
+
+      const event = createMockEvent({ properties: hugeProps });
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(fetchStub.calledOnce).to.be.true;
+      const fetchInit = fetchStub.firstCall.args[1];
+      expect(fetchInit.keepalive).to.be.false;
+    });
+
+    it("should still call done callback on success with split batches", async () => {
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const itemCallback = sinon.spy();
+      await enqueueLargeEvents(eventQueue, 8, itemCallback);
+      await eventQueue.flush();
+
+      expect(itemCallback.callCount).to.equal(8);
+      for (let i = 0; i < 8; i++) {
+        expect(itemCallback.getCall(i).args[0]).to.be.undefined;
+      }
+    });
+
+    it("should continue sending remaining batches when an earlier batch fails", async () => {
+      let callCount = 0;
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.callsFake(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        return Promise.resolve(makeResponse(200, "OK"));
+      });
+
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await enqueueLargeEvents(eventQueue);
+      await eventQueue.flush();
+
+      expect(fetchStub.callCount).to.be.greaterThan(1);
+    });
+
+    it("should report per-item success/failure when a batch fails partway", async () => {
+      let callCount = 0;
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.callsFake(() => {
+        callCount++;
+        if (callCount === 2) {
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        return Promise.resolve(makeResponse(200, "OK"));
+      });
+
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const itemCallback = sinon.spy();
+      await enqueueLargeEvents(eventQueue, 8, itemCallback);
+      await eventQueue.flush();
+
+      expect(itemCallback.callCount).to.equal(8);
+
+      let successCount = 0;
+      let failureCount = 0;
+      for (let i = 0; i < itemCallback.callCount; i++) {
+        if (itemCallback.getCall(i).args[0] === undefined) {
+          successCount++;
+        } else {
+          failureCount++;
+        }
+      }
+      expect(successCount).to.be.greaterThan(0);
+      expect(failureCount).to.be.greaterThan(0);
+    });
+
+    it("should call errorHandler with error on partial batch failure", async () => {
+      let callCount = 0;
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.callsFake(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        return Promise.resolve(makeResponse(200, "OK"));
+      });
+
+      useUniqueCryptoHashes();
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      await enqueueLargeEvents(eventQueue);
+      await eventQueue.flush();
+
+      expect(errorHandler.calledOnce).to.be.true;
+      expect(errorHandler.firstCall.args[0]).to.be.an.instanceOf(TypeError);
     });
   });
 });
