@@ -194,13 +194,14 @@ export class EventQueue implements IEventQueue {
     };
 
     // Split the batch into chunks that fit within the keepalive payload limit.
-    // Browsers cancel keepalive fetch requests whose body exceeds 64KB.
+    // Browsers enforce a cumulative 64KB limit across all in-flight keepalive
+    // requests, so batches must be sent sequentially to avoid exceeding it.
     const batches = this.splitIntoBatches(data);
 
-    return (this.pendingFlush = Promise.all(
-      batches.map((batch) => {
+    const sendBatches = async () => {
+      for (const batch of batches) {
         const body = JSON.stringify(batch.data);
-        return fetch(`${this.apiHost}`, {
+        const response = await fetch(`${this.apiHost}`, {
           headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
           method: "POST",
           body,
@@ -208,15 +209,16 @@ export class EventQueue implements IEventQueue {
           retries: this.retryCount,
           retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
           retryOn: (_, error, response) => this.isErrorRetryable(error, response),
-        }).then((response) => {
-          if (!response.ok) {
-            const error: any = new Error(response.statusText || `HTTP ${response.status}`);
-            error.response = response;
-            throw error;
-          }
         });
-      })
-    )
+        if (!response.ok) {
+          const error: any = new Error(response.statusText || `HTTP ${response.status}`);
+          error.response = response;
+          throw error;
+        }
+      }
+    };
+
+    return (this.pendingFlush = sendBatches()
       .then(() => {
         done();
         return Promise.resolve(data);
@@ -234,6 +236,16 @@ export class EventQueue implements IEventQueue {
   //#region Utility functions
 
   /**
+   * Returns the UTF-8 byte length of a string. The browser's keepalive limit
+   * is enforced on the wire (UTF-8 bytes), not on JS string length (UTF-16
+   * code units). Non-ASCII characters (CJK, emoji) can be 2–4x larger in
+   * UTF-8 than their string .length suggests.
+   */
+  private static byteLength(str: string): number {
+    return new TextEncoder().encode(str).byteLength;
+  }
+
+  /**
    * Splits a list of events into batches that respect the browser's keepalive
    * payload size limit. Each batch includes a flag indicating whether keepalive
    * is safe to use. If a single event exceeds the limit on its own, it is sent
@@ -241,7 +253,7 @@ export class EventQueue implements IEventQueue {
    */
   private splitIntoBatches(data: IFormoEventFlushPayload[]): { data: IFormoEventFlushPayload[]; keepalive: boolean }[] {
     const serialized = JSON.stringify(data);
-    if (serialized.length <= KEEPALIVE_PAYLOAD_LIMIT) {
+    if (EventQueue.byteLength(serialized) <= KEEPALIVE_PAYLOAD_LIMIT) {
       return [{ data, keepalive: true }];
     }
 
@@ -250,7 +262,7 @@ export class EventQueue implements IEventQueue {
     let currentSize = 2; // account for JSON array brackets "[]"
 
     for (const event of data) {
-      const eventSize = JSON.stringify(event).length;
+      const eventSize = EventQueue.byteLength(JSON.stringify(event));
 
       // Size with this event added: currentSize + comma (if not first) + eventSize
       const sizeWithEvent = currentSize + (currentBatch.length > 0 ? 1 : 0) + eventSize;

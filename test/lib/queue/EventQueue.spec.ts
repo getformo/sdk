@@ -427,13 +427,76 @@ describe("EventQueue", () => {
       // Should have been split into multiple fetch calls
       expect(fetchStub.callCount).to.be.greaterThan(1);
 
-      // All sub-batches should use keepalive: true
+      // All sub-batches should use keepalive: true and fit under 64KB
       for (let i = 0; i < fetchStub.callCount; i++) {
         const fetchInit = fetchStub.getCall(i).args[1];
         expect(fetchInit.keepalive).to.be.true;
-        // Each body should be under 64KB
-        expect(fetchInit.body.length).to.be.at.most(64 * 1024);
+        // Each body should be under 64KB in UTF-8 bytes
+        const byteSize = new TextEncoder().encode(fetchInit.body).byteLength;
+        expect(byteSize).to.be.at.most(64 * 1024);
       }
+    });
+
+    it("should send batches sequentially, not concurrently", async () => {
+      // Track how many fetches are in-flight simultaneously
+      let inFlight = 0;
+      let maxInFlight = 0;
+
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+
+      fetchStub.callsFake(() => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return Promise.resolve().then(() => {
+          inFlight--;
+          return makeResponse(200, "OK");
+        });
+      });
+
+      // Override crypto for unique hashes
+      let hashCounter = 0;
+      Object.defineProperty(global, "crypto", {
+        value: {
+          subtle: {
+            digest: async (_algorithm: string, _data: ArrayBuffer) => {
+              const buf = new Uint8Array(32);
+              buf[0] = ++hashCounter;
+              return buf.buffer;
+            },
+          },
+          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const largeProps: Record<string, string> = {};
+      for (let i = 0; i < 50; i++) {
+        largeProps[`field_${i}`] = "x".repeat(200);
+      }
+
+      for (let i = 0; i < 8; i++) {
+        const event = createMockEvent({
+          original_timestamp: new Date(Date.now() + i).toISOString(),
+          properties: { ...largeProps, index: i },
+        });
+        await eventQueue.enqueue(event);
+      }
+
+      await eventQueue.flush();
+
+      // Multiple batches were sent
+      expect(fetchStub.callCount).to.be.greaterThan(1);
+      // But at most one was in-flight at any time (sequential, not concurrent)
+      expect(maxInFlight).to.equal(1);
     });
 
     it("should disable keepalive for a single event exceeding 64KB", async () => {
