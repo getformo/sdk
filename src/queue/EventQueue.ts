@@ -73,6 +73,7 @@ export class EventQueue implements IEventQueue {
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
   private payloadHashes: Set<string> = new Set();
+  private keepaliveSupported: boolean = true;
 
   constructor(writeKey: string, options: Options) {
     options = options || {};
@@ -289,15 +290,7 @@ export class EventQueue implements IEventQueue {
     for (const batch of batches) {
       try {
         const body = JSON.stringify(batch.data);
-        const response = await fetch(`${this.apiHost}`, {
-          headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
-          method: "POST",
-          body,
-          keepalive: batch.keepalive,
-          retries: this.retryCount,
-          retryDelay: (attempt) => Math.pow(2, attempt) * 1_000,
-          retryOn: (_, error, response) => this.isErrorRetryable(error, response),
-        });
+        const response = await this.sendWithKeepaliveFallback(body, batch.keepalive);
         if (!response.ok) {
           const error: any = new Error(response.statusText || `HTTP ${response.status}`);
           error.response = response;
@@ -311,6 +304,40 @@ export class EventQueue implements IEventQueue {
     }
 
     return firstError;
+  }
+
+  /**
+   * Attempts a fetch with the given keepalive flag. If the request fails with
+   * a network TypeError while keepalive is enabled, retries once without
+   * keepalive. Some older WebViews (e.g. Crosswalk 29) do not support
+   * keepalive for cross-origin POST requests and throw "Failed to fetch".
+   */
+  private async sendWithKeepaliveFallback(body: string, keepalive: boolean): Promise<Response> {
+    const init = {
+      headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
+      method: "POST",
+      body,
+      retries: this.retryCount,
+      retryDelay: (attempt: number) => Math.pow(2, attempt) * 1_000,
+      retryOn: (_: number, error: FetchRetryError | null, response: Response | null) =>
+        this.isErrorRetryable(error, response),
+    };
+
+    // Skip keepalive if a previous flush already discovered it's unsupported.
+    const useKeepalive = keepalive && this.keepaliveSupported;
+
+    try {
+      return await fetch(`${this.apiHost}`, { ...init, keepalive: useKeepalive });
+    } catch (err: any) {
+      // If keepalive was on and the failure looks like a network TypeError,
+      // the environment likely doesn't support keepalive — retry without it.
+      if (useKeepalive && isNetworkError(err)) {
+        this.keepaliveSupported = false;
+        logger.warn("keepalive fetch failed; retrying without keepalive");
+        return await fetch(`${this.apiHost}`, { ...init, keepalive: false });
+      }
+      throw err;
+    }
   }
 
   private isErrorRetryable(error: FetchRetryError | null, response: Response | null) {
