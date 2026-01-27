@@ -4,6 +4,7 @@ import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { EventQueue } from "../../../src/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
+import * as fetchModule from "../../../src/fetch";
 
 describe("EventQueue", () => {
   let jsdom: JSDOM;
@@ -164,6 +165,173 @@ describe("EventQueue", () => {
       });
       // Should not throw when flushing empty queue
       expect(() => eventQueue.flush()).to.not.throw();
+    });
+  });
+
+  describe("flush error handling", () => {
+    let fetchStub: sinon.SinonStub;
+
+    function makeResponse(status: number, statusText: string): Response {
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        statusText,
+        headers: new Headers(),
+        redirected: false,
+        type: "basic" as ResponseType,
+        url: "",
+        clone: () => makeResponse(status, statusText),
+        body: null,
+        bodyUsed: false,
+        arrayBuffer: async () => new ArrayBuffer(0),
+        blob: async () => new Blob(),
+        formData: async () => new FormData(),
+        json: async () => ({}),
+        text: async () => "",
+        bytes: async () => new Uint8Array(),
+      } as Response;
+    }
+
+    beforeEach(async () => {
+      fetchStub = sinon.stub(fetchModule, "default");
+    });
+
+    it("should not throw on network error (fire-and-forget)", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      // flush() should resolve, not reject — errors are swallowed
+      await eventQueue.flush();
+    });
+
+    it("should not throw on non-ok HTTP response", async () => {
+      fetchStub.resolves(makeResponse(500, "Internal Server Error"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      // flush() should resolve, not reject
+      await eventQueue.flush();
+    });
+
+    it("should call errorHandler on network error", async () => {
+      const networkError = new TypeError("Failed to fetch");
+      fetchStub.rejects(networkError);
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(errorHandler.calledOnce).to.be.true;
+      expect(errorHandler.firstCall.args[0]).to.equal(networkError);
+    });
+
+    it("should call errorHandler on non-ok HTTP response", async () => {
+      fetchStub.resolves(makeResponse(500, "Internal Server Error"));
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(errorHandler.calledOnce).to.be.true;
+      const err = errorHandler.firstCall.args[0];
+      expect(err).to.be.an.instanceOf(Error);
+      expect(err.message).to.include("Internal Server Error");
+    });
+
+    it("should call done callback with error on failure", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const itemCallback = sinon.spy();
+      const event = createMockEvent();
+      await eventQueue.enqueue(event, itemCallback);
+
+      await eventQueue.flush();
+
+      expect(itemCallback.calledOnce).to.be.true;
+      // First argument to callback is the error
+      expect(itemCallback.firstCall.args[0]).to.be.an.instanceOf(Error);
+    });
+
+    it("should call done callback without error on success", async () => {
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const itemCallback = sinon.spy();
+      const event = createMockEvent();
+      await eventQueue.enqueue(event, itemCallback);
+
+      await eventQueue.flush();
+
+      expect(itemCallback.calledOnce).to.be.true;
+      // First argument to callback is undefined (no error)
+      expect(itemCallback.firstCall.args[0]).to.be.undefined;
+    });
+
+    it("should not call errorHandler on success", async () => {
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(errorHandler.called).to.be.false;
     });
   });
 });
