@@ -589,5 +589,191 @@ describe("EventQueue", () => {
         expect(itemCallback.getCall(i).args[0]).to.be.undefined;
       }
     });
+
+    it("should continue sending remaining batches when an earlier batch fails", async () => {
+      let callCount = 0;
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+
+      // First batch fails, second batch succeeds
+      fetchStub.callsFake(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        return Promise.resolve(makeResponse(200, "OK"));
+      });
+
+      // Override crypto for unique hashes
+      let hashCounter = 0;
+      Object.defineProperty(global, "crypto", {
+        value: {
+          subtle: {
+            digest: async (_algorithm: string, _data: ArrayBuffer) => {
+              const buf = new Uint8Array(32);
+              buf[0] = ++hashCounter;
+              return buf.buffer;
+            },
+          },
+          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const largeProps: Record<string, string> = {};
+      for (let i = 0; i < 50; i++) {
+        largeProps[`field_${i}`] = "x".repeat(200);
+      }
+
+      for (let i = 0; i < 8; i++) {
+        const event = createMockEvent({
+          original_timestamp: new Date(Date.now() + i).toISOString(),
+          properties: { ...largeProps, index: i },
+        });
+        await eventQueue.enqueue(event);
+      }
+
+      await eventQueue.flush();
+
+      // All batches should have been attempted, not just the first
+      expect(fetchStub.callCount).to.be.greaterThan(1);
+    });
+
+    it("should report per-item success/failure when a batch fails partway", async () => {
+      let callCount = 0;
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+
+      // First batch succeeds, second batch fails
+      fetchStub.callsFake(() => {
+        callCount++;
+        if (callCount === 2) {
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        return Promise.resolve(makeResponse(200, "OK"));
+      });
+
+      // Override crypto for unique hashes
+      let hashCounter = 0;
+      Object.defineProperty(global, "crypto", {
+        value: {
+          subtle: {
+            digest: async (_algorithm: string, _data: ArrayBuffer) => {
+              const buf = new Uint8Array(32);
+              buf[0] = ++hashCounter;
+              return buf.buffer;
+            },
+          },
+          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const largeProps: Record<string, string> = {};
+      for (let i = 0; i < 50; i++) {
+        largeProps[`field_${i}`] = "x".repeat(200);
+      }
+
+      const itemCallback = sinon.spy();
+      for (let i = 0; i < 8; i++) {
+        const event = createMockEvent({
+          original_timestamp: new Date(Date.now() + i).toISOString(),
+          properties: { ...largeProps, index: i },
+        });
+        await eventQueue.enqueue(event, itemCallback);
+      }
+
+      await eventQueue.flush();
+
+      // All 8 callbacks should have been called
+      expect(itemCallback.callCount).to.equal(8);
+
+      // Some should have succeeded (no error), some should have failed
+      let successCount = 0;
+      let failureCount = 0;
+      for (let i = 0; i < itemCallback.callCount; i++) {
+        if (itemCallback.getCall(i).args[0] === undefined) {
+          successCount++;
+        } else {
+          failureCount++;
+        }
+      }
+      expect(successCount).to.be.greaterThan(0);
+      expect(failureCount).to.be.greaterThan(0);
+    });
+
+    it("should call errorHandler with error on partial batch failure", async () => {
+      let callCount = 0;
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+
+      fetchStub.callsFake(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        return Promise.resolve(makeResponse(200, "OK"));
+      });
+
+      // Override crypto for unique hashes
+      let hashCounter = 0;
+      Object.defineProperty(global, "crypto", {
+        value: {
+          subtle: {
+            digest: async (_algorithm: string, _data: ArrayBuffer) => {
+              const buf = new Uint8Array(32);
+              buf[0] = ++hashCounter;
+              return buf.buffer;
+            },
+          },
+          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const largeProps: Record<string, string> = {};
+      for (let i = 0; i < 50; i++) {
+        largeProps[`field_${i}`] = "x".repeat(200);
+      }
+
+      for (let i = 0; i < 8; i++) {
+        const event = createMockEvent({
+          original_timestamp: new Date(Date.now() + i).toISOString(),
+          properties: { ...largeProps, index: i },
+        });
+        await eventQueue.enqueue(event);
+      }
+
+      await eventQueue.flush();
+
+      expect(errorHandler.calledOnce).to.be.true;
+      expect(errorHandler.firstCall.args[0]).to.be.an.instanceOf(TypeError);
+    });
   });
 });

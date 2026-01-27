@@ -184,49 +184,80 @@ export class EventQueue implements IEventQueue {
       sent_at: sentAt
     }));
 
-    const done = (err?: Error) => {
-      items.forEach(({ message, callback }) => callback(err, message, data));
-      callback(err, data);
-    };
-
     // Split the batch into chunks that fit within the keepalive payload limit.
     // Browsers enforce a cumulative 64KB limit across all in-flight keepalive
     // requests, so batches must be sent sequentially to avoid exceeding it.
     const batches = this.splitIntoBatches(data);
 
+    // Map each batch back to its source items so we can report per-item
+    // success/failure. Items and data are in the same order; batches are
+    // contiguous slices of data, so we walk items in lockstep.
+    type BatchWithItems = { data: IFormoEventFlushPayload[]; keepalive: boolean; items: QueueItem[] };
+    let offset = 0;
+    const batchesWithItems: BatchWithItems[] = batches.map((batch) => {
+      const batchItems = items.slice(offset, offset + batch.data.length);
+      offset += batch.data.length;
+      return { ...batch, items: batchItems };
+    });
+
     const sendBatches = async () => {
-      for (const batch of batches) {
-        const body = JSON.stringify(batch.data);
-        const response = await fetch(`${this.apiHost}`, {
-          headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
-          method: "POST",
-          body,
-          keepalive: batch.keepalive,
-          retries: this.retryCount,
-          retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
-          retryOn: (_, error, response) => this.isErrorRetryable(error, response),
-        });
-        if (!response.ok) {
-          const error: any = new Error(response.statusText || `HTTP ${response.status}`);
-          error.response = response;
-          throw error;
+      let firstError: Error | undefined;
+
+      for (const batch of batchesWithItems) {
+        try {
+          const body = JSON.stringify(batch.data);
+          const response = await fetch(`${this.apiHost}`, {
+            headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
+            method: "POST",
+            body,
+            keepalive: batch.keepalive,
+            retries: this.retryCount,
+            retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
+            retryOn: (_, error, response) => this.isErrorRetryable(error, response),
+          });
+          if (!response.ok) {
+            const error: any = new Error(response.statusText || `HTTP ${response.status}`);
+            error.response = response;
+            throw error;
+          }
+          // Notify items in this batch of success
+          batch.items.forEach(({ message, callback: cb }) => cb(undefined, message, data));
+        } catch (err: any) {
+          firstError = firstError || err;
+          // Notify items in this batch of failure
+          batch.items.forEach(({ message, callback: cb }) => cb(err, message, data));
         }
       }
+
+      return firstError;
     };
 
     return (this.pendingFlush = sendBatches()
-      .then(() => {
-        done();
+      .then((firstError) => {
+        if (firstError) {
+          callback(firstError, data);
+          if (typeof this.errorHandler === "function") {
+            try {
+              this.errorHandler(firstError);
+            } catch {
+              // Swallow errors from user-provided handler to maintain
+              // the fire-and-forget contract
+            }
+          }
+        } else {
+          callback(undefined, data);
+        }
         return Promise.resolve(data);
       })
       .catch((err) => {
-        done(err);
+        // Defensive: should not be reachable since sendBatches catches
+        // all errors internally, but guard against unexpected failures.
+        callback(err, data);
         if (typeof this.errorHandler === "function") {
           try {
             this.errorHandler(err);
           } catch {
-            // Swallow errors from user-provided handler to maintain
-            // the fire-and-forget contract
+            // Swallow
           }
         }
         // Do NOT re-throw — analytics errors should never
