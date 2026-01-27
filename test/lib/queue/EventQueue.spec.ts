@@ -566,7 +566,9 @@ describe("EventQueue", () => {
       fetchStub.callsFake(() => {
         callCount++;
         if (callCount === 2) {
-          return Promise.reject(new TypeError("Failed to fetch"));
+          // Use a non-retryable 400 response to simulate a batch that fails
+          // without triggering the keepalive fallback path.
+          return Promise.resolve(makeResponse(400, "Bad Request"));
         }
         return Promise.resolve(makeResponse(200, "OK"));
       });
@@ -606,7 +608,9 @@ describe("EventQueue", () => {
       fetchStub.callsFake(() => {
         callCount++;
         if (callCount === 1) {
-          return Promise.reject(new TypeError("Failed to fetch"));
+          // Use a non-retryable 400 response to simulate a batch that fails
+          // without triggering the keepalive fallback path.
+          return Promise.resolve(makeResponse(400, "Bad Request"));
         }
         return Promise.resolve(makeResponse(200, "OK"));
       });
@@ -626,7 +630,131 @@ describe("EventQueue", () => {
       await eventQueue.flush();
 
       expect(errorHandler.calledOnce).to.be.true;
+      expect(errorHandler.firstCall.args[0]).to.be.an.instanceOf(Error);
+    });
+  });
+
+  describe("keepalive fallback", () => {
+    let fetchStub: sinon.SinonStub;
+
+    beforeEach(async () => {
+      fetchStub = sinon.stub(fetchModule, "default");
+    });
+
+    it("should retry without keepalive when keepalive fetch throws TypeError", async () => {
+      // First call (keepalive: true) fails, second call (keepalive: false) succeeds
+      fetchStub
+        .onFirstCall().rejects(new TypeError("Failed to fetch"))
+        .onSecondCall().resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(fetchStub.calledTwice).to.be.true;
+      // First call should have keepalive: true
+      expect(fetchStub.firstCall.args[1].keepalive).to.be.true;
+      // Second call should have keepalive: false (fallback)
+      expect(fetchStub.secondCall.args[1].keepalive).to.be.false;
+    });
+
+    it("should deliver events successfully after keepalive fallback", async () => {
+      fetchStub
+        .onFirstCall().rejects(new TypeError("Failed to fetch"))
+        .onSecondCall().resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const itemCallback = sinon.spy();
+      const event = createMockEvent();
+      await eventQueue.enqueue(event, itemCallback);
+      await eventQueue.flush();
+
+      expect(itemCallback.calledOnce).to.be.true;
+      // Callback should report success (no error)
+      expect(itemCallback.firstCall.args[0]).to.be.undefined;
+    });
+
+    it("should propagate error when both keepalive and non-keepalive fetch fail", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(errorHandler.calledOnce).to.be.true;
       expect(errorHandler.firstCall.args[0]).to.be.an.instanceOf(TypeError);
+    });
+
+    it("should not retry without keepalive for non-network errors", async () => {
+      // A non-TypeError (e.g. AbortError) should not trigger the fallback
+      const abortError = new DOMException("The operation was aborted", "AbortError");
+      fetchStub.rejects(abortError);
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      // Should only have been called once — no fallback retry
+      expect(fetchStub.calledOnce).to.be.true;
+      expect(errorHandler.calledOnce).to.be.true;
+    });
+
+    it("should not attempt fallback when keepalive was already false", async () => {
+      // Single event exceeding 64KB — keepalive will already be false
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      const errorHandler = sinon.spy();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const hugeProps: Record<string, string> = {};
+      for (let i = 0; i < 100; i++) {
+        hugeProps[`field_${i}`] = "x".repeat(700);
+      }
+
+      const event = createMockEvent({ properties: hugeProps });
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      // Only one call — no fallback since keepalive was already false
+      expect(fetchStub.calledOnce).to.be.true;
+      expect(fetchStub.firstCall.args[1].keepalive).to.be.false;
     });
   });
 });
