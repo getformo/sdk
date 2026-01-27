@@ -8,11 +8,6 @@ type RetryOptions = {
   retryOn?: (attempt: number, error: FetchRetryError | null, response: Response | null) => boolean;
 };
 
-type FetchWithRetry = (
-  input: RequestInfo | URL,
-  init?: RequestInit & RetryOptions
-) => Promise<Response>;
-
 async function fetchWithRetry(
   input: RequestInfo | URL,
   init?: RequestInit & RetryOptions
