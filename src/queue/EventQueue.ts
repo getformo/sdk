@@ -112,7 +112,6 @@ export class EventQueue implements IEventQueue {
     });
   }
 
-  //#region Public functions
   private async generateMessageId(event: IFormoEvent): Promise<string> {
     const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
@@ -217,8 +216,6 @@ export class EventQueue implements IEventQueue {
         // propagate as unhandled rejections to the host app
       }));
   }
-
-  //#region Utility functions
 
   /**
    * Returns the UTF-8 byte length of a string. The browser's keepalive limit
