@@ -44,6 +44,11 @@ const DEFAULT_QUEUE_SIZE = 1_024 * 500; // 500kB
 const MAX_QUEUE_SIZE = 1_024 * 500; // 500kB
 const MIN_QUEUE_SIZE = 200; // 200 bytes
 
+// Browsers enforce a 64KB limit on the total body size of in-flight
+// keepalive fetch requests. Payloads exceeding this are silently cancelled,
+// producing a TypeError: Failed to fetch that cannot be resolved by retrying.
+const KEEPALIVE_PAYLOAD_LIMIT = 64 * 1_024; // 64kB
+
 const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 1 MINUTE
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
@@ -175,7 +180,7 @@ export class EventQueue implements IEventQueue {
 
     const items = this.queue.splice(0, this.flushAt);
     this.payloadHashes.clear();
-    
+
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
     const data: IFormoEventFlushPayload[] = items.map((item) => ({
@@ -188,21 +193,31 @@ export class EventQueue implements IEventQueue {
       callback(err, data);
     };
 
-    return (this.pendingFlush = fetch(`${this.apiHost}`, {
-      headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
-      method: "POST",
-      body: JSON.stringify(data),
-      keepalive: true,
-      retries: this.retryCount,
-      retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
-      retryOn: (_, error, response) => this.isErrorRetryable(error, response),
-    })
-      .then((response) => {
-        if (!response.ok) {
-          const error: any = new Error(response.statusText || `HTTP ${response.status}`);
-          error.response = response;
-          throw error;
-        }
+    // Split the batch into chunks that fit within the keepalive payload limit.
+    // Browsers cancel keepalive fetch requests whose body exceeds 64KB.
+    const batches = this.splitIntoBatches(data);
+
+    return (this.pendingFlush = Promise.all(
+      batches.map((batch) => {
+        const body = JSON.stringify(batch.data);
+        return fetch(`${this.apiHost}`, {
+          headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
+          method: "POST",
+          body,
+          keepalive: batch.keepalive,
+          retries: this.retryCount,
+          retryDelay: (attempt) => Math.pow(2, attempt) * 1_000, // exponential backoff
+          retryOn: (_, error, response) => this.isErrorRetryable(error, response),
+        }).then((response) => {
+          if (!response.ok) {
+            const error: any = new Error(response.statusText || `HTTP ${response.status}`);
+            error.response = response;
+            throw error;
+          }
+        });
+      })
+    )
+      .then(() => {
         done();
         return Promise.resolve(data);
       })
@@ -217,6 +232,57 @@ export class EventQueue implements IEventQueue {
   }
 
   //#region Utility functions
+
+  /**
+   * Splits a list of events into batches that respect the browser's keepalive
+   * payload size limit. Each batch includes a flag indicating whether keepalive
+   * is safe to use. If a single event exceeds the limit on its own, it is sent
+   * in its own batch with keepalive disabled.
+   */
+  private splitIntoBatches(data: IFormoEventFlushPayload[]): { data: IFormoEventFlushPayload[]; keepalive: boolean }[] {
+    const serialized = JSON.stringify(data);
+    if (serialized.length <= KEEPALIVE_PAYLOAD_LIMIT) {
+      return [{ data, keepalive: true }];
+    }
+
+    const batches: { data: IFormoEventFlushPayload[]; keepalive: boolean }[] = [];
+    let currentBatch: IFormoEventFlushPayload[] = [];
+    let currentSize = 2; // account for JSON array brackets "[]"
+
+    for (const event of data) {
+      const eventSize = JSON.stringify(event).length;
+
+      // Size with this event added: currentSize + comma (if not first) + eventSize
+      const sizeWithEvent = currentSize + (currentBatch.length > 0 ? 1 : 0) + eventSize;
+
+      if (sizeWithEvent > KEEPALIVE_PAYLOAD_LIMIT) {
+        // Flush current batch if non-empty
+        if (currentBatch.length > 0) {
+          batches.push({ data: currentBatch, keepalive: true });
+        }
+
+        // If a single event exceeds the limit, send it without keepalive
+        if (eventSize + 2 > KEEPALIVE_PAYLOAD_LIMIT) {
+          batches.push({ data: [event], keepalive: false });
+          currentBatch = [];
+          currentSize = 2;
+        } else {
+          currentBatch = [event];
+          currentSize = 2 + eventSize;
+        }
+      } else {
+        currentBatch.push(event);
+        currentSize = sizeWithEvent;
+      }
+    }
+
+    if (currentBatch.length > 0) {
+      batches.push({ data: currentBatch, keepalive: true });
+    }
+
+    return batches;
+  }
+
   private isErrorRetryable(error: FetchRetryError | null, response: Response | null) {
     // Retry Network Errors.
     if (error && isNetworkError(error)) return true;

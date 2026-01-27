@@ -334,4 +334,177 @@ describe("EventQueue", () => {
       expect(errorHandler.called).to.be.false;
     });
   });
+
+  describe("keepalive payload splitting", () => {
+    let fetchStub: sinon.SinonStub;
+
+    function makeResponse(status: number, statusText: string): Response {
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        statusText,
+        headers: new Headers(),
+        redirected: false,
+        type: "basic" as ResponseType,
+        url: "",
+        clone: () => makeResponse(status, statusText),
+        body: null,
+        bodyUsed: false,
+        arrayBuffer: async () => new ArrayBuffer(0),
+        blob: async () => new Blob(),
+        formData: async () => new FormData(),
+        json: async () => ({}),
+        text: async () => "",
+        bytes: async () => new Uint8Array(),
+      } as Response;
+    }
+
+    beforeEach(async () => {
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.resolves(makeResponse(200, "OK"));
+    });
+
+    it("should send small payload with keepalive: true", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(fetchStub.calledOnce).to.be.true;
+      const fetchInit = fetchStub.firstCall.args[1];
+      expect(fetchInit.keepalive).to.be.true;
+    });
+
+    it("should split large payload into multiple requests with keepalive: true", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      // Override crypto.subtle.digest to return unique hashes per input
+      // so events are not deduplicated
+      let hashCounter = 0;
+      Object.defineProperty(global, "crypto", {
+        value: {
+          subtle: {
+            digest: async (_algorithm: string, _data: ArrayBuffer) => {
+              const buf = new Uint8Array(32);
+              buf[0] = ++hashCounter;
+              return buf.buffer;
+            },
+          },
+          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      // Create events with large properties to exceed 64KB total
+      // Each event ~10KB, so 8 events ≈ 80KB > 64KB limit
+      const largeProps: Record<string, string> = {};
+      for (let i = 0; i < 50; i++) {
+        largeProps[`field_${i}`] = "x".repeat(200);
+      }
+
+      for (let i = 0; i < 8; i++) {
+        const event = createMockEvent({
+          original_timestamp: new Date(Date.now() + i).toISOString(),
+          properties: { ...largeProps, index: i },
+        });
+        await eventQueue.enqueue(event);
+      }
+
+      await eventQueue.flush();
+
+      // Should have been split into multiple fetch calls
+      expect(fetchStub.callCount).to.be.greaterThan(1);
+
+      // All sub-batches should use keepalive: true
+      for (let i = 0; i < fetchStub.callCount; i++) {
+        const fetchInit = fetchStub.getCall(i).args[1];
+        expect(fetchInit.keepalive).to.be.true;
+        // Each body should be under 64KB
+        expect(fetchInit.body.length).to.be.at.most(64 * 1024);
+      }
+    });
+
+    it("should disable keepalive for a single event exceeding 64KB", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      // Create a single event that exceeds 64KB on its own
+      const hugeProps: Record<string, string> = {};
+      for (let i = 0; i < 100; i++) {
+        hugeProps[`field_${i}`] = "x".repeat(700);
+      }
+
+      const event = createMockEvent({ properties: hugeProps });
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(fetchStub.calledOnce).to.be.true;
+      const fetchInit = fetchStub.firstCall.args[1];
+      expect(fetchInit.keepalive).to.be.false;
+    });
+
+    it("should still call done callback on success with split batches", async () => {
+      // Override crypto.subtle.digest to return unique hashes per input
+      let hashCounter = 0;
+      Object.defineProperty(global, "crypto", {
+        value: {
+          subtle: {
+            digest: async (_algorithm: string, _data: ArrayBuffer) => {
+              const buf = new Uint8Array(32);
+              buf[0] = ++hashCounter;
+              return buf.buffer;
+            },
+          },
+          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const largeProps: Record<string, string> = {};
+      for (let i = 0; i < 50; i++) {
+        largeProps[`field_${i}`] = "x".repeat(200);
+      }
+
+      const itemCallback = sinon.spy();
+      for (let i = 0; i < 8; i++) {
+        const event = createMockEvent({
+          original_timestamp: new Date(Date.now() + i).toISOString(),
+          properties: { ...largeProps, index: i },
+        });
+        await eventQueue.enqueue(event, itemCallback);
+      }
+
+      await eventQueue.flush();
+
+      // All item callbacks should have been called without error
+      expect(itemCallback.callCount).to.equal(8);
+      for (let i = 0; i < 8; i++) {
+        expect(itemCallback.getCall(i).args[0]).to.be.undefined;
+      }
+    });
+  });
 });
