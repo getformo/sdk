@@ -32,6 +32,61 @@ describe("EventQueue", () => {
     ...overrides,
   });
 
+  function makeResponse(status: number, statusText: string): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText,
+      headers: new Headers(),
+      redirected: false,
+      type: "basic" as ResponseType,
+      url: "",
+      clone: () => makeResponse(status, statusText),
+      body: null,
+      bodyUsed: false,
+      arrayBuffer: async () => new ArrayBuffer(0),
+      blob: async () => new Blob(),
+      formData: async () => new FormData(),
+      json: async () => ({}),
+      text: async () => "",
+      bytes: async () => new Uint8Array(),
+    } as Response;
+  }
+
+  /** Override crypto.subtle.digest to return unique hashes so events are not deduplicated. */
+  function useUniqueCryptoHashes() {
+    let counter = 0;
+    Object.defineProperty(global, "crypto", {
+      value: {
+        subtle: {
+          digest: async (_algorithm: string, _data: ArrayBuffer) => {
+            const buf = new Uint8Array(32);
+            buf[0] = ++counter;
+            return buf.buffer;
+          },
+        },
+        randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+
+  /** Enqueue multiple large (~10KB each) events to exceed the 64KB keepalive limit. */
+  async function enqueueLargeEvents(queue: EventQueue, count = 8, cb?: sinon.SinonSpy) {
+    const largeProps: Record<string, string> = {};
+    for (let i = 0; i < 50; i++) {
+      largeProps[`field_${i}`] = "x".repeat(200);
+    }
+    for (let i = 0; i < count; i++) {
+      const event = createMockEvent({
+        original_timestamp: new Date(Date.now() + i).toISOString(),
+        properties: { ...largeProps, index: i },
+      });
+      await queue.enqueue(event, cb);
+    }
+  }
+
   beforeEach(() => {
     jsdom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
       url: "https://example.com",
@@ -170,27 +225,6 @@ describe("EventQueue", () => {
 
   describe("flush error handling", () => {
     let fetchStub: sinon.SinonStub;
-
-    function makeResponse(status: number, statusText: string): Response {
-      return {
-        ok: status >= 200 && status < 300,
-        status,
-        statusText,
-        headers: new Headers(),
-        redirected: false,
-        type: "basic" as ResponseType,
-        url: "",
-        clone: () => makeResponse(status, statusText),
-        body: null,
-        bodyUsed: false,
-        arrayBuffer: async () => new ArrayBuffer(0),
-        blob: async () => new Blob(),
-        formData: async () => new FormData(),
-        json: async () => ({}),
-        text: async () => "",
-        bytes: async () => new Uint8Array(),
-      } as Response;
-    }
 
     beforeEach(async () => {
       fetchStub = sinon.stub(fetchModule, "default");
@@ -355,24 +389,7 @@ describe("EventQueue", () => {
     });
 
     it("should not produce unhandled rejection when flush callback throws", async () => {
-      fetchStub.resolves({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers(),
-        redirected: false,
-        type: "basic" as ResponseType,
-        url: "",
-        clone() { return this; },
-        body: null,
-        bodyUsed: false,
-        arrayBuffer: async () => new ArrayBuffer(0),
-        blob: async () => new Blob(),
-        formData: async () => new FormData(),
-        json: async () => ({}),
-        text: async () => "",
-        bytes: async () => new Uint8Array(),
-      } as Response);
+      fetchStub.resolves(makeResponse(200, "OK"));
 
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
@@ -393,27 +410,6 @@ describe("EventQueue", () => {
 
   describe("keepalive payload splitting", () => {
     let fetchStub: sinon.SinonStub;
-
-    function makeResponse(status: number, statusText: string): Response {
-      return {
-        ok: status >= 200 && status < 300,
-        status,
-        statusText,
-        headers: new Headers(),
-        redirected: false,
-        type: "basic" as ResponseType,
-        url: "",
-        clone: () => makeResponse(status, statusText),
-        body: null,
-        bodyUsed: false,
-        arrayBuffer: async () => new ArrayBuffer(0),
-        blob: async () => new Blob(),
-        formData: async () => new FormData(),
-        json: async () => ({}),
-        text: async () => "",
-        bytes: async () => new Uint8Array(),
-      } as Response;
-    }
 
     beforeEach(async () => {
       fetchStub = sinon.stub(fetchModule, "default");
@@ -438,6 +434,8 @@ describe("EventQueue", () => {
     });
 
     it("should split large payload into multiple requests with keepalive: true", async () => {
+      useUniqueCryptoHashes();
+
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
         flushAt: 20,
@@ -445,39 +443,7 @@ describe("EventQueue", () => {
         retryCount: 1,
       });
 
-      // Override crypto.subtle.digest to return unique hashes per input
-      // so events are not deduplicated
-      let hashCounter = 0;
-      Object.defineProperty(global, "crypto", {
-        value: {
-          subtle: {
-            digest: async (_algorithm: string, _data: ArrayBuffer) => {
-              const buf = new Uint8Array(32);
-              buf[0] = ++hashCounter;
-              return buf.buffer;
-            },
-          },
-          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-        },
-        writable: true,
-        configurable: true,
-      });
-
-      // Create events with large properties to exceed 64KB total
-      // Each event ~10KB, so 8 events ≈ 80KB > 64KB limit
-      const largeProps: Record<string, string> = {};
-      for (let i = 0; i < 50; i++) {
-        largeProps[`field_${i}`] = "x".repeat(200);
-      }
-
-      for (let i = 0; i < 8; i++) {
-        const event = createMockEvent({
-          original_timestamp: new Date(Date.now() + i).toISOString(),
-          properties: { ...largeProps, index: i },
-        });
-        await eventQueue.enqueue(event);
-      }
-
+      await enqueueLargeEvents(eventQueue);
       await eventQueue.flush();
 
       // Should have been split into multiple fetch calls
@@ -487,20 +453,17 @@ describe("EventQueue", () => {
       for (let i = 0; i < fetchStub.callCount; i++) {
         const fetchInit = fetchStub.getCall(i).args[1];
         expect(fetchInit.keepalive).to.be.true;
-        // Each body should be under 64KB in UTF-8 bytes
         const byteSize = new TextEncoder().encode(fetchInit.body).byteLength;
         expect(byteSize).to.be.at.most(64 * 1024);
       }
     });
 
     it("should send batches sequentially, not concurrently", async () => {
-      // Track how many fetches are in-flight simultaneously
       let inFlight = 0;
       let maxInFlight = 0;
 
       fetchStub.restore();
       fetchStub = sinon.stub(fetchModule, "default");
-
       fetchStub.callsFake(() => {
         inFlight++;
         maxInFlight = Math.max(maxInFlight, inFlight);
@@ -510,22 +473,7 @@ describe("EventQueue", () => {
         });
       });
 
-      // Override crypto for unique hashes
-      let hashCounter = 0;
-      Object.defineProperty(global, "crypto", {
-        value: {
-          subtle: {
-            digest: async (_algorithm: string, _data: ArrayBuffer) => {
-              const buf = new Uint8Array(32);
-              buf[0] = ++hashCounter;
-              return buf.buffer;
-            },
-          },
-          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-        },
-        writable: true,
-        configurable: true,
-      });
+      useUniqueCryptoHashes();
 
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
@@ -534,24 +482,10 @@ describe("EventQueue", () => {
         retryCount: 1,
       });
 
-      const largeProps: Record<string, string> = {};
-      for (let i = 0; i < 50; i++) {
-        largeProps[`field_${i}`] = "x".repeat(200);
-      }
-
-      for (let i = 0; i < 8; i++) {
-        const event = createMockEvent({
-          original_timestamp: new Date(Date.now() + i).toISOString(),
-          properties: { ...largeProps, index: i },
-        });
-        await eventQueue.enqueue(event);
-      }
-
+      await enqueueLargeEvents(eventQueue);
       await eventQueue.flush();
 
-      // Multiple batches were sent
       expect(fetchStub.callCount).to.be.greaterThan(1);
-      // But at most one was in-flight at any time (sequential, not concurrent)
       expect(maxInFlight).to.equal(1);
     });
 
@@ -579,22 +513,7 @@ describe("EventQueue", () => {
     });
 
     it("should still call done callback on success with split batches", async () => {
-      // Override crypto.subtle.digest to return unique hashes per input
-      let hashCounter = 0;
-      Object.defineProperty(global, "crypto", {
-        value: {
-          subtle: {
-            digest: async (_algorithm: string, _data: ArrayBuffer) => {
-              const buf = new Uint8Array(32);
-              buf[0] = ++hashCounter;
-              return buf.buffer;
-            },
-          },
-          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-        },
-        writable: true,
-        configurable: true,
-      });
+      useUniqueCryptoHashes();
 
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
@@ -603,23 +522,10 @@ describe("EventQueue", () => {
         retryCount: 1,
       });
 
-      const largeProps: Record<string, string> = {};
-      for (let i = 0; i < 50; i++) {
-        largeProps[`field_${i}`] = "x".repeat(200);
-      }
-
       const itemCallback = sinon.spy();
-      for (let i = 0; i < 8; i++) {
-        const event = createMockEvent({
-          original_timestamp: new Date(Date.now() + i).toISOString(),
-          properties: { ...largeProps, index: i },
-        });
-        await eventQueue.enqueue(event, itemCallback);
-      }
-
+      await enqueueLargeEvents(eventQueue, 8, itemCallback);
       await eventQueue.flush();
 
-      // All item callbacks should have been called without error
       expect(itemCallback.callCount).to.equal(8);
       for (let i = 0; i < 8; i++) {
         expect(itemCallback.getCall(i).args[0]).to.be.undefined;
@@ -630,8 +536,6 @@ describe("EventQueue", () => {
       let callCount = 0;
       fetchStub.restore();
       fetchStub = sinon.stub(fetchModule, "default");
-
-      // First batch fails, second batch succeeds
       fetchStub.callsFake(() => {
         callCount++;
         if (callCount === 1) {
@@ -640,22 +544,7 @@ describe("EventQueue", () => {
         return Promise.resolve(makeResponse(200, "OK"));
       });
 
-      // Override crypto for unique hashes
-      let hashCounter = 0;
-      Object.defineProperty(global, "crypto", {
-        value: {
-          subtle: {
-            digest: async (_algorithm: string, _data: ArrayBuffer) => {
-              const buf = new Uint8Array(32);
-              buf[0] = ++hashCounter;
-              return buf.buffer;
-            },
-          },
-          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-        },
-        writable: true,
-        configurable: true,
-      });
+      useUniqueCryptoHashes();
 
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
@@ -664,22 +553,9 @@ describe("EventQueue", () => {
         retryCount: 1,
       });
 
-      const largeProps: Record<string, string> = {};
-      for (let i = 0; i < 50; i++) {
-        largeProps[`field_${i}`] = "x".repeat(200);
-      }
-
-      for (let i = 0; i < 8; i++) {
-        const event = createMockEvent({
-          original_timestamp: new Date(Date.now() + i).toISOString(),
-          properties: { ...largeProps, index: i },
-        });
-        await eventQueue.enqueue(event);
-      }
-
+      await enqueueLargeEvents(eventQueue);
       await eventQueue.flush();
 
-      // All batches should have been attempted, not just the first
       expect(fetchStub.callCount).to.be.greaterThan(1);
     });
 
@@ -687,8 +563,6 @@ describe("EventQueue", () => {
       let callCount = 0;
       fetchStub.restore();
       fetchStub = sinon.stub(fetchModule, "default");
-
-      // First batch succeeds, second batch fails
       fetchStub.callsFake(() => {
         callCount++;
         if (callCount === 2) {
@@ -697,22 +571,7 @@ describe("EventQueue", () => {
         return Promise.resolve(makeResponse(200, "OK"));
       });
 
-      // Override crypto for unique hashes
-      let hashCounter = 0;
-      Object.defineProperty(global, "crypto", {
-        value: {
-          subtle: {
-            digest: async (_algorithm: string, _data: ArrayBuffer) => {
-              const buf = new Uint8Array(32);
-              buf[0] = ++hashCounter;
-              return buf.buffer;
-            },
-          },
-          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-        },
-        writable: true,
-        configurable: true,
-      });
+      useUniqueCryptoHashes();
 
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
@@ -721,26 +580,12 @@ describe("EventQueue", () => {
         retryCount: 1,
       });
 
-      const largeProps: Record<string, string> = {};
-      for (let i = 0; i < 50; i++) {
-        largeProps[`field_${i}`] = "x".repeat(200);
-      }
-
       const itemCallback = sinon.spy();
-      for (let i = 0; i < 8; i++) {
-        const event = createMockEvent({
-          original_timestamp: new Date(Date.now() + i).toISOString(),
-          properties: { ...largeProps, index: i },
-        });
-        await eventQueue.enqueue(event, itemCallback);
-      }
-
+      await enqueueLargeEvents(eventQueue, 8, itemCallback);
       await eventQueue.flush();
 
-      // All 8 callbacks should have been called
       expect(itemCallback.callCount).to.equal(8);
 
-      // Some should have succeeded (no error), some should have failed
       let successCount = 0;
       let failureCount = 0;
       for (let i = 0; i < itemCallback.callCount; i++) {
@@ -758,7 +603,6 @@ describe("EventQueue", () => {
       let callCount = 0;
       fetchStub.restore();
       fetchStub = sinon.stub(fetchModule, "default");
-
       fetchStub.callsFake(() => {
         callCount++;
         if (callCount === 1) {
@@ -767,22 +611,7 @@ describe("EventQueue", () => {
         return Promise.resolve(makeResponse(200, "OK"));
       });
 
-      // Override crypto for unique hashes
-      let hashCounter = 0;
-      Object.defineProperty(global, "crypto", {
-        value: {
-          subtle: {
-            digest: async (_algorithm: string, _data: ArrayBuffer) => {
-              const buf = new Uint8Array(32);
-              buf[0] = ++hashCounter;
-              return buf.buffer;
-            },
-          },
-          randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-        },
-        writable: true,
-        configurable: true,
-      });
+      useUniqueCryptoHashes();
 
       const errorHandler = sinon.spy();
       eventQueue = new EventQueue("test-key", {
@@ -793,19 +622,7 @@ describe("EventQueue", () => {
         errorHandler,
       });
 
-      const largeProps: Record<string, string> = {};
-      for (let i = 0; i < 50; i++) {
-        largeProps[`field_${i}`] = "x".repeat(200);
-      }
-
-      for (let i = 0; i < 8; i++) {
-        const event = createMockEvent({
-          original_timestamp: new Date(Date.now() + i).toISOString(),
-          properties: { ...largeProps, index: i },
-        });
-        await eventQueue.enqueue(event);
-      }
-
+      await enqueueLargeEvents(eventQueue);
       await eventQueue.flush();
 
       expect(errorHandler.calledOnce).to.be.true;
