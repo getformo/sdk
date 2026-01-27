@@ -170,12 +170,8 @@ export class EventQueue implements IEventQueue {
       return Promise.resolve();
     }
 
-    try {
-      if (this.pendingFlush) {
-        await this.pendingFlush;
-      }
-    } catch {
-      this.pendingFlush = null;
+    if (this.pendingFlush) {
+      await this.pendingFlush;
     }
 
     const items = this.queue.splice(0, this.flushAt);
@@ -226,7 +222,12 @@ export class EventQueue implements IEventQueue {
       .catch((err) => {
         done(err);
         if (typeof this.errorHandler === "function") {
-          this.errorHandler(err);
+          try {
+            this.errorHandler(err);
+          } catch {
+            // Swallow errors from user-provided handler to maintain
+            // the fire-and-forget contract
+          }
         }
         // Do NOT re-throw — analytics errors should never
         // propagate as unhandled rejections to the host app

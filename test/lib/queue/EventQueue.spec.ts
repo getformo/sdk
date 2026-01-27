@@ -333,6 +333,26 @@ describe("EventQueue", () => {
 
       expect(errorHandler.called).to.be.false;
     });
+
+    it("should not throw when errorHandler itself throws", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      const errorHandler = sinon.stub().throws(new Error("handler broke"));
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        errorHandler,
+      });
+
+      const event = createMockEvent();
+      await eventQueue.enqueue(event);
+
+      // flush() should still resolve — errorHandler exception is swallowed
+      await eventQueue.flush();
+      expect(errorHandler.calledOnce).to.be.true;
+    });
   });
 
   describe("keepalive payload splitting", () => {
