@@ -283,6 +283,23 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
+   * Discard all pending events without sending them.
+   * Used when the user opts out of tracking to prevent queued events
+   * from being sent after consent is revoked.
+   */
+  public clear(): void {
+    this.queue = [];
+    this.payloadHashes.clear();
+
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+
+    logger.debug("EventQueue: Cleared all pending events");
+  }
+
+  /**
    * Clean up resources, flushing any pending events first
    */
   public cleanup(): void {

@@ -20,12 +20,14 @@ export default function EventsScreen() {
   const [customProperty, setCustomProperty] = useState("");
   const [eventsSent, setEventsSent] = useState(0);
 
-  // Track screen view
+  // Track screen view once SDK is ready
+  // formo starts as a no-op defaultContext and becomes the real SDK async,
+  // so we must include it in deps to re-run when initialization completes.
   useEffect(() => {
     formo.screen("Events", {
       isConnected,
     });
-  }, []);
+  }, [formo]);
 
   const sendEvent = (eventType: string, details?: string) => {
     setEventsSent((prev) => prev + 1);

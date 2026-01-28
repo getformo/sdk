@@ -20,14 +20,16 @@ export default function WalletScreen() {
   const { switchChain } = useSwitchChain();
   const { open } = useAppKit();
 
-  // Track screen view
+  // Track screen view once SDK is ready
+  // formo starts as a no-op defaultContext and becomes the real SDK async,
+  // so we must include it in deps to re-run when initialization completes.
   useEffect(() => {
     formo.screen("Wallet", {
       isConnected,
       address: address || null,
       chainId,
     });
-  }, []);
+  }, [formo]);
 
   const handleConnect = () => {
     formo.track("Connect Button Pressed", {

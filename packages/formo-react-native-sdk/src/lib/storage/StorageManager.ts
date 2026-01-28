@@ -54,13 +54,7 @@ export class StorageManager {
   private createStorage(type: StorageType): IStorage {
     switch (type) {
       case "asyncStorage":
-        const adapter = new AsyncStorageAdapter(this.writeKey);
-        if (this.asyncStorageInstance) {
-          adapter.initialize(this.asyncStorageInstance).catch((error) => {
-            logger.error("Failed to initialize AsyncStorage adapter", error);
-          });
-        }
-        return adapter;
+        return new AsyncStorageAdapter(this.writeKey);
 
       case "memoryStorage":
       default:

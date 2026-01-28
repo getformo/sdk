@@ -477,6 +477,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   public optOutTracking(): void {
     logger.info("Opting out of tracking");
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
+    this.eventQueue.clear();
     this.reset();
     logger.info("Successfully opted out of tracking");
   }

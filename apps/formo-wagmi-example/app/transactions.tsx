@@ -8,11 +8,13 @@ export default function TransactionsScreen() {
   const formo = useFormo();
   const { isConnected } = useAccount();
 
+  // formo starts as a no-op defaultContext and becomes the real SDK async,
+  // so we must include it in deps to re-run when initialization completes.
   useEffect(() => {
     formo.screen("Transactions", {
       isConnected,
     });
-  }, []);
+  }, [formo]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
