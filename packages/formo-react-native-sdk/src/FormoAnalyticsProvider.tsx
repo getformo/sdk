@@ -158,7 +158,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
       // Clean up existing SDK
       if (sdkRef.current && sdkRef.current !== defaultContext) {
         logger.log("Cleaning up existing FormoAnalytics SDK instance");
-        sdkRef.current.cleanup();
+        await sdkRef.current.cleanup();
         sdkRef.current = defaultContext;
         setSdk(defaultContext);
       }
@@ -179,7 +179,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
           onReadyRef.current?.(sdkInstance);
         } else {
           logger.log("Component unmounted during initialization, cleaning up");
-          sdkInstance.cleanup();
+          await sdkInstance.cleanup();
         }
       } catch (error) {
         if (!isCleanedUp) {
@@ -197,6 +197,9 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
 
       if (sdkRef.current && sdkRef.current !== defaultContext) {
         logger.log("Cleaning up FormoAnalytics SDK instance");
+        // React useEffect cleanup must be synchronous, so we fire-and-forget.
+        // Pending events are best-effort flushed; the AppState background
+        // listener provides the primary guarantee for event delivery.
         sdkRef.current.cleanup();
         sdkRef.current = defaultContext;
       }

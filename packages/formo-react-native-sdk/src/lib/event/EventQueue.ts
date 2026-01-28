@@ -215,7 +215,12 @@ export class EventQueue implements IEventQueue {
     }
 
     const items = this.queue.splice(0, this.flushAt);
-    this.payloadHashes.clear();
+
+    // Only remove hashes for the flushed items so remaining queue items
+    // retain dedup protection until they are flushed
+    for (const item of items) {
+      this.payloadHashes.delete(item.message.message_id);
+    }
 
     const sentAt = new Date().toISOString();
     const data: IFormoEventFlushPayload[] = items.map((item) => ({
