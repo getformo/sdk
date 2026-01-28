@@ -5,6 +5,11 @@ import type { Options } from "@formo/react-native-analytics";
 export const FORMO_WRITE_KEY =
   process.env.EXPO_PUBLIC_FORMO_WRITE_KEY || "YOUR_FORMO_WRITE_KEY";
 
+// Module-level callback to avoid inline arrow function reference issues
+const handleReady = () => {
+  console.log("Formo Analytics initialized successfully!");
+};
+
 // Formo Analytics configuration
 export const formoOptions: Options = {
   // Wagmi integration - automatically tracks wallet events
@@ -31,7 +36,5 @@ export const formoOptions: Options = {
   },
 
   // Ready callback
-  ready: (formo) => {
-    console.log("Formo Analytics initialized successfully!");
-  },
+  ready: handleReady,
 };
