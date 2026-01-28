@@ -48,8 +48,6 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
-import { extractPrivyProperties } from "./privy";
-import { PrivyUser } from "./privy/types";
 
 /**
  * Constants for provider switching reasons
@@ -138,7 +136,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       (cookie().get(SESSION_USER_ID_KEY) as string) || undefined;
 
     this.identify = this.identify.bind(this);
-    this.identifyPrivyUser = this.identifyPrivyUser.bind(this);
     this.connect = this.connect.bind(this);
     this.disconnect = this.disconnect.bind(this);
     this.chain = this.chain.bind(this);
@@ -543,6 +540,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits an identify event with current wallet address and provider info.
+   *
+   * For Privy integration, use `extractPrivyProperties()` to convert a Privy user
+   * object into properties and pass them via the `properties` parameter:
+   *
    * @param {string} params.address
    * @param {string} params.userId
    * @param {string} params.rdns
@@ -551,6 +552,22 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
+   *
+   * @example
+   * ```ts
+   * // With Privy user
+   * import { extractPrivyProperties } from '@formo/analytics';
+   * const { user } = usePrivy();
+   * if (user) {
+   *   formo.identify(
+   *     { address: user.wallet?.address, userId: user.id },
+   *     extractPrivyProperties(user)
+   *   );
+   * }
+   *
+   * // Standard identify
+   * formo.identify({ address: '0x...', userId: 'user123' });
+   * ```
    */
   async identify(
     params?: {
@@ -697,52 +714,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
     } catch (e) {
       logger.log("identify error", e);
-    }
-  }
-
-  /**
-   * Identifies a user using their Privy profile data.
-   * Extracts relevant properties (email, phone, social accounts, wallet info, etc.)
-   * from the Privy user object and sends them as wallet profile properties via `identify()`.
-   *
-   * @param {PrivyUser} user - The Privy user object from `usePrivy()` or the Privy API
-   * @param {IFormoEventProperties} properties - Additional custom properties (merged with extracted Privy properties)
-   * @param {IFormoEventContext} context - Additional context to include
-   * @param {(...args: unknown[]) => void} callback - Optional callback function
-   * @returns {Promise<void>}
-   *
-   * @example
-   * ```ts
-   * const { user } = usePrivy();
-   * if (user) {
-   *   formo.identifyPrivyUser(user);
-   * }
-   * ```
-   */
-  async identifyPrivyUser(
-    user: PrivyUser,
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void> {
-    try {
-      const privyProperties = extractPrivyProperties(user);
-      const walletAddress = user.wallet?.address;
-
-      await this.identify(
-        {
-          address: walletAddress,
-          userId: user.id,
-        },
-        {
-          ...privyProperties,
-          ...properties,
-        },
-        context,
-        callback
-      );
-    } catch (e) {
-      logger.error("identifyPrivyUser error", e);
     }
   }
 

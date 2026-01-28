@@ -26,8 +26,7 @@ import {
  * ```ts
  * const { user } = usePrivy();
  * if (user) {
- *   const properties = extractPrivyProperties(user);
- *   formo.identify({ address: user.wallet?.address, userId: user.id }, properties);
+ *   formo.identify({ privyUser: user });
  * }
  * ```
  */
@@ -35,16 +34,19 @@ export function extractPrivyProperties(
   user: PrivyUser
 ): PrivyProfileProperties {
   // Support both SDK (camelCase) and API (snake_case) linked_accounts
-  const accounts = user.linked_accounts || user.linkedAccounts || [];
+  const accounts = user.linkedAccounts || user.linked_accounts || [];
+  const createdAt = user.createdAt || user.created_at;
+  const isGuest = user.isGuest ?? user.is_guest;
+  const mfaCount = user.mfaMethods?.length ?? user.mfa_methods?.length ?? 0;
 
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
-    privyCreatedAt: user.created_at,
+    privyCreatedAt: createdAt,
     linkedAccountTypes: getLinkedAccountTypes(accounts),
     linkedAccounts: summarizeLinkedAccounts(accounts),
     walletCount: countWallets(accounts),
     hasEmbeddedWallet: hasEmbeddedWallet(accounts),
-    hasMfa: (user.mfa_methods?.length ?? 0) > 0,
+    hasMfa: mfaCount > 0,
   };
 
   // Email
@@ -58,17 +60,20 @@ export function extractPrivyProperties(
   }
 
   // Guest status
-  if (user.is_guest !== undefined) {
-    properties.isGuest = user.is_guest;
+  if (isGuest !== undefined) {
+    properties.isGuest = isGuest;
   }
 
   // Social accounts - extract usernames/identifiers
-  if (user.discord?.username) {
-    properties.discordUsername = user.discord.username;
+  // Matches all convenience accessors from the Privy user object:
+  // https://docs.privy.io/user-management/users/the-user-object
+
+  if (user.apple?.email) {
+    properties.appleEmail = user.apple.email;
   }
 
-  if (user.twitter?.username) {
-    properties.twitterUsername = user.twitter.username;
+  if (user.discord?.username) {
+    properties.discordUsername = user.discord.username;
   }
 
   if (user.farcaster?.username) {
@@ -87,16 +92,32 @@ export function extractPrivyProperties(
     properties.googleEmail = user.google.email;
   }
 
+  if (user.instagram?.username) {
+    properties.instagramUsername = user.instagram.username;
+  }
+
+  if (user.line?.email) {
+    properties.lineEmail = user.line.email;
+  }
+
   if (user.linkedin?.email) {
     properties.linkedinEmail = user.linkedin.email;
+  }
+
+  if (user.spotify?.email) {
+    properties.spotifyEmail = user.spotify.email;
   }
 
   if (user.telegram?.username) {
     properties.telegramUsername = user.telegram.username;
   }
 
-  if (user.instagram?.username) {
-    properties.instagramUsername = user.instagram.username;
+  if (user.tiktok?.username) {
+    properties.tiktokUsername = user.tiktok.username;
+  }
+
+  if (user.twitter?.username) {
+    properties.twitterUsername = user.twitter.username;
   }
 
   return properties;
@@ -133,15 +154,15 @@ function summarizeLinkedAccounts(
 
     // Wallet-specific fields (support both naming conventions)
     const walletClient =
-      account.wallet_client ||
+      account.walletClientType ||
       account.walletClient ||
       account.wallet_client_type ||
-      account.walletClientType;
+      account.wallet_client;
     if (walletClient) {
       summary.walletClient = walletClient;
     }
 
-    const chainType = account.chain_type || account.chainType;
+    const chainType = account.chainType || account.chain_type;
     if (chainType) {
       summary.chainType = chainType;
     }
@@ -152,8 +173,7 @@ function summarizeLinkedAccounts(
     }
 
     // Verified status
-    const verifiedAt =
-      account.verified_at || account.verifiedAt;
+    const verifiedAt = account.verifiedAt || account.verified_at;
     if (verifiedAt) {
       summary.verified = true;
     }
@@ -176,9 +196,9 @@ function hasEmbeddedWallet(accounts: PrivyLinkedAccount[]): boolean {
   return accounts.some(
     (a) =>
       a.type === "wallet" &&
-      (a.wallet_client === "privy" ||
-        a.wallet_client_type === "privy" ||
+      (a.walletClientType === "privy" ||
         a.walletClient === "privy" ||
-        a.walletClientType === "privy")
+        a.wallet_client_type === "privy" ||
+        a.wallet_client === "privy")
   );
 }

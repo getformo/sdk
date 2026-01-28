@@ -30,6 +30,7 @@ export type PrivyAccountType =
   | "spotify_oauth"
   | "tiktok_oauth"
   | "twitter_oauth"
+  | "line"
   | "custom_auth"
   | "passkey"
   | "cross_app"
@@ -121,26 +122,34 @@ export interface PrivyLinkedAccount {
 /**
  * Privy user object as returned by the Privy SDK or API.
  *
- * Includes convenience accessors for common linked account types
- * and the full `linked_accounts` / `linkedAccounts` array for detailed access.
+ * The Privy React SDK uses camelCase (`linkedAccounts`, `createdAt`, `mfaMethods`),
+ * while the REST API uses snake_case (`linked_accounts`, `created_at`, `mfa_methods`).
+ * Both formats are supported.
+ *
+ * Convenience accessors: user.email, user.phone, user.wallet, user.discord,
+ * user.twitter, user.farcaster, user.github, user.google, user.linkedin,
+ * user.apple, user.instagram, user.spotify, user.tiktok, user.telegram, user.line
  */
 export interface PrivyUser {
   /** Privy user ID in DID format (e.g., "did:privy:cm3np...") */
   id: string;
 
-  /** Account creation timestamp (Unix seconds or milliseconds) */
-  created_at: number;
+  /** Account creation timestamp — SDK camelCase */
+  createdAt?: number;
+  /** Account creation timestamp — API snake_case */
+  created_at?: number;
 
-  /** All linked accounts (API snake_case format) */
-  linked_accounts: PrivyLinkedAccount[];
-
-  /** All linked accounts (SDK camelCase format) */
+  /** All linked accounts — SDK camelCase */
   linkedAccounts?: PrivyLinkedAccount[];
+  /** All linked accounts — API snake_case */
+  linked_accounts?: PrivyLinkedAccount[];
 
-  /** Optional custom metadata set via the Privy API */
+  /** Optional custom metadata — SDK camelCase */
+  customMetadata?: Record<string, unknown>;
+  /** Optional custom metadata — API snake_case */
   custom_metadata?: Record<string, unknown>;
 
-  // Convenience accessors for common account types (from Privy SDK)
+  // Convenience accessors for common account types
   email?: { address: string };
   phone?: { number: string };
   wallet?: {
@@ -179,6 +188,7 @@ export interface PrivyUser {
   instagram?: { username?: string; subject?: string };
   spotify?: { email?: string; name?: string; subject?: string };
   tiktok?: { username?: string; name?: string; subject?: string };
+  line?: { email?: string; name?: string; subject?: string };
   telegram?: {
     telegramUserId?: string;
     telegram_user_id?: string;
@@ -189,13 +199,19 @@ export interface PrivyUser {
     last_name?: string;
   };
 
-  /** MFA methods configured for this user */
+  /** MFA methods — SDK camelCase */
+  mfaMethods?: Array<string>;
+  /** MFA methods — API snake_case */
   mfa_methods?: Array<{ type: string }>;
 
-  /** Whether the user has accepted terms */
+  /** Whether the user has accepted terms — SDK camelCase */
+  hasAcceptedTerms?: boolean;
+  /** Whether the user has accepted terms — API snake_case */
   has_accepted_terms?: boolean;
 
-  /** Whether this is a guest user */
+  /** Whether this is a guest user — SDK camelCase */
+  isGuest?: boolean;
+  /** Whether this is a guest user — API snake_case */
   is_guest?: boolean;
 }
 
@@ -205,7 +221,7 @@ export interface PrivyUser {
  */
 export interface PrivyProfileProperties {
   privyDid: string;
-  privyCreatedAt: number;
+  privyCreatedAt?: number;
   email?: string;
   phone?: string;
   linkedAccountTypes: string[];
@@ -214,6 +230,7 @@ export interface PrivyProfileProperties {
   hasEmbeddedWallet: boolean;
   isGuest?: boolean;
   hasMfa: boolean;
+  appleEmail?: string;
   discordUsername?: string;
   twitterUsername?: string;
   farcasterUsername?: string;
@@ -221,7 +238,10 @@ export interface PrivyProfileProperties {
   githubUsername?: string;
   googleEmail?: string;
   linkedinEmail?: string;
+  lineEmail?: string;
+  spotifyEmail?: string;
   telegramUsername?: string;
+  tiktokUsername?: string;
   instagramUsername?: string;
   [key: string]: unknown;
 }
