@@ -48,6 +48,8 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
+import { extractPrivyProperties } from "./privy";
+import { PrivyUser } from "./privy/types";
 
 /**
  * Constants for provider switching reasons
@@ -136,6 +138,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       (cookie().get(SESSION_USER_ID_KEY) as string) || undefined;
 
     this.identify = this.identify.bind(this);
+    this.identifyPrivyUser = this.identifyPrivyUser.bind(this);
     this.connect = this.connect.bind(this);
     this.disconnect = this.disconnect.bind(this);
     this.chain = this.chain.bind(this);
@@ -694,6 +697,52 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
     } catch (e) {
       logger.log("identify error", e);
+    }
+  }
+
+  /**
+   * Identifies a user using their Privy profile data.
+   * Extracts relevant properties (email, phone, social accounts, wallet info, etc.)
+   * from the Privy user object and sends them as wallet profile properties via `identify()`.
+   *
+   * @param {PrivyUser} user - The Privy user object from `usePrivy()` or the Privy API
+   * @param {IFormoEventProperties} properties - Additional custom properties (merged with extracted Privy properties)
+   * @param {IFormoEventContext} context - Additional context to include
+   * @param {(...args: unknown[]) => void} callback - Optional callback function
+   * @returns {Promise<void>}
+   *
+   * @example
+   * ```ts
+   * const { user } = usePrivy();
+   * if (user) {
+   *   formo.identifyPrivyUser(user);
+   * }
+   * ```
+   */
+  async identifyPrivyUser(
+    user: PrivyUser,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    try {
+      const privyProperties = extractPrivyProperties(user);
+      const walletAddress = user.wallet?.address;
+
+      await this.identify(
+        {
+          address: walletAddress,
+          userId: user.id,
+        },
+        {
+          ...privyProperties,
+          ...properties,
+        },
+        context,
+        callback
+      );
+    } catch (e) {
+      logger.error("identifyPrivyUser error", e);
     }
   }
 

@@ -15,6 +15,7 @@ const defaultContext: IFormoAnalytics = {
   signature: () => Promise.resolve(),
   transaction: () => Promise.resolve(),
   identify: () => Promise.resolve(),
+  identifyPrivyUser: () => Promise.resolve(),
   track: () => Promise.resolve(),
   
   // Consent management methods
