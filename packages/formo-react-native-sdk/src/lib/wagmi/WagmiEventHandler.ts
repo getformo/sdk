@@ -351,6 +351,8 @@ export class WagmiEventHandler {
         address,
         message,
         ...(signatureHash && { signatureHash }),
+      }).catch((error) => {
+        logger.error("WagmiEventHandler: Error tracking signature:", error);
       });
     } catch (error) {
       logger.error(
@@ -432,6 +434,8 @@ export class WagmiEventHandler {
         ...(to && { to }),
         ...(value && { value }),
         ...(transactionHash && { transactionHash }),
+      }).catch((error) => {
+        logger.error("WagmiEventHandler: Error tracking transaction:", error);
       });
     } catch (error) {
       logger.error(

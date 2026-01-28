@@ -20,9 +20,13 @@ export class StorageManager {
   public async initialize(asyncStorage: AsyncStorageInterface): Promise<void> {
     this.asyncStorageInstance = asyncStorage;
 
-    // Initialize AsyncStorage adapter
-    const adapter = this.getStorage("asyncStorage") as AsyncStorageAdapter;
+    // Create and initialize the AsyncStorage adapter directly.
+    // We bypass getStorage() here because it checks isAvailable() which
+    // returns false on an uninitialized adapter and would fall back to
+    // MemoryStorage, causing a crash when we call adapter.initialize().
+    const adapter = new AsyncStorageAdapter(this.writeKey);
     await adapter.initialize(asyncStorage);
+    this.storages.set("asyncStorage", adapter);
 
     logger.debug("StorageManager: Initialized with AsyncStorage");
   }

@@ -103,7 +103,13 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderPropsWithStorage> = ({
 }) => {
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
   const sdkRef = useRef<IFormoAnalytics>(defaultContext);
-  initStorageManager(writeKey);
+  const storageInitKeyRef = useRef<string | null>(null);
+
+  // Only initialize storage manager when writeKey changes, not on every render
+  if (storageInitKeyRef.current !== writeKey) {
+    initStorageManager(writeKey);
+    storageInitKeyRef.current = writeKey;
+  }
 
   // Store callbacks in refs to avoid re-initialization when they change
   // This fixes the issue where inline arrow functions cause repeated SDK init
