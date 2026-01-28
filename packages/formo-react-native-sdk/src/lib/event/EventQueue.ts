@@ -208,6 +208,12 @@ export class EventQueue implements IEventQueue {
       }
     }
 
+    // Re-check queue after waiting — a concurrent flush may have drained it
+    if (!this.queue.length) {
+      callback();
+      return;
+    }
+
     const items = this.queue.splice(0, this.flushAt);
     this.payloadHashes.clear();
 
@@ -300,14 +306,17 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
-   * Clean up resources, flushing any pending events first
+   * Clean up resources, flushing any pending events first.
+   * Async so callers can await flush completion before teardown.
    */
-  public cleanup(): void {
-    // Attempt to flush any remaining queued events before teardown
+  public async cleanup(): Promise<void> {
+    // Flush any remaining queued events before teardown
     if (this.queue.length > 0) {
-      this.flush().catch((error) => {
+      try {
+        await this.flush();
+      } catch (error) {
         logger.error("EventQueue: Failed to flush during cleanup", error);
-      });
+      }
     }
 
     if (this.timer) {

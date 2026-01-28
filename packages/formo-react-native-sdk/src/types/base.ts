@@ -24,7 +24,7 @@ export interface IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
   reset(): void;
-  cleanup(): void;
+  cleanup(): void | Promise<void>;
   detect(
     params: { rdns: string; providerName: string },
     properties?: IFormoEventProperties,

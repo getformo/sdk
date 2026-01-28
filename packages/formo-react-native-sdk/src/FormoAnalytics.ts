@@ -173,7 +173,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   /**
    * Clean up resources
    */
-  public cleanup(): void {
+  public async cleanup(): Promise<void> {
     logger.info("FormoAnalytics: Cleaning up resources");
 
     if (this.wagmiHandler) {
@@ -182,7 +182,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     if (this.eventQueue) {
-      this.eventQueue.cleanup();
+      await this.eventQueue.cleanup();
     }
 
     logger.info("FormoAnalytics: Cleanup complete");
