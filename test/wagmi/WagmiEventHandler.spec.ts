@@ -1588,6 +1588,14 @@ describe("WagmiEventHandler", () => {
         to: "0xRecipient",
         amount: "1000000000000000000",
       });
+
+      // Verify safeFunctionArgs are also passed as additional properties (second argument)
+      // 'to' collides with transaction 'to' field, so it gets prefixed to 'arg_to'
+      const confirmedProperties = mockFormo.transaction.firstCall.args[1];
+      expect(confirmedProperties).to.deep.equal({
+        arg_to: "0xRecipient",
+        amount: "1000000000000000000",
+      });
     });
 
     it("should preserve transaction properties for sendTransaction CONFIRMED", async () => {

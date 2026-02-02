@@ -52,6 +52,7 @@ export class WagmiEventHandler {
     value?: string;
     function_name?: string;
     function_args?: Record<string, unknown>;
+    safeFunctionArgs?: Record<string, unknown>;
   }>();
 
   constructor(
@@ -369,18 +370,22 @@ export class WagmiEventHandler {
         blockNumber: receipt?.blockNumber?.toString(),
       });
 
-      this.formo.transaction({
-        status: txStatus,
-        chainId: chainId || 0,
-        address,
-        transactionHash,
-        // Include stored transaction details if available
-        ...(pendingTx?.data && { data: pendingTx.data }),
-        ...(pendingTx?.to && { to: pendingTx.to }),
-        ...(pendingTx?.value && { value: pendingTx.value }),
-        ...(pendingTx?.function_name && { function_name: pendingTx.function_name }),
-        ...(pendingTx?.function_args && { function_args: pendingTx.function_args }),
-      });
+      this.formo.transaction(
+        {
+          status: txStatus,
+          chainId: chainId || 0,
+          address,
+          transactionHash,
+          // Include stored transaction details if available
+          ...(pendingTx?.data && { data: pendingTx.data }),
+          ...(pendingTx?.to && { to: pendingTx.to }),
+          ...(pendingTx?.value && { value: pendingTx.value }),
+          ...(pendingTx?.function_name && { function_name: pendingTx.function_name }),
+          ...(pendingTx?.function_args && { function_args: pendingTx.function_args }),
+        },
+        // Spread function args as additional properties (only colliding keys are prefixed)
+        pendingTx?.safeFunctionArgs
+      );
 
       // Clean up the pending transaction after confirmation
       this.pendingTransactions.delete(normalizedHash);
@@ -637,6 +642,7 @@ export class WagmiEventHandler {
           ...(value && { value }),
           ...(function_name && { function_name }),
           ...(function_args && { function_args }),
+          ...(safeFunctionArgs && { safeFunctionArgs }),
         };
         this.pendingTransactions.set(normalizedHash, txDetails);
 
