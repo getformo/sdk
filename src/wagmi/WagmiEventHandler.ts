@@ -1,6 +1,6 @@
 /**
  * WagmiEventHandler
- * 
+ *
  * Handles wallet event tracking by hooking into Wagmi v2's config.subscribe()
  * and TanStack Query's MutationCache. This replaces the EIP-1193 provider
  * wrapping approach when Wagmi mode is enabled.
@@ -18,6 +18,7 @@ import {
   WagmiTrackingState,
   WagmiMutationKey,
 } from "./types";
+import { encodeWriteContractData, extractFunctionArgs, AbiItem } from "./utils";
 
 export class WagmiEventHandler {
   private formo: FormoAnalytics;
@@ -351,10 +352,15 @@ export class WagmiEventHandler {
     const state = mutation.state;
     const variables = state.variables || {};
     const chainId = this.trackingState.lastChainId || variables.chainId;
-    const address = this.trackingState.lastAddress || variables.account || variables.address;
+    // For sendTransaction, user's address is the 'from'
+    // For writeContract, variables.address is the contract address, not the user
+    const userAddress =
+      this.trackingState.lastAddress || variables.account || variables.from;
 
-    if (!address) {
-      logger.warn("WagmiEventHandler: Transaction event but no address available");
+    if (!userAddress) {
+      logger.warn(
+        "WagmiEventHandler: Transaction event but no address available"
+      );
       return;
     }
 
@@ -374,32 +380,69 @@ export class WagmiEventHandler {
         return; // Ignore idle state
       }
 
-      // Extract transaction details from variables
-      const data = variables.data;
-      const to = variables.to || variables.address;
+      // Extract transaction details based on mutation type
+      let data: string | undefined;
+      let to: string | undefined;
+      let function_name: string | undefined;
+      let function_args: Record<string, unknown> | undefined;
       const value = variables.value?.toString();
+
+      if (mutationType === "writeContract") {
+        // For writeContract, extract function info and encode data
+        const { abi, functionName: fnName, args, address: contractAddress } = variables;
+        to = contractAddress;
+        function_name = fnName;
+
+        if (abi && fnName) {
+          // Extract function arguments as a name-value map
+          function_args = extractFunctionArgs(abi, fnName, args);
+
+          // Encode the function data synchronously if viem is available
+          const encodedData = encodeWriteContractData(abi, fnName, args);
+          if (encodedData) {
+            data = encodedData;
+            logger.debug(
+              "WagmiEventHandler: Encoded writeContract data",
+              data.substring(0, 10)
+            );
+          }
+        }
+      } else {
+        // For sendTransaction, use variables directly
+        // Only data is available, function_name and function_args are not sent
+        data = variables.data;
+        to = variables.to;
+      }
 
       logger.info("WagmiEventHandler: Tracking transaction event", {
         status,
         mutationType,
-        address,
+        address: userAddress,
         chainId,
         transactionHash,
+        function_name,
       });
 
       this.formo.transaction(
         {
           status,
           chainId: chainId || 0,
-          address,
+          address: userAddress,
           ...(data && { data }),
           ...(to && { to }),
           ...(value && { value }),
           ...(transactionHash && { transactionHash }),
-        }
+          ...(function_name && { function_name }),
+          ...(function_args && { function_args }),
+        },
+        // Spread function args as additional properties (key-value pairs)
+        function_args ? { ...function_args } : undefined
       );
     } catch (error) {
-      logger.error("WagmiEventHandler: Error handling transaction mutation:", error);
+      logger.error(
+        "WagmiEventHandler: Error handling transaction mutation:",
+        error
+      );
     }
   }
 

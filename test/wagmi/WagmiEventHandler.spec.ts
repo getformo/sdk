@@ -454,7 +454,17 @@ describe("WagmiEventHandler", () => {
             status: "pending",
             variables: {
               address: "0xcontract",
-              data: "0xabcdef",
+              abi: [
+                {
+                  type: "function",
+                  name: "repayBorrow",
+                  inputs: [{ name: "repayAmount", type: "uint256" }],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "repayBorrow",
+              args: [BigInt(3300000)],
             },
           },
         },
@@ -465,7 +475,127 @@ describe("WagmiEventHandler", () => {
       }
 
       expect(mockFormo.transaction.calledOnce).to.be.true;
-      expect(mockFormo.transaction.firstCall.args[0].status).to.equal("started");
+      const txCall = mockFormo.transaction.firstCall.args[0];
+      expect(txCall.status).to.equal("started");
+      expect(txCall.to).to.equal("0xcontract");
+      expect(txCall.function_name).to.equal("repayBorrow");
+      expect(txCall.function_args).to.deep.equal({ repayAmount: "3300000" });
+
+      // Verify function args are also passed as additional properties (second argument)
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({ repayAmount: "3300000" });
+    });
+
+    it("should track writeContract mutation with multiple args", async () => {
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      // Connect first
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 60,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash456",
+            variables: {
+              address: "0xtoken",
+              abi: [
+                {
+                  type: "function",
+                  name: "transfer",
+                  inputs: [
+                    { name: "to", type: "address" },
+                    { name: "amount", type: "uint256" },
+                  ],
+                  outputs: [{ name: "", type: "bool" }],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "transfer",
+              args: ["0xrecipient123", BigInt("1000000000000000000")],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+      expect(txCall.status).to.equal("broadcasted");
+      expect(txCall.transactionHash).to.equal("0xtxhash456");
+      expect(txCall.to).to.equal("0xtoken");
+      expect(txCall.function_name).to.equal("transfer");
+      expect(txCall.function_args).to.deep.equal({
+        to: "0xrecipient123",
+        amount: "1000000000000000000",
+      });
+
+      // Verify function args are also passed as additional properties (second argument)
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({
+        to: "0xrecipient123",
+        amount: "1000000000000000000",
+      });
+    });
+
+    it("should not include function_name and function_args for sendTransaction", async () => {
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      // Connect first
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 61,
+          options: { mutationKey: ["sendTransaction"] },
+          state: {
+            status: "success",
+            data: "0xtxhash789",
+            variables: {
+              to: "0xrecipient",
+              data: "0xabcdef1234",
+              value: BigInt(1000000000000000000),
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+      expect(txCall.status).to.equal("broadcasted");
+      expect(txCall.transactionHash).to.equal("0xtxhash789");
+      expect(txCall.to).to.equal("0xrecipient");
+      expect(txCall.data).to.equal("0xabcdef1234");
+      // function_name and function_args should NOT be present for sendTransaction
+      expect(txCall.function_name).to.be.undefined;
+      expect(txCall.function_args).to.be.undefined;
+
+      // Properties (second argument) should be undefined for sendTransaction
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.be.undefined;
     });
 
     it("should not track transaction when autocapture is disabled", async () => {
