@@ -8,13 +8,47 @@
 import { logger } from "../logger";
 
 /**
+ * Flatten a nested object into a flat object with underscore-separated keys.
+ * Only leaf values (primitives) are included; intermediate objects are not.
+ *
+ * Example:
+ *   Input: { o: { x: "100", inner: { a: "42", b: "0xRecipient" } } }
+ *   Output: { o_x: "100", o_inner_a: "42", o_inner_b: "0xRecipient" }
+ *
+ * @param obj - The object to flatten
+ * @param prefix - Optional prefix for keys (used in recursion)
+ * @returns A flat object with underscore-separated keys
+ */
+export function flattenObject(
+  obj: Record<string, unknown>,
+  prefix = ""
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    const newKey = prefix ? `${prefix}_${key}` : key;
+
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      // Recursively flatten nested objects
+      const nested = flattenObject(value as Record<string, unknown>, newKey);
+      Object.assign(result, nested);
+    } else {
+      // Leaf value (primitive or array) - add directly
+      result[newKey] = value;
+    }
+  }
+
+  return result;
+}
+
+/**
  * Recursively convert all BigInt values to strings for JSON serialization
  * Handles nested objects, arrays, and deeply nested structures (e.g., Solidity structs)
  *
  * @param value - The value to convert
  * @returns The value with all BigInt converted to strings
  */
-function convertBigIntToString(value: unknown): unknown {
+export function convertBigIntToString(value: unknown): unknown {
   if (typeof value === "bigint") {
     return value.toString();
   }

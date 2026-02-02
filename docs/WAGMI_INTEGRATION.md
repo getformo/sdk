@@ -492,6 +492,56 @@ This handles:
 - Nested objects/structs with BigInt (e.g., Solidity tuples)
 - Multi-dimensional arrays
 
+### Nested Struct Flattening
+
+For Solidity structs (tuples), the SDK automatically flattens nested object properties into top-level keys with underscore separators. This makes it easier to query and analyze transaction data without traversing nested JSON.
+
+**Example**: Given a Solidity function with a nested struct:
+
+```solidity
+struct Inner { uint256 a; address b; }
+struct Outer { uint256 x; Inner inner; }
+function submitOrder(Outer calldata o) external;
+```
+
+**Function call**:
+```typescript
+writeContract({
+  abi: contractAbi,
+  functionName: 'submitOrder',
+  args: [{
+    x: BigInt(100),
+    inner: { a: BigInt(42), b: '0xRecipient...' }
+  }],
+});
+```
+
+**Resulting event properties**:
+```typescript
+{
+  // Original nested structure preserved in function_args
+  function_args: {
+    o: {
+      x: '100',
+      inner: { a: '42', b: '0xRecipient...' }
+    }
+  },
+  // Top-level struct reference
+  o: { x: '100', inner: { a: '42', b: '0xRecipient...' } },
+  // Flattened nested fields for easy querying
+  o_x: '100',
+  o_inner_a: '42',
+  o_inner_b: '0xRecipient...'
+}
+```
+
+**Key behaviors**:
+- Only leaf values (primitives, arrays) are flattened; intermediate objects are not duplicated as flat keys
+- Arrays remain as arrays (not expanded)
+- Underscore (`_`) is used as the separator between nesting levels
+- Collision handling (`arg_` prefix) is applied before flattening
+- This matches the Lambda's flattening behavior for consistent Tinybird querying
+
 ## Comparison: Wagmi Mode vs EIP-1193 Mode
 
 | Feature | Wagmi Mode | EIP-1193 Mode |

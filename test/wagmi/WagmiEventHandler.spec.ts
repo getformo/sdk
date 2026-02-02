@@ -789,6 +789,7 @@ describe("WagmiEventHandler", () => {
       });
 
       // 'order' doesn't collide with any built-in field, so no prefix needed
+      // Nested struct fields are also flattened for easier querying
       const txProperties = mockFormo.transaction.firstCall.args[1];
       expect(txProperties).to.deep.equal({
         order: {
@@ -796,6 +797,10 @@ describe("WagmiEventHandler", () => {
           price: "1000000000000000000",
           amount: "50000000",
         },
+        // Flattened nested struct fields
+        order_maker: "0xMakerAddress",
+        order_price: "1000000000000000000",
+        order_amount: "50000000",
       });
     });
 
@@ -981,6 +986,7 @@ describe("WagmiEventHandler", () => {
       });
 
       // 'params' doesn't collide with any built-in field, so no prefix
+      // Nested struct fields are also flattened for easier querying
       const txProperties = mockFormo.transaction.firstCall.args[1];
       expect(txProperties).to.deep.equal({
         params: {
@@ -994,6 +1000,12 @@ describe("WagmiEventHandler", () => {
           },
           deadline: "1700000000",
         },
+        // Flattened deeply nested struct fields
+        params_input_token: "0xUSDC",
+        params_input_amount: "1000000000",
+        params_output_token: "0xWETH",
+        params_output_minAmount: "500000000000000000",
+        params_deadline: "1700000000",
       });
     });
 
@@ -1068,6 +1080,313 @@ describe("WagmiEventHandler", () => {
       // Ensure the transaction's own 'data' field (encoded calldata) is different
       // from the function arg 'data' (which becomes arg_data)
       expect(txProperties!.arg_data).to.equal("0xcalldata123");
+    });
+
+    it("should flatten nested structs with collision handling on root key", async () => {
+      // Edge case: struct argument named 'to' (reserved field) with nested properties
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 201,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_nested_collision",
+            variables: {
+              address: "0xContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "send",
+                  inputs: [
+                    {
+                      name: "to",  // Collides with transaction 'to' field
+                      type: "tuple",
+                      components: [
+                        { name: "recipient", type: "address" },
+                        { name: "chainId", type: "uint256" },  // Also a reserved field name
+                      ],
+                    },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "send",
+              args: [
+                {
+                  recipient: "0xRecipientAddress",
+                  chainId: BigInt(137),
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+
+      // function_args preserves original structure
+      expect(txCall.function_args).to.deep.equal({
+        to: {
+          recipient: "0xRecipientAddress",
+          chainId: "137",
+        },
+      });
+
+      // Properties: 'to' becomes 'arg_to' due to collision, flattened fields follow
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({
+        arg_to: {
+          recipient: "0xRecipientAddress",
+          chainId: "137",
+        },
+        // Flattened with prefixed root key
+        arg_to_recipient: "0xRecipientAddress",
+        arg_to_chainId: "137",
+      });
+    });
+
+    it("should not flatten arrays but include them as leaf values", async () => {
+      // Arrays should remain as-is, not be expanded
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 202,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_array_test",
+            variables: {
+              address: "0xContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "multiSwap",
+                  inputs: [
+                    {
+                      name: "swap",
+                      type: "tuple",
+                      components: [
+                        { name: "paths", type: "address[]" },
+                        { name: "amounts", type: "uint256[]" },
+                      ],
+                    },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "multiSwap",
+              args: [
+                {
+                  paths: ["0xToken1", "0xToken2", "0xToken3"],
+                  amounts: [BigInt(100), BigInt(200), BigInt(300)],
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+
+      // Arrays should be preserved as arrays, not expanded
+      expect(txProperties).to.deep.equal({
+        swap: {
+          paths: ["0xToken1", "0xToken2", "0xToken3"],
+          amounts: ["100", "200", "300"],
+        },
+        // Flattened arrays remain arrays
+        swap_paths: ["0xToken1", "0xToken2", "0xToken3"],
+        swap_amounts: ["100", "200", "300"],
+      });
+    });
+
+    it("should handle triple-nested struct flattening", async () => {
+      // Three levels of nesting
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 203,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_deep_nested",
+            variables: {
+              address: "0xContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "deepCall",
+                  inputs: [
+                    {
+                      name: "data",  // Collision with reserved field
+                      type: "tuple",
+                      components: [
+                        {
+                          name: "level1",
+                          type: "tuple",
+                          components: [
+                            {
+                              name: "level2",
+                              type: "tuple",
+                              components: [
+                                { name: "value", type: "uint256" },
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "deepCall",
+              args: [
+                {
+                  level1: {
+                    level2: {
+                      value: BigInt(42),
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+
+      // 'data' collides, so it becomes 'arg_data', and flattening follows that prefix
+      expect(txProperties).to.deep.equal({
+        arg_data: {
+          level1: {
+            level2: {
+              value: "42",
+            },
+          },
+        },
+        arg_data_level1_level2_value: "42",
+      });
+    });
+
+    it("should handle mixed primitive and nested struct arguments", async () => {
+      // Mix of flat primitives and nested structs
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 204,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_mixed",
+            variables: {
+              address: "0xContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "complexCall",
+                  inputs: [
+                    { name: "id", type: "uint256" },
+                    {
+                      name: "config",
+                      type: "tuple",
+                      components: [
+                        { name: "enabled", type: "bool" },
+                        { name: "threshold", type: "uint256" },
+                      ],
+                    },
+                    { name: "recipient", type: "address" },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "complexCall",
+              args: [
+                BigInt(123),
+                { enabled: true, threshold: BigInt(1000) },
+                "0xRecipient",
+              ],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+
+      // Primitives stay flat, nested struct gets flattened
+      expect(txProperties).to.deep.equal({
+        id: "123",
+        config: { enabled: true, threshold: "1000" },
+        config_enabled: true,
+        config_threshold: "1000",
+        recipient: "0xRecipient",
+      });
     });
   });
 

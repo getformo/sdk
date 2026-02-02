@@ -1,8 +1,170 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import { extractFunctionArgs, AbiItem } from "../../src/wagmi/utils";
+import { extractFunctionArgs, flattenObject, AbiItem } from "../../src/wagmi/utils";
 
 describe("wagmi/utils", () => {
+  describe("flattenObject", () => {
+    it("should return flat object unchanged", () => {
+      const result = flattenObject({
+        x: "100",
+        y: "200",
+      });
+
+      expect(result).to.deep.equal({
+        x: "100",
+        y: "200",
+      });
+    });
+
+    it("should flatten nested object with underscore separator", () => {
+      const result = flattenObject({
+        o: {
+          x: "100",
+          y: "200",
+        },
+      });
+
+      expect(result).to.deep.equal({
+        o_x: "100",
+        o_y: "200",
+      });
+    });
+
+    it("should flatten deeply nested objects", () => {
+      const result = flattenObject({
+        o: {
+          x: "100",
+          inner: {
+            a: "42",
+            b: "0xRecipient",
+          },
+        },
+      });
+
+      expect(result).to.deep.equal({
+        o_x: "100",
+        o_inner_a: "42",
+        o_inner_b: "0xRecipient",
+      });
+    });
+
+    it("should handle arrays as leaf values (not flatten them)", () => {
+      const result = flattenObject({
+        amounts: ["100", "200", "300"],
+        nested: {
+          values: [1, 2, 3],
+        },
+      });
+
+      expect(result).to.deep.equal({
+        amounts: ["100", "200", "300"],
+        nested_values: [1, 2, 3],
+      });
+    });
+
+    it("should handle null values as leaf values", () => {
+      const result = flattenObject({
+        a: null,
+        b: {
+          c: null,
+        },
+      });
+
+      expect(result).to.deep.equal({
+        a: null,
+        b_c: null,
+      });
+    });
+
+    it("should handle mixed primitive types", () => {
+      const result = flattenObject({
+        str: "hello",
+        num: 42,
+        bool: true,
+        nested: {
+          str: "world",
+          num: 100,
+        },
+      });
+
+      expect(result).to.deep.equal({
+        str: "hello",
+        num: 42,
+        bool: true,
+        nested_str: "world",
+        nested_num: 100,
+      });
+    });
+
+    it("should handle empty objects", () => {
+      const result = flattenObject({});
+      expect(result).to.deep.equal({});
+    });
+
+    it("should handle nested empty objects", () => {
+      const result = flattenObject({
+        a: {},
+        b: {
+          c: {},
+        },
+      });
+
+      expect(result).to.deep.equal({});
+    });
+
+    it("should handle triple nesting", () => {
+      const result = flattenObject({
+        level1: {
+          level2: {
+            level3: {
+              value: "deep",
+            },
+          },
+        },
+      });
+
+      expect(result).to.deep.equal({
+        level1_level2_level3_value: "deep",
+      });
+    });
+
+    it("should respect provided prefix", () => {
+      const result = flattenObject(
+        {
+          x: "100",
+          inner: {
+            a: "42",
+          },
+        },
+        "order"
+      );
+
+      expect(result).to.deep.equal({
+        order_x: "100",
+        order_inner_a: "42",
+      });
+    });
+
+    it("should handle Solidity struct-like data", () => {
+      // Matches the Lambda example from the request
+      const result = flattenObject({
+        o: {
+          x: "100",
+          inner: {
+            a: "42",
+            b: "0xRecipient0000000000000000000000000000000",
+          },
+        },
+      });
+
+      expect(result).to.deep.equal({
+        o_x: "100",
+        o_inner_a: "42",
+        o_inner_b: "0xRecipient0000000000000000000000000000000",
+      });
+    });
+  });
+
   describe("extractFunctionArgs", () => {
     it("should extract function args from ABI and args array", () => {
       const abi: AbiItem[] = [

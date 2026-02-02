@@ -19,7 +19,7 @@ import {
   WagmiTrackingState,
   WagmiMutationKey,
 } from "./types";
-import { encodeWriteContractData, extractFunctionArgs } from "./utils";
+import { encodeWriteContractData, extractFunctionArgs, flattenObject } from "./utils";
 
 /**
  * Built-in transaction fields that could collide with function args.
@@ -36,6 +36,27 @@ const RESERVED_FIELDS = new Set([
   "function_name",
   "function_args",
 ]);
+
+/**
+ * Clean up old entries from a Set to prevent memory leaks.
+ * Removes oldest entries when size exceeds maxSize.
+ *
+ * @param set - The Set to clean up
+ * @param maxSize - Maximum allowed size before cleanup (default: 1000)
+ * @param removeCount - Number of entries to remove (default: 500)
+ */
+function cleanupOldEntries(
+  set: Set<string>,
+  maxSize = 1000,
+  removeCount = 500
+): void {
+  if (set.size > maxSize) {
+    const entries = Array.from(set);
+    for (let i = 0; i < removeCount && i < entries.length; i++) {
+      set.delete(entries[i]);
+    }
+  }
+}
 
 export class WagmiEventHandler {
   private formo: FormoAnalytics;
@@ -318,12 +339,7 @@ export class WagmiEventHandler {
     this.handleTransactionReceiptQuery(query);
 
     // Clean up old processed queries to prevent memory leaks
-    if (this.processedQueries.size > 1000) {
-      const entries = Array.from(this.processedQueries);
-      for (let i = 0; i < 500; i++) {
-        this.processedQueries.delete(entries[i]);
-      }
-    }
+    cleanupOldEntries(this.processedQueries);
   }
 
   /**
@@ -464,16 +480,9 @@ export class WagmiEventHandler {
     if (mutationType === "sendTransaction" || mutationType === "writeContract") {
       this.handleTransactionMutation(mutationType as WagmiMutationKey, mutation);
     }
-    
+
     // Clean up old processed mutations to prevent memory leaks
-    // Keep only recent mutations (max 1000 entries)
-    if (this.processedMutations.size > 1000) {
-      const entries = Array.from(this.processedMutations);
-      // Remove oldest 500 entries
-      for (let i = 0; i < 500; i++) {
-        this.processedMutations.delete(entries[i]);
-      }
-    }
+    cleanupOldEntries(this.processedMutations);
   }
 
   /**
@@ -628,16 +637,32 @@ export class WagmiEventHandler {
         function_name,
       });
 
-      // Only prefix function args that would collide with built-in transaction fields
+      // Build safeFunctionArgs with:
+      // 1. Top-level function args (with collision prefix for reserved fields)
+      // 2. Flattened nested struct values for easier querying (e.g., o_x, o_inner_a)
       // e.g., transfer(address to, uint256 amount) -> { arg_to: "0x...", amount: "..." }
-      // Non-colliding keys remain unprefixed for cleaner output
+      // e.g., foo(Order o) where o = {x: 100, inner: {a: 42}} -> { o: {...}, o_x: "100", o_inner_a: "42" }
       const safeFunctionArgs = function_args
-        ? Object.fromEntries(
-            Object.entries(function_args).map(([key, val]) => [
-              RESERVED_FIELDS.has(key) ? `arg_${key}` : key,
-              val,
-            ])
-          )
+        ? (() => {
+            // Start with top-level args, prefixing any that collide with reserved fields
+            const result: Record<string, unknown> = {};
+
+            for (const [key, val] of Object.entries(function_args)) {
+              const safeKey = RESERVED_FIELDS.has(key) ? `arg_${key}` : key;
+              result[safeKey] = val;
+
+              // If the value is a nested object (struct), flatten it
+              if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+                const flattened = flattenObject(
+                  val as Record<string, unknown>,
+                  safeKey
+                );
+                Object.assign(result, flattened);
+              }
+            }
+
+            return result;
+          })()
         : undefined;
 
       // Store transaction details for BROADCASTED status to use in CONFIRMED/REVERTED
@@ -661,10 +686,11 @@ export class WagmiEventHandler {
         });
 
         // Clean up old pending transactions to prevent memory leaks (keep max 100)
+        // Remove oldest 50 entries when limit exceeded to handle high-throughput scenarios
         if (this.pendingTransactions.size > 100) {
-          const oldestKey = this.pendingTransactions.keys().next().value;
-          if (oldestKey) {
-            this.pendingTransactions.delete(oldestKey);
+          const keys = Array.from(this.pendingTransactions.keys());
+          for (let i = 0; i < 50 && i < keys.length; i++) {
+            this.pendingTransactions.delete(keys[i]);
           }
         }
       }
