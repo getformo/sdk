@@ -313,8 +313,14 @@ export class WagmiEventHandler {
 
     const state = query.state;
 
+    // Extract receipt status early to include in deduplication key
+    // This ensures CONFIRMED vs REVERTED outcomes are processed separately
+    const receipt = state.data as { status?: string } | undefined;
+    const receiptStatus = receipt?.status;
+
     // Create a unique key for this query state to prevent duplicate processing
-    const queryStateKey = `${query.queryHash}:${state.status}`;
+    // Include receipt status to distinguish between CONFIRMED and REVERTED outcomes
+    const queryStateKey = `${query.queryHash}:${state.status}:${receiptStatus || ""}`;
 
     // Skip if we've already processed this query state
     if (this.processedQueries.has(queryStateKey)) {
@@ -322,6 +328,7 @@ export class WagmiEventHandler {
         queryType,
         queryHash: query.queryHash,
         status: state.status,
+        receiptStatus,
       });
       return;
     }
@@ -568,8 +575,14 @@ export class WagmiEventHandler {
     const chainId = this.trackingState.lastChainId || variables.chainId;
     // For sendTransaction, user's address is the 'from'
     // For writeContract, variables.address is the contract address, not the user
+    // variables.account can be a string address or an Account object with an address property
+    const accountValue = variables.account;
+    const accountAddress =
+      typeof accountValue === "string"
+        ? accountValue
+        : accountValue?.address;
     const userAddress =
-      this.trackingState.lastAddress || variables.account || variables.from;
+      this.trackingState.lastAddress || accountAddress || variables.from;
 
     if (!userAddress) {
       logger.warn(
@@ -652,12 +665,22 @@ export class WagmiEventHandler {
               result[safeKey] = val;
 
               // If the value is a nested object (struct), flatten it
+              // Skip flattened keys that would overwrite existing top-level args
               if (val !== null && typeof val === "object" && !Array.isArray(val)) {
                 const flattened = flattenObject(
                   val as Record<string, unknown>,
                   safeKey
                 );
-                Object.assign(result, flattened);
+                for (const [flatKey, flatVal] of Object.entries(flattened)) {
+                  if (!(flatKey in result)) {
+                    result[flatKey] = flatVal;
+                  } else {
+                    logger.debug(
+                      "WagmiEventHandler: Skipping flattened key collision",
+                      { flatKey, existingValue: result[flatKey] }
+                    );
+                  }
+                }
               }
             }
 

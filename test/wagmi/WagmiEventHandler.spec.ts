@@ -1388,6 +1388,72 @@ describe("WagmiEventHandler", () => {
         recipient: "0xRecipient",
       });
     });
+
+    it("should skip flattened keys that collide with existing top-level args", async () => {
+      // Edge case: flattened key would overwrite an existing top-level argument
+      // e.g., foo(uint256 config_value, Config config) where Config has a 'value' field
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 205,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_collision",
+            variables: {
+              address: "0xContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "edgeCase",
+                  inputs: [
+                    { name: "config_value", type: "uint256" }, // Top-level arg with underscore
+                    {
+                      name: "config",
+                      type: "tuple",
+                      components: [
+                        { name: "value", type: "uint256" }, // Would flatten to config_value
+                        { name: "other", type: "uint256" },
+                      ],
+                    },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "edgeCase",
+              args: [BigInt(999), { value: BigInt(123), other: BigInt(456) }],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+
+      // config_value should keep its original value (999), not be overwritten by config.value (123)
+      // config_other should be added since it doesn't collide
+      expect(txProperties).to.deep.equal({
+        config_value: "999", // Original top-level arg preserved
+        config: { value: "123", other: "456" },
+        // config_value would collide, so it's skipped
+        config_other: "456", // No collision, added
+      });
+    });
   });
 
   describe("deduplication", () => {
