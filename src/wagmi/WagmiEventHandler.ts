@@ -14,6 +14,7 @@ import {
   WagmiState,
   QueryClient,
   MutationCacheEvent,
+  QueryCacheEvent,
   UnsubscribeFn,
   WagmiTrackingState,
   WagmiMutationKey,
@@ -35,6 +36,24 @@ export class WagmiEventHandler {
    */
   private processedMutations = new Set<string>();
 
+  /**
+   * Track processed query states to prevent duplicate event emissions
+   * Key format: `${queryHash}:${status}`
+   */
+  private processedQueries = new Set<string>();
+
+  /**
+   * Store transaction details from BROADCASTED events for use in CONFIRMED/REVERTED
+   * Key: transactionHash, Value: transaction details
+   */
+  private pendingTransactions = new Map<string, {
+    data?: string;
+    to?: string;
+    value?: string;
+    function_name?: string;
+    function_args?: Record<string, unknown>;
+  }>();
+
   constructor(
     formoAnalytics: FormoAnalytics,
     wagmiConfig: WagmiConfig,
@@ -49,9 +68,10 @@ export class WagmiEventHandler {
     // Set up connection/disconnection/chain listeners
     this.setupConnectionListeners();
 
-    // Set up mutation tracking if QueryClient is provided
+    // Set up mutation and query tracking if QueryClient is provided
     if (this.queryClient) {
       this.setupMutationTracking();
+      this.setupQueryTracking();
     } else {
       logger.warn(
         "WagmiEventHandler: QueryClient not provided, signature and transaction events will not be tracked"
@@ -208,6 +228,169 @@ export class WagmiEventHandler {
 
     this.unsubscribers.push(unsubscribe);
     logger.info("WagmiEventHandler: Mutation tracking set up successfully");
+  }
+
+  /**
+   * Set up query tracking for transaction confirmations
+   * Listens for waitForTransactionReceipt queries to detect CONFIRMED status
+   */
+  private setupQueryTracking(): void {
+    if (!this.queryClient) {
+      return;
+    }
+
+    logger.info("WagmiEventHandler: Setting up query tracking");
+
+    const queryCache = this.queryClient.getQueryCache();
+    const unsubscribe = queryCache.subscribe((event: QueryCacheEvent) => {
+      this.handleQueryEvent(event);
+    });
+
+    this.unsubscribers.push(unsubscribe);
+    logger.info("WagmiEventHandler: Query tracking set up successfully");
+  }
+
+  /**
+   * Handle query cache events (transaction confirmations)
+   */
+  private handleQueryEvent(event: QueryCacheEvent): void {
+    if (event.type !== "updated") {
+      return;
+    }
+
+    const query = event.query;
+    const queryKey = query.queryKey;
+
+    if (!queryKey || queryKey.length === 0) {
+      return;
+    }
+
+    const queryType = queryKey[0] as string;
+
+    // Only handle waitForTransactionReceipt queries
+    if (queryType !== "waitForTransactionReceipt") {
+      return;
+    }
+
+    const state = query.state;
+
+    // Create a unique key for this query state to prevent duplicate processing
+    const queryStateKey = `${query.queryHash}:${state.status}`;
+
+    // Skip if we've already processed this query state
+    if (this.processedQueries.has(queryStateKey)) {
+      logger.debug("WagmiEventHandler: Skipping duplicate query event", {
+        queryType,
+        queryHash: query.queryHash,
+        status: state.status,
+      });
+      return;
+    }
+
+    // Mark this query state as processed
+    this.processedQueries.add(queryStateKey);
+
+    logger.debug("WagmiEventHandler: Query event", {
+      queryType,
+      queryHash: query.queryHash,
+      status: state.status,
+    });
+
+    // Handle transaction receipt queries
+    this.handleTransactionReceiptQuery(query);
+
+    // Clean up old processed queries to prevent memory leaks
+    if (this.processedQueries.size > 1000) {
+      const entries = Array.from(this.processedQueries);
+      for (let i = 0; i < 500; i++) {
+        this.processedQueries.delete(entries[i]);
+      }
+    }
+  }
+
+  /**
+   * Handle waitForTransactionReceipt query completion
+   * Emits CONFIRMED or REVERTED transaction status
+   */
+  private handleTransactionReceiptQuery(query: any): void {
+    if (!this.formo.isAutocaptureEnabled("transaction")) {
+      return;
+    }
+
+    const state = query.state;
+    const queryKey = query.queryKey;
+
+    // Only handle successful queries (transaction confirmed on chain)
+    if (state.status !== "success") {
+      return;
+    }
+
+    // Extract hash and chainId from query key
+    // Query key format: ['waitForTransactionReceipt', { hash, chainId, ... }]
+    const params = queryKey[1] as { hash?: string; chainId?: number } | undefined;
+    const transactionHash = params?.hash;
+    const chainId = params?.chainId || this.trackingState.lastChainId;
+    const address = this.trackingState.lastAddress;
+
+    if (!transactionHash) {
+      logger.warn("WagmiEventHandler: Transaction receipt query but no hash found");
+      return;
+    }
+
+    if (!address) {
+      logger.warn("WagmiEventHandler: Transaction receipt query but no address available");
+      return;
+    }
+
+    try {
+      // Extract receipt data
+      const receipt = state.data as {
+        status?: "success" | "reverted";
+        blockNumber?: bigint;
+        gasUsed?: bigint;
+      } | undefined;
+
+      // Determine transaction status from receipt
+      // receipt.status is 'success' or 'reverted' in viem
+      const txStatus = receipt?.status === "reverted"
+        ? TransactionStatus.REVERTED
+        : TransactionStatus.CONFIRMED;
+
+      // Retrieve stored transaction details from BROADCASTED event
+      // Normalize hash to lowercase for consistent lookup
+      const normalizedHash = transactionHash.toLowerCase();
+      const pendingTx = this.pendingTransactions.get(normalizedHash);
+
+      logger.info("WagmiEventHandler: Tracking transaction confirmation", {
+        status: txStatus,
+        transactionHash,
+        normalizedHash,
+        address,
+        chainId,
+        blockNumber: receipt?.blockNumber?.toString(),
+        hasPendingTxDetails: !!pendingTx,
+        pendingTxCount: this.pendingTransactions.size,
+        pendingTxKeys: Array.from(this.pendingTransactions.keys()),
+      });
+
+      this.formo.transaction({
+        status: txStatus,
+        chainId: chainId || 0,
+        address,
+        transactionHash,
+        // Include stored transaction details if available
+        ...(pendingTx?.data && { data: pendingTx.data }),
+        ...(pendingTx?.to && { to: pendingTx.to }),
+        ...(pendingTx?.value && { value: pendingTx.value }),
+        ...(pendingTx?.function_name && { function_name: pendingTx.function_name }),
+        ...(pendingTx?.function_args && { function_args: pendingTx.function_args }),
+      });
+
+      // Clean up the pending transaction after confirmation
+      this.pendingTransactions.delete(normalizedHash);
+    } catch (error) {
+      logger.error("WagmiEventHandler: Error handling transaction receipt query:", error);
+    }
   }
 
   /**
@@ -448,6 +631,38 @@ export class WagmiEventHandler {
           )
         : undefined;
 
+      // Store transaction details for BROADCASTED status to use in CONFIRMED/REVERTED
+      // Normalize hash to lowercase for consistent lookup
+      if (status === TransactionStatus.BROADCASTED && transactionHash) {
+        const normalizedHash = transactionHash.toLowerCase();
+        const txDetails = {
+          ...(data && { data }),
+          ...(to && { to }),
+          ...(value && { value }),
+          ...(function_name && { function_name }),
+          ...(function_args && { function_args }),
+        };
+        this.pendingTransactions.set(normalizedHash, txDetails);
+
+        logger.info("WagmiEventHandler: Stored pending transaction for confirmation", {
+          transactionHash: normalizedHash,
+          hasData: !!data,
+          hasTo: !!to,
+          hasValue: !!value,
+          hasFunctionName: !!function_name,
+          hasFunctionArgs: !!function_args,
+          pendingTxCount: this.pendingTransactions.size,
+        });
+
+        // Clean up old pending transactions to prevent memory leaks (keep max 100)
+        if (this.pendingTransactions.size > 100) {
+          const oldestKey = this.pendingTransactions.keys().next().value;
+          if (oldestKey) {
+            this.pendingTransactions.delete(oldestKey);
+          }
+        }
+      }
+
       this.formo.transaction(
         {
           status,
@@ -543,6 +758,8 @@ export class WagmiEventHandler {
     
     this.unsubscribers = [];
     this.processedMutations.clear();
+    this.processedQueries.clear();
+    this.pendingTransactions.clear();
     logger.info("WagmiEventHandler: Cleanup complete");
   }
 }

@@ -107,10 +107,47 @@ export interface MutationCache {
 }
 
 /**
+ * React Query query state
+ */
+export interface QueryState {
+  status: 'pending' | 'success' | 'error';
+  data?: any;
+  error?: Error | null;
+  fetchStatus: 'fetching' | 'paused' | 'idle';
+}
+
+/**
+ * React Query query object
+ */
+export interface Query {
+  state: QueryState;
+  queryKey: readonly unknown[];
+  queryHash: string;
+}
+
+/**
+ * React Query query cache event
+ */
+export interface QueryCacheEvent {
+  type: 'added' | 'removed' | 'updated';
+  query: Query;
+}
+
+/**
+ * React Query QueryCache interface
+ */
+export interface QueryCache {
+  subscribe(
+    listener: (event: QueryCacheEvent) => void
+  ): () => void;
+}
+
+/**
  * React Query QueryClient interface
  */
 export interface QueryClient {
   getMutationCache(): MutationCache;
+  getQueryCache(): QueryCache;
 }
 
 /**
