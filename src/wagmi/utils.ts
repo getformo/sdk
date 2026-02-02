@@ -8,6 +8,33 @@
 import { logger } from "../logger";
 
 /**
+ * Recursively convert all BigInt values to strings for JSON serialization
+ * Handles nested objects, arrays, and deeply nested structures (e.g., Solidity structs)
+ *
+ * @param value - The value to convert
+ * @returns The value with all BigInt converted to strings
+ */
+function convertBigIntToString(value: unknown): unknown {
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(convertBigIntToString);
+  }
+
+  if (value !== null && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value)) {
+      result[key] = convertBigIntToString(val);
+    }
+    return result;
+  }
+
+  return value;
+}
+
+/**
  * ABI function item type
  */
 export interface AbiItem {
@@ -141,20 +168,9 @@ export function extractFunctionArgs(
         const argValue = args[index];
         const argName = input.name || `arg${index}`;
 
-        // Convert BigInt to string for JSON serialization
-        if (typeof argValue === "bigint") {
-          result[argName] = argValue.toString();
-        } else if (
-          Array.isArray(argValue) &&
-          argValue.some((v) => typeof v === "bigint")
-        ) {
-          // Handle arrays containing BigInt
-          result[argName] = argValue.map((v) =>
-            typeof v === "bigint" ? v.toString() : v
-          );
-        } else {
-          result[argName] = argValue;
-        }
+        // Recursively convert BigInt to string for JSON serialization
+        // Handles: direct BigInt, arrays with BigInt, nested objects/structs with BigInt
+        result[argName] = convertBigIntToString(argValue);
       }
     });
 

@@ -187,5 +187,206 @@ describe("wagmi/utils", () => {
         to: "0xaddr",
       });
     });
+
+    it("should handle nested structs with BigInt values", () => {
+      // Simulates a Solidity function like:
+      // struct Order { address maker; uint256 price; uint256 amount; }
+      // function submitOrder(Order calldata order) external;
+      const abi: AbiItem[] = [
+        {
+          type: "function",
+          name: "submitOrder",
+          inputs: [
+            {
+              name: "order",
+              type: "tuple",
+              components: [
+                { name: "maker", type: "address" },
+                { name: "price", type: "uint256" },
+                { name: "amount", type: "uint256" },
+              ],
+            },
+          ],
+        },
+      ];
+
+      const result = extractFunctionArgs(abi, "submitOrder", [
+        {
+          maker: "0x1234567890123456789012345678901234567890",
+          price: BigInt("1000000000000000000"),
+          amount: BigInt("50000000"),
+        },
+      ]);
+
+      expect(result).to.deep.equal({
+        order: {
+          maker: "0x1234567890123456789012345678901234567890",
+          price: "1000000000000000000",
+          amount: "50000000",
+        },
+      });
+    });
+
+    it("should handle array of structs with BigInt values", () => {
+      // Simulates a Solidity function like:
+      // struct Transfer { address to; uint256 amount; }
+      // function batchTransfer(Transfer[] calldata transfers) external;
+      const abi: AbiItem[] = [
+        {
+          type: "function",
+          name: "batchTransfer",
+          inputs: [
+            {
+              name: "transfers",
+              type: "tuple[]",
+              components: [
+                { name: "to", type: "address" },
+                { name: "amount", type: "uint256" },
+              ],
+            },
+          ],
+        },
+      ];
+
+      const result = extractFunctionArgs(abi, "batchTransfer", [
+        [
+          { to: "0xaddr1", amount: BigInt(100) },
+          { to: "0xaddr2", amount: BigInt(200) },
+        ],
+      ]);
+
+      expect(result).to.deep.equal({
+        transfers: [
+          { to: "0xaddr1", amount: "100" },
+          { to: "0xaddr2", amount: "200" },
+        ],
+      });
+    });
+
+    it("should handle deeply nested structs with BigInt values", () => {
+      // Simulates a Solidity function like:
+      // struct TokenAmount { address token; uint256 amount; }
+      // struct SwapParams { TokenAmount input; TokenAmount output; uint256 deadline; }
+      // function swap(SwapParams calldata params) external;
+      const abi: AbiItem[] = [
+        {
+          type: "function",
+          name: "swap",
+          inputs: [
+            {
+              name: "params",
+              type: "tuple",
+              components: [
+                {
+                  name: "input",
+                  type: "tuple",
+                  components: [
+                    { name: "token", type: "address" },
+                    { name: "amount", type: "uint256" },
+                  ],
+                },
+                {
+                  name: "output",
+                  type: "tuple",
+                  components: [
+                    { name: "token", type: "address" },
+                    { name: "amount", type: "uint256" },
+                  ],
+                },
+                { name: "deadline", type: "uint256" },
+              ],
+            },
+          ],
+        },
+      ];
+
+      const result = extractFunctionArgs(abi, "swap", [
+        {
+          input: {
+            token: "0xtoken1",
+            amount: BigInt("1000000000000000000"),
+          },
+          output: {
+            token: "0xtoken2",
+            amount: BigInt("950000000000000000"),
+          },
+          deadline: BigInt("1700000000"),
+        },
+      ]);
+
+      expect(result).to.deep.equal({
+        params: {
+          input: {
+            token: "0xtoken1",
+            amount: "1000000000000000000",
+          },
+          output: {
+            token: "0xtoken2",
+            amount: "950000000000000000",
+          },
+          deadline: "1700000000",
+        },
+      });
+    });
+
+    it("should handle multi-dimensional arrays with BigInt values", () => {
+      // Simulates a Solidity function like:
+      // function processMatrix(uint256[][] calldata matrix) external;
+      const abi: AbiItem[] = [
+        {
+          type: "function",
+          name: "processMatrix",
+          inputs: [{ name: "matrix", type: "uint256[][]" }],
+        },
+      ];
+
+      const result = extractFunctionArgs(abi, "processMatrix", [
+        [
+          [BigInt(1), BigInt(2), BigInt(3)],
+          [BigInt(4), BigInt(5), BigInt(6)],
+        ],
+      ]);
+
+      expect(result).to.deep.equal({
+        matrix: [
+          ["1", "2", "3"],
+          ["4", "5", "6"],
+        ],
+      });
+    });
+
+    it("should handle mixed nested structures with BigInt", () => {
+      // Complex case: array of structs containing arrays
+      const abi: AbiItem[] = [
+        {
+          type: "function",
+          name: "complexCall",
+          inputs: [
+            {
+              name: "data",
+              type: "tuple[]",
+              components: [
+                { name: "amounts", type: "uint256[]" },
+                { name: "flag", type: "bool" },
+              ],
+            },
+          ],
+        },
+      ];
+
+      const result = extractFunctionArgs(abi, "complexCall", [
+        [
+          { amounts: [BigInt(100), BigInt(200)], flag: true },
+          { amounts: [BigInt(300)], flag: false },
+        ],
+      ]);
+
+      expect(result).to.deep.equal({
+        data: [
+          { amounts: ["100", "200"], flag: true },
+          { amounts: ["300"], flag: false },
+        ],
+      });
+    });
   });
 });
