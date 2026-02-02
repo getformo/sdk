@@ -19,7 +19,11 @@ import {
   WagmiTrackingState,
   WagmiMutationKey,
 } from "./types";
-import { encodeWriteContractData, extractFunctionArgs, flattenObject } from "./utils";
+import {
+  encodeWriteContractData,
+  extractFunctionArgs,
+  buildSafeFunctionArgs,
+} from "./utils";
 
 /**
  * Built-in transaction fields that could collide with function args.
@@ -650,43 +654,8 @@ export class WagmiEventHandler {
         function_name,
       });
 
-      // Build safeFunctionArgs with:
-      // 1. Top-level function args (with collision prefix for reserved fields)
-      // 2. Flattened nested struct values for easier querying (e.g., o_x, o_inner_a)
-      // e.g., transfer(address to, uint256 amount) -> { arg_to: "0x...", amount: "..." }
-      // e.g., foo(Order o) where o = {x: 100, inner: {a: 42}} -> { o: {...}, o_x: "100", o_inner_a: "42" }
-      const safeFunctionArgs = function_args
-        ? (() => {
-            // Start with top-level args, prefixing any that collide with reserved fields
-            const result: Record<string, unknown> = {};
-
-            for (const [key, val] of Object.entries(function_args)) {
-              const safeKey = RESERVED_FIELDS.has(key) ? `arg_${key}` : key;
-              result[safeKey] = val;
-
-              // If the value is a nested object (struct), flatten it
-              // Skip flattened keys that would overwrite existing top-level args
-              if (val !== null && typeof val === "object" && !Array.isArray(val)) {
-                const flattened = flattenObject(
-                  val as Record<string, unknown>,
-                  safeKey
-                );
-                for (const [flatKey, flatVal] of Object.entries(flattened)) {
-                  if (!(flatKey in result)) {
-                    result[flatKey] = flatVal;
-                  } else {
-                    logger.debug(
-                      "WagmiEventHandler: Skipping flattened key collision",
-                      { flatKey, existingValue: result[flatKey] }
-                    );
-                  }
-                }
-              }
-            }
-
-            return result;
-          })()
-        : undefined;
+      // Build safeFunctionArgs with collision handling and struct flattening
+      const safeFunctionArgs = buildSafeFunctionArgs(function_args, RESERVED_FIELDS);
 
       // Store transaction details for BROADCASTED status to use in CONFIRMED/REVERTED
       // Normalize hash to lowercase for consistent lookup

@@ -214,3 +214,49 @@ export function extractFunctionArgs(
     return undefined;
   }
 }
+
+/**
+ * Build safe function args with collision handling and struct flattening.
+ *
+ * This function:
+ * 1. Prefixes top-level args that collide with reserved fields (e.g., 'to' -> 'arg_to')
+ * 2. Flattens nested struct values for easier querying (e.g., order.maker -> order_maker)
+ * 3. Skips flattened keys that would collide with existing top-level args
+ *
+ * @param functionArgs - The extracted function arguments
+ * @param reservedFields - Set of reserved field names that need prefixing
+ * @returns Safe function args object, or undefined if input is undefined
+ */
+export function buildSafeFunctionArgs(
+  functionArgs: Record<string, unknown> | undefined,
+  reservedFields: Set<string>
+): Record<string, unknown> | undefined {
+  if (!functionArgs) {
+    return undefined;
+  }
+
+  const result: Record<string, unknown> = {};
+
+  for (const [key, val] of Object.entries(functionArgs)) {
+    const safeKey = reservedFields.has(key) ? `arg_${key}` : key;
+    result[safeKey] = val;
+
+    // If the value is a nested object (struct), flatten it
+    // Skip flattened keys that would overwrite existing top-level args
+    if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+      const flattened = flattenObject(val as Record<string, unknown>, safeKey);
+      for (const [flatKey, flatVal] of Object.entries(flattened)) {
+        if (!(flatKey in result)) {
+          result[flatKey] = flatVal;
+        } else {
+          logger.debug("WagmiEventHandler: Skipping flattened key collision", {
+            flatKey,
+            existingValue: result[flatKey],
+          });
+        }
+      }
+    }
+  }
+
+  return result;
+}

@@ -1,6 +1,11 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import { extractFunctionArgs, flattenObject, AbiItem } from "../../src/wagmi/utils";
+import {
+  extractFunctionArgs,
+  flattenObject,
+  buildSafeFunctionArgs,
+  AbiItem,
+} from "../../src/wagmi/utils";
 
 describe("wagmi/utils", () => {
   describe("flattenObject", () => {
@@ -548,6 +553,82 @@ describe("wagmi/utils", () => {
           { amounts: ["100", "200"], flag: true },
           { amounts: ["300"], flag: false },
         ],
+      });
+    });
+  });
+
+  describe("buildSafeFunctionArgs", () => {
+    const RESERVED_FIELDS = new Set([
+      "status",
+      "chainId",
+      "address",
+      "data",
+      "to",
+      "value",
+      "transactionHash",
+      "function_name",
+      "function_args",
+    ]);
+
+    it("should return undefined for undefined input", () => {
+      const result = buildSafeFunctionArgs(undefined, RESERVED_FIELDS);
+      expect(result).to.be.undefined;
+    });
+
+    it("should prefix reserved field names with arg_", () => {
+      const result = buildSafeFunctionArgs(
+        { to: "0xRecipient", amount: "100" },
+        RESERVED_FIELDS
+      );
+      expect(result).to.deep.equal({
+        arg_to: "0xRecipient",
+        amount: "100",
+      });
+    });
+
+    it("should flatten nested structs", () => {
+      const result = buildSafeFunctionArgs(
+        {
+          order: {
+            maker: "0xMaker",
+            price: "1000",
+          },
+        },
+        RESERVED_FIELDS
+      );
+      expect(result).to.deep.equal({
+        order: { maker: "0xMaker", price: "1000" },
+        order_maker: "0xMaker",
+        order_price: "1000",
+      });
+    });
+
+    it("should skip flattened keys that collide with existing args", () => {
+      const result = buildSafeFunctionArgs(
+        {
+          config_value: "999",
+          config: { value: "123", other: "456" },
+        },
+        RESERVED_FIELDS
+      );
+      expect(result).to.deep.equal({
+        config_value: "999",
+        config: { value: "123", other: "456" },
+        config_other: "456",
+      });
+    });
+
+    it("should handle reserved field name with nested struct", () => {
+      const result = buildSafeFunctionArgs(
+        {
+          to: { recipient: "0xAddr", chainId: "137" },
+        },
+        RESERVED_FIELDS
+      );
+      expect(result).to.deep.equal({
+        arg_to: { recipient: "0xAddr", chainId: "137" },
+        arg_to_recipient: "0xAddr",
+        arg_to_chainId: "137",
       });
     });
   });
