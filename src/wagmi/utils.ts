@@ -48,7 +48,7 @@ export function flattenObject(
  * @param value - The value to convert
  * @returns The value with all BigInt converted to strings
  */
-export function convertBigIntToString(value: unknown): unknown {
+function convertBigIntToString(value: unknown): unknown {
   if (typeof value === "bigint") {
     return value.toString();
   }
