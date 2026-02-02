@@ -18,7 +18,7 @@ import {
   WagmiTrackingState,
   WagmiMutationKey,
 } from "./types";
-import { encodeWriteContractData, extractFunctionArgs, AbiItem } from "./utils";
+import { encodeWriteContractData, extractFunctionArgs } from "./utils";
 
 export class WagmiEventHandler {
   private formo: FormoAnalytics;
