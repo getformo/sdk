@@ -1454,6 +1454,72 @@ describe("WagmiEventHandler", () => {
         config_other: "456", // No collision, added
       });
     });
+
+    it("should prioritize top-level args over flattened keys regardless of ABI order", async () => {
+      // Edge case: struct appears BEFORE the top-level arg in ABI order
+      // e.g., foo(Config config, uint256 config_value) where Config has a 'value' field
+      // Top-level args should still take precedence
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 206,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_order_test",
+            variables: {
+              address: "0xContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "orderTest",
+                  inputs: [
+                    {
+                      name: "config", // Struct comes FIRST
+                      type: "tuple",
+                      components: [
+                        { name: "value", type: "uint256" }, // Would flatten to config_value
+                        { name: "other", type: "uint256" },
+                      ],
+                    },
+                    { name: "config_value", type: "uint256" }, // Top-level arg comes SECOND
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "orderTest",
+              args: [{ value: BigInt(123), other: BigInt(456) }, BigInt(999)],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+
+      // Even though struct comes first in ABI, top-level arg should win
+      // config_value should be 999 (from top-level arg), not 123 (from flattened struct)
+      expect(txProperties).to.deep.equal({
+        config: { value: "123", other: "456" },
+        config_value: "999", // Top-level arg takes precedence
+        config_other: "456",
+      });
+    });
   });
 
   describe("deduplication", () => {
