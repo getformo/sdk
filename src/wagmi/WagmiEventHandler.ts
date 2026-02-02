@@ -364,13 +364,9 @@ export class WagmiEventHandler {
       logger.info("WagmiEventHandler: Tracking transaction confirmation", {
         status: txStatus,
         transactionHash,
-        normalizedHash,
         address,
         chainId,
         blockNumber: receipt?.blockNumber?.toString(),
-        hasPendingTxDetails: !!pendingTx,
-        pendingTxCount: this.pendingTransactions.size,
-        pendingTxKeys: Array.from(this.pendingTransactions.keys()),
       });
 
       this.formo.transaction({
@@ -644,14 +640,8 @@ export class WagmiEventHandler {
         };
         this.pendingTransactions.set(normalizedHash, txDetails);
 
-        logger.info("WagmiEventHandler: Stored pending transaction for confirmation", {
+        logger.debug("WagmiEventHandler: Stored pending transaction for confirmation", {
           transactionHash: normalizedHash,
-          hasData: !!data,
-          hasTo: !!to,
-          hasValue: !!value,
-          hasFunctionName: !!function_name,
-          hasFunctionArgs: !!function_args,
-          pendingTxCount: this.pendingTransactions.size,
         });
 
         // Clean up old pending transactions to prevent memory leaks (keep max 100)
