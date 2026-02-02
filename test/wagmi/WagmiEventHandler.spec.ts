@@ -482,8 +482,9 @@ describe("WagmiEventHandler", () => {
       expect(txCall.function_args).to.deep.equal({ repayAmount: "3300000" });
 
       // Verify function args are also passed as additional properties (second argument)
+      // with arg_ prefix to avoid collision with built-in transaction fields
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({ repayAmount: "3300000" });
+      expect(txProperties).to.deep.equal({ arg_repayAmount: "3300000" });
     });
 
     it("should track writeContract mutation with multiple args", async () => {
@@ -543,10 +544,11 @@ describe("WagmiEventHandler", () => {
       });
 
       // Verify function args are also passed as additional properties (second argument)
+      // with arg_ prefix to avoid collision with built-in transaction fields like 'to'
       const txProperties = mockFormo.transaction.firstCall.args[1];
       expect(txProperties).to.deep.equal({
-        to: "0xrecipient123",
-        amount: "1000000000000000000",
+        arg_to: "0xrecipient123",
+        arg_amount: "1000000000000000000",
       });
     });
 

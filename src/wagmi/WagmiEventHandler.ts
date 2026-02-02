@@ -423,6 +423,14 @@ export class WagmiEventHandler {
         function_name,
       });
 
+      // Prefix function args to avoid collision with built-in transaction fields
+      // e.g., transfer(address to, uint256 amount) -> { arg_to: "0x...", arg_amount: "..." }
+      const prefixedFunctionArgs = function_args
+        ? Object.fromEntries(
+            Object.entries(function_args).map(([key, val]) => [`arg_${key}`, val])
+          )
+        : undefined;
+
       this.formo.transaction(
         {
           status,
@@ -435,8 +443,8 @@ export class WagmiEventHandler {
           ...(function_name && { function_name }),
           ...(function_args && { function_args }),
         },
-        // Spread function args as additional properties (key-value pairs)
-        function_args ? { ...function_args } : undefined
+        // Spread prefixed function args as additional properties
+        prefixedFunctionArgs
       );
     } catch (error) {
       logger.error(
