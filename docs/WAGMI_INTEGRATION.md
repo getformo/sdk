@@ -75,7 +75,7 @@ Modified to support dual-mode operation:
 | `status: 'disconnected'` | `disconnect()` | Emitted when wallet disconnects |
 | `chainId` changes | `chain()` | Emitted when user switches networks |
 
-### Mutation Events
+### Mutation Events (MutationCache)
 
 | Wagmi Hook | Mutation Key | Formo Event | Status Mapping |
 |-----------|--------------|-------------|----------------|
@@ -83,6 +83,40 @@ Modified to support dual-mode operation:
 | `useSignTypedData` | `signTypedData` | `signature()` | pending → REQUESTED<br>success → CONFIRMED<br>error → REJECTED |
 | `useSendTransaction` | `sendTransaction` | `transaction()` | pending → STARTED<br>success → BROADCASTED<br>error → REJECTED |
 | `useWriteContract` | `writeContract` | `transaction()` | pending → STARTED<br>success → BROADCASTED<br>error → REJECTED |
+
+### Query Events (QueryCache)
+
+| Query Type | Formo Event | Status Mapping |
+|-----------|-------------|----------------|
+| `waitForTransactionReceipt` | `transaction()` | success + receipt.status="success" → CONFIRMED<br>success + receipt.status="reverted" → REVERTED |
+
+**Note**: Transaction confirmation tracking via QueryCache preserves all transaction details from the original BROADCASTED event (see [Transaction Property Preservation](#transaction-property-preservation)).
+
+### Transaction Event Lifecycle
+
+A typical transaction flow produces the following events:
+
+```
+User initiates writeContract
+        ↓
+    STARTED (pending mutation)
+        ↓
+User approves in wallet
+        ↓
+    BROADCASTED (success mutation, tx hash received)
+        ↓
+Transaction mined on chain
+        ↓
+    CONFIRMED or REVERTED (QueryCache receipt)
+```
+
+**Event Sources**:
+- **STARTED**: MutationCache `pending` status
+- **BROADCASTED**: MutationCache `success` status (returns transaction hash)
+- **REJECTED**: MutationCache `error` status (user rejected or RPC error)
+- **CONFIRMED/REVERTED**: QueryCache `waitForTransactionReceipt` query success
+
+All events for a transaction share the same properties (`to`, `data`, `value`, `function_name`, `function_args`) for consistent tracking.
 
 ## Usage
 
@@ -211,11 +245,11 @@ The handler subscribes to TanStack Query's mutation cache and implements dedupli
 mutationCache.subscribe((event: MutationCacheEvent) => {
   // Track processed mutations to prevent duplicates
   const mutationStateKey = `${mutation.mutationId}:${state.status}`;
-  
+
   if (processedMutations.has(mutationStateKey)) {
     return; // Skip duplicate
   }
-  
+
   processedMutations.add(mutationStateKey);
   // Process mutation...
 });
@@ -226,6 +260,67 @@ mutationCache.subscribe((event: MutationCacheEvent) => {
 - Prevents the same state transition from being tracked multiple times
 - Implements automatic cleanup (removes oldest entries when Set exceeds 1000 items)
 - Clears completely on handler cleanup
+
+### Transaction Confirmation Tracking via QueryCache
+
+In addition to MutationCache tracking, the handler subscribes to TanStack Query's QueryCache to detect transaction confirmations:
+
+```typescript
+queryCache.subscribe((event: QueryCacheEvent) => {
+  // Only handle waitForTransactionReceipt queries
+  if (queryKey[0] !== 'waitForTransactionReceipt') return;
+
+  // Track processed queries to prevent duplicates
+  const queryStateKey = `${query.queryHash}:${state.status}`;
+
+  if (processedQueries.has(queryStateKey)) {
+    return; // Skip duplicate
+  }
+
+  processedQueries.add(queryStateKey);
+  // Process query result...
+});
+```
+
+**How it works**:
+1. When `useWaitForTransactionReceipt` or similar hooks query for a receipt, Wagmi stores it in QueryCache
+2. The handler listens for `updated` events on `waitForTransactionReceipt` queries
+3. When the query succeeds, it extracts the receipt status (`success` or `reverted`)
+4. Emits a `CONFIRMED` or `REVERTED` transaction event
+
+### Transaction Property Preservation
+
+Transaction details are preserved from `BROADCASTED` to `CONFIRMED`/`REVERTED` events:
+
+```typescript
+// On BROADCASTED: Store transaction details keyed by hash
+pendingTransactions.set(normalizedHash, {
+  data,
+  to,
+  value,
+  function_name,
+  function_args,
+  safeFunctionArgs,
+});
+
+// On CONFIRMED: Retrieve and include stored details
+const pendingTx = pendingTransactions.get(normalizedHash);
+formo.transaction({
+  status: 'confirmed',
+  chainId,
+  address,
+  transactionHash,
+  ...pendingTx, // Includes all original details
+}, pendingTx?.safeFunctionArgs);
+
+// Clean up after confirmation
+pendingTransactions.delete(normalizedHash);
+```
+
+**Key behaviors**:
+- Transaction hash is normalized to lowercase for consistent lookup
+- Pending transactions Map is limited to 100 entries to prevent memory leaks
+- If CONFIRMED arrives without a prior BROADCASTED (e.g., page reload), the event is still emitted but without preserved details
 
 ### Address and Provider Detection
 
@@ -315,6 +410,88 @@ const formo = await FormoAnalytics.init('YOUR_WRITE_KEY', {
 
 **Best Practice**: Use the same QueryClient instance for both Wagmi and Formo to avoid creating multiple cache instances.
 
+## Transaction Event Properties
+
+Transaction events include different properties depending on the mode and mutation type.
+
+### Properties by Mode and Type
+
+| Property | Wagmi + writeContract | Wagmi + sendTransaction | No Wagmi (EIP-1193) |
+|----------|----------------------|------------------------|---------------------|
+| `status` | ✅ STARTED/BROADCASTED/CONFIRMED/REVERTED/REJECTED | ✅ Same | ✅ Same |
+| `chainId` | ✅ | ✅ | ✅ |
+| `address` | ✅ (user wallet) | ✅ (user wallet) | ✅ (from `from` field) |
+| `transactionHash` | ✅ (on BROADCASTED/CONFIRMED/REVERTED) | ✅ Same | ✅ Same |
+| `to` | ✅ (contract address) | ✅ (recipient) | ✅ (recipient) |
+| `data` | ✅ (encoded calldata via viem) | ✅ (raw data from vars) | ✅ (raw data) |
+| `value` | ✅ (if provided) | ✅ (if provided) | ✅ (if provided) |
+| `function_name` | ✅ (e.g., "transfer") | ❌ Not available | ❌ Not available |
+| `function_args` | ✅ (e.g., `{to: "0x...", amount: "100"}`) | ❌ Not available | ❌ Not available |
+| Top-level args | ✅ (e.g., `arg_to`, `amount`) | ❌ Not available | ❌ Not available |
+
+### writeContract Enhanced Properties
+
+When using `useWriteContract`, the SDK extracts additional metadata from the ABI:
+
+```typescript
+// Example writeContract call
+writeContract({
+  address: '0xTokenContract',
+  abi: tokenAbi,
+  functionName: 'transfer',
+  args: ['0xRecipient', BigInt('1000000000000000000')],
+});
+
+// Resulting transaction event properties
+{
+  status: 'broadcasted',
+  chainId: 1,
+  address: '0xUserWallet',           // User's wallet address
+  to: '0xTokenContract',              // Contract address
+  data: '0xa9059cbb...',              // Encoded calldata
+  transactionHash: '0x...',
+  function_name: 'transfer',          // Extracted from writeContract
+  function_args: {                    // Extracted from ABI + args
+    to: '0xRecipient',
+    amount: '1000000000000000000'
+  },
+  // Top-level args (with collision handling):
+  arg_to: '0xRecipient',              // Prefixed because 'to' collides
+  amount: '1000000000000000000'       // Not prefixed (no collision)
+}
+```
+
+### Function Argument Collision Handling
+
+When function argument names collide with built-in transaction fields, they are prefixed with `arg_`:
+
+**Reserved fields that trigger prefixing**:
+- `status`, `chainId`, `address`, `data`, `to`, `value`, `transactionHash`, `function_name`, `function_args`
+
+**Example**: `transfer(address to, uint256 amount)`
+- `to` → `arg_to` (collides with transaction `to` field)
+- `amount` → `amount` (no collision, stays unprefixed)
+
+The original unprefixed values are always preserved in `function_args` for reference.
+
+### BigInt Serialization
+
+All `BigInt` values in function arguments are recursively converted to strings for JSON serialization:
+
+```typescript
+// Input args
+args: [BigInt('1000000000000000000')]
+
+// Serialized in function_args
+function_args: { amount: '1000000000000000000' }
+```
+
+This handles:
+- Direct BigInt values
+- Arrays containing BigInt
+- Nested objects/structs with BigInt (e.g., Solidity tuples)
+- Multi-dimensional arrays
+
 ## Comparison: Wagmi Mode vs EIP-1193 Mode
 
 | Feature | Wagmi Mode | EIP-1193 Mode |
@@ -322,6 +499,8 @@ const formo = await FormoAnalytics.init('YOUR_WRITE_KEY', {
 | **Provider Wrapping** | ❌ Not needed | ✅ Wraps `provider.request()` |
 | **Event Source** | Wagmi config state | EIP-1193 provider events |
 | **Mutation Tracking** | TanStack Query | Request interception |
+| **Transaction Confirmation** | QueryCache subscription | `eth_getTransactionReceipt` polling |
+| **Function Name/Args** | ✅ Extracted from writeContract | ❌ Not available |
 | **Multi-Wallet Support** | Wagmi connectors (injected, WalletConnect, etc.) | EIP-6963 discovery |
 | **Provider Discovery** | ❌ Skipped (uses Wagmi connectors) | ✅ EIP-6963 auto-detection |
 | **React Integration** | Native with Wagmi | Provider-agnostic |
@@ -484,9 +663,9 @@ Potential improvements for future versions:
 
 1. **Account Switching**: Track when user switches between multiple accounts
 2. **Connector Info**: Include more detailed connector metadata
-3. **Transaction Receipts**: Track transaction confirmations/reverts
-4. **Custom Mutation Keys**: Support custom mutation key patterns
-5. **Wagmi v3 Support**: When released, add support for next major version
+3. **Custom Mutation Keys**: Support custom mutation key patterns
+4. **Wagmi v3 Support**: When released, add support for next major version
+5. **sendTransaction Function Decoding**: Decode function name/args from raw calldata using 4byte directory
 
 ## Migration Guide
 
