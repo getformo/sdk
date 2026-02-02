@@ -21,6 +21,22 @@ import {
 } from "./types";
 import { encodeWriteContractData, extractFunctionArgs } from "./utils";
 
+/**
+ * Built-in transaction fields that could collide with function args.
+ * Defined at module level to avoid recreating on every method call.
+ */
+const RESERVED_FIELDS = new Set([
+  "status",
+  "chainId",
+  "address",
+  "data",
+  "to",
+  "value",
+  "transactionHash",
+  "function_name",
+  "function_args",
+]);
+
 export class WagmiEventHandler {
   private formo: FormoAnalytics;
   private wagmiConfig: WagmiConfig;
@@ -44,9 +60,10 @@ export class WagmiEventHandler {
 
   /**
    * Store transaction details from BROADCASTED events for use in CONFIRMED/REVERTED
-   * Key: transactionHash, Value: transaction details
+   * Key: transactionHash, Value: transaction details including the original sender address
    */
   private pendingTransactions = new Map<string, {
+    address: string;
     data?: string;
     to?: string;
     value?: string;
@@ -331,12 +348,21 @@ export class WagmiEventHandler {
     const params = queryKey[1] as { hash?: string; chainId?: number } | undefined;
     const transactionHash = params?.hash;
     const chainId = params?.chainId || this.trackingState.lastChainId;
-    const address = this.trackingState.lastAddress;
 
     if (!transactionHash) {
       logger.warn("WagmiEventHandler: Transaction receipt query but no hash found");
       return;
     }
+
+    // Retrieve stored transaction details from BROADCASTED event
+    // Normalize hash to lowercase for consistent lookup
+    const normalizedHash = transactionHash.toLowerCase();
+    const pendingTx = this.pendingTransactions.get(normalizedHash);
+
+    // Use the original sender address from BROADCASTED event if available,
+    // otherwise fall back to current connected address.
+    // This handles wallet switches between broadcast and confirmation.
+    const address = pendingTx?.address || this.trackingState.lastAddress;
 
     if (!address) {
       logger.warn("WagmiEventHandler: Transaction receipt query but no address available");
@@ -356,11 +382,6 @@ export class WagmiEventHandler {
       const txStatus = receipt?.status === "reverted"
         ? TransactionStatus.REVERTED
         : TransactionStatus.CONFIRMED;
-
-      // Retrieve stored transaction details from BROADCASTED event
-      // Normalize hash to lowercase for consistent lookup
-      const normalizedHash = transactionHash.toLowerCase();
-      const pendingTx = this.pendingTransactions.get(normalizedHash);
 
       logger.info("WagmiEventHandler: Tracking transaction confirmation", {
         status: txStatus,
@@ -607,19 +628,6 @@ export class WagmiEventHandler {
         function_name,
       });
 
-      // Built-in transaction fields that could collide with function args
-      const RESERVED_FIELDS = new Set([
-        "status",
-        "chainId",
-        "address",
-        "data",
-        "to",
-        "value",
-        "transactionHash",
-        "function_name",
-        "function_args",
-      ]);
-
       // Only prefix function args that would collide with built-in transaction fields
       // e.g., transfer(address to, uint256 amount) -> { arg_to: "0x...", amount: "..." }
       // Non-colliding keys remain unprefixed for cleaner output
@@ -634,9 +642,11 @@ export class WagmiEventHandler {
 
       // Store transaction details for BROADCASTED status to use in CONFIRMED/REVERTED
       // Normalize hash to lowercase for consistent lookup
+      // Include the sender address to handle wallet switches between broadcast and confirmation
       if (status === TransactionStatus.BROADCASTED && transactionHash) {
         const normalizedHash = transactionHash.toLowerCase();
         const txDetails = {
+          address: userAddress,
           ...(data && { data }),
           ...(to && { to }),
           ...(value && { value }),
