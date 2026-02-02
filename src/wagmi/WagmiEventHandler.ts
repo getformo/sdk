@@ -423,11 +423,28 @@ export class WagmiEventHandler {
         function_name,
       });
 
-      // Prefix function args to avoid collision with built-in transaction fields
-      // e.g., transfer(address to, uint256 amount) -> { arg_to: "0x...", arg_amount: "..." }
-      const prefixedFunctionArgs = function_args
+      // Built-in transaction fields that could collide with function args
+      const RESERVED_FIELDS = new Set([
+        "status",
+        "chainId",
+        "address",
+        "data",
+        "to",
+        "value",
+        "transactionHash",
+        "function_name",
+        "function_args",
+      ]);
+
+      // Only prefix function args that would collide with built-in transaction fields
+      // e.g., transfer(address to, uint256 amount) -> { arg_to: "0x...", amount: "..." }
+      // Non-colliding keys remain unprefixed for cleaner output
+      const safeFunctionArgs = function_args
         ? Object.fromEntries(
-            Object.entries(function_args).map(([key, val]) => [`arg_${key}`, val])
+            Object.entries(function_args).map(([key, val]) => [
+              RESERVED_FIELDS.has(key) ? `arg_${key}` : key,
+              val,
+            ])
           )
         : undefined;
 
@@ -443,8 +460,8 @@ export class WagmiEventHandler {
           ...(function_name && { function_name }),
           ...(function_args && { function_args }),
         },
-        // Spread prefixed function args as additional properties
-        prefixedFunctionArgs
+        // Spread function args as additional properties (only colliding keys are prefixed)
+        safeFunctionArgs
       );
     } catch (error) {
       logger.error(

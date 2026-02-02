@@ -482,9 +482,9 @@ describe("WagmiEventHandler", () => {
       expect(txCall.function_args).to.deep.equal({ repayAmount: "3300000" });
 
       // Verify function args are also passed as additional properties (second argument)
-      // with arg_ prefix to avoid collision with built-in transaction fields
+      // 'repayAmount' doesn't collide with any built-in field, so no prefix needed
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({ arg_repayAmount: "3300000" });
+      expect(txProperties).to.deep.equal({ repayAmount: "3300000" });
     });
 
     it("should track writeContract mutation with multiple args", async () => {
@@ -544,11 +544,12 @@ describe("WagmiEventHandler", () => {
       });
 
       // Verify function args are also passed as additional properties (second argument)
-      // with arg_ prefix to avoid collision with built-in transaction fields like 'to'
+      // 'to' collides with transaction 'to' field, so it gets prefixed
+      // 'amount' doesn't collide, so it stays unprefixed
       const txProperties = mockFormo.transaction.firstCall.args[1];
       expect(txProperties).to.deep.equal({
         arg_to: "0xrecipient123",
-        arg_amount: "1000000000000000000",
+        amount: "1000000000000000000",
       });
     });
 
@@ -628,6 +629,431 @@ describe("WagmiEventHandler", () => {
       }
 
       expect(mockFormo.transaction.called).to.be.false;
+    });
+
+    it("should not overwrite transaction 'to' with function arg 'to' (collision avoidance)", async () => {
+      // This test verifies that when a function like transfer(address to, uint256 amount)
+      // is called, the 'to' field in function_args doesn't overwrite the transaction 'to'
+      // (contract address). Only colliding keys get the 'arg_' prefix.
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 100,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_collision_test",
+            variables: {
+              address: "0xContractAddress", // This is the contract address (transaction 'to')
+              abi: [
+                {
+                  type: "function",
+                  name: "transfer",
+                  inputs: [
+                    { name: "to", type: "address" },      // This 'to' is the recipient (collides!)
+                    { name: "amount", type: "uint256" },  // Doesn't collide
+                  ],
+                  outputs: [{ name: "", type: "bool" }],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "transfer",
+              args: ["0xRecipientAddress", BigInt("1000000000000000000")],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+
+      // The transaction 'to' should be the contract address, NOT the recipient
+      expect(txCall.to).to.equal("0xContractAddress");
+
+      // The function_args should contain the unprefixed original keys
+      expect(txCall.function_args).to.deep.equal({
+        to: "0xRecipientAddress",
+        amount: "1000000000000000000",
+      });
+
+      // The second argument (properties) should have:
+      // - 'to' prefixed to 'arg_to' (collision with transaction field)
+      // - 'amount' unprefixed (no collision)
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({
+        arg_to: "0xRecipientAddress",
+        amount: "1000000000000000000",
+      });
+
+      // Ensure arg_to doesn't equal the contract address (it should be the recipient)
+      expect(txProperties!.arg_to).to.not.equal(txCall.to);
+    });
+
+    it("should handle writeContract with nested struct containing BigInt", async () => {
+      // Tests Solidity structs like: struct Order { address maker; uint256 price; }
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 101,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_struct_test",
+            variables: {
+              address: "0xOrderBook",
+              abi: [
+                {
+                  type: "function",
+                  name: "submitOrder",
+                  inputs: [
+                    {
+                      name: "order",
+                      type: "tuple",
+                      components: [
+                        { name: "maker", type: "address" },
+                        { name: "price", type: "uint256" },
+                        { name: "amount", type: "uint256" },
+                      ],
+                    },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "submitOrder",
+              args: [
+                {
+                  maker: "0xMakerAddress",
+                  price: BigInt("1000000000000000000"),
+                  amount: BigInt("50000000"),
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+
+      expect(txCall.function_name).to.equal("submitOrder");
+      // BigInt values inside the struct should be converted to strings
+      expect(txCall.function_args).to.deep.equal({
+        order: {
+          maker: "0xMakerAddress",
+          price: "1000000000000000000",
+          amount: "50000000",
+        },
+      });
+
+      // 'order' doesn't collide with any built-in field, so no prefix needed
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({
+        order: {
+          maker: "0xMakerAddress",
+          price: "1000000000000000000",
+          amount: "50000000",
+        },
+      });
+    });
+
+    it("should handle writeContract with array of structs containing BigInt", async () => {
+      // Tests Solidity: function batchTransfer(Transfer[] calldata transfers)
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 102,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_batch_test",
+            variables: {
+              address: "0xBatchContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "batchTransfer",
+                  inputs: [
+                    {
+                      name: "transfers",
+                      type: "tuple[]",
+                      components: [
+                        { name: "to", type: "address" },
+                        { name: "amount", type: "uint256" },
+                      ],
+                    },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "batchTransfer",
+              args: [
+                [
+                  { to: "0xRecipient1", amount: BigInt(100) },
+                  { to: "0xRecipient2", amount: BigInt(200) },
+                  { to: "0xRecipient3", amount: BigInt(300) },
+                ],
+              ],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+
+      // Transaction 'to' should be the contract, not overwritten by struct 'to' fields
+      expect(txCall.to).to.equal("0xBatchContract");
+
+      expect(txCall.function_name).to.equal("batchTransfer");
+      // All BigInt values in the array of structs should be stringified
+      expect(txCall.function_args).to.deep.equal({
+        transfers: [
+          { to: "0xRecipient1", amount: "100" },
+          { to: "0xRecipient2", amount: "200" },
+          { to: "0xRecipient3", amount: "300" },
+        ],
+      });
+
+      // 'transfers' doesn't collide with any built-in field, so no prefix
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({
+        transfers: [
+          { to: "0xRecipient1", amount: "100" },
+          { to: "0xRecipient2", amount: "200" },
+          { to: "0xRecipient3", amount: "300" },
+        ],
+      });
+    });
+
+    it("should handle writeContract with deeply nested struct (DeFi swap params)", async () => {
+      // Tests complex DeFi structs like Uniswap's ExactInputParams
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 103,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_swap_test",
+            variables: {
+              address: "0xSwapRouter",
+              abi: [
+                {
+                  type: "function",
+                  name: "swap",
+                  inputs: [
+                    {
+                      name: "params",
+                      type: "tuple",
+                      components: [
+                        {
+                          name: "input",
+                          type: "tuple",
+                          components: [
+                            { name: "token", type: "address" },
+                            { name: "amount", type: "uint256" },
+                          ],
+                        },
+                        {
+                          name: "output",
+                          type: "tuple",
+                          components: [
+                            { name: "token", type: "address" },
+                            { name: "minAmount", type: "uint256" },
+                          ],
+                        },
+                        { name: "deadline", type: "uint256" },
+                      ],
+                    },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "swap",
+              args: [
+                {
+                  input: {
+                    token: "0xUSDC",
+                    amount: BigInt("1000000000"), // 1000 USDC
+                  },
+                  output: {
+                    token: "0xWETH",
+                    minAmount: BigInt("500000000000000000"), // 0.5 WETH
+                  },
+                  deadline: BigInt("1700000000"),
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+
+      expect(txCall.function_name).to.equal("swap");
+      // All nested BigInt values should be recursively stringified
+      expect(txCall.function_args).to.deep.equal({
+        params: {
+          input: {
+            token: "0xUSDC",
+            amount: "1000000000",
+          },
+          output: {
+            token: "0xWETH",
+            minAmount: "500000000000000000",
+          },
+          deadline: "1700000000",
+        },
+      });
+
+      // 'params' doesn't collide with any built-in field, so no prefix
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({
+        params: {
+          input: {
+            token: "0xUSDC",
+            amount: "1000000000",
+          },
+          output: {
+            token: "0xWETH",
+            minAmount: "500000000000000000",
+          },
+          deadline: "1700000000",
+        },
+      });
+    });
+
+    it("should handle collision with 'data' field in function args", async () => {
+      // Edge case: function has a parameter named 'data' which could collide
+      // with the transaction's encoded data field
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 104,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: "0xtxhash_data_collision",
+            variables: {
+              address: "0xProxyContract",
+              abi: [
+                {
+                  type: "function",
+                  name: "execute",
+                  inputs: [
+                    { name: "target", type: "address" },
+                    { name: "data", type: "bytes" },     // This 'data' is a function param
+                    { name: "value", type: "uint256" },  // This 'value' is also a collision risk
+                  ],
+                  outputs: [],
+                  stateMutability: "payable",
+                },
+              ],
+              functionName: "execute",
+              args: ["0xTargetContract", "0xcalldata123", BigInt("1000000000000000000")],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+
+      // function_args should have the unprefixed original keys
+      expect(txCall.function_args).to.deep.equal({
+        target: "0xTargetContract",
+        data: "0xcalldata123",
+        value: "1000000000000000000",
+      });
+
+      // The properties should have:
+      // - 'target' unprefixed (no collision)
+      // - 'data' prefixed to 'arg_data' (collides with transaction data field)
+      // - 'value' prefixed to 'arg_value' (collides with transaction value field)
+      const txProperties = mockFormo.transaction.firstCall.args[1];
+      expect(txProperties).to.deep.equal({
+        target: "0xTargetContract",
+        arg_data: "0xcalldata123",
+        arg_value: "1000000000000000000",
+      });
+
+      // Ensure the transaction's own 'data' field (encoded calldata) is different
+      // from the function arg 'data' (which becomes arg_data)
+      expect(txProperties!.arg_data).to.equal("0xcalldata123");
     });
   });
 
