@@ -23,9 +23,7 @@ import { generateUUID } from "../../utils/hash";
 import { logger } from "../logger";
 import { storage } from "../storage";
 import { IEventFactory } from "./types";
-
-// SDK version
-const SDK_VERSION = "1.0.0";
+import { version as SDK_VERSION } from "../../version";
 
 /**
  * Generate or retrieve anonymous ID

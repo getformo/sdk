@@ -309,12 +309,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    if (!address) {
+      logger.warn("Signature: Address cannot be empty");
+      return;
+    }
+
+    const checksummedAddress = this.validateAndChecksumAddress(address);
+    if (!checksummedAddress) {
+      logger.warn(`Signature: Invalid address provided ("${address}")`);
+      return;
+    }
+
     await this.trackEvent(
       EventType.SIGNATURE,
       {
         status,
         chainId,
-        address,
+        address: checksummedAddress,
         message,
         ...(signatureHash && { signatureHash }),
       },
@@ -353,12 +364,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    if (!address) {
+      logger.warn("Transaction: Address cannot be empty");
+      return;
+    }
+
+    const checksummedAddress = this.validateAndChecksumAddress(address);
+    if (!checksummedAddress) {
+      logger.warn(`Transaction: Invalid address provided ("${address}")`);
+      return;
+    }
+
     await this.trackEvent(
       EventType.TRANSACTION,
       {
         status,
         chainId,
-        address,
+        address: checksummedAddress,
         data,
         to,
         value,
