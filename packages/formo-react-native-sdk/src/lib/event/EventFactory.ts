@@ -227,7 +227,7 @@ class EventFactory implements IEventFactory {
       processedEvent.properties = null;
     }
 
-    return toSnakeCase(processedEvent);
+    return toSnakeCase(processedEvent as unknown as Record<string, unknown>) as unknown as IFormoEvent;
   }
 
   /**

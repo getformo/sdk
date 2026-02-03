@@ -30,6 +30,7 @@ export interface WagmiConfig {
 
 export interface QueryClient {
   getMutationCache: () => MutationCache;
+  getQueryCache: () => QueryCache;
 }
 
 export interface MutationCache {
@@ -50,6 +51,40 @@ export interface MutationCacheEvent {
       variables?: Record<string, unknown>;
     };
   };
+}
+
+/**
+ * React Query query state
+ */
+export interface QueryState {
+  status: "pending" | "success" | "error";
+  data?: unknown;
+  error?: Error | null;
+  fetchStatus: "fetching" | "paused" | "idle";
+}
+
+/**
+ * React Query query object
+ */
+export interface Query {
+  state: QueryState;
+  queryKey: readonly unknown[];
+  queryHash: string;
+}
+
+/**
+ * React Query query cache event
+ */
+export interface QueryCacheEvent {
+  type: "added" | "removed" | "updated";
+  query: Query;
+}
+
+/**
+ * React Query QueryCache interface
+ */
+export interface QueryCache {
+  subscribe: (callback: (event: QueryCacheEvent) => void) => () => void;
 }
 
 export type UnsubscribeFn = () => void;

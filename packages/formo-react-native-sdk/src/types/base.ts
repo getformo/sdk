@@ -70,6 +70,8 @@ export interface IFormoAnalytics {
       to?: string;
       value?: string;
       transactionHash?: string;
+      function_name?: string;
+      function_args?: Record<string, unknown>;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,

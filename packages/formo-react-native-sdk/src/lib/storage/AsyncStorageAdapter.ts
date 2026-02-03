@@ -54,7 +54,7 @@ class AsyncStorageAdapter extends StorageBlueprint {
   }
 
   public isAvailable(): boolean {
-    return this.asyncStorage !== null;
+    return this.asyncStorage !== null && this.initialized;
   }
 
   /**

@@ -336,6 +336,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       to,
       value,
       transactionHash,
+      function_name,
+      function_args,
     }: {
       status: TransactionStatus;
       chainId: ChainID;
@@ -344,6 +346,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       to?: string;
       value?: string;
       transactionHash?: string;
+      function_name?: string;
+      function_args?: Record<string, unknown>;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -359,6 +363,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         to,
         value,
         ...(transactionHash && { transactionHash }),
+        ...(function_name && { function_name }),
+        ...(function_args && { function_args }),
       },
       properties,
       context,

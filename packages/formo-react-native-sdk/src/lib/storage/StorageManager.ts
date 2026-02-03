@@ -9,7 +9,6 @@ import { IStorage, StorageType, AsyncStorageInterface } from "./types";
  */
 export class StorageManager {
   private storages: Map<StorageType, IStorage> = new Map();
-  private asyncStorageInstance: AsyncStorageInterface | null = null;
 
   constructor(private readonly writeKey: string) {}
 
@@ -18,8 +17,6 @@ export class StorageManager {
    * This should be called during SDK initialization
    */
   public async initialize(asyncStorage: AsyncStorageInterface): Promise<void> {
-    this.asyncStorageInstance = asyncStorage;
-
     // Create and initialize the AsyncStorage adapter directly.
     // We bypass getStorage() here because it checks isAvailable() which
     // returns false on an uninitialized adapter and would fall back to
