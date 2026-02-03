@@ -66,10 +66,12 @@ export interface TransactionAPIEvent {
   status: TransactionStatus;
   chainId: ChainID;
   address: Address;
-  data: string;
-  to: string;
-  value: string;
+  data?: string;
+  to?: string;
+  value?: string;
   transactionHash?: string;
+  function_name?: string;
+  function_args?: Record<string, unknown>;
 }
 export interface SignatureAPIEvent {
   type: "signature";

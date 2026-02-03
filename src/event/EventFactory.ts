@@ -477,10 +477,12 @@ class EventFactory implements IEventFactory {
     status: TransactionStatus,
     chainId: ChainID,
     address: Address,
-    data: string,
-    to: string,
-    value: string,
+    data?: string,
+    to?: string,
+    value?: string,
     transactionHash?: string,
+    function_name?: string,
+    function_args?: Record<string, unknown>,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ) {
@@ -488,10 +490,12 @@ class EventFactory implements IEventFactory {
       properties: {
         status,
         chainId,
-        data,
-        to,
-        value,
+        ...(data && { data }),
+        ...(to && { to }),
+        ...(value && { value }),
         ...(transactionHash && { transactionHash }),
+        ...(function_name && { function_name }),
+        ...(function_args && { function_args }),
         ...properties,
       },
       address,
@@ -609,6 +613,8 @@ class EventFactory implements IEventFactory {
           event.to,
           event.value,
           event.transactionHash,
+          event.function_name,
+          event.function_args,
           event.properties,
           event.context
         );

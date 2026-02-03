@@ -1,6 +1,6 @@
 /**
  * WagmiEventHandler
- * 
+ *
  * Handles wallet event tracking by hooking into Wagmi v2's config.subscribe()
  * and TanStack Query's MutationCache. This replaces the EIP-1193 provider
  * wrapping approach when Wagmi mode is enabled.
@@ -14,10 +14,53 @@ import {
   WagmiState,
   QueryClient,
   MutationCacheEvent,
+  QueryCacheEvent,
   UnsubscribeFn,
   WagmiTrackingState,
   WagmiMutationKey,
 } from "./types";
+import {
+  encodeWriteContractData,
+  extractFunctionArgs,
+  buildSafeFunctionArgs,
+} from "./utils";
+
+/**
+ * Built-in transaction fields that could collide with function args.
+ * Defined at module level to avoid recreating on every method call.
+ */
+const RESERVED_FIELDS = new Set([
+  "status",
+  "chainId",
+  "address",
+  "data",
+  "to",
+  "value",
+  "transactionHash",
+  "function_name",
+  "function_args",
+]);
+
+/**
+ * Clean up old entries from a Set to prevent memory leaks.
+ * Removes oldest entries when size exceeds maxSize.
+ *
+ * @param set - The Set to clean up
+ * @param maxSize - Maximum allowed size before cleanup (default: 1000)
+ * @param removeCount - Number of entries to remove (default: 500)
+ */
+function cleanupOldEntries(
+  set: Set<string>,
+  maxSize = 1000,
+  removeCount = 500
+): void {
+  if (set.size > maxSize) {
+    const entries = Array.from(set);
+    for (let i = 0; i < removeCount && i < entries.length; i++) {
+      set.delete(entries[i]);
+    }
+  }
+}
 
 export class WagmiEventHandler {
   private formo: FormoAnalytics;
@@ -34,6 +77,26 @@ export class WagmiEventHandler {
    */
   private processedMutations = new Set<string>();
 
+  /**
+   * Track processed query states to prevent duplicate event emissions
+   * Key format: `${queryHash}:${status}`
+   */
+  private processedQueries = new Set<string>();
+
+  /**
+   * Store transaction details from BROADCASTED events for use in CONFIRMED/REVERTED
+   * Key: transactionHash, Value: transaction details including the original sender address
+   */
+  private pendingTransactions = new Map<string, {
+    address: string;
+    data?: string;
+    to?: string;
+    value?: string;
+    function_name?: string;
+    function_args?: Record<string, unknown>;
+    safeFunctionArgs?: Record<string, unknown>;
+  }>();
+
   constructor(
     formoAnalytics: FormoAnalytics,
     wagmiConfig: WagmiConfig,
@@ -48,9 +111,10 @@ export class WagmiEventHandler {
     // Set up connection/disconnection/chain listeners
     this.setupConnectionListeners();
 
-    // Set up mutation tracking if QueryClient is provided
+    // Set up mutation and query tracking if QueryClient is provided
     if (this.queryClient) {
       this.setupMutationTracking();
+      this.setupQueryTracking();
     } else {
       logger.warn(
         "WagmiEventHandler: QueryClient not provided, signature and transaction events will not be tracked"
@@ -210,6 +274,175 @@ export class WagmiEventHandler {
   }
 
   /**
+   * Set up query tracking for transaction confirmations
+   * Listens for waitForTransactionReceipt queries to detect CONFIRMED status
+   */
+  private setupQueryTracking(): void {
+    if (!this.queryClient) {
+      return;
+    }
+
+    logger.info("WagmiEventHandler: Setting up query tracking");
+
+    const queryCache = this.queryClient.getQueryCache();
+    const unsubscribe = queryCache.subscribe((event: QueryCacheEvent) => {
+      this.handleQueryEvent(event);
+    });
+
+    this.unsubscribers.push(unsubscribe);
+    logger.info("WagmiEventHandler: Query tracking set up successfully");
+  }
+
+  /**
+   * Handle query cache events (transaction confirmations)
+   */
+  private handleQueryEvent(event: QueryCacheEvent): void {
+    if (event.type !== "updated") {
+      return;
+    }
+
+    const query = event.query;
+    const queryKey = query.queryKey;
+
+    if (!queryKey || queryKey.length === 0) {
+      return;
+    }
+
+    const queryType = queryKey[0] as string;
+
+    // Only handle waitForTransactionReceipt queries
+    if (queryType !== "waitForTransactionReceipt") {
+      return;
+    }
+
+    const state = query.state;
+
+    // Extract receipt status early to include in deduplication key
+    // This ensures CONFIRMED vs REVERTED outcomes are processed separately
+    const receipt = state.data as { status?: string } | undefined;
+    const receiptStatus = receipt?.status;
+
+    // Create a unique key for this query state to prevent duplicate processing
+    // Include receipt status to distinguish between CONFIRMED and REVERTED outcomes
+    const queryStateKey = `${query.queryHash}:${state.status}:${receiptStatus || ""}`;
+
+    // Skip if we've already processed this query state
+    if (this.processedQueries.has(queryStateKey)) {
+      logger.debug("WagmiEventHandler: Skipping duplicate query event", {
+        queryType,
+        queryHash: query.queryHash,
+        status: state.status,
+        receiptStatus,
+      });
+      return;
+    }
+
+    // Mark this query state as processed
+    this.processedQueries.add(queryStateKey);
+
+    logger.debug("WagmiEventHandler: Query event", {
+      queryType,
+      queryHash: query.queryHash,
+      status: state.status,
+    });
+
+    // Handle transaction receipt queries
+    this.handleTransactionReceiptQuery(query);
+
+    // Clean up old processed queries to prevent memory leaks
+    cleanupOldEntries(this.processedQueries);
+  }
+
+  /**
+   * Handle waitForTransactionReceipt query completion
+   * Emits CONFIRMED or REVERTED transaction status
+   */
+  private handleTransactionReceiptQuery(query: any): void {
+    if (!this.formo.isAutocaptureEnabled("transaction")) {
+      return;
+    }
+
+    const state = query.state;
+    const queryKey = query.queryKey;
+
+    // Only handle successful queries (transaction confirmed on chain)
+    if (state.status !== "success") {
+      return;
+    }
+
+    // Extract hash and chainId from query key
+    // Query key format: ['waitForTransactionReceipt', { hash, chainId, ... }]
+    const params = queryKey[1] as { hash?: string; chainId?: number } | undefined;
+    const transactionHash = params?.hash;
+    const chainId = params?.chainId || this.trackingState.lastChainId;
+
+    if (!transactionHash) {
+      logger.warn("WagmiEventHandler: Transaction receipt query but no hash found");
+      return;
+    }
+
+    // Retrieve stored transaction details from BROADCASTED event
+    // Normalize hash to lowercase for consistent lookup
+    const normalizedHash = transactionHash.toLowerCase();
+    const pendingTx = this.pendingTransactions.get(normalizedHash);
+
+    // Use the original sender address from BROADCASTED event if available,
+    // otherwise fall back to current connected address.
+    // This handles wallet switches between broadcast and confirmation.
+    const address = pendingTx?.address || this.trackingState.lastAddress;
+
+    if (!address) {
+      logger.warn("WagmiEventHandler: Transaction receipt query but no address available");
+      return;
+    }
+
+    try {
+      // Extract receipt data
+      const receipt = state.data as {
+        status?: "success" | "reverted";
+        blockNumber?: bigint;
+        gasUsed?: bigint;
+      } | undefined;
+
+      // Determine transaction status from receipt
+      // receipt.status is 'success' or 'reverted' in viem
+      const txStatus = receipt?.status === "reverted"
+        ? TransactionStatus.REVERTED
+        : TransactionStatus.CONFIRMED;
+
+      logger.info("WagmiEventHandler: Tracking transaction confirmation", {
+        status: txStatus,
+        transactionHash,
+        address,
+        chainId,
+        blockNumber: receipt?.blockNumber?.toString(),
+      });
+
+      this.formo.transaction(
+        {
+          status: txStatus,
+          chainId: chainId || 0,
+          address,
+          transactionHash,
+          // Include stored transaction details if available
+          ...(pendingTx?.data && { data: pendingTx.data }),
+          ...(pendingTx?.to && { to: pendingTx.to }),
+          ...(pendingTx?.value && { value: pendingTx.value }),
+          ...(pendingTx?.function_name && { function_name: pendingTx.function_name }),
+          ...(pendingTx?.function_args && { function_args: pendingTx.function_args }),
+        },
+        // Spread function args as additional properties (only colliding keys are prefixed)
+        pendingTx?.safeFunctionArgs
+      );
+
+      // Clean up the pending transaction after confirmation
+      this.pendingTransactions.delete(normalizedHash);
+    } catch (error) {
+      logger.error("WagmiEventHandler: Error handling transaction receipt query:", error);
+    }
+  }
+
+  /**
    * Handle mutation cache events (signatures, transactions)
    */
   private handleMutationEvent(event: MutationCacheEvent): void {
@@ -258,16 +491,9 @@ export class WagmiEventHandler {
     if (mutationType === "sendTransaction" || mutationType === "writeContract") {
       this.handleTransactionMutation(mutationType as WagmiMutationKey, mutation);
     }
-    
+
     // Clean up old processed mutations to prevent memory leaks
-    // Keep only recent mutations (max 1000 entries)
-    if (this.processedMutations.size > 1000) {
-      const entries = Array.from(this.processedMutations);
-      // Remove oldest 500 entries
-      for (let i = 0; i < 500; i++) {
-        this.processedMutations.delete(entries[i]);
-      }
-    }
+    cleanupOldEntries(this.processedMutations);
   }
 
   /**
@@ -351,10 +577,21 @@ export class WagmiEventHandler {
     const state = mutation.state;
     const variables = state.variables || {};
     const chainId = this.trackingState.lastChainId || variables.chainId;
-    const address = this.trackingState.lastAddress || variables.account || variables.address;
+    // For sendTransaction, user's address is the 'from'
+    // For writeContract, variables.address is the contract address, not the user
+    // variables.account can be a string address or an Account object with an address property
+    const accountValue = variables.account;
+    const accountAddress =
+      typeof accountValue === "string"
+        ? accountValue
+        : accountValue?.address;
+    const userAddress =
+      this.trackingState.lastAddress || accountAddress || variables.from;
 
-    if (!address) {
-      logger.warn("WagmiEventHandler: Transaction event but no address available");
+    if (!userAddress) {
+      logger.warn(
+        "WagmiEventHandler: Transaction event but no address available"
+      );
       return;
     }
 
@@ -374,32 +611,102 @@ export class WagmiEventHandler {
         return; // Ignore idle state
       }
 
-      // Extract transaction details from variables
-      const data = variables.data;
-      const to = variables.to || variables.address;
+      // Extract transaction details based on mutation type
+      let data: string | undefined;
+      let to: string | undefined;
+      let function_name: string | undefined;
+      let function_args: Record<string, unknown> | undefined;
       const value = variables.value?.toString();
+
+      if (mutationType === "writeContract") {
+        // For writeContract, extract function info and encode data
+        const { abi, functionName: fnName, args, address: contractAddress } = variables;
+        to = contractAddress;
+        function_name = fnName;
+
+        if (abi && fnName) {
+          // Extract function arguments as a name-value map
+          function_args = extractFunctionArgs(abi, fnName, args);
+
+          // Encode the function data synchronously if viem is available
+          const encodedData = encodeWriteContractData(abi, fnName, args);
+          if (encodedData) {
+            data = encodedData;
+            logger.debug(
+              "WagmiEventHandler: Encoded writeContract data",
+              data.substring(0, 10)
+            );
+          }
+        }
+      } else {
+        // For sendTransaction, use variables directly
+        // Only data is available, function_name and function_args are not sent
+        data = variables.data;
+        to = variables.to;
+      }
 
       logger.info("WagmiEventHandler: Tracking transaction event", {
         status,
         mutationType,
-        address,
+        address: userAddress,
         chainId,
         transactionHash,
+        function_name,
       });
+
+      // Build safeFunctionArgs with collision handling and struct flattening
+      const safeFunctionArgs = buildSafeFunctionArgs(function_args, RESERVED_FIELDS);
+
+      // Store transaction details for BROADCASTED status to use in CONFIRMED/REVERTED
+      // Normalize hash to lowercase for consistent lookup
+      // Include the sender address to handle wallet switches between broadcast and confirmation
+      if (status === TransactionStatus.BROADCASTED && transactionHash) {
+        const normalizedHash = transactionHash.toLowerCase();
+        const txDetails = {
+          address: userAddress,
+          ...(data && { data }),
+          ...(to && { to }),
+          ...(value && { value }),
+          ...(function_name && { function_name }),
+          ...(function_args && { function_args }),
+          ...(safeFunctionArgs && { safeFunctionArgs }),
+        };
+        this.pendingTransactions.set(normalizedHash, txDetails);
+
+        logger.debug("WagmiEventHandler: Stored pending transaction for confirmation", {
+          transactionHash: normalizedHash,
+        });
+
+        // Clean up old pending transactions to prevent memory leaks (keep max 100)
+        // Remove oldest 50 entries when limit exceeded to handle high-throughput scenarios
+        if (this.pendingTransactions.size > 100) {
+          const keys = Array.from(this.pendingTransactions.keys());
+          for (let i = 0; i < 50 && i < keys.length; i++) {
+            this.pendingTransactions.delete(keys[i]);
+          }
+        }
+      }
 
       this.formo.transaction(
         {
           status,
           chainId: chainId || 0,
-          address,
+          address: userAddress,
           ...(data && { data }),
           ...(to && { to }),
           ...(value && { value }),
           ...(transactionHash && { transactionHash }),
-        }
+          ...(function_name && { function_name }),
+          ...(function_args && { function_args }),
+        },
+        // Spread function args as additional properties (only colliding keys are prefixed)
+        safeFunctionArgs
       );
     } catch (error) {
-      logger.error("WagmiEventHandler: Error handling transaction mutation:", error);
+      logger.error(
+        "WagmiEventHandler: Error handling transaction mutation:",
+        error
+      );
     }
   }
 
@@ -475,6 +782,8 @@ export class WagmiEventHandler {
     
     this.unsubscribers = [];
     this.processedMutations.clear();
+    this.processedQueries.clear();
+    this.pendingTransactions.clear();
     logger.info("WagmiEventHandler: Cleanup complete");
   }
 }

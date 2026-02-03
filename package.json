@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.26.0",
+  "version": "1.27.0",
   "packageManager": "pnpm@9.0.0",
   "repository": {
     "type": "git",
@@ -94,10 +94,14 @@
     "@tanstack/react-query": ">=5.0.0",
     "@types/react": ">=16.14.34",
     "react": ">=16.14.0",
+    "viem": ">=2.0.0",
     "wagmi": ">=2.0.0"
   },
   "peerDependenciesMeta": {
     "@tanstack/react-query": {
+      "optional": true
+    },
+    "viem": {
       "optional": true
     },
     "wagmi": {
