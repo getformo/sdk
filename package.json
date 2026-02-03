@@ -50,7 +50,7 @@
     "@typescript-eslint/eslint-plugin": "^5.30.4",
     "@typescript-eslint/parser": "^5.30.4",
     "chai": "^4.3.6",
-    "eslint": "^8.19.0",
+    "eslint": "^9.26.0",
     "eslint-config-react-app": "^7.0.1",
     "global-jsdom": "^8.6.0",
     "jsdom": "^21.1.0",
