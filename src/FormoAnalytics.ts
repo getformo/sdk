@@ -48,6 +48,7 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
+import { SolanaWalletAdapterHandler } from "./solana";
 
 /**
  * Constants for provider switching reasons
@@ -96,6 +97,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Only initialized when options.wagmi is provided
    */
   private wagmiHandler?: WagmiEventHandler;
+
+  /**
+   * Solana Wallet Adapter handler for tracking Solana wallet events
+   * Only initialized when options.solana is provided
+   * Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
+   */
+  private solanaHandler?: SolanaWalletAdapterHandler;
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -191,6 +199,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
+    // Initialize Solana handler if Solana options are provided
+    // Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
+    if (options.solana) {
+      logger.info("FormoAnalytics: Initializing Solana wallet tracking");
+      this.solanaHandler = new SolanaWalletAdapterHandler(this, {
+        wallet: options.solana.wallet,
+        connection: options.solana.connection,
+        cluster: options.solana.cluster,
+        chainId: options.solana.chainId,
+      });
+    }
+
     this.trackPageHit();
     this.trackPageHits();
   }
@@ -257,20 +277,26 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public cleanup(): void {
     logger.info("FormoAnalytics: Cleaning up resources");
-    
+
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
       this.wagmiHandler.cleanup();
       this.wagmiHandler = undefined;
     }
-    
+
+    // Clean up Solana handler if present
+    if (this.solanaHandler) {
+      this.solanaHandler.cleanup();
+      this.solanaHandler = undefined;
+    }
+
     // Clean up EIP-1193 providers if not in Wagmi mode
     if (!this.isWagmiMode) {
       for (const provider of Array.from(this._trackedProviders)) {
         this.untrackProvider(provider);
       }
     }
-    
+
     logger.info("FormoAnalytics: Cleanup complete");
   }
 
@@ -1928,6 +1954,53 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
+  }
+
+  /**
+   * Get the Solana wallet adapter handler instance
+   * Useful for advanced integration scenarios
+   */
+  get solana(): SolanaWalletAdapterHandler | undefined {
+    return this.solanaHandler;
+  }
+
+  /**
+   * Update the Solana wallet instance
+   * Useful for React apps where wallet context changes
+   * @param wallet The new Solana wallet adapter or context
+   */
+  public setSolanaWallet(wallet: Parameters<SolanaWalletAdapterHandler["setWallet"]>[0]): void {
+    if (this.solanaHandler) {
+      this.solanaHandler.setWallet(wallet);
+    } else if (wallet) {
+      // Initialize Solana handler if not already present
+      logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
+      this.solanaHandler = new SolanaWalletAdapterHandler(this, {
+        wallet,
+        cluster: this.options.solana?.cluster,
+        chainId: this.options.solana?.chainId,
+      });
+    }
+  }
+
+  /**
+   * Update the Solana connection instance
+   * @param connection The new Solana connection
+   */
+  public setSolanaConnection(connection: Parameters<SolanaWalletAdapterHandler["setConnection"]>[0]): void {
+    if (this.solanaHandler) {
+      this.solanaHandler.setConnection(connection);
+    }
+  }
+
+  /**
+   * Update the Solana cluster/network
+   * @param cluster The Solana cluster (mainnet-beta, testnet, devnet, localnet)
+   */
+  public setSolanaCluster(cluster: Parameters<SolanaWalletAdapterHandler["setCluster"]>[0]): void {
+    if (this.solanaHandler) {
+      this.solanaHandler.setCluster(cluster);
+    }
   }
 
   private async getAddress(
