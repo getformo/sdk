@@ -76,11 +76,28 @@ export class SolanaWalletAdapterHandler {
   >();
 
   /**
-   * Original methods that we wrap for tracking
+   * Original adapter methods that we wrap for tracking
    */
-  private originalSendTransaction?: SolanaWalletAdapter["sendTransaction"];
-  private originalSignMessage?: SolanaWalletAdapter["signMessage"];
-  private originalSignTransaction?: SolanaWalletAdapter["signTransaction"];
+  private originalAdapterSendTransaction?: SolanaWalletAdapter["sendTransaction"];
+  private originalAdapterSignMessage?: SolanaWalletAdapter["signMessage"];
+  private originalAdapterSignTransaction?: SolanaWalletAdapter["signTransaction"];
+
+  /**
+   * Original context methods that we wrap for tracking
+   */
+  private originalContextSendTransaction?: SolanaWalletContext["sendTransaction"];
+  private originalContextSignMessage?: SolanaWalletContext["signMessage"];
+  private originalContextSignTransaction?: SolanaWalletContext["signTransaction"];
+
+  /**
+   * Reference to the wrapped context (to restore methods on cleanup)
+   */
+  private wrappedContext?: SolanaWalletContext;
+
+  /**
+   * Reference to the wrapped adapter (to restore methods on cleanup)
+   */
+  private wrappedAdapter?: SolanaWalletAdapter;
 
   /**
    * Track active polling timeout IDs for cleanup
@@ -120,11 +137,55 @@ export class SolanaWalletAdapterHandler {
   }
 
   /**
+   * Restore original methods on the wrapped wallet/context
+   */
+  private restoreOriginalMethods(): void {
+    // Restore adapter methods
+    if (this.wrappedAdapter) {
+      if (this.originalAdapterSendTransaction) {
+        this.wrappedAdapter.sendTransaction = this.originalAdapterSendTransaction;
+      }
+      if (this.originalAdapterSignMessage) {
+        this.wrappedAdapter.signMessage = this.originalAdapterSignMessage;
+      }
+      if (this.originalAdapterSignTransaction) {
+        this.wrappedAdapter.signTransaction = this.originalAdapterSignTransaction;
+      }
+      this.wrappedAdapter = undefined;
+    }
+
+    // Restore context methods
+    if (this.wrappedContext) {
+      if (this.originalContextSendTransaction) {
+        this.wrappedContext.sendTransaction = this.originalContextSendTransaction;
+      }
+      if (this.originalContextSignMessage) {
+        this.wrappedContext.signMessage = this.originalContextSignMessage;
+      }
+      if (this.originalContextSignTransaction) {
+        this.wrappedContext.signTransaction = this.originalContextSignTransaction;
+      }
+      this.wrappedContext = undefined;
+    }
+
+    // Clear original method references
+    this.originalAdapterSendTransaction = undefined;
+    this.originalAdapterSignMessage = undefined;
+    this.originalAdapterSignTransaction = undefined;
+    this.originalContextSendTransaction = undefined;
+    this.originalContextSignMessage = undefined;
+    this.originalContextSignTransaction = undefined;
+  }
+
+  /**
    * Update the wallet instance (useful for React context updates)
    */
   public setWallet(
     wallet: SolanaWalletAdapter | SolanaWalletContext | null
   ): void {
+    // Restore original methods on previous wallet before cleaning up
+    this.restoreOriginalMethods();
+
     // Clean up previous wallet listeners
     this.cleanupWalletListeners();
 
@@ -199,16 +260,51 @@ export class SolanaWalletAdapterHandler {
    * Set up listeners for a wallet context (useWallet)
    */
   private setupContextListeners(context: SolanaWalletContext): void {
-    // For context-based wallets, we need to poll for state changes
-    // since the context doesn't emit events directly
-    // The actual wallet adapter within the context will emit events
+    // For context-based wallets, we set up event listeners on the inner adapter
+    // but only wrap the context methods (not adapter methods) to avoid double tracking.
+    // The context methods are the user-facing API that we want to track.
 
     if (context.wallet) {
-      this.setupAdapterListeners(context.wallet);
+      // Only add event listeners (connect/disconnect) on the inner adapter
+      // Do NOT wrap adapter methods - we'll wrap context methods instead
+      this.setupAdapterEventListenersOnly(context.wallet);
     }
 
-    // Wrap context methods for tracking
+    // Wrap context methods for transaction/signature tracking
     this.wrapContextMethods(context);
+  }
+
+  /**
+   * Set up only event listeners on an adapter (no method wrapping)
+   * Used when wrapping context methods to avoid double tracking
+   */
+  private setupAdapterEventListenersOnly(adapter: SolanaWalletAdapter): void {
+    // Connect event
+    const connectListener = (publicKey: SolanaPublicKey) => {
+      this.handleConnect(publicKey);
+    };
+    adapter.on("connect", connectListener);
+    this.unsubscribers.push(() =>
+      adapter.off("connect", connectListener as (...args: unknown[]) => void)
+    );
+
+    // Disconnect event
+    const disconnectListener = () => {
+      this.handleDisconnect();
+    };
+    adapter.on("disconnect", disconnectListener);
+    this.unsubscribers.push(() =>
+      adapter.off("disconnect", disconnectListener as (...args: unknown[]) => void)
+    );
+
+    // Error event
+    const errorListener = (error: unknown) => {
+      logger.error("SolanaWalletAdapterHandler: Wallet error", error);
+    };
+    adapter.on("error", errorListener as (error: WalletError) => void);
+    this.unsubscribers.push(() =>
+      adapter.off("error", errorListener as (...args: unknown[]) => void)
+    );
   }
 
   /**
@@ -250,21 +346,24 @@ export class SolanaWalletAdapterHandler {
    * Wrap wallet adapter methods for transaction/signature tracking
    */
   private wrapAdapterMethods(adapter: SolanaWalletAdapter): void {
+    // Store reference to adapter for cleanup
+    this.wrappedAdapter = adapter;
+
     // Wrap sendTransaction
     if (adapter.sendTransaction) {
-      this.originalSendTransaction = adapter.sendTransaction.bind(adapter);
+      this.originalAdapterSendTransaction = adapter.sendTransaction.bind(adapter);
       adapter.sendTransaction = this.wrappedSendTransaction.bind(this);
     }
 
     // Wrap signMessage
     if (adapter.signMessage) {
-      this.originalSignMessage = adapter.signMessage.bind(adapter);
+      this.originalAdapterSignMessage = adapter.signMessage.bind(adapter);
       adapter.signMessage = this.wrappedSignMessage.bind(this);
     }
 
     // Wrap signTransaction
     if (adapter.signTransaction) {
-      this.originalSignTransaction = adapter.signTransaction.bind(adapter);
+      this.originalAdapterSignTransaction = adapter.signTransaction.bind(adapter);
       adapter.signTransaction = this.wrappedSignTransaction.bind(this);
     }
   }
@@ -273,10 +372,18 @@ export class SolanaWalletAdapterHandler {
    * Wrap wallet context methods for transaction/signature tracking
    */
   private wrapContextMethods(context: SolanaWalletContext): void {
-    // Store original methods
-    const originalSendTransaction = context.sendTransaction.bind(context);
-    const originalSignMessage = context.signMessage?.bind(context);
-    const originalSignTransaction = context.signTransaction?.bind(context);
+    // Store reference to context for cleanup
+    this.wrappedContext = context;
+
+    // Store original methods in class properties for cleanup
+    this.originalContextSendTransaction = context.sendTransaction.bind(context);
+    this.originalContextSignMessage = context.signMessage?.bind(context);
+    this.originalContextSignTransaction = context.signTransaction?.bind(context);
+
+    // Also store in local variables for use in closures below
+    const originalSendTransaction = this.originalContextSendTransaction;
+    const originalSignMessage = this.originalContextSignMessage;
+    const originalSignTransaction = this.originalContextSignTransaction;
 
     // Wrap sendTransaction
     context.sendTransaction = async (
@@ -439,7 +546,7 @@ export class SolanaWalletAdapterHandler {
     connection: SolanaConnection,
     options?: SendTransactionOptions
   ): Promise<TransactionSignature> {
-    if (!this.originalSendTransaction) {
+    if (!this.originalAdapterSendTransaction) {
       throw new Error("sendTransaction not available");
     }
 
@@ -454,7 +561,7 @@ export class SolanaWalletAdapterHandler {
     }
 
     try {
-      const signature = await this.originalSendTransaction(
+      const signature = await this.originalAdapterSendTransaction(
         transaction,
         connection,
         options
@@ -493,7 +600,7 @@ export class SolanaWalletAdapterHandler {
    * Wrapped signMessage method for direct adapter
    */
   private async wrappedSignMessage(message: Uint8Array): Promise<Uint8Array> {
-    if (!this.originalSignMessage) {
+    if (!this.originalAdapterSignMessage) {
       throw new Error("signMessage not available");
     }
 
@@ -510,7 +617,7 @@ export class SolanaWalletAdapterHandler {
     }
 
     try {
-      const signature = await this.originalSignMessage(message);
+      const signature = await this.originalAdapterSignMessage(message);
 
       if (address && this.formo.isAutocaptureEnabled("signature")) {
         const signatureHex = Buffer.from(signature).toString("hex");
@@ -543,7 +650,7 @@ export class SolanaWalletAdapterHandler {
   private async wrappedSignTransaction(
     transaction: SolanaTransaction
   ): Promise<SolanaTransaction> {
-    if (!this.originalSignTransaction) {
+    if (!this.originalAdapterSignTransaction) {
       throw new Error("signTransaction not available");
     }
 
@@ -559,7 +666,7 @@ export class SolanaWalletAdapterHandler {
     }
 
     try {
-      const signedTx = await this.originalSignTransaction(transaction);
+      const signedTx = await this.originalAdapterSignTransaction(transaction);
 
       if (address && this.formo.isAutocaptureEnabled("signature")) {
         this.formo.signature({
@@ -908,18 +1015,8 @@ export class SolanaWalletAdapterHandler {
     this.processedSignatures.clear();
     this.pendingTransactions.clear();
 
-    // Restore original methods if we wrapped them
-    if (this.wallet && isSolanaWalletAdapter(this.wallet)) {
-      if (this.originalSendTransaction) {
-        this.wallet.sendTransaction = this.originalSendTransaction;
-      }
-      if (this.originalSignMessage) {
-        this.wallet.signMessage = this.originalSignMessage;
-      }
-      if (this.originalSignTransaction) {
-        this.wallet.signTransaction = this.originalSignTransaction;
-      }
-    }
+    // Restore original methods on both adapter and context
+    this.restoreOriginalMethods();
 
     this.wallet = null;
     this.connection = null;

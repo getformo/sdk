@@ -19,6 +19,7 @@ import {
 } from "../types";
 import { toChecksumAddress, toSnakeCase } from "../utils";
 import { getValidAddress } from "../utils/address";
+import { isSolanaAddress, getValidSolanaAddress } from "../solana/address";
 import { getCurrentTimeFormatted } from "../utils/timestamp";
 import { isUndefined } from "../validators";
 import { logger } from "../logger";
@@ -46,6 +47,32 @@ class EventFactory implements IEventFactory {
         );
       }
     }
+  }
+
+  /**
+   * Validate an address for both EVM and Solana chains.
+   * For EVM addresses, returns checksummed format.
+   * For Solana addresses, returns the Base58 address as-is.
+   * @param address The address to validate
+   * @returns The validated address or null if invalid
+   */
+  private validateMultiChainAddress(address: string | null | undefined): Address | null {
+    if (!address) {
+      return null;
+    }
+
+    // Check if it's a valid Solana address first (Base58, no 0x prefix)
+    if (isSolanaAddress(address)) {
+      return getValidSolanaAddress(address);
+    }
+
+    // Try EVM address validation
+    const validEvmAddress = getValidAddress(address);
+    if (validEvmAddress) {
+      return toChecksumAddress(validEvmAddress);
+    }
+
+    return null;
   }
   private getTimezone(): string {
     try {
@@ -312,12 +339,9 @@ class EventFactory implements IEventFactory {
     commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     // Handle address - convert undefined to null for consistency
-    const validAddress = getValidAddress(formoEvent.address);
-    if (validAddress) {
-      commonEventData.address = toChecksumAddress(validAddress);
-    } else {
-      commonEventData.address = null;
-    }
+    // Supports both EVM (hex) and Solana (Base58) addresses
+    const validAddress = this.validateMultiChainAddress(formoEvent.address);
+    commonEventData.address = validAddress;
 
     const processedEvent = mergeDeepRight(
       formoEvent,
@@ -630,11 +654,9 @@ class EventFactory implements IEventFactory {
     }
 
     // Set address if not already set by the specific event generator
+    // Supports both EVM (hex) and Solana (Base58) addresses
     if (formoEvent.address === undefined || formoEvent.address === null) {
-      const validAddress = getValidAddress(address);
-      formoEvent.address = validAddress
-        ? toChecksumAddress(validAddress)
-        : null;
+      formoEvent.address = this.validateMultiChainAddress(address);
     }
     formoEvent.user_id = userId || null;
 
