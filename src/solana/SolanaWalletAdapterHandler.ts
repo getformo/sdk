@@ -47,6 +47,15 @@ function cleanupOldEntries(
   }
 }
 
+/**
+ * Convert a Uint8Array to a hex string (browser-compatible alternative to Buffer.from().toString('hex'))
+ */
+function uint8ArrayToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export class SolanaWalletAdapterHandler {
   private formo: FormoAnalytics;
   private wallet: SolanaWalletAdapter | SolanaWalletContext | null = null;
@@ -465,7 +474,7 @@ export class SolanaWalletAdapterHandler {
 
           if (address && this.formo.isAutocaptureEnabled("signature")) {
             // Track signature confirmed
-            const signatureHex = Buffer.from(signature).toString("hex");
+            const signatureHex = uint8ArrayToHex(signature);
             this.formo.signature({
               status: SignatureStatus.CONFIRMED,
               chainId: this.chainId,
@@ -620,7 +629,7 @@ export class SolanaWalletAdapterHandler {
       const signature = await this.originalAdapterSignMessage(message);
 
       if (address && this.formo.isAutocaptureEnabled("signature")) {
-        const signatureHex = Buffer.from(signature).toString("hex");
+        const signatureHex = uint8ArrayToHex(signature);
         this.formo.signature({
           status: SignatureStatus.CONFIRMED,
           chainId: this.chainId,
@@ -835,8 +844,15 @@ export class SolanaWalletAdapterHandler {
     }
 
     let attempts = 0;
+    let currentTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
     const poll = async () => {
+      // Remove the current timeout ID from tracking since it has fired
+      if (currentTimeoutId) {
+        this.pollingTimeouts.delete(currentTimeoutId);
+        currentTimeoutId = null;
+      }
+
       // Stop polling if cleaned up
       if (this.isCleanedUp) {
         this.pendingTransactions.delete(signature);
@@ -910,8 +926,8 @@ export class SolanaWalletAdapterHandler {
 
       attempts++;
       if (attempts < maxAttempts && !this.isCleanedUp) {
-        const timeoutId = setTimeout(poll, intervalMs);
-        this.pollingTimeouts.add(timeoutId);
+        currentTimeoutId = setTimeout(poll, intervalMs);
+        this.pollingTimeouts.add(currentTimeoutId);
       } else {
         // Cleanup after max attempts
         this.pendingTransactions.delete(signature);
@@ -919,8 +935,8 @@ export class SolanaWalletAdapterHandler {
     };
 
     // Start polling
-    const timeoutId = setTimeout(poll, intervalMs);
-    this.pollingTimeouts.add(timeoutId);
+    currentTimeoutId = setTimeout(poll, intervalMs);
+    this.pollingTimeouts.add(currentTimeoutId);
 
     // Clean up old processed signatures
     cleanupOldEntries(this.processedSignatures);
