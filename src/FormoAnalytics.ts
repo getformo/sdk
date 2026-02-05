@@ -48,6 +48,12 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
+import {
+  SolanaWalletAdapterHandler,
+  isSolanaAddress,
+  getValidSolanaAddress,
+  SOLANA_CHAIN_IDS,
+} from "./solana";
 
 /**
  * Constants for provider switching reasons
@@ -96,6 +102,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Only initialized when options.wagmi is provided
    */
   private wagmiHandler?: WagmiEventHandler;
+
+  /**
+   * Solana Wallet Adapter handler for tracking Solana wallet events
+   * Only initialized when options.solana is provided
+   * Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
+   */
+  private solanaHandler?: SolanaWalletAdapterHandler;
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -191,6 +204,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
+    // Initialize Solana handler if Solana options are provided
+    // Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
+    if (options.solana) {
+      logger.info("FormoAnalytics: Initializing Solana wallet tracking");
+      this.solanaHandler = new SolanaWalletAdapterHandler(this, {
+        wallet: options.solana.wallet,
+        connection: options.solana.connection,
+        cluster: options.solana.cluster,
+        chainId: options.solana.chainId,
+      });
+    }
+
     this.trackPageHit();
     this.trackPageHits();
   }
@@ -257,20 +282,26 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public cleanup(): void {
     logger.info("FormoAnalytics: Cleaning up resources");
-    
+
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
       this.wagmiHandler.cleanup();
       this.wagmiHandler = undefined;
     }
-    
+
+    // Clean up Solana handler if present
+    if (this.solanaHandler) {
+      this.solanaHandler.cleanup();
+      this.solanaHandler = undefined;
+    }
+
     // Clean up EIP-1193 providers if not in Wagmi mode
     if (!this.isWagmiMode) {
       for (const provider of Array.from(this._trackedProviders)) {
         this.untrackProvider(provider);
       }
     }
-    
+
     logger.info("FormoAnalytics: Cleanup complete");
   }
 
@@ -305,14 +336,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    const checksummedAddress = this.validateAndChecksumAddress(address);
-    if (!checksummedAddress) {
+    const validAddress = this.validateMultiChainAddress(address, chainId);
+    if (!validAddress) {
       logger.warn(
-        `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`
+        `Connect: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
       );
       return;
     }
-    this.currentAddress = checksummedAddress;
+    this.currentAddress = validAddress;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -1930,6 +1961,53 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._provider;
   }
 
+  /**
+   * Get the Solana wallet adapter handler instance
+   * Useful for advanced integration scenarios
+   */
+  get solana(): SolanaWalletAdapterHandler | undefined {
+    return this.solanaHandler;
+  }
+
+  /**
+   * Update the Solana wallet instance
+   * Useful for React apps where wallet context changes
+   * @param wallet The new Solana wallet adapter or context
+   */
+  public setSolanaWallet(wallet: Parameters<SolanaWalletAdapterHandler["setWallet"]>[0]): void {
+    if (this.solanaHandler) {
+      this.solanaHandler.setWallet(wallet);
+    } else if (wallet) {
+      // Initialize Solana handler if not already present
+      logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
+      this.solanaHandler = new SolanaWalletAdapterHandler(this, {
+        wallet,
+        cluster: this.options.solana?.cluster,
+        chainId: this.options.solana?.chainId,
+      });
+    }
+  }
+
+  /**
+   * Update the Solana connection instance
+   * @param connection The new Solana connection
+   */
+  public setSolanaConnection(connection: Parameters<SolanaWalletAdapterHandler["setConnection"]>[0]): void {
+    if (this.solanaHandler) {
+      this.solanaHandler.setConnection(connection);
+    }
+  }
+
+  /**
+   * Update the Solana cluster/network
+   * @param cluster The Solana cluster (mainnet-beta, testnet, devnet, localnet)
+   */
+  public setSolanaCluster(cluster: Parameters<SolanaWalletAdapterHandler["setCluster"]>[0]): void {
+    if (this.solanaHandler) {
+      this.solanaHandler.setCluster(cluster);
+    }
+  }
+
   private async getAddress(
     provider?: EIP1193Provider
   ): Promise<Address | null> {
@@ -2229,6 +2307,34 @@ export class FormoAnalytics implements IFormoAnalytics {
   private validateAndChecksumAddress(address: string): Address | undefined {
     const validAddress = getValidAddress(address);
     return validAddress ? toChecksumAddress(validAddress) : undefined;
+  }
+
+  /**
+   * Validates an address for both EVM and Solana chains.
+   * For EVM addresses, returns checksummed format.
+   * For Solana addresses, returns the Base58 address as-is.
+   * @param address The address to validate
+   * @param chainId Optional chain ID to help determine address type
+   * @returns The validated address or undefined if invalid
+   */
+  private validateMultiChainAddress(
+    address: string,
+    chainId?: number
+  ): Address | undefined {
+    // If chain ID is in Solana range, validate as Solana address
+    const solanaChainIds = Object.values(SOLANA_CHAIN_IDS);
+    if (chainId && solanaChainIds.includes(chainId)) {
+      const validSolanaAddress = getValidSolanaAddress(address);
+      return validSolanaAddress || undefined;
+    }
+
+    // Check if it looks like a Solana address (Base58, no 0x prefix)
+    if (isSolanaAddress(address)) {
+      return getValidSolanaAddress(address) || undefined;
+    }
+
+    // Default to EVM address validation
+    return this.validateAndChecksumAddress(address);
   }
 
   /**

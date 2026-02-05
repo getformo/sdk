@@ -95,7 +95,10 @@
     "@types/react": ">=16.14.34",
     "react": ">=16.14.0",
     "viem": ">=2.0.0",
-    "wagmi": ">=2.0.0"
+    "wagmi": ">=2.0.0",
+    "@solana/wallet-adapter-base": ">=0.9.0",
+    "@solana/wallet-adapter-react": ">=0.15.0",
+    "@solana/web3.js": ">=1.70.0"
   },
   "peerDependenciesMeta": {
     "@tanstack/react-query": {
@@ -105,6 +108,15 @@
       "optional": true
     },
     "wagmi": {
+      "optional": true
+    },
+    "@solana/wallet-adapter-base": {
+      "optional": true
+    },
+    "@solana/wallet-adapter-react": {
+      "optional": true
+    },
+    "@solana/web3.js": {
       "optional": true
     }
   },
