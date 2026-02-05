@@ -7,12 +7,7 @@ import {
 } from "./events";
 import { EIP1193Provider } from "./provider";
 import { ReactNode } from "react";
-import {
-  SolanaOptions,
-  SolanaWalletAdapter,
-  SolanaWalletContext,
-  SolanaCluster,
-} from "../solana/types";
+import { SolanaOptions } from "../solana/types";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID

@@ -48,7 +48,12 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
-import { SolanaWalletAdapterHandler } from "./solana";
+import {
+  SolanaWalletAdapterHandler,
+  isSolanaAddress,
+  getValidSolanaAddress,
+  SOLANA_CHAIN_IDS,
+} from "./solana";
 
 /**
  * Constants for provider switching reasons
@@ -331,14 +336,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this.currentChainId = chainId;
-    const checksummedAddress = this.validateAndChecksumAddress(address);
-    if (!checksummedAddress) {
+    const validAddress = this.validateMultiChainAddress(address, chainId);
+    if (!validAddress) {
       logger.warn(
-        `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`
+        `Connect: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
       );
       return;
     }
-    this.currentAddress = checksummedAddress;
+    this.currentAddress = validAddress;
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -2302,6 +2307,34 @@ export class FormoAnalytics implements IFormoAnalytics {
   private validateAndChecksumAddress(address: string): Address | undefined {
     const validAddress = getValidAddress(address);
     return validAddress ? toChecksumAddress(validAddress) : undefined;
+  }
+
+  /**
+   * Validates an address for both EVM and Solana chains.
+   * For EVM addresses, returns checksummed format.
+   * For Solana addresses, returns the Base58 address as-is.
+   * @param address The address to validate
+   * @param chainId Optional chain ID to help determine address type
+   * @returns The validated address or undefined if invalid
+   */
+  private validateMultiChainAddress(
+    address: string,
+    chainId?: number
+  ): Address | undefined {
+    // If chain ID is in Solana range, validate as Solana address
+    const solanaChainIds = Object.values(SOLANA_CHAIN_IDS);
+    if (chainId && solanaChainIds.includes(chainId)) {
+      const validSolanaAddress = getValidSolanaAddress(address);
+      return validSolanaAddress || undefined;
+    }
+
+    // Check if it looks like a Solana address (Base58, no 0x prefix)
+    if (isSolanaAddress(address)) {
+      return getValidSolanaAddress(address) || undefined;
+    }
+
+    // Default to EVM address validation
+    return this.validateAndChecksumAddress(address);
   }
 
   /**

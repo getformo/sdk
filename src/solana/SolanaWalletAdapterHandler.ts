@@ -20,7 +20,6 @@ import {
   TransactionSignature,
   UnsubscribeFn,
   SOLANA_CHAIN_IDS,
-  DEFAULT_SOLANA_CHAIN_ID,
   isSolanaWalletContext,
   isSolanaWalletAdapter,
   SolanaTransaction,
@@ -28,7 +27,6 @@ import {
   WalletError,
 } from "./types";
 import {
-  getValidSolanaAddress,
   isBlockedSolanaAddress,
   publicKeyToAddress,
 } from "./address";
@@ -83,6 +81,16 @@ export class SolanaWalletAdapterHandler {
   private originalSendTransaction?: SolanaWalletAdapter["sendTransaction"];
   private originalSignMessage?: SolanaWalletAdapter["signMessage"];
   private originalSignTransaction?: SolanaWalletAdapter["signTransaction"];
+
+  /**
+   * Track active polling timeout IDs for cleanup
+   */
+  private pollingTimeouts = new Set<ReturnType<typeof setTimeout>>();
+
+  /**
+   * Flag to prevent new polls after cleanup is initiated
+   */
+  private isCleanedUp = false;
 
   constructor(
     formoAnalytics: FormoAnalytics,
@@ -706,6 +714,11 @@ export class SolanaWalletAdapterHandler {
     maxAttempts = 30,
     intervalMs = 2000
   ): Promise<void> {
+    // Don't start polling if already cleaned up
+    if (this.isCleanedUp) {
+      return;
+    }
+
     const conn = connection || this.connection;
     if (!conn || !conn.getSignatureStatus) {
       logger.debug(
@@ -717,6 +730,12 @@ export class SolanaWalletAdapterHandler {
     let attempts = 0;
 
     const poll = async () => {
+      // Stop polling if cleaned up
+      if (this.isCleanedUp) {
+        this.pendingTransactions.delete(signature);
+        return;
+      }
+
       try {
         const result = await conn.getSignatureStatus!(signature);
         const status = result.value;
@@ -783,8 +802,9 @@ export class SolanaWalletAdapterHandler {
       }
 
       attempts++;
-      if (attempts < maxAttempts) {
-        setTimeout(poll, intervalMs);
+      if (attempts < maxAttempts && !this.isCleanedUp) {
+        const timeoutId = setTimeout(poll, intervalMs);
+        this.pollingTimeouts.add(timeoutId);
       } else {
         // Cleanup after max attempts
         this.pendingTransactions.delete(signature);
@@ -792,7 +812,8 @@ export class SolanaWalletAdapterHandler {
     };
 
     // Start polling
-    setTimeout(poll, intervalMs);
+    const timeoutId = setTimeout(poll, intervalMs);
+    this.pollingTimeouts.add(timeoutId);
 
     // Clean up old processed signatures
     cleanupOldEntries(this.processedSignatures);
@@ -873,6 +894,15 @@ export class SolanaWalletAdapterHandler {
    */
   public cleanup(): void {
     logger.info("SolanaWalletAdapterHandler: Cleaning up");
+
+    // Set cleanup flag to stop any ongoing polls
+    this.isCleanedUp = true;
+
+    // Cancel all active polling timeouts
+    Array.from(this.pollingTimeouts).forEach((timeoutId) => {
+      clearTimeout(timeoutId);
+    });
+    this.pollingTimeouts.clear();
 
     this.cleanupWalletListeners();
     this.processedSignatures.clear();
