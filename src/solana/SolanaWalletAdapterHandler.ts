@@ -63,7 +63,7 @@ function uint8ArrayToHex(bytes: Uint8Array): string {
 function safeDecodeMessage(message: Uint8Array): string {
   try {
     if (typeof TextDecoder !== "undefined") {
-      return safeDecodeMessage(message);
+      return new TextDecoder().decode(message);
     }
     // Fallback for Node environments without TextDecoder global
     if (typeof Buffer !== "undefined") {
