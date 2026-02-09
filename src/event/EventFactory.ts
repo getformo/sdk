@@ -61,15 +61,15 @@ class EventFactory implements IEventFactory {
       return null;
     }
 
-    // Check if it's a valid Solana address first (Base58, no 0x prefix)
-    if (isSolanaAddress(address)) {
-      return getValidSolanaAddress(address);
-    }
-
-    // Try EVM address validation
+    // Try EVM address validation first
     const validEvmAddress = getValidAddress(address);
     if (validEvmAddress) {
       return toChecksumAddress(validEvmAddress);
+    }
+
+    // Check if it's a valid Solana address (Base58, no 0x prefix)
+    if (isSolanaAddress(address)) {
+      return getValidSolanaAddress(address);
     }
 
     return null;
