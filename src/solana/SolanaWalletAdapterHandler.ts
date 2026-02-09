@@ -56,6 +56,26 @@ function uint8ArrayToHex(bytes: Uint8Array): string {
     .join("");
 }
 
+/**
+ * Safely decode a Uint8Array message to string.
+ * Falls back to hex representation if TextDecoder is unavailable (some Node environments).
+ */
+function safeDecodeMessage(message: Uint8Array): string {
+  try {
+    if (typeof TextDecoder !== "undefined") {
+      return safeDecodeMessage(message);
+    }
+    // Fallback for Node environments without TextDecoder global
+    if (typeof Buffer !== "undefined") {
+      return Buffer.from(message).toString("utf-8");
+    }
+    // Last resort: hex representation
+    return `0x${uint8ArrayToHex(message)}`;
+  } catch {
+    return `0x${uint8ArrayToHex(message)}`;
+  }
+}
+
 export class SolanaWalletAdapterHandler {
   private formo: FormoAnalytics;
   private wallet: SolanaWalletAdapter | SolanaWalletContext | null = null;
@@ -201,6 +221,8 @@ export class SolanaWalletAdapterHandler {
     this.wallet = wallet;
 
     if (this.wallet) {
+      // Reset cleanup flag when setting a new wallet to enable polling
+      this.isCleanedUp = false;
       this.setupWalletListeners();
     }
   }
@@ -226,7 +248,11 @@ export class SolanaWalletAdapterHandler {
       this.trackingState.lastAddress &&
       this.formo.isAutocaptureEnabled("chain")
     ) {
-      this.formo.chain({
+      // Update trackingState to keep lastChainId in sync for future disconnect events
+      this.trackingState.lastChainId = this.chainId;
+
+      // Use internal method to avoid corrupting shared EVM wallet state
+      this.formo.trackChainEventOnly({
         chainId: this.chainId,
         address: this.trackingState.lastAddress,
       });
@@ -458,7 +484,7 @@ export class SolanaWalletAdapterHandler {
         message: Uint8Array
       ): Promise<Uint8Array> => {
         const address = this.getCurrentAddress();
-        const messageString = new TextDecoder().decode(message);
+        const messageString = safeDecodeMessage(message);
 
         if (address && this.formo.isAutocaptureEnabled("signature")) {
           // Track signature requested
@@ -615,7 +641,7 @@ export class SolanaWalletAdapterHandler {
     }
 
     const address = this.getCurrentAddress();
-    const messageString = new TextDecoder().decode(message);
+    const messageString = safeDecodeMessage(message);
 
     if (address && this.formo.isAutocaptureEnabled("signature")) {
       this.formo.signature({
@@ -709,6 +735,19 @@ export class SolanaWalletAdapterHandler {
     if (publicKey) {
       const address = publicKeyToAddress(publicKey);
       if (address && !isBlockedSolanaAddress(address)) {
+        // Skip if we already tracked this address to avoid duplicate connect events
+        // (e.g., when setWallet is called repeatedly with the same connected wallet)
+        if (
+          this.trackingState.lastAddress === address &&
+          this.trackingState.lastChainId === this.chainId
+        ) {
+          logger.debug(
+            "SolanaWalletAdapterHandler: Already tracking this address, skipping duplicate connect",
+            { address, chainId: this.chainId }
+          );
+          return;
+        }
+
         this.trackingState.lastAddress = address;
         this.trackingState.lastChainId = this.chainId;
 
@@ -855,10 +894,13 @@ export class SolanaWalletAdapterHandler {
     }
 
     const conn = connection || this.connection;
-    if (!conn || !conn.getSignatureStatus) {
+    // Prefer getSignatureStatuses (standard web3.js API) over getSignatureStatus (custom wrapper)
+    if (!conn || (!conn.getSignatureStatuses && !conn.getSignatureStatus)) {
       logger.debug(
         "SolanaWalletAdapterHandler: No connection for confirmation polling"
       );
+      // Clean up pendingTransactions entry since we can't poll for confirmation
+      this.pendingTransactions.delete(signature);
       return;
     }
 
@@ -879,8 +921,15 @@ export class SolanaWalletAdapterHandler {
       }
 
       try {
-        const result = await conn.getSignatureStatus!(signature);
-        const status = result.value;
+        // Use standard getSignatureStatuses API if available, fall back to getSignatureStatus
+        let status: import("./types").SignatureStatus | null = null;
+        if (conn.getSignatureStatuses) {
+          const result = await conn.getSignatureStatuses([signature]);
+          status = result.value[0];
+        } else if (conn.getSignatureStatus) {
+          const result = await conn.getSignatureStatus(signature);
+          status = result.value;
+        }
 
         if (status) {
           const signatureKey = `${signature}:${status.confirmationStatus}`;
@@ -1009,6 +1058,7 @@ export class SolanaWalletAdapterHandler {
     }
 
     if (isSolanaWalletContext(this.wallet)) {
+      // In wallet-adapter-react, wallet is a Wallet object with an adapter property
       return this.wallet.wallet?.adapter?.name || "Unknown Solana Wallet";
     }
 

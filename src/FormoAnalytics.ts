@@ -501,6 +501,44 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Internal method to emit a chain change event WITHOUT mutating shared state.
+   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
+   * @internal
+   */
+  async trackChainEventOnly(
+    params: {
+      chainId: ChainID;
+      address: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    const { chainId, address } = params;
+
+    if (!chainId || Number(chainId) === 0) {
+      logger.warn("trackChainEventOnly: chainId cannot be empty or 0");
+      return;
+    }
+    if (!address) {
+      logger.warn("trackChainEventOnly: address cannot be empty");
+      return;
+    }
+
+    // Emit event WITHOUT setting this.currentChainId
+    await this.trackEvent(
+      EventType.CHAIN,
+      {
+        chainId,
+        address,
+      },
+      properties,
+      context,
+      callback
+    );
+  }
+
+  /**
    * Emits a chain network change event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
@@ -2060,9 +2098,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.solanaHandler.setWallet(wallet);
     } else if (wallet) {
       // Initialize Solana handler if not already present
+      // Include connection from initial options for transaction confirmation tracking
       logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
       this.solanaHandler = new SolanaWalletAdapterHandler(this, {
         wallet,
+        connection: this.options.solana?.connection,
         cluster: this.options.solana?.cluster,
         chainId: this.options.solana?.chainId,
       });

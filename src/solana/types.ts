@@ -173,8 +173,19 @@ export interface SendTransactionOptions {
 }
 
 /**
+ * Solana Wallet wrapper interface
+ * In wallet-adapter-react, useWallet().wallet is a Wallet object that wraps an adapter
+ * @see https://github.com/anza-xyz/wallet-adapter/blob/master/packages/core/react/src/useWallet.ts
+ */
+export interface SolanaWallet {
+  adapter: SolanaWalletAdapter;
+  readyState: WalletReadyState;
+}
+
+/**
  * Solana Wallet Context interface
  * Based on @solana/wallet-adapter-react useWallet hook
+ * @see https://github.com/anza-xyz/wallet-adapter/blob/master/packages/core/react/src/useWallet.ts
  */
 export interface SolanaWalletContext {
   autoConnect: boolean;
