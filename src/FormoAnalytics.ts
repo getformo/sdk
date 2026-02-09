@@ -2409,13 +2409,20 @@ export class FormoAnalytics implements IFormoAnalytics {
       return validSolanaAddress || undefined;
     }
 
-    // Check if it looks like a Solana address (Base58, no 0x prefix)
-    if (isSolanaAddress(address)) {
-      return getValidSolanaAddress(address) || undefined;
+    // Default to EVM address validation first
+    const validEvmAddress = this.validateAndChecksumAddress(address);
+    if (validEvmAddress) {
+      return validEvmAddress;
     }
 
-    // Default to EVM address validation
-    return this.validateAndChecksumAddress(address);
+    // Only fall back to Solana format when chainId is not provided
+    if (chainId === undefined || chainId === null) {
+      if (isSolanaAddress(address)) {
+        return getValidSolanaAddress(address) || undefined;
+      }
+    }
+
+    return undefined;
   }
 
   /**

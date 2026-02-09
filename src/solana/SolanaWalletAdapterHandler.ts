@@ -273,10 +273,11 @@ export class SolanaWalletAdapterHandler {
     // but only wrap the context methods (not adapter methods) to avoid double tracking.
     // The context methods are the user-facing API that we want to track.
 
-    if (context.wallet) {
+    const adapter = context.wallet?.adapter;
+    if (adapter) {
       // Only add event listeners (connect/disconnect) on the inner adapter
       // Do NOT wrap adapter methods - we'll wrap context methods instead
-      this.setupAdapterEventListenersOnly(context.wallet);
+      this.setupAdapterEventListenersOnly(adapter);
     }
 
     // Wrap context methods for transaction/signature tracking
@@ -1008,7 +1009,7 @@ export class SolanaWalletAdapterHandler {
     }
 
     if (isSolanaWalletContext(this.wallet)) {
-      return this.wallet.wallet?.name || "Unknown Solana Wallet";
+      return this.wallet.wallet?.adapter?.name || "Unknown Solana Wallet";
     }
 
     return this.wallet.name;

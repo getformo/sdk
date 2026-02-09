@@ -104,6 +104,14 @@ export interface SolanaWalletAdapter {
 }
 
 /**
+ * Solana wallet entry from @solana/wallet-adapter-react
+ */
+export interface SolanaWallet {
+  adapter: SolanaWalletAdapter;
+  readyState: WalletReadyState;
+}
+
+/**
  * Solana wallet ready state
  */
 export enum WalletReadyState {
@@ -170,8 +178,8 @@ export interface SendTransactionOptions {
  */
 export interface SolanaWalletContext {
   autoConnect: boolean;
-  wallets: SolanaWalletAdapter[];
-  wallet: SolanaWalletAdapter | null;
+  wallets: SolanaWallet[];
+  wallet: SolanaWallet | null;
   publicKey: SolanaPublicKey | null;
   connecting: boolean;
   connected: boolean;
