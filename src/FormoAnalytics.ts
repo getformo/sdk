@@ -2455,11 +2455,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       return validEvmAddress;
     }
 
-    // Only fall back to Solana format when chainId is not provided
-    if (chainId === undefined || chainId === null) {
-      if (isSolanaAddress(address)) {
-        return getValidSolanaAddress(address) || undefined;
-      }
+    // Fall back to Solana format when EVM validation fails
+    // This handles custom chainIds and cases where chainId is not provided
+    if (isSolanaAddress(address)) {
+      return getValidSolanaAddress(address) || undefined;
     }
 
     return undefined;

@@ -242,20 +242,18 @@ export class SolanaWalletAdapterHandler {
     this.cluster = cluster;
     this.chainId = SOLANA_CHAIN_IDS[cluster];
 
-    // Emit chain change event if connected and cluster changed
-    if (
-      previousCluster !== cluster &&
-      this.trackingState.lastAddress &&
-      this.formo.isAutocaptureEnabled("chain")
-    ) {
-      // Update trackingState to keep lastChainId in sync for future disconnect events
+    // Update trackingState and emit chain event if connected and cluster changed
+    if (previousCluster !== cluster && this.trackingState.lastAddress) {
+      // Always update trackingState to keep lastChainId in sync for future disconnect events
       this.trackingState.lastChainId = this.chainId;
 
-      // Use internal method to avoid corrupting shared EVM wallet state
-      this.formo.trackChainEventOnly({
-        chainId: this.chainId,
-        address: this.trackingState.lastAddress,
-      });
+      if (this.formo.isAutocaptureEnabled("chain")) {
+        // Use internal method to avoid corrupting shared EVM wallet state
+        this.formo.trackChainEventOnly({
+          chainId: this.chainId,
+          address: this.trackingState.lastAddress,
+        });
+      }
     }
   }
 
