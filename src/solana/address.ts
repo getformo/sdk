@@ -155,11 +155,6 @@ export function isBlockedSolanaAddress(
     return true;
   }
 
-  // Block all-ones address (similar to zero address in EVM)
-  if (validAddress === SOLANA_SYSTEM_ADDRESSES.SYSTEM_PROGRAM) {
-    return true;
-  }
-
   return false;
 }
 

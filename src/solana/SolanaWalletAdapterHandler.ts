@@ -320,33 +320,7 @@ export class SolanaWalletAdapterHandler {
    * Set up listeners for a direct wallet adapter
    */
   private setupAdapterListeners(adapter: SolanaWalletAdapter): void {
-    // Connect event
-    const connectListener = (publicKey: SolanaPublicKey) => {
-      this.handleConnect(publicKey);
-    };
-    adapter.on("connect", connectListener);
-    this.unsubscribers.push(() =>
-      adapter.off("connect", connectListener as (...args: unknown[]) => void)
-    );
-
-    // Disconnect event
-    const disconnectListener = () => {
-      this.handleDisconnect();
-    };
-    adapter.on("disconnect", disconnectListener);
-    this.unsubscribers.push(() =>
-      adapter.off("disconnect", disconnectListener as (...args: unknown[]) => void)
-    );
-
-    // Error event
-    const errorListener = (error: unknown) => {
-      logger.error("SolanaWalletAdapterHandler: Wallet error", error);
-    };
-    adapter.on("error", errorListener as (error: WalletError) => void);
-    this.unsubscribers.push(() =>
-      adapter.off("error", errorListener as (...args: unknown[]) => void)
-    );
-
+    this.setupAdapterEventListenersOnly(adapter);
     // Wrap adapter methods for tracking
     this.wrapAdapterMethods(adapter);
   }
@@ -718,6 +692,26 @@ export class SolanaWalletAdapterHandler {
             chainId: this.chainId,
           }
         );
+
+        if (this.formo.isAutocaptureEnabled("connect")) {
+          void this.formo
+            .connect(
+              {
+                chainId: this.chainId,
+                address,
+              },
+              {
+                providerName: this.getWalletName(),
+                rdns: this.getWalletRdns(),
+              }
+            )
+            .catch((error) => {
+              logger.error(
+                "SolanaWalletAdapterHandler: Error emitting initial connect",
+                error
+              );
+            });
+        }
       }
     }
   }
@@ -864,13 +858,23 @@ export class SolanaWalletAdapterHandler {
         const status = result.value;
 
         if (status) {
-          const signatureKey = `${signature}:${status.confirmationStatus}`;
+          const confirmationStatus = status.confirmationStatus;
+          const isTerminalStatus =
+            !!status.err ||
+            confirmationStatus === "confirmed" ||
+            confirmationStatus === "finalized";
 
-          // Check for duplicate processing
-          if (this.processedSignatures.has(signatureKey)) {
-            return;
+          if (isTerminalStatus) {
+            const signatureKey = `${signature}:${
+              status.err ? "err" : confirmationStatus
+            }`;
+
+            // Check for duplicate processing only for terminal statuses
+            if (this.processedSignatures.has(signatureKey)) {
+              return;
+            }
+            this.processedSignatures.add(signatureKey);
           }
-          this.processedSignatures.add(signatureKey);
 
           if (status.err) {
             // Transaction failed
@@ -894,15 +898,15 @@ export class SolanaWalletAdapterHandler {
           }
 
           if (
-            status.confirmationStatus === "confirmed" ||
-            status.confirmationStatus === "finalized"
+            confirmationStatus === "confirmed" ||
+            confirmationStatus === "finalized"
           ) {
             // Transaction confirmed
             logger.info(
               "SolanaWalletAdapterHandler: Transaction confirmed",
               {
                 signature,
-                confirmationStatus: status.confirmationStatus,
+                confirmationStatus,
               }
             );
 

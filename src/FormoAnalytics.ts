@@ -305,6 +305,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("FormoAnalytics: Cleanup complete");
   }
 
+  private isSolanaChainId(chainId?: ChainID): boolean {
+    if (chainId === null || chainId === undefined) {
+      return false;
+    }
+    return Object.values(SOLANA_CHAIN_IDS).includes(chainId);
+  }
+
+  private hasNonSolanaState(): boolean {
+    const hasNonSolanaChain =
+      this.currentChainId !== undefined &&
+      !this.isSolanaChainId(this.currentChainId);
+    const hasNonSolanaAddress =
+      this.currentAddress !== undefined && !isSolanaAddress(this.currentAddress);
+    return hasNonSolanaChain || hasNonSolanaAddress;
+  }
+
   /**
    * Emits a connect wallet event.
    * @param {ChainID} params.chainId
@@ -335,7 +351,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.currentChainId = chainId;
     const validAddress = this.validateMultiChainAddress(address, chainId);
     if (!validAddress) {
       logger.warn(
@@ -343,13 +358,20 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
       return;
     }
-    this.currentAddress = validAddress;
+    const isSolanaConnection =
+      this.isSolanaChainId(chainId) || isSolanaAddress(validAddress);
+    const shouldUpdateState =
+      !isSolanaConnection || !this.hasNonSolanaState();
+    if (shouldUpdateState) {
+      this.currentChainId = chainId;
+      this.currentAddress = validAddress;
+    }
 
     await this.trackEvent(
       EventType.CONNECT,
       {
         chainId,
-        address: this.currentAddress,
+        address: validAddress,
       },
       properties,
       context,
@@ -411,12 +433,22 @@ export class FormoAnalytics implements IFormoAnalytics {
       callback
     );
 
-    this.currentAddress = undefined;
-    this.currentChainId = undefined;
-    this.clearActiveProvider();
-    logger.info(
-      "Wallet disconnected: Cleared currentAddress, currentChainId, and provider"
-    );
+    const isSolanaDisconnect =
+      this.isSolanaChainId(chainId) ||
+      (address ? isSolanaAddress(address) : false);
+    const shouldClearState = !isSolanaDisconnect || !this.hasNonSolanaState();
+    if (shouldClearState) {
+      this.currentAddress = undefined;
+      this.currentChainId = undefined;
+      this.clearActiveProvider();
+      logger.info(
+        "Wallet disconnected: Cleared currentAddress, currentChainId, and provider"
+      );
+    } else {
+      logger.info(
+        "Wallet disconnected: Preserved currentAddress, currentChainId, and provider for non-Solana state"
+      );
+    }
   }
 
   /**
