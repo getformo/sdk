@@ -703,7 +703,7 @@ export class SolanaWalletAdapterHandler {
   /**
    * Check initial connection state
    */
-  private checkInitialConnection(): void {
+  private async checkInitialConnection(): Promise<void> {
     const publicKey = this.getPublicKey();
     if (publicKey) {
       const address = publicKeyToAddress(publicKey);
@@ -718,6 +718,22 @@ export class SolanaWalletAdapterHandler {
             chainId: this.chainId,
           }
         );
+
+        // Emit connect event for already-connected wallets (common in auto-connect scenarios)
+        // The wallet adapter's "connect" event only fires during adapter.connect(),
+        // not retroactively for already-connected wallets
+        if (this.formo.isAutocaptureEnabled("connect")) {
+          await this.formo.trackConnectEventOnly(
+            {
+              chainId: this.chainId,
+              address,
+            },
+            {
+              providerName: this.getWalletName(),
+              rdns: this.getWalletRdns(),
+            }
+          );
+        }
       }
     }
   }
@@ -761,7 +777,8 @@ export class SolanaWalletAdapterHandler {
       this.trackingState.lastChainId = this.chainId;
 
       if (this.formo.isAutocaptureEnabled("connect")) {
-        await this.formo.connect(
+        // Use internal method to avoid corrupting shared EVM wallet state
+        await this.formo.trackConnectEventOnly(
           {
             chainId: this.chainId,
             address,
@@ -802,7 +819,8 @@ export class SolanaWalletAdapterHandler {
       });
 
       if (this.formo.isAutocaptureEnabled("disconnect")) {
-        await this.formo.disconnect({
+        // Use internal method to avoid corrupting shared EVM wallet state
+        await this.formo.trackDisconnectEventOnly({
           chainId: this.trackingState.lastChainId,
           address: this.trackingState.lastAddress,
         });
@@ -866,11 +884,21 @@ export class SolanaWalletAdapterHandler {
         if (status) {
           const signatureKey = `${signature}:${status.confirmationStatus}`;
 
-          // Check for duplicate processing
-          if (this.processedSignatures.has(signatureKey)) {
+          // Only deduplicate terminal states (confirmed/finalized/err) to prevent
+          // duplicate event emissions. Do NOT deduplicate intermediate states like
+          // "processed" since we need to keep polling until a terminal state.
+          const isTerminalState =
+            !!status.err ||
+            status.confirmationStatus === "confirmed" ||
+            status.confirmationStatus === "finalized";
+
+          // Check for duplicate processing of terminal states only
+          if (isTerminalState && this.processedSignatures.has(signatureKey)) {
             return;
           }
-          this.processedSignatures.add(signatureKey);
+          if (isTerminalState) {
+            this.processedSignatures.add(signatureKey);
+          }
 
           if (status.err) {
             // Transaction failed

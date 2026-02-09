@@ -420,6 +420,87 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Internal method to emit a connect event WITHOUT mutating shared state.
+   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
+   * @internal
+   */
+  async trackConnectEventOnly(
+    params: {
+      chainId: ChainID;
+      address: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    const { chainId, address } = params;
+
+    if (!chainId || Number(chainId) === 0) {
+      logger.warn("trackConnectEventOnly: Chain ID cannot be null or undefined");
+      return;
+    }
+    if (!address) {
+      logger.warn("trackConnectEventOnly: Address cannot be empty");
+      return;
+    }
+
+    const validAddress = this.validateMultiChainAddress(address, chainId);
+    if (!validAddress) {
+      logger.warn(
+        `trackConnectEventOnly: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
+      );
+      return;
+    }
+
+    // Emit event WITHOUT setting this.currentAddress or this.currentChainId
+    await this.trackEvent(
+      EventType.CONNECT,
+      {
+        chainId,
+        address: validAddress,
+      },
+      properties,
+      context,
+      callback
+    );
+  }
+
+  /**
+   * Internal method to emit a disconnect event WITHOUT mutating shared state.
+   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
+   * @internal
+   */
+  async trackDisconnectEventOnly(
+    params?: {
+      chainId?: ChainID;
+      address?: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    const chainId = params?.chainId;
+    const address = params?.address;
+
+    logger.info("trackDisconnectEventOnly: Emitting disconnect event with:", {
+      chainId,
+      address,
+    });
+
+    // Emit event WITHOUT clearing this.currentAddress, this.currentChainId, or _provider
+    await this.trackEvent(
+      EventType.DISCONNECT,
+      {
+        ...(chainId && { chainId }),
+        ...(address && { address }),
+      },
+      properties,
+      context,
+      callback
+    );
+  }
+
+  /**
    * Emits a chain network change event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address

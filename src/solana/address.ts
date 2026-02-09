@@ -150,13 +150,8 @@ export function isBlockedSolanaAddress(
     return false;
   }
 
-  // Block system addresses
+  // Block system addresses (includes SYSTEM_PROGRAM, TOKEN_PROGRAM, etc.)
   if (isSolanaSystemAddress(validAddress)) {
-    return true;
-  }
-
-  // Block all-ones address (similar to zero address in EVM)
-  if (validAddress === SOLANA_SYSTEM_ADDRESSES.SYSTEM_PROGRAM) {
     return true;
   }
 
