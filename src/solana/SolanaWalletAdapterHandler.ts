@@ -458,8 +458,8 @@ export class SolanaWalletAdapterHandler {
             startTime: Date.now(),
           });
 
-          // Start polling for confirmation
-          this.pollTransactionConfirmation(signature, address, connection);
+          // Start polling for confirmation (capture chainId at call time)
+          this.pollTransactionConfirmation(signature, address, this.chainId, connection);
         }
 
         return signature;
@@ -614,7 +614,8 @@ export class SolanaWalletAdapterHandler {
           startTime: Date.now(),
         });
 
-        this.pollTransactionConfirmation(signature, address, connection);
+        // Capture chainId at call time to avoid stale values during polling
+        this.pollTransactionConfirmation(signature, address, this.chainId, connection);
       }
 
       return signature;
@@ -882,6 +883,7 @@ export class SolanaWalletAdapterHandler {
   private async pollTransactionConfirmation(
     signature: string,
     address: string,
+    chainId: number,
     connection?: SolanaConnection,
     maxAttempts = 30,
     intervalMs = 2000
@@ -960,7 +962,7 @@ export class SolanaWalletAdapterHandler {
 
             this.formo.transaction({
               status: TransactionStatus.REVERTED,
-              chainId: this.chainId,
+              chainId,
               address,
               transactionHash: signature,
             });
@@ -984,7 +986,7 @@ export class SolanaWalletAdapterHandler {
 
             this.formo.transaction({
               status: TransactionStatus.CONFIRMED,
-              chainId: this.chainId,
+              chainId,
               address,
               transactionHash: signature,
             });
