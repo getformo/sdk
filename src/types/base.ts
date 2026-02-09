@@ -6,6 +6,7 @@ import {
   TransactionStatus,
 } from "./events";
 import { EIP1193Provider } from "./provider";
+import { PrivyUser } from "../privy/types";
 import { ReactNode } from "react";
 
 export type Nullable<T> = T | null;
@@ -77,11 +78,12 @@ export interface IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
   identify(
-    params: {
-      address: Address;
+    params?: {
+      address?: Address;
       providerName?: string;
       userId?: string;
       rdns?: string;
+      privyUser?: PrivyUser;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
