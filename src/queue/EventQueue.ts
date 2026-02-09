@@ -5,7 +5,7 @@ import {
   getActionDescriptor,
   hash,
   millisecondsToSecond,
-  toDateHourMinute,
+  toDateHourMinuteSecond,
 } from "../utils";
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
@@ -113,7 +113,7 @@ export class EventQueue implements IEventQueue {
   }
 
   private async generateMessageId(event: IFormoEvent): Promise<string> {
-    const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
+    const formattedTimestamp = toDateHourMinuteSecond(new Date(event.original_timestamp));
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
     return hash(eventString);

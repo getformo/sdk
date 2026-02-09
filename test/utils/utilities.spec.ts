@@ -4,6 +4,7 @@ import {
   toSnakeCase,
   millisecondsToSecond,
   toDateHourMinute,
+  toDateHourMinuteSecond,
   clampNumber,
 } from "../../src/utils/converter";
 import { getActionDescriptor } from "../../src/utils/base";
@@ -130,6 +131,34 @@ describe("Utility Functions", () => {
     it("should handle end of day", () => {
       const date = new Date(Date.UTC(2024, 11, 31, 23, 59, 59));
       expect(toDateHourMinute(date)).to.equal("2024-12-31 23:59");
+    });
+  });
+
+  describe("toDateHourMinuteSecond", () => {
+    it("should format date to YYYY-MM-DD HH:mm:ss", () => {
+      const date = new Date(Date.UTC(2024, 0, 15, 10, 30, 45));
+      expect(toDateHourMinuteSecond(date)).to.equal("2024-01-15 10:30:45");
+    });
+
+    it("should pad single digit months, days, and seconds", () => {
+      const date = new Date(Date.UTC(2024, 0, 5, 5, 5, 3));
+      expect(toDateHourMinuteSecond(date)).to.equal("2024-01-05 05:05:03");
+    });
+
+    it("should handle midnight", () => {
+      const date = new Date(Date.UTC(2024, 5, 15, 0, 0, 0));
+      expect(toDateHourMinuteSecond(date)).to.equal("2024-06-15 00:00:00");
+    });
+
+    it("should handle end of day", () => {
+      const date = new Date(Date.UTC(2024, 11, 31, 23, 59, 59));
+      expect(toDateHourMinuteSecond(date)).to.equal("2024-12-31 23:59:59");
+    });
+
+    it("should differentiate events in the same minute but different seconds", () => {
+      const date1 = new Date(Date.UTC(2024, 0, 15, 10, 30, 15));
+      const date2 = new Date(Date.UTC(2024, 0, 15, 10, 30, 45));
+      expect(toDateHourMinuteSecond(date1)).to.not.equal(toDateHourMinuteSecond(date2));
     });
   });
 
