@@ -331,6 +331,15 @@ export class SolanaWalletAdapterHandler {
    * Wrap wallet adapter methods for transaction/signature tracking
    */
   private wrapAdapterMethods(adapter: SolanaWalletAdapter): void {
+    // Guard against double-wrapping the same adapter (e.g., React re-renders)
+    // If we already wrapped this adapter, skip to prevent capturing wrapped methods as originals
+    if (this.wrappedAdapter === adapter) {
+      logger.debug(
+        "SolanaWalletAdapterHandler: Adapter already wrapped, skipping"
+      );
+      return;
+    }
+
     // Store reference to adapter for cleanup
     this.wrappedAdapter = adapter;
 
@@ -627,6 +636,15 @@ export class SolanaWalletAdapterHandler {
     if (this.trackingState.isProcessing) {
       logger.debug(
         "SolanaWalletAdapterHandler: Already processing, skipping disconnect"
+      );
+      return;
+    }
+
+    // Only emit disconnect if we have a prior tracked connection
+    // This prevents emitting events with undefined address/chainId
+    if (!this.trackingState.lastAddress) {
+      logger.debug(
+        "SolanaWalletAdapterHandler: No prior connection tracked, skipping disconnect event"
       );
       return;
     }
