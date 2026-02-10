@@ -111,6 +111,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   private solanaHandler?: SolanaWalletAdapterHandler;
 
   /**
+   * Pending Solana connection set before handler was initialized.
+   * Applied when handler is lazily created via setSolanaWallet().
+   */
+  private pendingSolanaConnection?: Parameters<SolanaWalletAdapterHandler["setConnection"]>[0];
+
+  /**
+   * Pending Solana cluster set before handler was initialized.
+   * Applied when handler is lazily created via setSolanaWallet().
+   */
+  private pendingSolanaCluster?: Parameters<SolanaWalletAdapterHandler["setCluster"]>[0];
+
+  /**
    * Flag indicating if Wagmi mode is enabled
    * When true, EIP-1193 provider wrapping is skipped
    */
@@ -2101,11 +2113,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.solanaHandler.setWallet(wallet);
     } else if (wallet) {
       logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
+      // Use pending values if set, otherwise fall back to initial options
       this.solanaHandler = new SolanaWalletAdapterHandler(this, {
         wallet,
-        connection: this.options.solana?.connection,
-        cluster: this.options.solana?.cluster,
+        connection: this.pendingSolanaConnection ?? this.options.solana?.connection,
+        cluster: this.pendingSolanaCluster ?? this.options.solana?.cluster,
       });
+      // Clear pending values after use
+      this.pendingSolanaConnection = undefined;
+      this.pendingSolanaCluster = undefined;
     }
   }
 
@@ -2117,6 +2133,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   public setSolanaConnection(connection: Parameters<SolanaWalletAdapterHandler["setConnection"]>[0]): void {
     if (this.solanaHandler) {
       this.solanaHandler.setConnection(connection);
+    } else {
+      // Store for when handler is lazily created via setSolanaWallet()
+      this.pendingSolanaConnection = connection;
     }
   }
 
@@ -2127,6 +2146,31 @@ export class FormoAnalytics implements IFormoAnalytics {
   public setSolanaCluster(cluster: Parameters<SolanaWalletAdapterHandler["setCluster"]>[0]): void {
     if (this.solanaHandler) {
       this.solanaHandler.setCluster(cluster);
+    } else {
+      // Store for when handler is lazily created via setSolanaWallet()
+      this.pendingSolanaCluster = cluster;
+    }
+  }
+
+  /**
+   * Sync Solana wallet state by checking if the adapter has changed.
+   * Call this in React effects when you know the wallet context may have changed
+   * but the context object reference stayed the same.
+   *
+   * This ensures connect/disconnect events from the new wallet are properly tracked
+   * without waiting for the next transaction or signature call.
+   *
+   * @example
+   * ```tsx
+   * const wallet = useWallet();
+   * useEffect(() => {
+   *   formo.syncSolanaWalletState();
+   * }, [wallet.wallet]); // Trigger when inner wallet changes
+   * ```
+   */
+  public syncSolanaWalletState(): void {
+    if (this.solanaHandler) {
+      this.solanaHandler.syncWalletState();
     }
   }
 

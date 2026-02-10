@@ -204,6 +204,26 @@ export class SolanaWalletAdapterHandler {
   }
 
   /**
+   * Check if the wallet adapter has changed (for context-based wallets) and rebind if needed.
+   * Call this in React effects when you know the wallet context may have changed but the
+   * context object reference stayed the same (e.g., user switched wallets in the wallet selector).
+   *
+   * This ensures connect/disconnect events from the new wallet are properly tracked without
+   * waiting for the next transaction or signature call.
+   *
+   * @example
+   * ```tsx
+   * const wallet = useWallet();
+   * useEffect(() => {
+   *   formo.syncSolanaWalletState();
+   * }, [wallet.wallet]); // Trigger when inner wallet changes
+   * ```
+   */
+  public syncWalletState(): void {
+    this.checkAndRebindContextAdapter();
+  }
+
+  /**
    * Update the connection instance
    */
   public setConnection(connection: SolanaConnection | null): void {
