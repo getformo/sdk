@@ -117,6 +117,12 @@ export class SolanaWalletAdapterHandler {
   private wrappedAdapter?: SolanaWalletAdapter;
 
   /**
+   * Reference to the adapter we bound event listeners to (for context wallets).
+   * Used to detect when context.wallet changes and rebind listeners.
+   */
+  private currentBoundAdapter?: SolanaWalletAdapter;
+
+  /**
    * Track active polling timeout IDs for cleanup
    */
   private pollingTimeouts = new Set<ReturnType<typeof setTimeout>>();
@@ -288,9 +294,74 @@ export class SolanaWalletAdapterHandler {
   }
 
   /**
+   * Check if the adapter inside a wallet context has changed (e.g., user switched wallets).
+   * If so, rebind event listeners and rewrap methods on the new adapter.
+   * This handles the case where context.wallet changes but the context object reference stays the same.
+   */
+  private checkAndRebindContextAdapter(): void {
+    if (!this.wallet || !isSolanaWalletContext(this.wallet)) {
+      return;
+    }
+
+    const currentAdapter = this.getAdapterFromContext(this.wallet);
+
+    // If adapter changed, rebind listeners and rewrap methods
+    if (currentAdapter !== this.currentBoundAdapter) {
+      logger.info(
+        "SolanaWalletAdapterHandler: Detected wallet adapter change, rebinding"
+      );
+
+      // Restore methods on old adapter and clean up listeners
+      this.restoreOriginalMethods();
+      this.cleanupAdapterListenersOnly();
+
+      // Set up on new adapter
+      if (currentAdapter) {
+        this.setupAdapterEventListenersOnly(currentAdapter);
+        this.wrapAdapterMethods(currentAdapter);
+
+        // Check if new adapter is already connected
+        this.checkInitialConnection().catch((error) => {
+          logger.error(
+            "SolanaWalletAdapterHandler: Error checking initial connection after adapter change",
+            error
+          );
+        });
+      } else {
+        // No adapter means disconnected
+        this.currentBoundAdapter = undefined;
+        if (this.trackingState.lastAddress) {
+          this.handleDisconnect();
+        }
+      }
+    }
+  }
+
+  /**
+   * Clean up only adapter event listeners (not the full cleanup)
+   */
+  private cleanupAdapterListenersOnly(): void {
+    for (const unsubscribe of this.unsubscribers) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        logger.error(
+          "SolanaWalletAdapterHandler: Error cleaning up adapter listener",
+          error
+        );
+      }
+    }
+    this.unsubscribers = [];
+    this.currentBoundAdapter = undefined;
+  }
+
+  /**
    * Set up event listeners on an adapter (connect/disconnect events)
    */
   private setupAdapterEventListenersOnly(adapter: SolanaWalletAdapter): void {
+    // Store reference to detect adapter changes in context
+    this.currentBoundAdapter = adapter;
+
     // Connect event
     const connectListener = (publicKey: SolanaPublicKey) => {
       this.handleConnect(publicKey);
@@ -371,16 +442,23 @@ export class SolanaWalletAdapterHandler {
     connection: SolanaConnection,
     options?: SendTransactionOptions
   ): Promise<TransactionSignature> {
+    // Check if adapter changed (user switched wallets) and rebind if needed
+    this.checkAndRebindContextAdapter();
+
     if (!this.originalAdapterSendTransaction) {
       throw new Error("sendTransaction not available");
     }
 
+    // Capture chainId at call time to ensure consistency across all events
+    // in this transaction lifecycle (prevents issues if setCluster() is called
+    // while user is approving the transaction in their wallet)
+    const chainId = this.chainId;
     const address = this.getCurrentAddress();
 
     if (address && this.formo.isAutocaptureEnabled("transaction")) {
       this.formo.transaction({
         status: TransactionStatus.STARTED,
-        chainId: this.chainId,
+        chainId,
         address,
       });
     }
@@ -395,7 +473,7 @@ export class SolanaWalletAdapterHandler {
       if (address && this.formo.isAutocaptureEnabled("transaction")) {
         this.formo.transaction({
           status: TransactionStatus.BROADCASTED,
-          chainId: this.chainId,
+          chainId,
           address,
           transactionHash: signature,
         });
@@ -405,8 +483,8 @@ export class SolanaWalletAdapterHandler {
           startTime: Date.now(),
         });
 
-        // Capture chainId at call time to avoid stale values during polling
-        this.pollTransactionConfirmation(signature, address, this.chainId, connection);
+        // Pass captured chainId to polling to maintain consistency
+        this.pollTransactionConfirmation(signature, address, chainId, connection);
       }
 
       return signature;
@@ -414,7 +492,7 @@ export class SolanaWalletAdapterHandler {
       if (address && this.formo.isAutocaptureEnabled("transaction")) {
         this.formo.transaction({
           status: TransactionStatus.REJECTED,
-          chainId: this.chainId,
+          chainId,
           address,
         });
       }
@@ -426,17 +504,22 @@ export class SolanaWalletAdapterHandler {
    * Wrapped signMessage method for direct adapter
    */
   private async wrappedSignMessage(message: Uint8Array): Promise<Uint8Array> {
+    // Check if adapter changed (user switched wallets) and rebind if needed
+    this.checkAndRebindContextAdapter();
+
     if (!this.originalAdapterSignMessage) {
       throw new Error("signMessage not available");
     }
 
+    // Capture chainId at call time for consistency across all events
+    const chainId = this.chainId;
     const address = this.getCurrentAddress();
     const messageString = safeDecodeMessage(message);
 
     if (address && this.formo.isAutocaptureEnabled("signature")) {
       this.formo.signature({
         status: SignatureStatus.REQUESTED,
-        chainId: this.chainId,
+        chainId,
         address,
         message: messageString,
       });
@@ -449,7 +532,7 @@ export class SolanaWalletAdapterHandler {
         const signatureHex = uint8ArrayToHex(signature);
         this.formo.signature({
           status: SignatureStatus.CONFIRMED,
-          chainId: this.chainId,
+          chainId,
           address,
           message: messageString,
           signatureHash: signatureHex,
@@ -461,7 +544,7 @@ export class SolanaWalletAdapterHandler {
       if (address && this.formo.isAutocaptureEnabled("signature")) {
         this.formo.signature({
           status: SignatureStatus.REJECTED,
-          chainId: this.chainId,
+          chainId,
           address,
           message: messageString,
         });
@@ -476,16 +559,21 @@ export class SolanaWalletAdapterHandler {
   private async wrappedSignTransaction(
     transaction: SolanaTransaction
   ): Promise<SolanaTransaction> {
+    // Check if adapter changed (user switched wallets) and rebind if needed
+    this.checkAndRebindContextAdapter();
+
     if (!this.originalAdapterSignTransaction) {
       throw new Error("signTransaction not available");
     }
 
+    // Capture chainId at call time for consistency across all events
+    const chainId = this.chainId;
     const address = this.getCurrentAddress();
 
     if (address && this.formo.isAutocaptureEnabled("signature")) {
       this.formo.signature({
         status: SignatureStatus.REQUESTED,
-        chainId: this.chainId,
+        chainId,
         address,
         message: "[Transaction Signature]",
       });
@@ -497,7 +585,7 @@ export class SolanaWalletAdapterHandler {
       if (address && this.formo.isAutocaptureEnabled("signature")) {
         this.formo.signature({
           status: SignatureStatus.CONFIRMED,
-          chainId: this.chainId,
+          chainId,
           address,
           message: "[Transaction Signature]",
         });
@@ -508,7 +596,7 @@ export class SolanaWalletAdapterHandler {
       if (address && this.formo.isAutocaptureEnabled("signature")) {
         this.formo.signature({
           status: SignatureStatus.REJECTED,
-          chainId: this.chainId,
+          chainId,
           address,
           message: "[Transaction Signature]",
         });
@@ -910,6 +998,7 @@ export class SolanaWalletAdapterHandler {
       }
     }
     this.unsubscribers = [];
+    this.currentBoundAdapter = undefined;
   }
 
   /**
