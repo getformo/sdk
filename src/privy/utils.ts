@@ -38,7 +38,7 @@ export function extractPrivyProperties(
 ): PrivyProfileProperties {
   // Support both SDK (camelCase) and API (snake_case) linked_accounts
   const accounts = user.linkedAccounts || user.linked_accounts || [];
-  const createdAt = user.createdAt || user.created_at;
+  const createdAt = user.createdAt ?? user.created_at;
   const isGuest = user.isGuest ?? user.is_guest;
   const mfaCount = user.mfaMethods?.length ?? user.mfa_methods?.length ?? 0;
 
