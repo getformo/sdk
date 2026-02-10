@@ -177,7 +177,9 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   public isUserIdentified(userId: string): boolean {
     const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
     const identifiedUsers = cookieValue?.split(",") || [];
-    const isIdentified = identifiedUsers.includes(userId);
+    // Use URL encoding to safely handle special characters like commas in userIds
+    const encodedUserId = encodeURIComponent(userId);
+    const isIdentified = identifiedUsers.includes(encodedUserId);
 
     logger.debug("Session: Checking user identification", {
       userId,
@@ -196,9 +198,11 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   public markUserIdentified(userId: string): void {
     const identifiedUsers =
       cookie().get(SESSION_USER_IDENTIFIED_KEY)?.split(",") || [];
+    // Use URL encoding to safely handle special characters like commas in userIds
+    const encodedUserId = encodeURIComponent(userId);
 
-    if (!identifiedUsers.includes(userId)) {
-      identifiedUsers.push(userId);
+    if (!identifiedUsers.includes(encodedUserId)) {
+      identifiedUsers.push(encodedUserId);
       const newValue = identifiedUsers.join(",");
       cookie().set(SESSION_USER_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day

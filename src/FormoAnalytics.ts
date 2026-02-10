@@ -705,10 +705,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Mark as identified before emitting the event
-      // Mark even if rdns is empty to prevent duplicate empty identifies
+      // Mark both wallet and user when both are provided
       if (validAddress) {
         this.session.markWalletIdentified(validAddress, rdns || "");
-      } else if (userId) {
+      }
+      if (userId) {
         this.session.markUserIdentified(userId);
       }
 
