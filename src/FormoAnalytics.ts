@@ -647,19 +647,25 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
+      const hasAddressParam = Object.prototype.hasOwnProperty.call(
+        params,
+        "address"
+      );
       const { address, providerName, userId, rdns } = params;
 
       // Explicit identify
       logger.info("Identify", address, userId, providerName, rdns);
       let validAddress: Address | undefined = undefined;
-      if (address) {
-        validAddress = this.validateAndChecksumAddress(address);
-        this.currentAddress = validAddress || undefined;
-        if (!validAddress) {
-          logger.warn?.("Invalid address provided to identify:", address);
+      if (hasAddressParam) {
+        if (address) {
+          validAddress = this.validateAndChecksumAddress(address);
+          this.currentAddress = validAddress || undefined;
+          if (!validAddress) {
+            logger.warn?.("Invalid address provided to identify:", address);
+          }
+        } else {
+          this.currentAddress = undefined;
         }
-      } else {
-        this.currentAddress = undefined;
       }
       if (userId) {
         this.currentUserId = userId;
