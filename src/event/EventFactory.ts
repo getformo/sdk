@@ -374,9 +374,9 @@ class EventFactory implements IEventFactory {
   }
 
   async generateIdentifyEvent(
-    providerName: string,
-    rdns: string,
-    address: Nullable<Address>,
+    providerName?: string,
+    rdns?: string,
+    address?: Nullable<Address>,
     userId?: Nullable<string>,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
