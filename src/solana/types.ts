@@ -242,7 +242,6 @@ export interface SolanaOptions {
  */
 export interface SolanaTrackingState {
   lastAddress?: string;
-  lastCluster?: SolanaCluster;
   lastChainId?: number;
   isProcessing: boolean;
 }

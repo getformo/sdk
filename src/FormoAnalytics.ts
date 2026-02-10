@@ -2447,7 +2447,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Address | undefined {
     // If chain ID is in Solana range, validate as Solana address
     const solanaChainIds = Object.values(SOLANA_CHAIN_IDS);
-    if (chainId && solanaChainIds.includes(chainId)) {
+    if (chainId !== undefined && chainId !== null && solanaChainIds.includes(chainId)) {
       const validSolanaAddress = getValidSolanaAddress(address);
       return validSolanaAddress || undefined;
     }

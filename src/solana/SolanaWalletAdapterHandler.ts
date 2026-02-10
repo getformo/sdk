@@ -154,7 +154,7 @@ export class SolanaWalletAdapterHandler {
   }
 
   /**
-   * Restore original methods on the wrapped wallet/context
+   * Restore original methods on the wrapped adapter
    */
   private restoreOriginalMethods(): void {
     // Restore adapter methods
@@ -324,34 +324,7 @@ export class SolanaWalletAdapterHandler {
    * Set up listeners for a direct wallet adapter
    */
   private setupAdapterListeners(adapter: SolanaWalletAdapter): void {
-    // Connect event
-    const connectListener = (publicKey: SolanaPublicKey) => {
-      this.handleConnect(publicKey);
-    };
-    adapter.on("connect", connectListener);
-    this.unsubscribers.push(() =>
-      adapter.off("connect", connectListener as (...args: unknown[]) => void)
-    );
-
-    // Disconnect event
-    const disconnectListener = () => {
-      this.handleDisconnect();
-    };
-    adapter.on("disconnect", disconnectListener);
-    this.unsubscribers.push(() =>
-      adapter.off("disconnect", disconnectListener as (...args: unknown[]) => void)
-    );
-
-    // Error event
-    const errorListener = (error: unknown) => {
-      logger.error("SolanaWalletAdapterHandler: Wallet error", error);
-    };
-    adapter.on("error", errorListener as (error: WalletError) => void);
-    this.unsubscribers.push(() =>
-      adapter.off("error", errorListener as (...args: unknown[]) => void)
-    );
-
-    // Wrap adapter methods for tracking
+    this.setupAdapterEventListenersOnly(adapter);
     this.wrapAdapterMethods(adapter);
   }
 
@@ -937,7 +910,7 @@ export class SolanaWalletAdapterHandler {
     this.processedSignatures.clear();
     this.pendingTransactions.clear();
 
-    // Restore original methods on both adapter and context
+    // Restore original methods on wrapped adapter
     this.restoreOriginalMethods();
 
     this.wallet = null;
