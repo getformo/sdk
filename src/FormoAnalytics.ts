@@ -22,6 +22,7 @@ import {
   FormoAnalyticsSession,
   SESSION_WALLET_DETECTED_KEY,
   SESSION_WALLET_IDENTIFIED_KEY,
+  SESSION_USER_IDENTIFIED_KEY,
 } from "./session";
 import {
   Address,
@@ -248,6 +249,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
+    cookie().remove(SESSION_USER_IDENTIFIED_KEY);
   }
 
   /**
@@ -676,14 +678,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Handle both cases: with rdns (address:rdns) and without rdns (address only)
       const isAlreadyIdentified = validAddress
         ? this.session.isWalletIdentified(validAddress, rdns || "")
+        : userId
+        ? this.session.isUserIdentified(userId)
         : false;
 
       logger.debug("Identify: Checking deduplication", {
         validAddress,
         rdns,
         providerName,
+        userId,
         hasValidAddress: !!validAddress,
         hasRdns: !!rdns,
+        hasUserId: !!userId,
         isAlreadyIdentified,
       });
 
@@ -702,6 +708,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Mark even if rdns is empty to prevent duplicate empty identifies
       if (validAddress) {
         this.session.markWalletIdentified(validAddress, rdns || "");
+      } else if (userId) {
+        this.session.markUserIdentified(userId);
       }
 
       await this.trackEvent(
