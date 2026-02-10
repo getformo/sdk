@@ -435,7 +435,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     const { chainId, address } = params;
 
-    if (!chainId || Number(chainId) === 0) {
+    if (chainId === undefined || chainId === null) {
       logger.warn("trackConnectEventOnly: Chain ID cannot be null or undefined");
       return;
     }
@@ -516,8 +516,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     const { chainId, address } = params;
 
-    if (!chainId || Number(chainId) === 0) {
-      logger.warn("trackChainEventOnly: chainId cannot be empty or 0");
+    if (chainId === undefined || chainId === null) {
+      logger.warn("trackChainEventOnly: chainId cannot be null or undefined");
       return;
     }
     if (!address) {

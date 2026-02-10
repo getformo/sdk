@@ -104,14 +104,6 @@ export interface SolanaWalletAdapter {
 }
 
 /**
- * Solana wallet entry from @solana/wallet-adapter-react
- */
-export interface SolanaWallet {
-  adapter: SolanaWalletAdapter;
-  readyState: WalletReadyState;
-}
-
-/**
  * Solana wallet ready state
  */
 export enum WalletReadyState {
@@ -180,6 +172,11 @@ export interface SolanaWalletEntry {
   adapter: SolanaWalletAdapter;
   readyState: WalletReadyState;
 }
+
+/**
+ * @deprecated Use SolanaWalletEntry instead
+ */
+export type SolanaWallet = SolanaWalletEntry;
 
 /**
  * Solana Wallet Context interface
