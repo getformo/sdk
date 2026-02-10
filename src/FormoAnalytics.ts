@@ -420,6 +420,125 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Internal method to emit a connect event WITHOUT mutating shared state.
+   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
+   * @internal
+   */
+  async trackConnectEventOnly(
+    params: {
+      chainId: ChainID;
+      address: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    const { chainId, address } = params;
+
+    if (!chainId || Number(chainId) === 0) {
+      logger.warn("trackConnectEventOnly: Chain ID cannot be null or undefined");
+      return;
+    }
+    if (!address) {
+      logger.warn("trackConnectEventOnly: Address cannot be empty");
+      return;
+    }
+
+    const validAddress = this.validateMultiChainAddress(address, chainId);
+    if (!validAddress) {
+      logger.warn(
+        `trackConnectEventOnly: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
+      );
+      return;
+    }
+
+    // Emit event WITHOUT setting this.currentAddress or this.currentChainId
+    await this.trackEvent(
+      EventType.CONNECT,
+      {
+        chainId,
+        address: validAddress,
+      },
+      properties,
+      context,
+      callback
+    );
+  }
+
+  /**
+   * Internal method to emit a disconnect event WITHOUT mutating shared state.
+   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
+   * @internal
+   */
+  async trackDisconnectEventOnly(
+    params?: {
+      chainId?: ChainID;
+      address?: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    const chainId = params?.chainId;
+    const address = params?.address;
+
+    logger.info("trackDisconnectEventOnly: Emitting disconnect event with:", {
+      chainId,
+      address,
+    });
+
+    // Emit event WITHOUT clearing this.currentAddress, this.currentChainId, or _provider
+    await this.trackEvent(
+      EventType.DISCONNECT,
+      {
+        ...(chainId && { chainId }),
+        ...(address && { address }),
+      },
+      properties,
+      context,
+      callback
+    );
+  }
+
+  /**
+   * Internal method to emit a chain change event WITHOUT mutating shared state.
+   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
+   * @internal
+   */
+  async trackChainEventOnly(
+    params: {
+      chainId: ChainID;
+      address: Address;
+    },
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
+  ): Promise<void> {
+    const { chainId, address } = params;
+
+    if (!chainId || Number(chainId) === 0) {
+      logger.warn("trackChainEventOnly: chainId cannot be empty or 0");
+      return;
+    }
+    if (!address) {
+      logger.warn("trackChainEventOnly: address cannot be empty");
+      return;
+    }
+
+    // Emit event WITHOUT setting this.currentChainId
+    await this.trackEvent(
+      EventType.CHAIN,
+      {
+        chainId,
+        address,
+      },
+      properties,
+      context,
+      callback
+    );
+  }
+
+  /**
    * Emits a chain network change event.
    * @param {ChainID} params.chainId
    * @param {Address} params.address
@@ -1979,9 +2098,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.solanaHandler.setWallet(wallet);
     } else if (wallet) {
       // Initialize Solana handler if not already present
+      // Include connection from initial options for transaction confirmation tracking
       logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
       this.solanaHandler = new SolanaWalletAdapterHandler(this, {
         wallet,
+        connection: this.options.solana?.connection,
         cluster: this.options.solana?.cluster,
         chainId: this.options.solana?.chainId,
       });
@@ -2328,13 +2449,19 @@ export class FormoAnalytics implements IFormoAnalytics {
       return validSolanaAddress || undefined;
     }
 
-    // Check if it looks like a Solana address (Base58, no 0x prefix)
+    // Default to EVM address validation first
+    const validEvmAddress = this.validateAndChecksumAddress(address);
+    if (validEvmAddress) {
+      return validEvmAddress;
+    }
+
+    // Fall back to Solana format when EVM validation fails
+    // This handles custom chainIds and cases where chainId is not provided
     if (isSolanaAddress(address)) {
       return getValidSolanaAddress(address) || undefined;
     }
 
-    // Default to EVM address validation
-    return this.validateAndChecksumAddress(address);
+    return undefined;
   }
 
   /**

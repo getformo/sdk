@@ -104,6 +104,14 @@ export interface SolanaWalletAdapter {
 }
 
 /**
+ * Solana wallet entry from @solana/wallet-adapter-react
+ */
+export interface SolanaWallet {
+  adapter: SolanaWalletAdapter;
+  readyState: WalletReadyState;
+}
+
+/**
  * Solana wallet ready state
  */
 export enum WalletReadyState {
@@ -176,6 +184,7 @@ export interface SolanaWalletEntry {
 /**
  * Solana Wallet Context interface
  * Based on @solana/wallet-adapter-react useWallet hook
+ * @see https://github.com/anza-xyz/wallet-adapter/blob/master/packages/core/react/src/useWallet.ts
  */
 export interface SolanaWalletContext {
   autoConnect: boolean;
