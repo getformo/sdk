@@ -273,10 +273,13 @@ export class SolanaWalletAdapterHandler {
     // but only wrap the context methods (not adapter methods) to avoid double tracking.
     // The context methods are the user-facing API that we want to track.
 
-    if (context.wallet) {
+    // The wallet-adapter-react useWallet() returns wallet as { adapter, readyState },
+    // so we need to extract the actual adapter which has .on()/.off() methods
+    const adapter = this.getAdapterFromContext(context);
+    if (adapter) {
       // Only add event listeners (connect/disconnect) on the inner adapter
       // Do NOT wrap adapter methods - we'll wrap context methods instead
-      this.setupAdapterEventListenersOnly(context.wallet);
+      this.setupAdapterEventListenersOnly(adapter);
     }
 
     // Wrap context methods for transaction/signature tracking
@@ -972,6 +975,23 @@ export class SolanaWalletAdapterHandler {
   }
 
   /**
+   * Extract the actual adapter (with .on/.off) from a wallet context.
+   * In @solana/wallet-adapter-react, context.wallet is { adapter, readyState },
+   * not a direct adapter.
+   */
+  private getAdapterFromContext(context: SolanaWalletContext): SolanaWalletAdapter | null {
+    const wallet = context.wallet;
+    if (!wallet) return null;
+
+    // wallet-adapter-react: wallet is { adapter, readyState }
+    if (wallet.adapter && typeof wallet.adapter.on === "function") {
+      return wallet.adapter;
+    }
+
+    return null;
+  }
+
+  /**
    * Get wallet name
    */
   private getWalletName(): string {
@@ -980,7 +1000,8 @@ export class SolanaWalletAdapterHandler {
     }
 
     if (isSolanaWalletContext(this.wallet)) {
-      return this.wallet.wallet?.name || "Unknown Solana Wallet";
+      const adapter = this.getAdapterFromContext(this.wallet);
+      return adapter?.name || "Unknown Solana Wallet";
     }
 
     return this.wallet.name;

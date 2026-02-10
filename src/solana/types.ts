@@ -165,13 +165,22 @@ export interface SendTransactionOptions {
 }
 
 /**
+ * Wallet entry as returned by @solana/wallet-adapter-react useWallet().wallet
+ * This is { adapter, readyState }, not a direct adapter.
+ */
+export interface SolanaWalletEntry {
+  adapter: SolanaWalletAdapter;
+  readyState: WalletReadyState;
+}
+
+/**
  * Solana Wallet Context interface
  * Based on @solana/wallet-adapter-react useWallet hook
  */
 export interface SolanaWalletContext {
   autoConnect: boolean;
-  wallets: SolanaWalletAdapter[];
-  wallet: SolanaWalletAdapter | null;
+  wallets: SolanaWalletEntry[];
+  wallet: SolanaWalletEntry | null;
   publicKey: SolanaPublicKey | null;
   connecting: boolean;
   connected: boolean;
