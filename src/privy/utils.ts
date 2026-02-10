@@ -177,7 +177,13 @@ function summarizeLinkedAccounts(
 
     // Verified status
     // Use null check to handle timestamp of 0 correctly
-    const verifiedAt = account.verifiedAt ?? account.verified_at;
+    const verifiedAt =
+      account.verifiedAt ??
+      account.verified_at ??
+      account.latestVerifiedAt ??
+      account.latest_verified_at ??
+      account.firstVerifiedAt ??
+      account.first_verified_at;
     if (verifiedAt != null) {
       summary.verified = true;
     }
