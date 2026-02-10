@@ -383,8 +383,8 @@ class EventFactory implements IEventFactory {
   ) {
     const identifyEvent: Partial<IFormoEvent> = {
       properties: {
-        providerName,
-        rdns,
+        ...(providerName !== undefined && { providerName }),
+        ...(rdns !== undefined && { rdns }),
         ...properties,
       },
       user_id: userId,
