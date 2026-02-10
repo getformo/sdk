@@ -11,7 +11,7 @@
  * Solana cluster/network types
  * Solana doesn't use chainId like EVM, instead it uses cluster names
  */
-export type SolanaCluster = "mainnet-beta" | "devnet";
+export type SolanaCluster = "mainnet-beta" | "testnet" | "devnet" | "localnet";
 
 /**
  * Mapping of Solana clusters to numeric chain IDs for consistency with EVM events
@@ -22,7 +22,9 @@ export type SolanaCluster = "mainnet-beta" | "devnet";
  */
 export const SOLANA_CHAIN_IDS: Record<SolanaCluster, number> = {
   "mainnet-beta": 900001,
+  testnet: 900002,
   devnet: 900003,
+  localnet: 900004,
 } as const;
 
 /**
@@ -30,7 +32,9 @@ export const SOLANA_CHAIN_IDS: Record<SolanaCluster, number> = {
  */
 export const SOLANA_CLUSTERS_BY_ID: Record<number, SolanaCluster> = {
   900001: "mainnet-beta",
+  900002: "testnet",
   900003: "devnet",
+  900004: "localnet",
 } as const;
 
 /**
