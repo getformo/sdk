@@ -258,6 +258,8 @@ export class SolanaWalletAdapterHandler {
         this.formo.trackChainEventOnly({
           chainId: this.chainId,
           address: this.trackingState.lastAddress,
+        }).catch((error) => {
+          logger.error("SolanaWalletAdapterHandler: Error emitting chain event", error);
         });
       }
     }

@@ -491,8 +491,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     await this.trackEvent(
       EventType.DISCONNECT,
       {
-        ...(chainId && { chainId }),
-        ...(address && { address }),
+        ...(chainId !== undefined && chainId !== null && { chainId }),
+        ...(address !== undefined && address !== null && { address }),
       },
       properties,
       context,
