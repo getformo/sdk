@@ -676,6 +676,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Check for duplicate identify events in this session
       // Handle both cases: with rdns (address:rdns) and without rdns (address only)
+      const anonymousIdentifyKey =
+        !validAddress && !userId
+          ? `anonymous:${providerName || "unknown"}`
+          : undefined;
       const isAlreadyIdentified = validAddress
         ? userId
           ? this.session.isWalletIdentified(validAddress, rdns || "") &&
@@ -683,6 +687,8 @@ export class FormoAnalytics implements IFormoAnalytics {
           : this.session.isWalletIdentified(validAddress, rdns || "")
         : userId
         ? this.session.isUserIdentified(userId)
+        : anonymousIdentifyKey
+        ? this.session.isWalletIdentified(anonymousIdentifyKey, rdns || "")
         : false;
 
       logger.debug("Identify: Checking deduplication", {
@@ -714,6 +720,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       if (userId) {
         this.session.markUserIdentified(userId);
+      }
+      if (anonymousIdentifyKey) {
+        this.session.markWalletIdentified(anonymousIdentifyKey, rdns || "");
       }
 
       await this.trackEvent(
