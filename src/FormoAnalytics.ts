@@ -677,7 +677,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Check for duplicate identify events in this session
       // Handle both cases: with rdns (address:rdns) and without rdns (address only)
       const isAlreadyIdentified = validAddress
-        ? this.session.isWalletIdentified(validAddress, rdns || "")
+        ? userId
+          ? this.session.isWalletIdentified(validAddress, rdns || "") &&
+            this.session.isUserIdentified(userId)
+          : this.session.isWalletIdentified(validAddress, rdns || "")
         : userId
         ? this.session.isUserIdentified(userId)
         : false;
