@@ -708,7 +708,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Mark even if rdns is empty to prevent duplicate empty identifies
       if (validAddress) {
         this.session.markWalletIdentified(validAddress, rdns || "");
-      } else if (userId) {
+      }
+      if (userId) {
         this.session.markUserIdentified(userId);
       }
 
