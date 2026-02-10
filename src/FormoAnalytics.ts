@@ -556,12 +556,14 @@ export class FormoAnalytics implements IFormoAnalytics {
    * formo.identify({ address: '0x...', userId: 'user123' });
    *
    * // With Privy user (using extractPrivyProperties utility)
-   * import { extractPrivyProperties } from '@anthropic/sdk/privy';
+   * import { extractPrivyProperties } from '@formo/analytics';
    * const { user } = usePrivy();
-   * formo.identify(
-   *   { address: user.wallet?.address, userId: user.id },
-   *   extractPrivyProperties(user)
-   * );
+   * if (user) {
+   *   formo.identify(
+   *     { address: user.wallet?.address, userId: user.id },
+   *     extractPrivyProperties(user)
+   *   );
+   * }
    * ```
    */
   async identify(

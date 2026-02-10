@@ -26,7 +26,10 @@ import {
  * ```ts
  * const { user } = usePrivy();
  * if (user) {
- *   formo.identify({ privyUser: user });
+ *   formo.identify(
+ *     { address: user.wallet?.address, userId: user.id },
+ *     extractPrivyProperties(user)
+ *   );
  * }
  * ```
  */
