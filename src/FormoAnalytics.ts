@@ -2089,16 +2089,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Update the Solana wallet instance
-   * Useful for React apps where wallet context changes
+   * Update the Solana wallet instance.
+   * Useful for React apps where wallet context changes.
+   *
+   * If no Solana handler exists yet, this lazily initializes one.
+   * Call setSolanaConnection() afterwards if you need transaction confirmation tracking.
+   *
    * @param wallet The new Solana wallet adapter or context
    */
   public setSolanaWallet(wallet: Parameters<SolanaWalletAdapterHandler["setWallet"]>[0]): void {
     if (this.solanaHandler) {
       this.solanaHandler.setWallet(wallet);
     } else if (wallet) {
-      // Initialize Solana handler if not already present
-      // Include connection from initial options for transaction confirmation tracking
       logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
       this.solanaHandler = new SolanaWalletAdapterHandler(this, {
         wallet,
@@ -2110,7 +2112,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Update the Solana connection instance
+   * Update the Solana connection instance.
+   * Required for transaction confirmation polling.
    * @param connection The new Solana connection
    */
   public setSolanaConnection(connection: Parameters<SolanaWalletAdapterHandler["setConnection"]>[0]): void {
@@ -2120,7 +2123,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Update the Solana cluster/network
+   * Update the Solana cluster/network.
    * @param cluster The Solana cluster (mainnet-beta, testnet, devnet, localnet)
    */
   public setSolanaCluster(cluster: Parameters<SolanaWalletAdapterHandler["setCluster"]>[0]): void {
