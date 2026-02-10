@@ -129,6 +129,12 @@ export class SolanaWalletAdapterHandler {
   private wrappedAdapter?: SolanaWalletAdapter;
 
   /**
+   * Reference to the adapter we bound event listeners to (for context wallets).
+   * Used to detect when context.wallet changes and rebind listeners.
+   */
+  private currentBoundAdapter?: SolanaWalletAdapter;
+
+  /**
    * Track active polling timeout IDs for cleanup
    */
   private pollingTimeouts = new Set<ReturnType<typeof setTimeout>>();
@@ -314,10 +320,74 @@ export class SolanaWalletAdapterHandler {
   }
 
   /**
+   * Check if the adapter inside a wallet context has changed (e.g., user switched wallets).
+   * If so, rebind event listeners to the new adapter.
+   * This handles the case where context.wallet changes but the context object reference stays the same.
+   */
+  private checkAndRebindContextAdapter(): void {
+    if (!this.wallet || !isSolanaWalletContext(this.wallet)) {
+      return;
+    }
+
+    const currentAdapter = this.wallet.wallet?.adapter;
+
+    // If adapter changed, rebind listeners
+    if (currentAdapter !== this.currentBoundAdapter) {
+      logger.info(
+        "SolanaWalletAdapterHandler: Detected wallet adapter change, rebinding listeners"
+      );
+
+      // Remove old adapter listeners (but keep context method wrappers)
+      this.cleanupAdapterListenersOnly();
+
+      // Set up listeners on new adapter
+      if (currentAdapter) {
+        this.setupAdapterEventListenersOnly(currentAdapter);
+
+        // Check if new adapter is already connected
+        this.checkInitialConnection().catch((error) => {
+          logger.error(
+            "SolanaWalletAdapterHandler: Error checking initial connection after adapter change",
+            error
+          );
+        });
+      } else {
+        // No adapter means disconnected
+        this.currentBoundAdapter = undefined;
+        if (this.trackingState.lastAddress) {
+          this.handleDisconnect();
+        }
+      }
+    }
+  }
+
+  /**
+   * Clean up only adapter event listeners (not context method wrappers)
+   */
+  private cleanupAdapterListenersOnly(): void {
+    // Run all unsubscribers - they only contain adapter event listeners when using context
+    for (const unsubscribe of this.unsubscribers) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        logger.error(
+          "SolanaWalletAdapterHandler: Error cleaning up adapter listener",
+          error
+        );
+      }
+    }
+    this.unsubscribers = [];
+    this.currentBoundAdapter = undefined;
+  }
+
+  /**
    * Set up only event listeners on an adapter (no method wrapping)
    * Used when wrapping context methods to avoid double tracking
    */
   private setupAdapterEventListenersOnly(adapter: SolanaWalletAdapter): void {
+    // Store reference to detect adapter changes in context
+    this.currentBoundAdapter = adapter;
+
     // Connect event
     const connectListener = (publicKey: SolanaPublicKey) => {
       this.handleConnect(publicKey);
@@ -430,6 +500,9 @@ export class SolanaWalletAdapterHandler {
       connection: SolanaConnection,
       options?: SendTransactionOptions
     ): Promise<TransactionSignature> => {
+      // Check if adapter changed (user switched wallets) and rebind if needed
+      this.checkAndRebindContextAdapter();
+
       const address = this.getCurrentAddress();
 
       if (address && this.formo.isAutocaptureEnabled("transaction")) {
@@ -486,6 +559,9 @@ export class SolanaWalletAdapterHandler {
       context.signMessage = async (
         message: Uint8Array
       ): Promise<Uint8Array> => {
+        // Check if adapter changed (user switched wallets) and rebind if needed
+        this.checkAndRebindContextAdapter();
+
         const address = this.getCurrentAddress();
         const messageString = safeDecodeMessage(message);
 
@@ -535,6 +611,9 @@ export class SolanaWalletAdapterHandler {
       context.signTransaction = async (
         transaction: SolanaTransaction
       ): Promise<SolanaTransaction> => {
+        // Check if adapter changed (user switched wallets) and rebind if needed
+        this.checkAndRebindContextAdapter();
+
         const address = this.getCurrentAddress();
 
         if (address && this.formo.isAutocaptureEnabled("signature")) {
@@ -1094,6 +1173,7 @@ export class SolanaWalletAdapterHandler {
       }
     }
     this.unsubscribers = [];
+    this.currentBoundAdapter = undefined;
   }
 
   /**
