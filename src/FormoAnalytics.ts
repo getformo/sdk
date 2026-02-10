@@ -212,7 +212,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         wallet: options.solana.wallet,
         connection: options.solana.connection,
         cluster: options.solana.cluster,
-        chainId: options.solana.chainId,
       });
     }
 
@@ -2106,7 +2105,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         wallet,
         connection: this.options.solana?.connection,
         cluster: this.options.solana?.cluster,
-        chainId: this.options.solana?.chainId,
       });
     }
   }

@@ -132,14 +132,13 @@ export class SolanaWalletAdapterHandler {
       wallet?: SolanaWalletAdapter | SolanaWalletContext;
       connection?: SolanaConnection;
       cluster?: SolanaCluster;
-      chainId?: number;
     }
   ) {
     this.formo = formoAnalytics;
     this.wallet = options.wallet || null;
     this.connection = options.connection || null;
     this.cluster = options.cluster || "mainnet-beta";
-    this.chainId = options.chainId || SOLANA_CHAIN_IDS[this.cluster];
+    this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
     logger.info("SolanaWalletAdapterHandler: Initializing Solana integration", {
       cluster: this.cluster,

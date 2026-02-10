@@ -176,15 +176,6 @@ describe("SolanaWalletAdapterHandler", () => {
       handler.cleanup();
     });
 
-    it("should use custom chainId when provided", () => {
-      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
-        cluster: "devnet",
-        chainId: 999999,
-      });
-      expect(handler.getChainId()).to.equal(999999);
-      handler.cleanup();
-    });
-
     it("should not set up listeners without a wallet", () => {
       const handler = new SolanaWalletAdapterHandler(mockFormo as any, {});
       // No errors, no trackConnectEventOnly calls

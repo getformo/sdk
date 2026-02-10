@@ -230,11 +230,6 @@ export interface SolanaOptions {
    */
   cluster?: SolanaCluster;
 
-  /**
-   * Custom chain ID to use instead of the default Solana chain IDs
-   * Useful if you have a custom indexing pipeline that expects specific IDs
-   */
-  chainId?: number;
 }
 
 /**
