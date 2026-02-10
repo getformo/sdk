@@ -827,9 +827,13 @@ export class SolanaWalletAdapterHandler {
       return this.trackingState.lastAddress;
     }
 
-    // Then check wallet
+    // Then check wallet, filtering out blocked addresses (system programs, etc.)
     const publicKey = this.getPublicKey();
-    return publicKey ? publicKeyToAddress(publicKey) : null;
+    const address = publicKey ? publicKeyToAddress(publicKey) : null;
+    if (address && isBlockedSolanaAddress(address)) {
+      return null;
+    }
+    return address;
   }
 
   /**
