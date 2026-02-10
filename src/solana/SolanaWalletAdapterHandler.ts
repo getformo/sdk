@@ -282,7 +282,12 @@ export class SolanaWalletAdapterHandler {
     }
 
     // Check if already connected
-    this.checkInitialConnection();
+    this.checkInitialConnection().catch((error) => {
+      logger.error(
+        "SolanaWalletAdapterHandler: Error checking initial connection",
+        error
+      );
+    });
 
     logger.info(
       "SolanaWalletAdapterHandler: Wallet listeners set up successfully"
