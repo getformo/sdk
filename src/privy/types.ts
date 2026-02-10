@@ -230,19 +230,19 @@ export interface PrivyProfileProperties {
   hasEmbeddedWallet: boolean;
   isGuest?: boolean;
   hasMfa: boolean;
-  appleEmail?: string;
-  discordUsername?: string;
-  twitterUsername?: string;
-  farcasterUsername?: string;
+  apple?: string;
+  discord?: string;
+  twitter?: string;
+  farcaster?: string;
   farcasterFid?: number;
-  githubUsername?: string;
-  googleEmail?: string;
-  linkedinEmail?: string;
-  lineEmail?: string;
-  spotifyEmail?: string;
-  telegramUsername?: string;
-  tiktokUsername?: string;
-  instagramUsername?: string;
+  github?: string;
+  google?: string;
+  linkedin?: string;
+  line?: string;
+  spotify?: string;
+  telegram?: string;
+  tiktok?: string;
+  instagram?: string;
   [key: string]: unknown;
 }
 

@@ -69,15 +69,15 @@ export function extractPrivyProperties(
   // https://docs.privy.io/user-management/users/the-user-object
 
   if (user.apple?.email) {
-    properties.appleEmail = user.apple.email;
+    properties.apple = user.apple.email;
   }
 
   if (user.discord?.username) {
-    properties.discordUsername = user.discord.username;
+    properties.discord = user.discord.username;
   }
 
   if (user.farcaster?.username) {
-    properties.farcasterUsername = user.farcaster.username;
+    properties.farcaster = user.farcaster.username;
   }
 
   if (user.farcaster?.fid) {
@@ -85,39 +85,39 @@ export function extractPrivyProperties(
   }
 
   if (user.github?.username) {
-    properties.githubUsername = user.github.username;
+    properties.github = user.github.username;
   }
 
   if (user.google?.email) {
-    properties.googleEmail = user.google.email;
+    properties.google = user.google.email;
   }
 
   if (user.instagram?.username) {
-    properties.instagramUsername = user.instagram.username;
+    properties.instagram = user.instagram.username;
   }
 
   if (user.line?.email) {
-    properties.lineEmail = user.line.email;
+    properties.line = user.line.email;
   }
 
   if (user.linkedin?.email) {
-    properties.linkedinEmail = user.linkedin.email;
+    properties.linkedin = user.linkedin.email;
   }
 
   if (user.spotify?.email) {
-    properties.spotifyEmail = user.spotify.email;
+    properties.spotify = user.spotify.email;
   }
 
   if (user.telegram?.username) {
-    properties.telegramUsername = user.telegram.username;
+    properties.telegram = user.telegram.username;
   }
 
   if (user.tiktok?.username) {
-    properties.tiktokUsername = user.tiktok.username;
+    properties.tiktok = user.tiktok.username;
   }
 
   if (user.twitter?.username) {
-    properties.twitterUsername = user.twitter.username;
+    properties.twitter = user.twitter.username;
   }
 
   return properties;

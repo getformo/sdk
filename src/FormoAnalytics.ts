@@ -48,8 +48,6 @@ import { getValidAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
-import { extractPrivyProperties } from "./privy";
-import { PrivyUser } from "./privy/types";
 
 /**
  * Constants for provider switching reasons
@@ -543,27 +541,27 @@ export class FormoAnalytics implements IFormoAnalytics {
   /**
    * Emits an identify event with current wallet address and provider info.
    *
-   * @param {string} params.address - Wallet address (defaults to privyUser.wallet.address if privyUser provided)
-   * @param {string} params.userId - External user ID (defaults to privyUser.id if privyUser provided)
+   * @param {string} params.address - Wallet address
+   * @param {string} params.userId - External user ID
    * @param {string} params.rdns - Provider reverse domain name
    * @param {string} params.providerName - Provider display name
-   * @param {PrivyUser} params.privyUser - Privy user object from usePrivy() - auto-extracts profile properties
-   * @param {IFormoEventProperties} properties - Additional properties (merged with Privy properties if privyUser provided)
+   * @param {IFormoEventProperties} properties - Additional properties to include with the identify event
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
    *
    * @example
    * ```ts
-   * // With Privy user (simplest)
-   * const { user } = usePrivy();
-   * formo.identify({ privyUser: user });
-   *
-   * // With Privy user + custom properties
-   * formo.identify({ privyUser: user }, { plan: 'premium' });
-   *
-   * // Standard identify (without Privy)
+   * // Basic identify
    * formo.identify({ address: '0x...', userId: 'user123' });
+   *
+   * // With Privy user (using extractPrivyProperties utility)
+   * import { extractPrivyProperties } from '@anthropic/sdk/privy';
+   * const { user } = usePrivy();
+   * formo.identify(
+   *   { address: user.wallet?.address, userId: user.id },
+   *   extractPrivyProperties(user)
+   * );
    * ```
    */
   async identify(
@@ -572,7 +570,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       providerName?: string;
       userId?: string;
       rdns?: string;
-      privyUser?: PrivyUser;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -648,26 +645,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      // Extract Privy properties if privyUser is provided
-      const { providerName, rdns, privyUser } = params;
-      let address = params.address;
-      let userId = params.userId;
-      let mergedProperties = properties;
-
-      if (privyUser) {
-        const privyProperties = extractPrivyProperties(privyUser);
-        mergedProperties = {
-          ...privyProperties,
-          ...properties, // explicit properties take precedence
-        };
-        // Use Privy user data as defaults if not explicitly provided
-        if (!address) {
-          address = privyUser.wallet?.address;
-        }
-        if (!userId) {
-          userId = privyUser.id;
-        }
-      }
+      const { address, providerName, userId, rdns } = params;
 
       // Explicit identify
       logger.info("Identify", address, userId, providerName, rdns);
@@ -726,7 +704,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           userId,
           rdns,
         },
-        mergedProperties,
+        properties,
         context,
         callback
       );
