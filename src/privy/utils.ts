@@ -123,6 +123,147 @@ export function extractPrivyProperties(
     properties.twitter = user.twitter.username;
   }
 
+  if (!properties.email) {
+    const emailAccount = accounts.find((account) => account.type === "email");
+    if (emailAccount?.address) {
+      properties.email = emailAccount.address;
+    } else if (emailAccount?.email) {
+      properties.email = emailAccount.email;
+    }
+  }
+
+  if (!properties.phone) {
+    const phoneAccount = accounts.find((account) => account.type === "phone");
+    if (phoneAccount?.number) {
+      properties.phone = phoneAccount.number;
+    }
+  }
+
+  if (!properties.apple) {
+    const appleAccount = accounts.find(
+      (account) => account.type === "apple_oauth"
+    );
+    if (appleAccount?.email) {
+      properties.apple = appleAccount.email;
+    } else if (appleAccount?.address) {
+      properties.apple = appleAccount.address;
+    }
+  }
+
+  if (!properties.discord) {
+    const discordAccount = accounts.find(
+      (account) => account.type === "discord_oauth"
+    );
+    if (discordAccount?.username) {
+      properties.discord = discordAccount.username;
+    } else if (discordAccount?.email) {
+      properties.discord = discordAccount.email;
+    } else if (discordAccount?.name) {
+      properties.discord = discordAccount.name;
+    }
+  }
+
+  if (!properties.farcaster) {
+    const farcasterAccount = accounts.find(
+      (account) => account.type === "farcaster"
+    );
+    if (farcasterAccount?.username) {
+      properties.farcaster = farcasterAccount.username;
+    } else if (farcasterAccount?.displayName) {
+      properties.farcaster = farcasterAccount.displayName;
+    } else if (farcasterAccount?.display_name) {
+      properties.farcaster = farcasterAccount.display_name;
+    }
+    if (!properties.farcasterFid && farcasterAccount?.fid) {
+      properties.farcasterFid = farcasterAccount.fid;
+    }
+  }
+
+  if (!properties.github) {
+    const githubAccount = accounts.find(
+      (account) => account.type === "github_oauth"
+    );
+    if (githubAccount?.username) {
+      properties.github = githubAccount.username;
+    } else if (githubAccount?.name) {
+      properties.github = githubAccount.name;
+    }
+  }
+
+  if (!properties.google) {
+    const googleAccount = accounts.find(
+      (account) => account.type === "google_oauth"
+    );
+    if (googleAccount?.email) {
+      properties.google = googleAccount.email;
+    }
+  }
+
+  if (!properties.instagram) {
+    const instagramAccount = accounts.find(
+      (account) => account.type === "instagram_oauth"
+    );
+    if (instagramAccount?.username) {
+      properties.instagram = instagramAccount.username;
+    }
+  }
+
+  if (!properties.line) {
+    const lineAccount = accounts.find((account) => account.type === "line");
+    if (lineAccount?.email) {
+      properties.line = lineAccount.email;
+    }
+  }
+
+  if (!properties.linkedin) {
+    const linkedinAccount = accounts.find(
+      (account) => account.type === "linkedin_oauth"
+    );
+    if (linkedinAccount?.email) {
+      properties.linkedin = linkedinAccount.email;
+    }
+  }
+
+  if (!properties.spotify) {
+    const spotifyAccount = accounts.find(
+      (account) => account.type === "spotify_oauth"
+    );
+    if (spotifyAccount?.email) {
+      properties.spotify = spotifyAccount.email;
+    }
+  }
+
+  if (!properties.telegram) {
+    const telegramAccount = accounts.find(
+      (account) => account.type === "telegram"
+    );
+    if (telegramAccount?.username) {
+      properties.telegram = telegramAccount.username;
+    } else if (telegramAccount?.telegramUserId) {
+      properties.telegram = telegramAccount.telegramUserId;
+    } else if (telegramAccount?.telegram_user_id) {
+      properties.telegram = telegramAccount.telegram_user_id;
+    }
+  }
+
+  if (!properties.tiktok) {
+    const tiktokAccount = accounts.find(
+      (account) => account.type === "tiktok_oauth"
+    );
+    if (tiktokAccount?.username) {
+      properties.tiktok = tiktokAccount.username;
+    }
+  }
+
+  if (!properties.twitter) {
+    const twitterAccount = accounts.find(
+      (account) => account.type === "twitter_oauth"
+    );
+    if (twitterAccount?.username) {
+      properties.twitter = twitterAccount.username;
+    }
+  }
+
   return properties;
 }
 
