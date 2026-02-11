@@ -105,17 +105,19 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    * 
    * @param address The wallet address
    * @param userId The external user ID
+   * @param rdns The reverse domain name of the wallet provider
    * @returns A unique identification key for wallet-user pairs
    */
   private generateWalletUserIdentificationKey(
     address: string,
-    userId: string
+    userId: string,
+    rdns: string
   ): string {
-    return `${address}:${userId}`;
+    return rdns ? `${address}:${userId}:${rdns}` : `${address}:${userId}`;
   }
 
   private encodeCookieValue(value: string): string {
-    return encodeURIComponent(value);
+    return value;
   }
 
   private decodeCookieValue(value: string): string {
@@ -286,7 +288,8 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   ): boolean {
     const identifiedKey = this.generateWalletUserIdentificationKey(
       address,
-      userId
+      userId,
+      rdns
     );
     const cookieValue = cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY);
     const identifiedPairs = (cookieValue?.split(",") || []).map((value) =>
@@ -318,7 +321,8 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   ): void {
     const identifiedKey = this.generateWalletUserIdentificationKey(
       address,
-      userId
+      userId,
+      rdns
     );
     const identifiedPairs =
       cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)?.split(",") || [];
