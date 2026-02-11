@@ -203,16 +203,15 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   }
 
   /**
-   * Parse user IDs from cookie value with backward compatibility.
+   * Parse cookie array values with backward compatibility.
    * Tries JSON array first (new format), falls back to comma-separated (legacy).
    */
-  private parseUserIds(cookieValue: string | undefined): string[] {
+  private parseCookieArray(cookieValue: string | undefined): string[] {
     if (!cookieValue) return [];
 
     // Try JSON array format first (new format)
     try {
-      const decoded = decodeURIComponent(cookieValue);
-      const parsed = JSON.parse(decoded);
+      const parsed = JSON.parse(cookieValue);
       if (Array.isArray(parsed)) {
         return parsed;
       }
@@ -220,23 +219,9 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       // Not JSON, fall through to legacy format
     }
 
-    // Fall back to comma-separated format (legacy)
-    return cookieValue.split(",");
-  }
-
-  /**
-   * Parse wallet-user identification keys from cookie value with backward compatibility.
-   * Tries JSON array first (new format), falls back to comma-separated (legacy).
-   */
-  private parseWalletUserIdentificationKeys(
-    cookieValue: string | undefined
-  ): string[] {
-    if (!cookieValue) return [];
-
-    // Try JSON array format first (new format)
+    // Backward compatibility for previously double-encoded JSON
     try {
-      const decoded = decodeURIComponent(cookieValue);
-      const parsed = JSON.parse(decoded);
+      const parsed = JSON.parse(decodeURIComponent(cookieValue));
       if (Array.isArray(parsed)) {
         return parsed;
       }
@@ -256,7 +241,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    */
   public isUserIdentified(userId: string): boolean {
     const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
-    const identifiedUsers = this.parseUserIds(cookieValue);
+    const identifiedUsers = this.parseCookieArray(cookieValue);
     const isIdentified = identifiedUsers.includes(userId);
 
     logger.debug("Session: Checking user identification", {
@@ -275,12 +260,12 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    */
   public markUserIdentified(userId: string): void {
     const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
-    const identifiedUsers = this.parseUserIds(cookieValue);
+    const identifiedUsers = this.parseCookieArray(cookieValue);
 
     if (!identifiedUsers.includes(userId)) {
       identifiedUsers.push(userId);
       // Store as JSON array to properly handle special characters
-      const newValue = encodeURIComponent(JSON.stringify(identifiedUsers));
+      const newValue = JSON.stringify(identifiedUsers);
       cookie().set(SESSION_USER_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
@@ -317,8 +302,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       rdns
     );
     const cookieValue = cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY);
-    const identifiedPairs =
-      this.parseWalletUserIdentificationKeys(cookieValue);
+    const identifiedPairs = this.parseCookieArray(cookieValue);
     const isIdentified = identifiedPairs.includes(identifiedKey);
 
     logger.debug("Session: Checking wallet-user identification", {
@@ -348,16 +332,15 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       userId,
       rdns
     );
-    const identifiedPairs =
-      this.parseWalletUserIdentificationKeys(
-        cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)
-      );
+    const identifiedPairs = this.parseCookieArray(
+      cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)
+    );
     const alreadyExists = identifiedPairs.includes(identifiedKey);
 
     if (!alreadyExists) {
       identifiedPairs.push(identifiedKey);
       // Store as JSON array to properly handle special characters
-      const newValue = encodeURIComponent(JSON.stringify(identifiedPairs));
+      const newValue = JSON.stringify(identifiedPairs);
       cookie().set(SESSION_WALLET_USER_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
