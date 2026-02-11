@@ -203,14 +203,36 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   }
 
   /**
+   * Parse user IDs from cookie value with backward compatibility.
+   * Tries JSON array first (new format), falls back to comma-separated (legacy).
+   */
+  private parseUserIds(cookieValue: string | undefined): string[] {
+    if (!cookieValue) return [];
+
+    // Try JSON array format first (new format)
+    try {
+      const decoded = decodeURIComponent(cookieValue);
+      const parsed = JSON.parse(decoded);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Not JSON, fall through to legacy format
+    }
+
+    // Fall back to comma-separated format (legacy)
+    return cookieValue.split(",");
+  }
+
+  /**
    * Check if a user has been identified in this session
-   * 
+   *
    * @param userId The external user ID
    * @returns true if this user has been identified
    */
   public isUserIdentified(userId: string): boolean {
     const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
-    const identifiedUsers = cookieValue?.split(",") || [];
+    const identifiedUsers = this.parseUserIds(cookieValue);
     const isIdentified = identifiedUsers.includes(userId);
 
     logger.debug("Session: Checking user identification", {
@@ -224,17 +246,17 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
    * Mark a user as identified in this session
    * Prevents duplicate identification events from being emitted
-   * 
+   *
    * @param userId The external user ID
    */
   public markUserIdentified(userId: string): void {
-    const identifiedUsers =
-      cookie().get(SESSION_USER_IDENTIFIED_KEY)?.split(",") || [];
-    const alreadyExists = identifiedUsers.includes(userId);
+    const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
+    const identifiedUsers = this.parseUserIds(cookieValue);
 
-    if (!alreadyExists) {
+    if (!identifiedUsers.includes(userId)) {
       identifiedUsers.push(userId);
-      const newValue = identifiedUsers.join(",");
+      // Store as JSON array to properly handle special characters
+      const newValue = encodeURIComponent(JSON.stringify(identifiedUsers));
       cookie().set(SESSION_USER_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
