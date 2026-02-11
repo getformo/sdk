@@ -24,7 +24,6 @@ import {
   isSolanaWalletAdapter,
   SolanaTransaction,
   SendTransactionOptions,
-  WalletError,
 } from "./types";
 import {
   isBlockedSolanaAddress,
@@ -376,37 +375,31 @@ export class SolanaWalletAdapterHandler {
   }
 
   /**
+   * Register a listener on an adapter and track its unsubscriber
+   */
+  private registerAdapterListener(
+    adapter: SolanaWalletAdapter,
+    event: string,
+    handler: (...args: unknown[]) => void
+  ): void {
+    adapter.on(event as "connect", handler as () => void);
+    this.unsubscribers.push(() => adapter.off(event as "connect", handler as () => void));
+  }
+
+  /**
    * Set up event listeners on an adapter (connect/disconnect events)
    */
   private setupAdapterEventListenersOnly(adapter: SolanaWalletAdapter): void {
-    // Store reference to detect adapter changes in context
     this.currentBoundAdapter = adapter;
 
-    // Connect event
-    const connectListener = (publicKey: SolanaPublicKey) => {
-      this.handleConnect(publicKey);
-    };
-    adapter.on("connect", connectListener);
-    this.unsubscribers.push(() =>
-      adapter.off("connect", connectListener as (...args: unknown[]) => void)
+    this.registerAdapterListener(adapter, "connect", (publicKey: unknown) =>
+      this.handleConnect(publicKey as SolanaPublicKey)
     );
-
-    // Disconnect event
-    const disconnectListener = () => {
-      this.handleDisconnect();
-    };
-    adapter.on("disconnect", disconnectListener);
-    this.unsubscribers.push(() =>
-      adapter.off("disconnect", disconnectListener as (...args: unknown[]) => void)
+    this.registerAdapterListener(adapter, "disconnect", () =>
+      this.handleDisconnect()
     );
-
-    // Error event
-    const errorListener = (error: unknown) => {
-      logger.error("SolanaWalletAdapterHandler: Wallet error", error);
-    };
-    adapter.on("error", errorListener as (error: WalletError) => void);
-    this.unsubscribers.push(() =>
-      adapter.off("error", errorListener as (...args: unknown[]) => void)
+    this.registerAdapterListener(adapter, "error", (error: unknown) =>
+      logger.error("SolanaWalletAdapterHandler: Wallet error", error)
     );
   }
 
@@ -462,7 +455,6 @@ export class SolanaWalletAdapterHandler {
     connection: SolanaConnection,
     options?: SendTransactionOptions
   ): Promise<TransactionSignature> {
-    // Check if adapter changed (user switched wallets) and rebind if needed
     this.checkAndRebindContextAdapter();
 
     if (!this.originalAdapterSendTransaction) {
@@ -470,18 +462,10 @@ export class SolanaWalletAdapterHandler {
     }
 
     // Capture chainId at call time to ensure consistency across all events
-    // in this transaction lifecycle (prevents issues if setCluster() is called
-    // while user is approving the transaction in their wallet)
     const chainId = this.chainId;
     const address = this.getCurrentAddress();
 
-    if (address && this.formo.isAutocaptureEnabled("transaction")) {
-      this.formo.transaction({
-        status: TransactionStatus.STARTED,
-        chainId,
-        address,
-      });
-    }
+    this.emitTransactionEvent(TransactionStatus.STARTED, address, chainId);
 
     try {
       const signature = await this.originalAdapterSendTransaction(
@@ -490,32 +474,19 @@ export class SolanaWalletAdapterHandler {
         options
       );
 
-      if (address && this.formo.isAutocaptureEnabled("transaction")) {
-        this.formo.transaction({
-          status: TransactionStatus.BROADCASTED,
-          chainId,
-          address,
-          transactionHash: signature,
-        });
+      this.emitTransactionEvent(TransactionStatus.BROADCASTED, address, chainId, signature);
 
+      if (address && this.formo.isAutocaptureEnabled("transaction")) {
         this.pendingTransactions.set(signature, {
           address,
           startTime: Date.now(),
         });
-
-        // Pass captured chainId to polling to maintain consistency
         this.pollTransactionConfirmation(signature, address, chainId, connection);
       }
 
       return signature;
     } catch (error) {
-      if (address && this.formo.isAutocaptureEnabled("transaction")) {
-        this.formo.transaction({
-          status: TransactionStatus.REJECTED,
-          chainId,
-          address,
-        });
-      }
+      this.emitTransactionEvent(TransactionStatus.REJECTED, address, chainId);
       throw error;
     }
   }
@@ -524,51 +495,25 @@ export class SolanaWalletAdapterHandler {
    * Wrapped signMessage method for direct adapter
    */
   private async wrappedSignMessage(message: Uint8Array): Promise<Uint8Array> {
-    // Check if adapter changed (user switched wallets) and rebind if needed
     this.checkAndRebindContextAdapter();
 
     if (!this.originalAdapterSignMessage) {
       throw new Error("signMessage not available");
     }
 
-    // Capture chainId at call time for consistency across all events
     const chainId = this.chainId;
     const address = this.getCurrentAddress();
     const messageString = safeDecodeMessage(message);
 
-    if (address && this.formo.isAutocaptureEnabled("signature")) {
-      this.formo.signature({
-        status: SignatureStatus.REQUESTED,
-        chainId,
-        address,
-        message: messageString,
-      });
-    }
+    this.emitSignatureEvent(SignatureStatus.REQUESTED, address, chainId, messageString);
 
     try {
       const signature = await this.originalAdapterSignMessage(message);
-
-      if (address && this.formo.isAutocaptureEnabled("signature")) {
-        const signatureHex = uint8ArrayToHex(signature);
-        this.formo.signature({
-          status: SignatureStatus.CONFIRMED,
-          chainId,
-          address,
-          message: messageString,
-          signatureHash: signatureHex,
-        });
-      }
-
+      const signatureHex = uint8ArrayToHex(signature);
+      this.emitSignatureEvent(SignatureStatus.CONFIRMED, address, chainId, messageString, signatureHex);
       return signature;
     } catch (error) {
-      if (address && this.formo.isAutocaptureEnabled("signature")) {
-        this.formo.signature({
-          status: SignatureStatus.REJECTED,
-          chainId,
-          address,
-          message: messageString,
-        });
-      }
+      this.emitSignatureEvent(SignatureStatus.REJECTED, address, chainId, messageString);
       throw error;
     }
   }
@@ -579,48 +524,24 @@ export class SolanaWalletAdapterHandler {
   private async wrappedSignTransaction(
     transaction: SolanaTransaction
   ): Promise<SolanaTransaction> {
-    // Check if adapter changed (user switched wallets) and rebind if needed
     this.checkAndRebindContextAdapter();
 
     if (!this.originalAdapterSignTransaction) {
       throw new Error("signTransaction not available");
     }
 
-    // Capture chainId at call time for consistency across all events
     const chainId = this.chainId;
     const address = this.getCurrentAddress();
+    const message = "[Transaction Signature]";
 
-    if (address && this.formo.isAutocaptureEnabled("signature")) {
-      this.formo.signature({
-        status: SignatureStatus.REQUESTED,
-        chainId,
-        address,
-        message: "[Transaction Signature]",
-      });
-    }
+    this.emitSignatureEvent(SignatureStatus.REQUESTED, address, chainId, message);
 
     try {
       const signedTx = await this.originalAdapterSignTransaction(transaction);
-
-      if (address && this.formo.isAutocaptureEnabled("signature")) {
-        this.formo.signature({
-          status: SignatureStatus.CONFIRMED,
-          chainId,
-          address,
-          message: "[Transaction Signature]",
-        });
-      }
-
+      this.emitSignatureEvent(SignatureStatus.CONFIRMED, address, chainId, message);
       return signedTx;
     } catch (error) {
-      if (address && this.formo.isAutocaptureEnabled("signature")) {
-        this.formo.signature({
-          status: SignatureStatus.REJECTED,
-          chainId,
-          address,
-          message: "[Transaction Signature]",
-        });
-      }
+      this.emitSignatureEvent(SignatureStatus.REJECTED, address, chainId, message);
       throw error;
     }
   }
@@ -951,6 +872,50 @@ export class SolanaWalletAdapterHandler {
       return null;
     }
     return address;
+  }
+
+  // ============================================================
+  // Event Emission Helpers
+  // ============================================================
+
+  /**
+   * Emit a transaction event if address is valid and autocapture is enabled
+   */
+  private emitTransactionEvent(
+    status: TransactionStatus,
+    address: string | null,
+    chainId: number,
+    transactionHash?: string
+  ): void {
+    if (address && this.formo.isAutocaptureEnabled("transaction")) {
+      this.formo.transaction({
+        status,
+        chainId,
+        address,
+        ...(transactionHash && { transactionHash }),
+      });
+    }
+  }
+
+  /**
+   * Emit a signature event if address is valid and autocapture is enabled
+   */
+  private emitSignatureEvent(
+    status: SignatureStatus,
+    address: string | null,
+    chainId: number,
+    message: string,
+    signatureHash?: string
+  ): void {
+    if (address && this.formo.isAutocaptureEnabled("signature")) {
+      this.formo.signature({
+        status,
+        chainId,
+        address,
+        message,
+        ...(signatureHash && { signatureHash }),
+      });
+    }
   }
 
   /**
