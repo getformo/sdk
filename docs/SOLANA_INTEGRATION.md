@@ -276,15 +276,14 @@ interface SolanaOptions {
 
   /**
    * The Solana cluster/network
+   * Chain ID is automatically derived from cluster:
+   * - mainnet-beta: 900001
+   * - testnet: 900002
+   * - devnet: 900003
+   * - localnet: 900004
    * @default "mainnet-beta"
    */
   cluster?: SolanaCluster;
-
-  /**
-   * Custom chain ID to use instead of the default Solana chain IDs
-   * Useful if you have a custom indexing pipeline
-   */
-  chainId?: number;
 }
 ```
 
