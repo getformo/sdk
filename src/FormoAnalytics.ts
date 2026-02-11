@@ -677,24 +677,27 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Check for duplicate identify events in this session
-      // Handle both cases: with rdns (address:rdns) and without rdns (address only)
+      // When both address and userId are present, check the wallet-user pair
+      // Also check individual wallet and user to catch partial overlaps
       const anonymousIdentifyKey =
         !validAddress && !userId
           ? `anonymous:${providerName || "unknown"}`
           : undefined;
-      const isAlreadyIdentified = validAddress
-        ? userId
-          ? this.session.isWalletUserIdentified(
-              validAddress,
-              userId,
-              rdns || ""
-            )
-          : this.session.isWalletIdentified(validAddress, rdns || "")
-        : userId
-        ? this.session.isUserIdentified(userId)
-        : anonymousIdentifyKey
-        ? this.session.isWalletIdentified(anonymousIdentifyKey, rdns || "")
-        : false;
+
+      let isAlreadyIdentified = false;
+      if (validAddress && userId) {
+        // Check wallet-user pair OR either individual identifier
+        isAlreadyIdentified =
+          this.session.isWalletUserIdentified(validAddress, userId, rdns || "") ||
+          this.session.isWalletIdentified(validAddress, rdns || "") ||
+          this.session.isUserIdentified(userId);
+      } else if (validAddress) {
+        isAlreadyIdentified = this.session.isWalletIdentified(validAddress, rdns || "");
+      } else if (userId) {
+        isAlreadyIdentified = this.session.isUserIdentified(userId);
+      } else if (anonymousIdentifyKey) {
+        isAlreadyIdentified = this.session.isWalletIdentified(anonymousIdentifyKey, rdns || "");
+      }
 
       logger.debug("Identify: Checking deduplication", {
         validAddress,
