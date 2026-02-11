@@ -116,18 +116,6 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     return rdns ? `${address}:${userId}:${rdns}` : `${address}:${userId}`;
   }
 
-  private encodeCookieValue(value: string): string {
-    return encodeURIComponent(value);
-  }
-
-  private decodeCookieValue(value: string): string {
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  }
-
   /**
    * Check if a wallet provider has been detected in this session
    * 
@@ -167,9 +155,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   public isWalletIdentified(address: string, rdns: string): boolean {
     const identifiedKey = this.generateIdentificationKey(address, rdns);
     const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
-    const identifiedWallets = (cookieValue?.split(",") || []).map((value) =>
-      this.decodeCookieValue(value)
-    );
+    const identifiedWallets = cookieValue?.split(",") || [];
     const isIdentified = identifiedWallets.includes(identifiedKey);
     
     logger.debug("Session: Checking wallet identification", {
@@ -192,13 +178,10 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     const identifiedKey = this.generateIdentificationKey(address, rdns);
     const identifiedWallets =
       cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
-    const decodedWallets = identifiedWallets.map((value) =>
-      this.decodeCookieValue(value)
-    );
-    const alreadyExists = decodedWallets.includes(identifiedKey);
+    const alreadyExists = identifiedWallets.includes(identifiedKey);
 
     if (!alreadyExists) {
-      identifiedWallets.push(this.encodeCookieValue(identifiedKey));
+      identifiedWallets.push(identifiedKey);
       const newValue = identifiedWallets.join(",");
       cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
@@ -213,7 +196,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     } else {
       logger.info("Session: Wallet already marked as identified", {
         identifiedKey,
-        existingWallets: decodedWallets,
+        existingWallets: identifiedWallets,
         hasRdns: !!rdns,
       });
     }
@@ -227,9 +210,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    */
   public isUserIdentified(userId: string): boolean {
     const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
-    const identifiedUsers = (cookieValue?.split(",") || []).map((value) =>
-      this.decodeCookieValue(value)
-    );
+    const identifiedUsers = cookieValue?.split(",") || [];
     const isIdentified = identifiedUsers.includes(userId);
 
     logger.debug("Session: Checking user identification", {
@@ -249,12 +230,10 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   public markUserIdentified(userId: string): void {
     const identifiedUsers =
       cookie().get(SESSION_USER_IDENTIFIED_KEY)?.split(",") || [];
-    const alreadyExists = identifiedUsers
-      .map((value) => this.decodeCookieValue(value))
-      .includes(userId);
+    const alreadyExists = identifiedUsers.includes(userId);
 
     if (!alreadyExists) {
-      identifiedUsers.push(this.encodeCookieValue(userId));
+      identifiedUsers.push(userId);
       const newValue = identifiedUsers.join(",");
       cookie().set(SESSION_USER_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
@@ -292,9 +271,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       rdns
     );
     const cookieValue = cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY);
-    const identifiedPairs = (cookieValue?.split(",") || []).map((value) =>
-      this.decodeCookieValue(value)
-    );
+    const identifiedPairs = cookieValue?.split(",") || [];
     const isIdentified = identifiedPairs.includes(identifiedKey);
 
     logger.debug("Session: Checking wallet-user identification", {
@@ -326,12 +303,10 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     );
     const identifiedPairs =
       cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)?.split(",") || [];
-    const alreadyExists = identifiedPairs
-      .map((value) => this.decodeCookieValue(value))
-      .includes(identifiedKey);
+    const alreadyExists = identifiedPairs.includes(identifiedKey);
 
     if (!alreadyExists) {
-      identifiedPairs.push(this.encodeCookieValue(identifiedKey));
+      identifiedPairs.push(identifiedKey);
       const newValue = identifiedPairs.join(",");
       cookie().set(SESSION_WALLET_USER_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
