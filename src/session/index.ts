@@ -225,6 +225,30 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   }
 
   /**
+   * Parse wallet-user identification keys from cookie value with backward compatibility.
+   * Tries JSON array first (new format), falls back to comma-separated (legacy).
+   */
+  private parseWalletUserIdentificationKeys(
+    cookieValue: string | undefined
+  ): string[] {
+    if (!cookieValue) return [];
+
+    // Try JSON array format first (new format)
+    try {
+      const decoded = decodeURIComponent(cookieValue);
+      const parsed = JSON.parse(decoded);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Not JSON, fall through to legacy format
+    }
+
+    // Fall back to comma-separated format (legacy)
+    return cookieValue.split(",");
+  }
+
+  /**
    * Check if a user has been identified in this session
    *
    * @param userId The external user ID
@@ -293,7 +317,8 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       rdns
     );
     const cookieValue = cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY);
-    const identifiedPairs = cookieValue?.split(",") || [];
+    const identifiedPairs =
+      this.parseWalletUserIdentificationKeys(cookieValue);
     const isIdentified = identifiedPairs.includes(identifiedKey);
 
     logger.debug("Session: Checking wallet-user identification", {
@@ -324,12 +349,15 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       rdns
     );
     const identifiedPairs =
-      cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)?.split(",") || [];
+      this.parseWalletUserIdentificationKeys(
+        cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)
+      );
     const alreadyExists = identifiedPairs.includes(identifiedKey);
 
     if (!alreadyExists) {
       identifiedPairs.push(identifiedKey);
-      const newValue = identifiedPairs.join(",");
+      // Store as JSON array to properly handle special characters
+      const newValue = encodeURIComponent(JSON.stringify(identifiedPairs));
       cookie().set(SESSION_WALLET_USER_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
