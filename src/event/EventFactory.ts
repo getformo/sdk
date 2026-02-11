@@ -624,7 +624,10 @@ class EventFactory implements IEventFactory {
     }
 
     // Set address if not already set by the specific event generator
-    if (formoEvent.address === undefined || formoEvent.address === null) {
+    if (
+      (formoEvent.address === undefined || formoEvent.address === null) &&
+      event.type !== "identify"
+    ) {
       const validAddress = getValidAddress(address);
       formoEvent.address = validAddress
         ? toChecksumAddress(validAddress)
