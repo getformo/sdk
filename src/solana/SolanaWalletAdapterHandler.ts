@@ -382,8 +382,9 @@ export class SolanaWalletAdapterHandler {
     event: string,
     handler: (...args: unknown[]) => void
   ): void {
-    adapter.on(event as "connect", handler as () => void);
-    this.unsubscribers.push(() => adapter.off(event as "connect", handler as () => void));
+    // Use 'any' cast to handle the overloaded on/off signatures
+    (adapter as any).on(event, handler);
+    this.unsubscribers.push(() => (adapter as any).off(event, handler));
   }
 
   /**
