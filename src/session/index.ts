@@ -117,7 +117,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   }
 
   private encodeCookieValue(value: string): string {
-    return value;
+    return encodeURIComponent(value);
   }
 
   private decodeCookieValue(value: string): string {
