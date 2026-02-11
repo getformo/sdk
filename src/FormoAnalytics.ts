@@ -677,8 +677,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Check for duplicate identify events in this session
-      // When both address and userId are present, check the wallet-user pair
-      // Also check individual wallet and user to catch partial overlaps
+      // When both address and userId are present, only check the wallet-user pair
+      // Individual wallet or user identifies should NOT suppress combined identify calls
+      // that may carry enrichment data (e.g., Privy user properties)
       const anonymousIdentifyKey =
         !validAddress && !userId
           ? `anonymous:${providerName || "unknown"}`
@@ -686,11 +687,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       let isAlreadyIdentified = false;
       if (validAddress && userId) {
-        // Check wallet-user pair OR either individual identifier
-        isAlreadyIdentified =
-          this.session.isWalletUserIdentified(validAddress, userId, rdns || "") ||
-          this.session.isWalletIdentified(validAddress, rdns || "") ||
-          this.session.isUserIdentified(userId);
+        // Only check the wallet-user pair — allows enrichment even if either was seen alone
+        isAlreadyIdentified = this.session.isWalletUserIdentified(
+          validAddress,
+          userId,
+          rdns || ""
+        );
       } else if (validAddress) {
         isAlreadyIdentified = this.session.isWalletIdentified(validAddress, rdns || "");
       } else if (userId) {
