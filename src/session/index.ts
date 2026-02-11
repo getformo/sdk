@@ -105,16 +105,13 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    * 
    * @param address The wallet address
    * @param userId The external user ID
-   * @param rdns The reverse domain name of the wallet provider
    * @returns A unique identification key for wallet-user pairs
    */
   private generateWalletUserIdentificationKey(
     address: string,
-    userId: string,
-    rdns: string
+    userId: string
   ): string {
-    const walletKey = this.generateIdentificationKey(address, rdns);
-    return `${walletKey}:${userId}`;
+    return `${address}:${userId}`;
   }
 
   private encodeCookieValue(value: string): string {
@@ -168,7 +165,9 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   public isWalletIdentified(address: string, rdns: string): boolean {
     const identifiedKey = this.generateIdentificationKey(address, rdns);
     const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
-    const identifiedWallets = cookieValue?.split(",") || [];
+    const identifiedWallets = (cookieValue?.split(",") || []).map((value) =>
+      this.decodeCookieValue(value)
+    );
     const isIdentified = identifiedWallets.includes(identifiedKey);
     
     logger.debug("Session: Checking wallet identification", {
@@ -191,9 +190,13 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     const identifiedKey = this.generateIdentificationKey(address, rdns);
     const identifiedWallets =
       cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
-    
-    if (!identifiedWallets.includes(identifiedKey)) {
-      identifiedWallets.push(identifiedKey);
+    const decodedWallets = identifiedWallets.map((value) =>
+      this.decodeCookieValue(value)
+    );
+    const alreadyExists = decodedWallets.includes(identifiedKey);
+
+    if (!alreadyExists) {
+      identifiedWallets.push(this.encodeCookieValue(identifiedKey));
       const newValue = identifiedWallets.join(",");
       cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
@@ -208,7 +211,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     } else {
       logger.info("Session: Wallet already marked as identified", {
         identifiedKey,
-        existingWallets: identifiedWallets,
+        existingWallets: decodedWallets,
         hasRdns: !!rdns,
       });
     }
@@ -283,8 +286,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   ): boolean {
     const identifiedKey = this.generateWalletUserIdentificationKey(
       address,
-      userId,
-      rdns
+      userId
     );
     const cookieValue = cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY);
     const identifiedPairs = (cookieValue?.split(",") || []).map((value) =>
@@ -316,8 +318,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   ): void {
     const identifiedKey = this.generateWalletUserIdentificationKey(
       address,
-      userId,
-      rdns
+      userId
     );
     const identifiedPairs =
       cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)?.split(",") || [];
