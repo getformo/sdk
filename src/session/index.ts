@@ -16,6 +16,7 @@ import { logger } from "../logger";
 export const SESSION_WALLET_DETECTED_KEY = "wallet-detected";
 export const SESSION_WALLET_IDENTIFIED_KEY = "wallet-identified";
 export const SESSION_USER_IDENTIFIED_KEY = "user-identified";
+export const SESSION_WALLET_USER_IDENTIFIED_KEY = "wallet-user-identified";
 
 /**
  * Interface for session management operations
@@ -58,6 +59,22 @@ export interface IFormoAnalyticsSession {
    * @param userId The external user ID
    */
   markUserIdentified(userId: string): void;
+
+  /**
+   * Check if a wallet-user pair has been identified in this session
+   * @param address The wallet address
+   * @param userId The external user ID
+   * @param rdns The reverse domain name (RDNS) of the wallet provider
+   */
+  isWalletUserIdentified(address: string, userId: string, rdns: string): boolean;
+
+  /**
+   * Mark a wallet-user pair as identified in this session
+   * @param address The wallet address
+   * @param userId The external user ID
+   * @param rdns The reverse domain name (RDNS) of the wallet provider
+   */
+  markWalletUserIdentified(address: string, userId: string, rdns: string): void;
 }
 
 /**
@@ -81,6 +98,23 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   private generateIdentificationKey(address: string, rdns: string): string {
     // If rdns is missing, use address-only key as fallback for empty identifies
     return rdns ? `${address}:${rdns}` : address;
+  }
+
+  /**
+   * Generate a unique key for wallet-user identification tracking
+   * 
+   * @param address The wallet address
+   * @param userId The external user ID
+   * @param rdns The reverse domain name of the wallet provider
+   * @returns A unique identification key for wallet-user pairs
+   */
+  private generateWalletUserIdentificationKey(
+    address: string,
+    userId: string,
+    rdns: string
+  ): string {
+    const walletKey = this.generateIdentificationKey(address, rdns);
+    return `${walletKey}:${userId}`;
   }
 
   /**
@@ -214,6 +248,81 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       logger.info("Session: User already marked as identified", {
         userId,
         existingUsers: identifiedUsers,
+      });
+    }
+  }
+
+  /**
+   * Check if a wallet-user pair has been identified
+   * 
+   * @param address The wallet address
+   * @param userId The external user ID
+   * @param rdns The reverse domain name of the wallet provider
+   * @returns true if this wallet-user pair has been identified
+   */
+  public isWalletUserIdentified(
+    address: string,
+    userId: string,
+    rdns: string
+  ): boolean {
+    const identifiedKey = this.generateWalletUserIdentificationKey(
+      address,
+      userId,
+      rdns
+    );
+    const cookieValue = cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY);
+    const identifiedPairs = cookieValue?.split(",") || [];
+    const isIdentified = identifiedPairs.includes(identifiedKey);
+
+    logger.debug("Session: Checking wallet-user identification", {
+      identifiedKey,
+      isIdentified,
+      hasRdns: !!rdns,
+    });
+
+    return isIdentified;
+  }
+
+  /**
+   * Mark a wallet-user pair as identified in this session
+   * Prevents duplicate identification events from being emitted
+   * 
+   * @param address The wallet address
+   * @param userId The external user ID
+   * @param rdns The reverse domain name of the wallet provider
+   */
+  public markWalletUserIdentified(
+    address: string,
+    userId: string,
+    rdns: string
+  ): void {
+    const identifiedKey = this.generateWalletUserIdentificationKey(
+      address,
+      userId,
+      rdns
+    );
+    const identifiedPairs =
+      cookie().get(SESSION_WALLET_USER_IDENTIFIED_KEY)?.split(",") || [];
+    const alreadyExists = identifiedPairs.includes(identifiedKey);
+
+    if (!alreadyExists) {
+      identifiedPairs.push(identifiedKey);
+      const newValue = identifiedPairs.join(",");
+      cookie().set(SESSION_WALLET_USER_IDENTIFIED_KEY, newValue, {
+        // Expires by the end of the day
+        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
+        path: "/",
+      });
+
+      logger.debug("Session: Marked wallet-user pair as identified", {
+        identifiedKey,
+        hasRdns: !!rdns,
+      });
+    } else {
+      logger.info("Session: Wallet-user pair already marked as identified", {
+        identifiedKey,
+        existingPairs: identifiedPairs,
+        hasRdns: !!rdns,
       });
     }
   }

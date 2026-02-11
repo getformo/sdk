@@ -23,6 +23,7 @@ import {
   SESSION_WALLET_DETECTED_KEY,
   SESSION_WALLET_IDENTIFIED_KEY,
   SESSION_USER_IDENTIFIED_KEY,
+  SESSION_WALLET_USER_IDENTIFIED_KEY,
 } from "./session";
 import {
   Address,
@@ -250,6 +251,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(SESSION_USER_IDENTIFIED_KEY);
+    cookie().remove(SESSION_WALLET_USER_IDENTIFIED_KEY);
   }
 
   /**
@@ -682,8 +684,11 @@ export class FormoAnalytics implements IFormoAnalytics {
           : undefined;
       const isAlreadyIdentified = validAddress
         ? userId
-          ? this.session.isWalletIdentified(validAddress, rdns || "") &&
-            this.session.isUserIdentified(userId)
+          ? this.session.isWalletUserIdentified(
+              validAddress,
+              userId,
+              rdns || ""
+            )
           : this.session.isWalletIdentified(validAddress, rdns || "")
         : userId
         ? this.session.isUserIdentified(userId)
@@ -720,6 +725,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       if (userId) {
         this.session.markUserIdentified(userId);
+      }
+      if (validAddress && userId) {
+        this.session.markWalletUserIdentified(validAddress, userId, rdns || "");
       }
       if (anonymousIdentifyKey) {
         this.session.markWalletIdentified(anonymousIdentifyKey, rdns || "");
