@@ -219,16 +219,6 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       // Not JSON, fall through to legacy format
     }
 
-    // Backward compatibility for previously double-encoded JSON
-    try {
-      const parsed = JSON.parse(decodeURIComponent(cookieValue));
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // Not JSON, fall through to legacy format
-    }
-
     // Fall back to comma-separated format (legacy)
     return cookieValue.split(",");
   }
