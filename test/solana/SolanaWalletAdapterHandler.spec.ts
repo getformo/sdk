@@ -913,21 +913,26 @@ describe("SolanaWalletAdapterHandler", () => {
         wallet: adapter,
       });
 
-      // Get the wrapped method reference
-      const wrappedOnce = adapter.sendTransaction;
-
-      // Setting the same wallet again should not double-wrap
-      handler.setWallet(adapter);
-
-      // Method should still work correctly
+      // Connect and do a transaction
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      const result = await adapter.sendTransaction(
-        createMockTransaction(),
-        createMockConnection()
-      );
-      expect(result).to.equal("original_result");
+      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
+      const callCountAfterFirst = mockFormo.transaction.callCount;
+
+      // Setting the same wallet again should restore and re-wrap cleanly
+      handler.setWallet(adapter);
+
+      // Re-connect after setWallet
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Second transaction should emit correct number of events (not doubled)
+      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
+
+      // Should have added the same number of calls (STARTED + BROADCASTED)
+      const callsForSecondTx = mockFormo.transaction.callCount - callCountAfterFirst;
+      expect(callsForSecondTx).to.equal(2); // STARTED + BROADCASTED, not 4
 
       handler.cleanup();
     });
