@@ -782,4 +782,289 @@ describe("SolanaWalletAdapterHandler", () => {
       expect(entry.readyState).to.equal(WalletReadyState.Installed);
     });
   });
+
+  // -- Wallet Swap Detection --
+
+  describe("Wallet Swap Detection", () => {
+    it("should detect adapter change in context and rebind listeners", async () => {
+      const adapter1 = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
+      }) as any;
+      const context = createMockContext(adapter1) as any;
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: context,
+      });
+
+      // Connect with adapter1
+      adapter1._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+      expect(mockFormo.trackConnectEventOnly.calledOnce).to.be.true;
+
+      // Switch to adapter2 (simulate wallet swap)
+      const adapter2 = createMockAdapter({
+        publicKey: createMockPublicKey(MOCK_ADDRESS_2),
+        connected: true,
+      }) as any;
+      context.wallet = createMockWalletEntry(adapter2);
+      context.publicKey = createMockPublicKey(MOCK_ADDRESS_2);
+
+      // Call syncWalletState to detect the change
+      handler.syncWalletState();
+      await new Promise((r) => setTimeout(r, 50));
+
+      // adapter2 should now have listeners
+      expect(adapter2._listeners.get("connect")?.size).to.be.greaterThan(0);
+
+      handler.cleanup();
+    });
+
+    it("should handle adapter becoming null in context", async () => {
+      const adapter = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
+      }) as any;
+      const context = createMockContext(adapter) as any;
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: context,
+      });
+
+      // Connect first
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Remove wallet from context (all wallets disconnected)
+      context.wallet = null;
+
+      // Sync should handle this gracefully
+      handler.syncWalletState();
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Should emit disconnect
+      expect(mockFormo.trackDisconnectEventOnly.called).to.be.true;
+
+      handler.cleanup();
+    });
+
+    it("should be a no-op for non-context wallets", async () => {
+      const adapter = createMockAdapter() as any;
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: adapter,
+      });
+
+      // Should not throw for direct adapter
+      handler.syncWalletState();
+
+      handler.cleanup();
+    });
+  });
+
+  // -- Disconnect Guards --
+
+  describe("Disconnect Guards", () => {
+    it("should not emit disconnect when no prior connection exists", async () => {
+      const adapter = createMockAdapter() as any;
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: adapter,
+      });
+
+      // Emit disconnect without ever connecting
+      adapter._emit("disconnect");
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Should not emit disconnect event
+      expect(mockFormo.trackDisconnectEventOnly.called).to.be.false;
+
+      handler.cleanup();
+    });
+
+    it("should emit disconnect only when prior connection exists", async () => {
+      const adapter = createMockAdapter() as any;
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: adapter,
+      });
+
+      // Connect first
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Then disconnect
+      adapter._emit("disconnect");
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(mockFormo.trackDisconnectEventOnly.calledOnce).to.be.true;
+
+      handler.cleanup();
+    });
+  });
+
+  // -- Double-Wrapping Prevention --
+
+  describe("Double-Wrapping Prevention", () => {
+    it("should not double-wrap the same adapter on setWallet", async () => {
+      const originalSendTransaction = async () => "original_result";
+      const adapter = createMockAdapter({
+        sendTransaction: originalSendTransaction,
+        publicKey: createMockPublicKey(),
+        connected: true,
+      }) as any;
+
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: adapter,
+      });
+
+      // Get the wrapped method reference
+      const wrappedOnce = adapter.sendTransaction;
+
+      // Setting the same wallet again should not double-wrap
+      handler.setWallet(adapter);
+
+      // Method should still work correctly
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      const result = await adapter.sendTransaction(
+        createMockTransaction(),
+        createMockConnection()
+      );
+      expect(result).to.equal("original_result");
+
+      handler.cleanup();
+    });
+
+    it("should properly re-wrap when switching to different adapter", async () => {
+      const adapter1 = createMockAdapter({
+        sendTransaction: async () => "result1",
+        publicKey: createMockPublicKey(),
+        connected: true,
+      }) as any;
+
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: adapter1,
+      });
+
+      adapter1._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      const adapter2 = createMockAdapter({
+        sendTransaction: async () => "result2",
+        publicKey: createMockPublicKey(MOCK_ADDRESS_2),
+        connected: true,
+      }) as any;
+
+      handler.setWallet(adapter2);
+      adapter2._emit("connect", createMockPublicKey(MOCK_ADDRESS_2));
+      await new Promise((r) => setTimeout(r, 50));
+
+      const result = await adapter2.sendTransaction(
+        createMockTransaction(),
+        createMockConnection()
+      );
+      expect(result).to.equal("result2");
+
+      handler.cleanup();
+    });
+  });
+
+  // -- ChainId Consistency --
+
+  describe("ChainId Consistency", () => {
+    it("should use captured chainId for all events in transaction lifecycle", async () => {
+      const adapter = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
+        sendTransaction: async () => "tx_sig",
+      }) as any;
+
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: adapter,
+        cluster: "mainnet-beta",
+      });
+
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Call sendTransaction
+      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
+
+      // Both STARTED and BROADCASTED should have mainnet-beta chainId
+      expect(mockFormo.transaction.firstCall.args[0].chainId).to.equal(
+        SOLANA_CHAIN_IDS["mainnet-beta"]
+      );
+      expect(mockFormo.transaction.secondCall.args[0].chainId).to.equal(
+        SOLANA_CHAIN_IDS["mainnet-beta"]
+      );
+
+      handler.cleanup();
+    });
+
+    it("should use captured chainId even if setCluster called during transaction", async () => {
+      let clusterChangeCallback: (() => void) | null = null;
+
+      const adapter = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
+        sendTransaction: async () => {
+          // Simulate setCluster being called while waiting for approval
+          if (clusterChangeCallback) clusterChangeCallback();
+          return "tx_sig";
+        },
+      }) as any;
+
+      const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+        wallet: adapter,
+        cluster: "mainnet-beta",
+      });
+
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Set up callback to change cluster mid-transaction
+      clusterChangeCallback = () => {
+        handler.setCluster("devnet");
+      };
+
+      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
+
+      // STARTED should be mainnet-beta (captured before the call)
+      expect(mockFormo.transaction.firstCall.args[0].chainId).to.equal(
+        SOLANA_CHAIN_IDS["mainnet-beta"]
+      );
+      // BROADCASTED should also be mainnet-beta (captured at call time)
+      expect(mockFormo.transaction.secondCall.args[0].chainId).to.equal(
+        SOLANA_CHAIN_IDS["mainnet-beta"]
+      );
+
+      handler.cleanup();
+    });
+  });
+
+  // -- System Address Blocking --
+
+  describe("System Address Blocking", () => {
+    const SYSTEM_ADDRESSES = [
+      { name: "System Program", address: "11111111111111111111111111111111" },
+      { name: "Token Program", address: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+      { name: "Token 2022 Program", address: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" },
+      { name: "Associated Token Program", address: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" },
+      { name: "Rent Sysvar", address: "SysvarRent111111111111111111111111111111111" },
+      { name: "Clock Sysvar", address: "SysvarC1ock11111111111111111111111111111111" },
+    ];
+
+    SYSTEM_ADDRESSES.forEach(({ name, address }) => {
+      it(`should block ${name} address`, async () => {
+        const systemPk = createMockPublicKey(address);
+        const adapter = createMockAdapter() as any;
+        const handler = new SolanaWalletAdapterHandler(mockFormo as any, {
+          wallet: adapter,
+        });
+
+        adapter._emit("connect", systemPk);
+        await new Promise((r) => setTimeout(r, 50));
+
+        expect(mockFormo.trackConnectEventOnly.called).to.be.false;
+        handler.cleanup();
+      });
+    });
+  });
 });

@@ -932,15 +932,7 @@ export class SolanaWalletAdapterHandler {
    * Get current wallet public key
    */
   private getPublicKey(): SolanaPublicKey | null {
-    if (!this.wallet) {
-      return null;
-    }
-
-    if (isSolanaWalletContext(this.wallet)) {
-      return this.wallet.publicKey;
-    }
-
-    return this.wallet.publicKey;
+    return this.wallet?.publicKey ?? null;
   }
 
   /**
