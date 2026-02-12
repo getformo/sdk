@@ -15,7 +15,6 @@ import { logger } from "../logger";
  */
 export const SESSION_WALLET_DETECTED_KEY = "wallet-detected";
 export const SESSION_WALLET_IDENTIFIED_KEY = "wallet-identified";
-export const SESSION_USER_IDENTIFIED_KEY = "user-identified";
 export const SESSION_WALLET_USER_IDENTIFIED_KEY = "wallet-user-identified";
 
 /**
@@ -47,18 +46,6 @@ export interface IFormoAnalyticsSession {
    * @param rdns The reverse domain name (RDNS) of the wallet provider
    */
   markWalletIdentified(address: string, rdns: string): void;
-
-  /**
-   * Check if a user has been identified in this session
-   * @param userId The external user ID
-   */
-  isUserIdentified(userId: string): boolean;
-
-  /**
-   * Mark a user as identified in this session
-   * @param userId The external user ID
-   */
-  markUserIdentified(userId: string): void;
 
   /**
    * Check if a wallet-user pair has been identified in this session
@@ -221,56 +208,6 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
 
     // Fall back to comma-separated format (legacy)
     return cookieValue.split(",");
-  }
-
-  /**
-   * Check if a user has been identified in this session
-   *
-   * @param userId The external user ID
-   * @returns true if this user has been identified
-   */
-  public isUserIdentified(userId: string): boolean {
-    const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
-    const identifiedUsers = this.parseCookieArray(cookieValue);
-    const isIdentified = identifiedUsers.includes(userId);
-
-    logger.debug("Session: Checking user identification", {
-      userId,
-      isIdentified,
-    });
-
-    return isIdentified;
-  }
-
-  /**
-   * Mark a user as identified in this session
-   * Prevents duplicate identification events from being emitted
-   *
-   * @param userId The external user ID
-   */
-  public markUserIdentified(userId: string): void {
-    const cookieValue = cookie().get(SESSION_USER_IDENTIFIED_KEY);
-    const identifiedUsers = this.parseCookieArray(cookieValue);
-
-    if (!identifiedUsers.includes(userId)) {
-      identifiedUsers.push(userId);
-      // Store as JSON array to properly handle special characters
-      const newValue = JSON.stringify(identifiedUsers);
-      cookie().set(SESSION_USER_IDENTIFIED_KEY, newValue, {
-        // Expires by the end of the day
-        expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
-        path: "/",
-      });
-
-      logger.debug("Session: Marked user as identified", {
-        userId,
-      });
-    } else {
-      logger.info("Session: User already marked as identified", {
-        userId,
-        existingUsers: identifiedUsers,
-      });
-    }
   }
 
   /**
