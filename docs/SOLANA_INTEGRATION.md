@@ -123,12 +123,10 @@ Transaction confirmed on chain
 
 ```typescript
 import { FormoAnalytics } from '@formo/analytics';
-import { useWallet } from '@solana/wallet-adapter-react';
-import { useConnection } from '@solana/wallet-adapter-react';
-
-// Get wallet context and connection from hooks
-const wallet = useWallet();
-const { connection } = useConnection();
+// wallet/context and connection should come from your app integration
+// (for example, from @solana/wallet-adapter-react hooks inside a component)
+const wallet = solanaWalletContextOrAdapter;
+const connection = solanaConnection;
 
 // Initialize Formo with Solana integration
 const formo = await FormoAnalytics.init('YOUR_WRITE_KEY', {
@@ -145,31 +143,43 @@ const formo = await FormoAnalytics.init('YOUR_WRITE_KEY', {
 ```tsx
 import { WalletProvider } from '@solana/wallet-adapter-react';
 import { ConnectionProvider } from '@solana/wallet-adapter-react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { FormoAnalyticsProvider } from '@formo/analytics';
 
-function App() {
+function FormoProviders({ children }) {
+  return (
+    <ConnectionProvider endpoint={clusterApiUrl('mainnet-beta')}>
+      <WalletProvider wallets={wallets}>{children}</WalletProvider>
+    </ConnectionProvider>
+  );
+}
+
+function FormoRoot({ children }) {
   const wallet = useWallet();
   const { connection } = useConnection();
 
   return (
-    <ConnectionProvider endpoint={clusterApiUrl('mainnet-beta')}>
-      <WalletProvider wallets={wallets}>
-        <FormoAnalyticsProvider
-          writeKey="YOUR_WRITE_KEY"
-          options={{
-            solana: {
-              wallet: wallet,
-              connection: connection,
-              cluster: 'mainnet-beta',
-            },
-          }}
-        >
-          <YourApp />
-        </FormoAnalyticsProvider>
-      </WalletProvider>
-    </ConnectionProvider>
+    <FormoAnalyticsProvider
+      writeKey="YOUR_WRITE_KEY"
+      options={{
+        solana: {
+          wallet: wallet,
+          connection: connection,
+          cluster: 'mainnet-beta',
+        },
+      }}
+    >
+      {children}
+    </FormoAnalyticsProvider>
   );
 }
+
+// Usage:
+// <FormoProviders>
+//   <FormoRoot>
+//     <YourApp />
+//   </FormoRoot>
+// </FormoProviders>
 ```
 
 ### Dynamic Wallet Updates
@@ -192,6 +202,11 @@ function WalletTracker() {
     formo?.solana.setWallet(wallet);
   }, [wallet, formo]);
 
+  // Rebind listeners/wrappers when the inner adapter changes
+  useEffect(() => {
+    formo?.solana.syncWalletState();
+  }, [wallet.wallet, formo]);
+
   useEffect(() => {
     formo?.solana.setConnection(connection);
   }, [connection, formo]);
@@ -205,7 +220,6 @@ function WalletTracker() {
 ```typescript
 import { createConfig } from 'wagmi';
 import { QueryClient } from '@tanstack/react-query';
-import { useWallet } from '@solana/wallet-adapter-react';
 
 const wagmiConfig = createConfig({ /* ... */ });
 const queryClient = new QueryClient();
@@ -289,7 +303,9 @@ interface SolanaOptions {
 
 ### Connection: Optional but Recommended
 
-The `connection` parameter is optional but recommended for full transaction confirmation tracking:
+The `connection` option is optional. Confirmation tracking works when a usable Solana connection
+is available either from `options.solana.connection` or from the `connection` argument passed to
+`sendTransaction(...)`.
 
 | Feature | Without Connection | With Connection |
 |---------|-------------------|-----------------|
@@ -298,8 +314,8 @@ The `connection` parameter is optional but recommended for full transaction conf
 | Signatures | ✅ Tracked | ✅ Tracked |
 | Transaction Start | ✅ Tracked | ✅ Tracked |
 | Transaction Broadcast | ✅ Tracked | ✅ Tracked |
-| Transaction Confirmed | ❌ NOT Tracked | ✅ Tracked |
-| Transaction Reverted | ❌ NOT Tracked | ✅ Tracked |
+| Transaction Confirmed | ❌ Not tracked if no usable connection is available | ✅ Tracked |
+| Transaction Reverted | ❌ Not tracked if no usable connection is available | ✅ Tracked |
 
 ## Address Format
 
@@ -318,6 +334,8 @@ The SDK blocks events from known system program addresses:
 - Token Program: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
 - Token-2022 Program: `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`
 - Associated Token Program: `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL`
+- Rent Sysvar: `SysvarRent111111111111111111111111111111111`
+- Clock Sysvar: `SysvarC1ock11111111111111111111111111111111`
 
 ## Comparison: Solana Mode vs EVM Modes
 
@@ -380,8 +398,9 @@ The handler polls for transaction confirmation using the Solana connection:
 
 ```typescript
 const poll = async () => {
-  const result = await connection.getSignatureStatus(signature);
-  const status = result.value;
+  const status = connection.getSignatureStatuses
+    ? (await connection.getSignatureStatuses([signature])).value[0]
+    : (await connection.getSignatureStatus(signature)).value;
 
   if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
     this.formo.transaction({ status: 'confirmed', ... });
@@ -424,6 +443,10 @@ solana: { wallet: useWallet(), cluster: 'mainnet-beta' }
 useEffect(() => {
   formo?.solana.setWallet(wallet);
 }, [wallet]);
+
+useEffect(() => {
+  formo?.solana.syncWalletState();
+}, [wallet.wallet]);
 ```
 
 **Check 3**: Check autocapture settings
@@ -437,11 +460,11 @@ autocapture: {
 
 ### No Transaction Confirmations
 
-Ensure connection is provided:
+Ensure a usable connection is available either in options or at send-time:
 ```typescript
 solana: {
   wallet: wallet,
-  connection: connection, // Required for confirmations
+  connection: connection, // Recommended persistent connection
 }
 ```
 
