@@ -3,7 +3,6 @@
  */
 
 import {
-  PrivyLinkedAccount,
   PrivyProfileProperties,
   PrivyUser,
   PrivyWalletInfo,
