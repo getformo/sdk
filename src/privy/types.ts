@@ -160,7 +160,6 @@ export interface PrivyProfileProperties {
   discord?: string;
   twitter?: string;
   farcaster?: string;
-  farcasterFid?: number;
   github?: string;
   google?: string;
   linkedin?: string;

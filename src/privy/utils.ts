@@ -62,10 +62,6 @@ export function extractPrivyProperties(
     properties.farcaster = user.farcaster.username;
   }
 
-  if (user.farcaster?.fid) {
-    properties.farcasterFid = user.farcaster.fid;
-  }
-
   if (user.github?.username) {
     properties.github = user.github.username;
   }
@@ -130,9 +126,6 @@ export function extractPrivyProperties(
       properties.farcaster = farcasterAccount.username;
     } else if (farcasterAccount?.displayName) {
       properties.farcaster = farcasterAccount.displayName;
-    }
-    if (!properties.farcasterFid && farcasterAccount?.fid) {
-      properties.farcasterFid = farcasterAccount.fid;
     }
   }
 
