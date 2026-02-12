@@ -1,7 +1,9 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
 import { toChecksumAddress, isBlockedAddress } from "../../src/utils";
+import { validateAddress } from "../../src/utils/address";
 import { ZERO_ADDRESS, DEAD_ADDRESS } from "../../src/constants";
+import { SOLANA_CHAIN_IDS } from "../../src/solana/types";
 
 describe("toChecksumAddress", () => {
   it("should return the checksum of the address", () => {
@@ -101,5 +103,39 @@ describe("isBlockedAddress", () => {
     deadAddressVariants.forEach(variant => {
       expect(isBlockedAddress(variant)).to.be.true;
     });
+  });
+});
+
+describe("validateAddress", () => {
+  const VALID_EVM = "0x82827Bc8342a16b681AfbA6B979E3D1aE5F28a0e";
+  const VALID_SOLANA = "FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn";
+
+  it("should validate EVM address when explicit EVM chainId is provided", () => {
+    expect(validateAddress(VALID_EVM, 1)).to.equal(VALID_EVM);
+  });
+
+  it("should reject Solana address when explicit EVM chainId is provided", () => {
+    expect(validateAddress(VALID_SOLANA, 1)).to.be.undefined;
+    expect(validateAddress(VALID_SOLANA, 137)).to.be.undefined;
+  });
+
+  it("should validate Solana address when explicit Solana chainId is provided", () => {
+    expect(validateAddress(VALID_SOLANA, SOLANA_CHAIN_IDS["mainnet-beta"])).to.equal(VALID_SOLANA);
+    expect(validateAddress(VALID_SOLANA, SOLANA_CHAIN_IDS["devnet"])).to.equal(VALID_SOLANA);
+  });
+
+  it("should reject EVM address when explicit Solana chainId is provided", () => {
+    expect(validateAddress(VALID_EVM, SOLANA_CHAIN_IDS["mainnet-beta"])).to.be.undefined;
+  });
+
+  it("should try EVM first then Solana fallback when no chainId", () => {
+    expect(validateAddress(VALID_EVM)).to.equal(VALID_EVM);
+    expect(validateAddress(VALID_SOLANA)).to.equal(VALID_SOLANA);
+  });
+
+  it("should return undefined for invalid addresses", () => {
+    expect(validateAddress("not-an-address")).to.be.undefined;
+    expect(validateAddress("not-an-address", 1)).to.be.undefined;
+    expect(validateAddress("not-an-address", SOLANA_CHAIN_IDS["mainnet-beta"])).to.be.undefined;
   });
 });

@@ -26,8 +26,11 @@ import {
 import {
   Address,
   ChainID,
+  ChainNamespace,
+  ChainState,
   Config,
   EIP1193Provider,
+  EvmChainState,
   IFormoAnalytics,
   IFormoEventContext,
   IFormoEventProperties,
@@ -43,11 +46,12 @@ import {
   WRAPPED_REQUEST_SYMBOL,
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
-import { toChecksumAddress } from "./utils";
-import { getValidAddress } from "./utils/address";
+import { validateAddress, validateAndChecksumAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
+import { isSolanaChainId } from "./solana";
+import { SolanaManager } from "./solana/SolanaManager";
 
 /**
  * Constants for provider switching reasons
@@ -59,7 +63,28 @@ const PROVIDER_SWITCH_REASONS = {
 } as const;
 
 export class FormoAnalytics implements IFormoAnalytics {
-  private _provider?: EIP1193Provider;
+  // Per-chain namespace state — isolates EVM and Solana connection state
+  private _chainState: { evm: EvmChainState; solana: ChainState } = {
+    evm: {},
+    solana: {},
+  };
+  private _activeNamespace?: ChainNamespace;
+
+  // EVM state accessors — EVM listener paths must use these instead of
+  // currentAddress/currentChainId to avoid cross-namespace reads.
+  private get _provider(): EIP1193Provider | undefined {
+    return this._chainState.evm.provider;
+  }
+  private set _provider(value: EIP1193Provider | undefined) {
+    this._chainState.evm.provider = value;
+  }
+  private get _evmAddress(): Address | undefined {
+    return this._chainState.evm.address;
+  }
+  private get _evmChainId(): ChainID | undefined {
+    return this._chainState.evm.chainId;
+  }
+
   private _providerListenersMap: Map<
     EIP1193Provider,
     Record<string, (...args: unknown[]) => void>
@@ -96,6 +121,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Only initialized when options.wagmi is provided
    */
   private wagmiHandler?: WagmiEventHandler;
+
+  /**
+   * Solana integration manager for tracking Solana wallet events.
+   * Only initialized when options.solana is provided or via formo.solana.
+   */
+  private solanaManager?: SolanaManager;
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -191,6 +222,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
+    // Initialize Solana manager if Solana options are provided
+    if (options.solana) {
+      this.solanaManager = new SolanaManager(this, options.solana);
+    }
+
     this.trackPageHit();
     this.trackPageHits();
   }
@@ -256,22 +292,28 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {void}
    */
   public cleanup(): void {
-    logger.info("FormoAnalytics: Cleaning up resources");
-    
+    logger.debug("FormoAnalytics: Cleaning up resources");
+
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
       this.wagmiHandler.cleanup();
       this.wagmiHandler = undefined;
     }
-    
+
+    // Clean up Solana manager if present
+    if (this.solanaManager) {
+      this.solanaManager.cleanup();
+      this.solanaManager = undefined;
+    }
+
     // Clean up EIP-1193 providers if not in Wagmi mode
     if (!this.isWagmiMode) {
       for (const provider of Array.from(this._trackedProviders)) {
         this.untrackProvider(provider);
       }
     }
-    
-    logger.info("FormoAnalytics: Cleanup complete");
+
+    logger.debug("FormoAnalytics: Cleanup complete");
   }
 
   /**
@@ -304,21 +346,21 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.currentChainId = chainId;
-    const checksummedAddress = this.validateAndChecksumAddress(address);
-    if (!checksummedAddress) {
+    const validAddress = validateAddress(address, chainId);
+    if (!validAddress) {
       logger.warn(
-        `Connect: Invalid address provided ("${address}"). Please provide a valid Ethereum address in checksum format.`
+        `Connect: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
       );
       return;
     }
-    this.currentAddress = checksummedAddress;
+
+    this.setChainState(chainId, { address: validAddress });
 
     await this.trackEvent(
       EventType.CONNECT,
       {
         chainId,
-        address: this.currentAddress,
+        address: validAddress,
       },
       properties,
       context,
@@ -346,11 +388,13 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     const chainId = params?.chainId || this.currentChainId;
     const address = params?.address || this.currentAddress;
+    const isSolana = isSolanaChainId(chainId);
 
-    // Get provider info for the disconnect event
-    const providerInfo = this._provider
-      ? this.getProviderInfo(this._provider)
-      : null;
+    // Only include EVM provider info for non-Solana disconnects
+    const providerInfo =
+      !isSolana && this._provider
+        ? this.getProviderInfo(this._provider)
+        : null;
 
     logger.info("Disconnect: Emitting disconnect event with:", {
       chainId,
@@ -380,9 +424,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       callback
     );
 
-    this.currentAddress = undefined;
-    this.currentChainId = undefined;
-    this.clearActiveProvider();
+    // Clear the disconnecting chain's namespace state.
+    // Per-chain isolation ensures a Solana disconnect never wipes EVM state (and vice versa).
+    this.clearChainState(chainId);
     logger.info(
       "Wallet disconnected: Cleared currentAddress, currentChainId, and provider"
     );
@@ -426,7 +470,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.currentChainId = chainId;
+    this.setChainState(chainId, {});
 
     await this.trackEvent(
       EventType.CHAIN,
@@ -580,7 +624,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           try {
             const address = await this.getAddress(provider);
             if (address) {
-              const validAddress = this.validateAndChecksumAddress(address);
+              const validAddress = validateAndChecksumAddress(address);
               logger.info("Auto-identify: Checking deduplication", {
                 validAddress,
                 rdns: providerDetail.info.rdns,
@@ -641,7 +685,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info("Identify", address, userId, providerName, rdns);
       let validAddress: Address | undefined = undefined;
       if (address) {
-        validAddress = this.validateAndChecksumAddress(address);
+        validAddress = validateAndChecksumAddress(address);
         this.currentAddress = validAddress || undefined;
         if (!validAddress) {
           logger.warn?.("Invalid address provided to identify:", address);
@@ -951,18 +995,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Handle wallet disconnect for active provider only
       if (this._provider === provider) {
         logger.info("OnAccountsChanged: Detecting disconnect, current state:", {
-          currentAddress: this.currentAddress,
-          currentChainId: this.currentChainId,
+          evmAddress: this._evmAddress,
+          evmChainId: this._evmChainId,
           providerMatch: this._provider === provider,
         });
-        
+
         // Check if disconnect tracking is enabled before emitting event
         if (this.isAutocaptureEnabled("disconnect")) {
           try {
-            // Pass current state explicitly to ensure we have the data for the disconnect event
+            // Pass EVM state explicitly to ensure we have the data for the disconnect event
             await this.disconnect({
-              chainId: this.currentChainId,
-              address: this.currentAddress,
+              chainId: this._evmChainId,
+              address: this._evmAddress,
             });
             // Provider remains tracked to allow for reconnection scenarios
           } catch (error) {
@@ -975,9 +1019,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         } else {
           logger.debug("OnAccountsChanged: Disconnect event skipped (autocapture.disconnect: false)");
           // Still clear state even if not tracking the event
-          this.currentAddress = undefined;
-          this.currentChainId = undefined;
-          this.clearActiveProvider();
+          this.clearChainState('evm');
         }
       } else {
         logger.info(
@@ -988,7 +1030,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // Validate and checksum the first account address
-    const address = this.validateAndChecksumAddress(accounts[0]);
+    const address = validateAndChecksumAddress(accounts[0]);
     if (!address) {
       logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
       return;
@@ -997,9 +1039,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Handle provider switching: if we have an active provider but a different provider
     // is connecting with accounts, check if the current provider is still connected
     if (this._provider && this._provider !== provider) {
-      // Capture current state BEFORE any changes
-      const currentStoredAddress = this.currentAddress;
-      const newProviderAddress = this.validateAndChecksumAddress(address);
+      // Capture current EVM state BEFORE any changes
+      const currentStoredAddress = this._evmAddress;
+      const newProviderAddress = validateAndChecksumAddress(address);
 
       logger.info(
         "OnAccountsChanged: Different provider attempting to connect",
@@ -1043,14 +1085,13 @@ export class FormoAnalytics implements IFormoAnalytics {
             // Emit disconnect for the old provider if tracking is enabled
             if (this.isAutocaptureEnabled("disconnect")) {
               await this.disconnect({
-                chainId: this.currentChainId,
-                address: this.currentAddress,
+                chainId: this._evmChainId,
+                address: this._evmAddress,
               });
             } else {
               logger.debug("OnAccountsChanged: Disconnect event skipped during provider switch (autocapture.disconnect: false)");
               // Still clear state even if not tracking the event
-              this.currentAddress = undefined;
-              this.currentChainId = undefined;
+              this.clearChainState('evm');
             }
 
             // Clear state and let the new provider become active
@@ -1081,18 +1122,15 @@ export class FormoAnalytics implements IFormoAnalytics {
           // Emit disconnect for the old provider that didn't signal properly if tracking is enabled
           if (this.isAutocaptureEnabled("disconnect")) {
             await this.disconnect({
-              chainId: this.currentChainId,
-              address: this.currentAddress,
+              chainId: this._evmChainId,
+              address: this._evmAddress,
             });
           } else {
             logger.debug("OnAccountsChanged: Disconnect event skipped for old provider (autocapture.disconnect: false)");
             // Still clear state even if not tracking the event
-            this.currentAddress = undefined;
-            this.currentChainId = undefined;
+            this.clearChainState('evm');
           }
 
-          // Clear state and let the new provider become active
-          this.clearActiveProvider();
         }
       } catch (error) {
         logger.warn(
@@ -1112,17 +1150,15 @@ export class FormoAnalytics implements IFormoAnalytics {
         // If we can't check the current provider, assume it's disconnected
         if (this.isAutocaptureEnabled("disconnect")) {
           await this.disconnect({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
+            chainId: this._evmChainId,
+            address: this._evmAddress,
           });
         } else {
           logger.debug("OnAccountsChanged: Disconnect event skipped for failed provider check (autocapture.disconnect: false)");
           // Still clear state even if not tracking the event
-          this.currentAddress = undefined;
-          this.currentChainId = undefined;
+          this.clearChainState('evm');
         }
 
-        this.clearActiveProvider();
       }
     }
 
@@ -1132,18 +1168,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // If both the provider and address are the same, no-op
-    if (this._provider === provider && address === this.currentAddress) {
+    if (this._provider === provider && address === this._evmAddress) {
       return;
     }
 
     // Get chain ID and update state
     const nextChainId = await this.getCurrentChainId(provider);
-    const wasDisconnected = !this.currentAddress;
+    const wasDisconnected = !this._evmAddress;
 
     // CRITICAL: Always update state regardless of whether connect tracking is enabled
     // This ensures disconnect events will have valid address/chainId values
-    this.currentAddress = address;
-    this.currentChainId = nextChainId;
+    this.setChainState('evm', { address, chainId: nextChainId });
 
     // Conditionally emit connect event based on tracking configuration
     const providerInfo = this.getProviderInfo(provider);
@@ -1217,7 +1252,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // Chain changes only matter for connected users
-    if (!this.currentAddress) {
+    if (!this._evmAddress) {
       logger.info(
         "OnChainChanged: No current address, user appears disconnected"
       );
@@ -1229,19 +1264,19 @@ export class FormoAnalytics implements IFormoAnalytics {
       this._provider = provider;
     }
 
-    this.currentChainId = nextChainId;
+    this.setChainState('evm', { chainId: nextChainId });
 
     try {
-      // This is just a chain change since we already confirmed currentAddress exists
+      // This is just a chain change since we already confirmed _evmAddress exists
       if (this.isAutocaptureEnabled("chain")) {
         return this.chain({
-          chainId: this.currentChainId,
-          address: this.currentAddress,
+          chainId: nextChainId,
+          address: this._evmAddress,
         });
       } else {
         logger.debug("OnChainChanged: Chain event skipped (autocapture.chain: false)", {
-          chainId: this.currentChainId,
-          address: this.currentAddress,
+          chainId: this._evmChainId,
+          address: this._evmAddress,
         });
       }
     } catch (error) {
@@ -1266,19 +1301,19 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info(
         "OnDisconnect: Wallet disconnect event received, current state:",
         {
-          currentAddress: this.currentAddress,
-          currentChainId: this.currentChainId,
+          currentAddress: this._evmAddress,
+          currentChainId: this._evmChainId,
         }
       );
-      
+
       // Double-check disconnect tracking is enabled (defensive programming)
       // Note: This listener should only be registered if tracking is enabled
       if (this.isAutocaptureEnabled("disconnect")) {
         try {
           // Pass current state explicitly to ensure we have the data for the disconnect event
           await this.disconnect({
-            chainId: this.currentChainId,
-            address: this.currentAddress,
+            chainId: this._evmChainId,
+            address: this._evmAddress,
           });
           // Provider remains tracked to allow for reconnection scenarios
         } catch (e) {
@@ -1288,9 +1323,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       } else {
         logger.debug("OnDisconnect: Disconnect event skipped (autocapture.disconnect: false)");
         // Still clear state even if not tracking the event
-        this.currentAddress = undefined;
-        this.currentChainId = undefined;
-        this.clearActiveProvider();
+        this.clearChainState('evm');
       }
     };
     provider.on("disconnect", listener);
@@ -1312,7 +1345,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       if (chainId && address) {
         // Check if this is a connection event (transition from no address to having an address)
-        const wasDisconnected = !this.currentAddress;
+        const wasDisconnected = !this._evmAddress;
 
         // Set provider if none exists
         if (!this._provider) {
@@ -1326,13 +1359,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         // CRITICAL: Always update state from active provider regardless of tracking config
         // This ensures disconnect events will have valid address/chainId values
         if (isActiveProvider) {
-          this.currentChainId = chainId;
-          this.currentAddress =
-            this.validateAndChecksumAddress(address) || undefined;
+          this.setChainState('evm', {
+            chainId,
+            address: validateAndChecksumAddress(address) || undefined,
+          });
         }
-        
+
         // Conditionally emit connect event based on tracking configuration
-        if (isActiveProvider && this.currentAddress) {
+        if (isActiveProvider && this._evmAddress) {
           const providerInfo = this.getProviderInfo(provider);
           const effectiveChainId = chainId || 0;
 
@@ -1436,7 +1470,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
         // Use current chainId if available, otherwise fetch it
         const capturedChainId =
-          this.currentChainId || (await this.getCurrentChainId(provider));
+          this._evmChainId || (await this.getCurrentChainId(provider));
         // Fire-and-forget tracking
         (async () => {
           try {
@@ -1930,10 +1964,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._provider;
   }
 
+  /**
+   * Access the Solana integration manager.
+   * Lazily creates one if not already initialized.
+   *
+   * @example
+   * ```tsx
+   * formo.solana.setWallet(wallet);
+   * formo.solana.setConnection(connection);
+   * formo.solana.setCluster("devnet");
+   * formo.solana.syncWalletState();
+   * ```
+   */
+  get solana(): SolanaManager {
+    if (!this.solanaManager) {
+      this.solanaManager = new SolanaManager(this);
+    }
+    return this.solanaManager;
+  }
+
   private async getAddress(
     provider?: EIP1193Provider
   ): Promise<Address | null> {
-    if (this.currentAddress) return this.currentAddress;
+    // Use EVM-specific state to avoid returning a Solana address in an EVM context
+    if (this._chainState.evm.address) return this._chainState.evm.address;
     const p = provider || this.provider;
     if (!p) {
       logger.info("The provider is not set");
@@ -1943,7 +1997,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        return this.validateAndChecksumAddress(accounts[0]) || null;
+        return validateAndChecksumAddress(accounts[0]) || null;
       }
     } catch (err) {
       const code = (err as RPCError)?.code;
@@ -1968,7 +2022,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       });
       if (!res || res.length === 0) return null;
       return res
-        .map((e) => this.validateAndChecksumAddress(e))
+        .map((e) => validateAndChecksumAddress(e))
         .filter((e): e is Address => e !== undefined);
     } catch (err) {
       const code = (err as RPCError)?.code;
@@ -2016,13 +2070,13 @@ export class FormoAnalytics implements IFormoAnalytics {
         ? (params[1] as Address)
         : (params[0] as Address);
 
-    const validAddress = this.validateAndChecksumAddress(rawAddress);
+    const validAddress = validateAndChecksumAddress(rawAddress);
     if (!validAddress) {
       throw new Error(`Invalid address in signature payload: ${rawAddress}`);
     }
 
     const basePayload = {
-      chainId: chainId ?? this.currentChainId ?? undefined,
+      chainId: chainId ?? this._evmChainId ?? undefined,
       address: validAddress,
     };
 
@@ -2056,13 +2110,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       value: string;
     };
 
-    const validAddress = this.validateAndChecksumAddress(from);
+    const validAddress = validateAndChecksumAddress(from);
     if (!validAddress) {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
 
     return {
-      chainId: this.currentChainId || (await this.getCurrentChainId(provider)),
+      chainId: this._evmChainId || (await this.getCurrentChainId(provider)),
       data,
       address: validAddress,
       to,
@@ -2215,20 +2269,87 @@ export class FormoAnalytics implements IFormoAnalytics {
     // If this is a different provider, allow the switch
     if (this._provider) {
       // Clear any provider-specific state when switching
-      this.currentChainId = undefined;
-      this.currentAddress = undefined;
+      this.setChainState('evm', { address: undefined, chainId: undefined, provider });
+    } else {
+      this._provider = provider;
     }
-    this._provider = provider;
   }
 
   /**
-   * Helper method to validate and checksum an address
-   * @param address The address to validate and checksum
-   * @returns The checksummed address or undefined if invalid
+   * Determine which namespace a chainId belongs to.
    */
-  private validateAndChecksumAddress(address: string): Address | undefined {
-    const validAddress = getValidAddress(address);
-    return validAddress ? toChecksumAddress(validAddress) : undefined;
+  private getNamespace(chainId?: ChainID): ChainNamespace {
+    return isSolanaChainId(chainId) ? 'solana' : 'evm';
+  }
+
+  /**
+   * Update per-chain state and sync the derived currentAddress/currentChainId.
+   * Accepts either a namespace string ('evm'/'solana') or a chainId number
+   * to resolve the namespace automatically. When a chainId number is passed,
+   * it is also stored as the namespace's chainId (unless explicitly overridden
+   * in the update object).
+   */
+  private setChainState(
+    namespaceOrChainId: ChainNamespace | ChainID | undefined,
+    update: { address?: Address; chainId?: ChainID; provider?: EIP1193Provider }
+  ): void {
+    const namespace = typeof namespaceOrChainId === 'string'
+      ? namespaceOrChainId
+      : this.getNamespace(namespaceOrChainId);
+    const ns = this._chainState[namespace];
+    if ('address' in update) ns.address = update.address;
+    if ('chainId' in update) {
+      ns.chainId = update.chainId;
+    } else if (typeof namespaceOrChainId === 'number') {
+      ns.chainId = namespaceOrChainId;
+    }
+    if (namespace === 'evm' && 'provider' in update) {
+      (ns as EvmChainState).provider = update.provider;
+    }
+    this._activeNamespace = namespace;
+    this.syncDerivedState();
+  }
+
+  /**
+   * Clear per-chain state for a given namespace (or chainId) and sync derived state.
+   */
+  private clearChainState(namespaceOrChainId: ChainNamespace | ChainID | undefined): void {
+    const namespace = typeof namespaceOrChainId === 'string'
+      ? namespaceOrChainId
+      : this.getNamespace(namespaceOrChainId);
+    if (namespace === 'evm') {
+      this._chainState.evm = {};
+    } else {
+      this._chainState.solana = {};
+    }
+    this.syncDerivedState();
+  }
+
+  /**
+   * Synchronize currentAddress/currentChainId from the active namespace.
+   * Last-connected-chain-wins: _activeNamespace takes precedence.
+   */
+  private syncDerivedState(): void {
+    const active = this._activeNamespace;
+    if (active) {
+      const state = this._chainState[active];
+      if (state.address || state.chainId) {
+        this.currentAddress = state.address;
+        this.currentChainId = state.chainId;
+        return;
+      }
+    }
+    // Fall through to the other namespace
+    const other: ChainNamespace = active === 'evm' ? 'solana' : 'evm';
+    const otherState = this._chainState[other];
+    if (otherState.address || otherState.chainId) {
+      this.currentAddress = otherState.address;
+      this.currentChainId = otherState.chainId;
+      this._activeNamespace = other;
+      return;
+    }
+    this.currentAddress = undefined;
+    this.currentChainId = undefined;
   }
 
   /**
