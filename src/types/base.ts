@@ -16,6 +16,18 @@ export type ChainID = number;
 // Address (EVM, Solana, etc.)
 export type Address = string;
 
+// Per-chain namespace state (internal)
+export type ChainNamespace = 'evm' | 'solana';
+
+export interface ChainState {
+  address?: Address;
+  chainId?: ChainID;
+}
+
+export interface EvmChainState extends ChainState {
+  provider?: EIP1193Provider;
+}
+
 export type ValidInputTypes = Uint8Array | bigint | string | number | boolean;
 export interface IFormoAnalytics {
   page(

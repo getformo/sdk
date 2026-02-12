@@ -215,8 +215,18 @@ export class SolanaAdapter {
       }
     }
 
+    // For raw adapters, skip teardown if it's the same object
+    if (wallet && wallet === this.wrappedAdapter) {
+      return;
+    }
+
     // Restore original methods on previous wallet before cleaning up
     this.restoreOriginalMethods();
+
+    // Clear stale connection state to prevent the old adapter's
+    // address/chainId from leaking into disconnect events
+    this.connectionState.lastAddress = undefined;
+    this.connectionState.lastChainId = undefined;
 
     // Clean up previous wallet listeners
     this.cleanupWalletListeners();
@@ -1082,6 +1092,10 @@ export class SolanaAdapter {
     this.cleanupWalletListeners();
     this.processedSignatures.clear();
     this.pendingTransactions.clear();
+
+    // Clear connection state to prevent stale data
+    this.connectionState.lastAddress = undefined;
+    this.connectionState.lastChainId = undefined;
 
     // Restore original methods on wrapped adapter
     this.restoreOriginalMethods();
