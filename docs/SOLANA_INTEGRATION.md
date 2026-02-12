@@ -27,7 +27,7 @@ The Formo Analytics SDK now supports integration with [Solana Wallet Adapter](ht
 ```
 Solana Wallet Adapter (Phantom, Solflare, etc.)
                     ↓
-         SolanaWalletAdapter
+         SolanaAdapter
                     ↓
            FormoAnalytics SDK
                     ↓
@@ -36,7 +36,7 @@ Solana Wallet Adapter (Phantom, Solflare, etc.)
 
 ### Key Components
 
-#### 1. **SolanaWalletAdapter** (`src/solana/SolanaWalletAdapter.ts`)
+#### 1. **SolanaAdapter** (`src/solana/SolanaAdapter.ts`)
 
 The core orchestrator that hooks into Solana Wallet Adapter's event system:
 
@@ -49,7 +49,7 @@ The core orchestrator that hooks into Solana Wallet Adapter's event system:
 
 Comprehensive TypeScript interfaces for Solana integration:
 
-- `ISolanaWalletAdapter`: Single wallet adapter interface
+- `ISolanaAdapter`: Single wallet adapter interface
 - `SolanaWalletContext`: useWallet() hook context interface
 - `SolanaCluster`: Network types (mainnet-beta, testnet, devnet, localnet)
 - `SOLANA_CHAIN_IDS`: Mapping of clusters to numeric chain IDs
@@ -281,7 +281,7 @@ interface SolanaOptions {
    * The Solana wallet adapter instance or wallet context
    * Can be a single wallet adapter or the useWallet() context
    */
-  wallet?: ISolanaWalletAdapter | SolanaWalletContext;
+  wallet?: ISolanaAdapter | SolanaWalletContext;
 
   /**
    * The Solana connection for tracking transaction confirmations
@@ -492,6 +492,7 @@ const mockWallet = {
   connect: async () => {},
   disconnect: async () => {},
   signMessage: async (message) => new Uint8Array(64),
+  signTransaction: async (tx) => tx,
   sendTransaction: async (tx, conn) => 'mock_signature',
   on: jest.fn(),
   off: jest.fn(),

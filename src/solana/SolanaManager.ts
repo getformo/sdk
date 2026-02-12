@@ -1,16 +1,16 @@
 /**
  * SolanaManager
  *
- * Manages the lifecycle of the SolanaWalletAdapter, handling lazy initialization
+ * Manages the lifecycle of the SolanaAdapter, handling lazy initialization
  * and pending configuration. This keeps Solana-specific lifecycle logic out of
  * the main FormoAnalytics class.
  */
 
 import { FormoAnalytics } from "../FormoAnalytics";
 import { logger } from "../logger";
-import { SolanaWalletAdapter } from "./SolanaWalletAdapter";
+import { SolanaAdapter } from "./SolanaAdapter";
 import {
-  ISolanaWalletAdapter,
+  ISolanaAdapter,
   SolanaWalletContext,
   SolanaConnection,
   SolanaCluster,
@@ -18,7 +18,7 @@ import {
 } from "./types";
 
 export class SolanaManager {
-  private handler?: SolanaWalletAdapter;
+  private handler?: SolanaAdapter;
   private pendingConnection?: SolanaConnection;
   private pendingCluster?: SolanaCluster;
 
@@ -28,7 +28,7 @@ export class SolanaManager {
   ) {
     if (options?.wallet) {
       logger.info("SolanaManager: Initializing Solana wallet tracking");
-      this.handler = new SolanaWalletAdapter(formo, {
+      this.handler = new SolanaAdapter(formo, {
         wallet: options.wallet,
         connection: options.connection,
         cluster: options.cluster,
@@ -40,18 +40,18 @@ export class SolanaManager {
     }
   }
 
-  get adapter(): SolanaWalletAdapter | undefined {
+  get adapter(): SolanaAdapter | undefined {
     return this.handler;
   }
 
   setWallet(
-    wallet: ISolanaWalletAdapter | SolanaWalletContext | null
+    wallet: ISolanaAdapter | SolanaWalletContext | null
   ): void {
     if (this.handler) {
       this.handler.setWallet(wallet);
     } else if (wallet) {
       logger.info("SolanaManager: Initializing Solana wallet tracking (lazy)");
-      this.handler = new SolanaWalletAdapter(this.formo, {
+      this.handler = new SolanaAdapter(this.formo, {
         wallet,
         connection: this.pendingConnection,
         cluster: this.pendingCluster,

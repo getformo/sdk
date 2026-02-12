@@ -43,17 +43,11 @@ import {
   WRAPPED_REQUEST_SYMBOL,
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
-import { toChecksumAddress } from "./utils";
-import { getValidAddress } from "./utils/address";
+import { validateAddress, validateAndChecksumAddress } from "./utils/address";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
-import {
-  isSolanaAddress,
-  getValidSolanaAddress,
-  SOLANA_CHAIN_IDS,
-  isSolanaChainId,
-} from "./solana";
+import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
 
 /**
@@ -328,7 +322,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    const validAddress = this.validateMultiChainAddress(address, chainId);
+    const validAddress = validateAddress(address, chainId);
     if (!validAddress) {
       logger.warn(
         `Connect: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
@@ -614,7 +608,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           try {
             const address = await this.getAddress(provider);
             if (address) {
-              const validAddress = this.validateAndChecksumAddress(address);
+              const validAddress = validateAndChecksumAddress(address);
               logger.info("Auto-identify: Checking deduplication", {
                 validAddress,
                 rdns: providerDetail.info.rdns,
@@ -675,7 +669,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info("Identify", address, userId, providerName, rdns);
       let validAddress: Address | undefined = undefined;
       if (address) {
-        validAddress = this.validateAndChecksumAddress(address);
+        validAddress = validateAndChecksumAddress(address);
         this.currentAddress = validAddress || undefined;
         if (!validAddress) {
           logger.warn?.("Invalid address provided to identify:", address);
@@ -1022,7 +1016,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // Validate and checksum the first account address
-    const address = this.validateAndChecksumAddress(accounts[0]);
+    const address = validateAndChecksumAddress(accounts[0]);
     if (!address) {
       logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
       return;
@@ -1033,7 +1027,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (this._provider && this._provider !== provider) {
       // Capture current state BEFORE any changes
       const currentStoredAddress = this.currentAddress;
-      const newProviderAddress = this.validateAndChecksumAddress(address);
+      const newProviderAddress = validateAndChecksumAddress(address);
 
       logger.info(
         "OnAccountsChanged: Different provider attempting to connect",
@@ -1362,7 +1356,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         if (isActiveProvider) {
           this.currentChainId = chainId;
           this.currentAddress =
-            this.validateAndChecksumAddress(address) || undefined;
+            validateAndChecksumAddress(address) || undefined;
         }
         
         // Conditionally emit connect event based on tracking configuration
@@ -1996,7 +1990,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const accounts = await this.getAccounts(p);
       if (accounts && accounts.length > 0) {
-        return this.validateAndChecksumAddress(accounts[0]) || null;
+        return validateAndChecksumAddress(accounts[0]) || null;
       }
     } catch (err) {
       const code = (err as RPCError)?.code;
@@ -2021,7 +2015,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       });
       if (!res || res.length === 0) return null;
       return res
-        .map((e) => this.validateAndChecksumAddress(e))
+        .map((e) => validateAndChecksumAddress(e))
         .filter((e): e is Address => e !== undefined);
     } catch (err) {
       const code = (err as RPCError)?.code;
@@ -2069,7 +2063,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         ? (params[1] as Address)
         : (params[0] as Address);
 
-    const validAddress = this.validateAndChecksumAddress(rawAddress);
+    const validAddress = validateAndChecksumAddress(rawAddress);
     if (!validAddress) {
       throw new Error(`Invalid address in signature payload: ${rawAddress}`);
     }
@@ -2109,7 +2103,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       value: string;
     };
 
-    const validAddress = this.validateAndChecksumAddress(from);
+    const validAddress = validateAndChecksumAddress(from);
     if (!validAddress) {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
@@ -2272,50 +2266,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.currentAddress = undefined;
     }
     this._provider = provider;
-  }
-
-  /**
-   * Helper method to validate and checksum an address
-   * @param address The address to validate and checksum
-   * @returns The checksummed address or undefined if invalid
-   */
-  private validateAndChecksumAddress(address: string): Address | undefined {
-    const validAddress = getValidAddress(address);
-    return validAddress ? toChecksumAddress(validAddress) : undefined;
-  }
-
-  /**
-   * Validates an address for both EVM and Solana chains.
-   * For EVM addresses, returns checksummed format.
-   * For Solana addresses, returns the Base58 address as-is.
-   * @param address The address to validate
-   * @param chainId Optional chain ID to help determine address type
-   * @returns The validated address or undefined if invalid
-   */
-  private validateMultiChainAddress(
-    address: string,
-    chainId?: number
-  ): Address | undefined {
-    // If chain ID is in Solana range, validate as Solana address
-    const solanaChainIds = Object.values(SOLANA_CHAIN_IDS);
-    if (chainId !== undefined && chainId !== null && solanaChainIds.includes(chainId)) {
-      const validSolanaAddress = getValidSolanaAddress(address);
-      return validSolanaAddress || undefined;
-    }
-
-    // Default to EVM address validation first
-    const validEvmAddress = this.validateAndChecksumAddress(address);
-    if (validEvmAddress) {
-      return validEvmAddress;
-    }
-
-    // Fall back to Solana format when EVM validation fails
-    // This handles custom chainIds and cases where chainId is not provided
-    if (isSolanaAddress(address)) {
-      return getValidSolanaAddress(address) || undefined;
-    }
-
-    return undefined;
   }
 
   /**

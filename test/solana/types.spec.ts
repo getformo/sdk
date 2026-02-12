@@ -5,8 +5,8 @@ import {
   SOLANA_CLUSTERS_BY_ID,
   DEFAULT_SOLANA_CHAIN_ID,
   isSolanaWalletContext,
-  isSolanaWalletAdapter,
-  ISolanaWalletAdapter,
+  isSolanaAdapter,
+  ISolanaAdapter,
   SolanaWalletContext,
   WalletReadyState,
 } from "../../src/solana/types";
@@ -69,7 +69,7 @@ describe("Solana Types", () => {
     });
 
     it("should return false for wallet adapter objects", () => {
-      const mockAdapter: Partial<ISolanaWalletAdapter> = {
+      const mockAdapter: Partial<ISolanaAdapter> = {
         name: "Test Wallet",
         url: "https://test.wallet",
         icon: "icon.png",
@@ -83,7 +83,7 @@ describe("Solana Types", () => {
         off: () => {},
       };
 
-      expect(isSolanaWalletContext(mockAdapter as ISolanaWalletAdapter)).to.be
+      expect(isSolanaWalletContext(mockAdapter as ISolanaAdapter)).to.be
         .false;
     });
 
@@ -98,9 +98,9 @@ describe("Solana Types", () => {
     });
   });
 
-  describe("isSolanaWalletAdapter", () => {
+  describe("isSolanaAdapter", () => {
     it("should return true for wallet adapter objects", () => {
-      const mockAdapter: Partial<ISolanaWalletAdapter> = {
+      const mockAdapter: Partial<ISolanaAdapter> = {
         name: "Test Wallet",
         url: "https://test.wallet",
         icon: "icon.png",
@@ -114,7 +114,7 @@ describe("Solana Types", () => {
         off: () => {},
       };
 
-      expect(isSolanaWalletAdapter(mockAdapter as ISolanaWalletAdapter)).to.be
+      expect(isSolanaAdapter(mockAdapter as ISolanaAdapter)).to.be
         .true;
     });
 
@@ -133,13 +133,13 @@ describe("Solana Types", () => {
         sendTransaction: async () => "",
       };
 
-      expect(isSolanaWalletAdapter(mockContext as SolanaWalletContext)).to.be
+      expect(isSolanaAdapter(mockContext as SolanaWalletContext)).to.be
         .false;
     });
 
     it("should return false for null/undefined", () => {
-      expect(isSolanaWalletAdapter(null)).to.be.false;
-      expect(isSolanaWalletAdapter(undefined)).to.be.false;
+      expect(isSolanaAdapter(null)).to.be.false;
+      expect(isSolanaAdapter(undefined)).to.be.false;
     });
   });
 });

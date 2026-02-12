@@ -1,10 +1,10 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import * as sinon from "sinon";
-import { SolanaWalletAdapter } from "../../src/solana/SolanaWalletAdapter";
+import { SolanaAdapter } from "../../src/solana/SolanaAdapter";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
 import {
-  ISolanaWalletAdapter,
+  ISolanaAdapter,
   SolanaWalletContext,
   SolanaConnection,
   SolanaPublicKey,
@@ -13,10 +13,10 @@ import {
   SOLANA_CHAIN_IDS,
   SolanaWalletEntry,
   isSolanaWalletContext,
-  isSolanaWalletAdapter,
+  isSolanaAdapter,
 } from "../../src/solana/types";
 
-describe("SolanaWalletAdapter", () => {
+describe("SolanaAdapter", () => {
   let sandbox: sinon.SinonSandbox;
   let mockFormo: sinon.SinonStubbedInstance<FormoAnalytics>;
 
@@ -35,8 +35,8 @@ describe("SolanaWalletAdapter", () => {
   });
 
   const createMockAdapter = (
-    overrides: Partial<ISolanaWalletAdapter> = {}
-  ): ISolanaWalletAdapter => {
+    overrides: Partial<ISolanaAdapter> = {}
+  ): ISolanaAdapter => {
     const listeners = new Map<string, Set<Function>>();
     return {
       name: "Test Wallet",
@@ -51,31 +51,31 @@ describe("SolanaWalletAdapter", () => {
       on: ((event: string, listener: Function) => {
         if (!listeners.has(event)) listeners.set(event, new Set());
         listeners.get(event)!.add(listener);
-      }) as ISolanaWalletAdapter["on"],
+      }) as ISolanaAdapter["on"],
       off: ((event: string, listener: Function) => {
         listeners.get(event)?.delete(listener);
-      }) as ISolanaWalletAdapter["off"],
+      }) as ISolanaAdapter["off"],
       // Helper to emit events in tests
       _emit: (event: string, ...args: unknown[]) => {
         listeners.get(event)?.forEach((fn) => fn(...args));
       },
       _listeners: listeners,
       ...overrides,
-    } as ISolanaWalletAdapter & {
+    } as ISolanaAdapter & {
       _emit: (event: string, ...args: unknown[]) => void;
       _listeners: Map<string, Set<Function>>;
     };
   };
 
   const createMockWalletEntry = (
-    adapter: ISolanaWalletAdapter
+    adapter: ISolanaAdapter
   ): SolanaWalletEntry => ({
     adapter,
     readyState: adapter.readyState,
   });
 
   const createMockContext = (
-    adapter: ISolanaWalletAdapter,
+    adapter: ISolanaAdapter,
     overrides: Partial<SolanaWalletContext> = {}
   ): SolanaWalletContext => {
     const walletEntry = createMockWalletEntry(adapter);
@@ -142,20 +142,20 @@ describe("SolanaWalletAdapter", () => {
       const adapter = createMockAdapter();
       const context = createMockContext(adapter);
       expect(isSolanaWalletContext(context)).to.be.true;
-      expect(isSolanaWalletAdapter(context)).to.be.false;
+      expect(isSolanaAdapter(context)).to.be.false;
     });
 
     it("should identify wallet adapter (has name, no wallets)", () => {
       const adapter = createMockAdapter();
-      expect(isSolanaWalletAdapter(adapter)).to.be.true;
+      expect(isSolanaAdapter(adapter)).to.be.true;
       expect(isSolanaWalletContext(adapter)).to.be.false;
     });
 
     it("should return false for null/undefined", () => {
       expect(isSolanaWalletContext(null)).to.be.false;
-      expect(isSolanaWalletAdapter(null)).to.be.false;
+      expect(isSolanaAdapter(null)).to.be.false;
       expect(isSolanaWalletContext(undefined)).to.be.false;
-      expect(isSolanaWalletAdapter(undefined)).to.be.false;
+      expect(isSolanaAdapter(undefined)).to.be.false;
     });
   });
 
@@ -163,13 +163,13 @@ describe("SolanaWalletAdapter", () => {
 
   describe("Constructor", () => {
     it("should initialize with default cluster (mainnet-beta)", () => {
-      const handler = new SolanaWalletAdapter(mockFormo as any, {});
+      const handler = new SolanaAdapter(mockFormo as any, {});
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
       handler.cleanup();
     });
 
     it("should use provided cluster", () => {
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         cluster: "devnet",
       });
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
@@ -177,7 +177,7 @@ describe("SolanaWalletAdapter", () => {
     });
 
     it("should not set up listeners without a wallet", () => {
-      const handler = new SolanaWalletAdapter(mockFormo as any, {});
+      const handler = new SolanaAdapter(mockFormo as any, {});
       // No errors, no connect calls
       expect(mockFormo.connect.called).to.be.false;
       handler.cleanup();
@@ -189,7 +189,7 @@ describe("SolanaWalletAdapter", () => {
   describe("Direct Adapter: Event Listeners", () => {
     it("should register connect/disconnect/error listeners on adapter", () => {
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -202,7 +202,7 @@ describe("SolanaWalletAdapter", () => {
     it("should emit connect event when adapter fires connect", async () => {
       const pk = createMockPublicKey();
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         cluster: "devnet",
       });
@@ -222,7 +222,7 @@ describe("SolanaWalletAdapter", () => {
     it("should emit disconnect event when adapter fires disconnect", async () => {
       const pk = createMockPublicKey();
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -249,7 +249,7 @@ describe("SolanaWalletAdapter", () => {
         () => new Promise((r) => setTimeout(r, 100))
       );
 
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -268,7 +268,7 @@ describe("SolanaWalletAdapter", () => {
         "11111111111111111111111111111111"
       );
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -290,7 +290,7 @@ describe("SolanaWalletAdapter", () => {
         sendTransaction: async () => "tx_sig_123",
       }) as any;
       const connection = createMockConnection();
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         connection,
       });
@@ -324,7 +324,7 @@ describe("SolanaWalletAdapter", () => {
           throw error;
         },
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -353,7 +353,7 @@ describe("SolanaWalletAdapter", () => {
         connected: true,
         signMessage: async () => mockSigBytes,
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -381,7 +381,7 @@ describe("SolanaWalletAdapter", () => {
           throw error;
         },
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -406,7 +406,7 @@ describe("SolanaWalletAdapter", () => {
         connected: true,
         signTransaction: async () => signedTx,
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -431,7 +431,7 @@ describe("SolanaWalletAdapter", () => {
     it("should extract adapter from context and set up listeners", () => {
       const adapter = createMockAdapter() as any;
       const context = createMockContext(adapter);
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: context,
       });
 
@@ -447,7 +447,7 @@ describe("SolanaWalletAdapter", () => {
         sendTransaction: async () => "ctx_sig",
       }) as any;
       const context = createMockContext(adapter);
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: context,
       });
 
@@ -469,7 +469,7 @@ describe("SolanaWalletAdapter", () => {
         wallet: null,
       });
       // Should not throw
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: context,
       });
       handler.cleanup();
@@ -484,7 +484,7 @@ describe("SolanaWalletAdapter", () => {
         publicKey: createMockPublicKey(),
         connected: true,
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -501,7 +501,7 @@ describe("SolanaWalletAdapter", () => {
         publicKey: createMockPublicKey(),
         connected: true,
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
       await new Promise((r) => setTimeout(r, 50));
@@ -520,7 +520,7 @@ describe("SolanaWalletAdapter", () => {
 
   describe("setCluster", () => {
     it("should update chainId when cluster changes", () => {
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         cluster: "mainnet-beta",
       });
       expect(handler.getChainId()).to.equal(900001);
@@ -535,7 +535,7 @@ describe("SolanaWalletAdapter", () => {
         publicKey: createMockPublicKey(),
         connected: true,
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         cluster: "mainnet-beta",
       });
@@ -554,7 +554,7 @@ describe("SolanaWalletAdapter", () => {
     });
 
     it("should not emit chain event when not connected", () => {
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         cluster: "mainnet-beta",
       });
 
@@ -569,7 +569,7 @@ describe("SolanaWalletAdapter", () => {
         publicKey: createMockPublicKey(),
         connected: true,
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         cluster: "devnet",
       });
@@ -592,7 +592,7 @@ describe("SolanaWalletAdapter", () => {
         connected: true,
         sendTransaction: async () => "sig",
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -616,7 +616,7 @@ describe("SolanaWalletAdapter", () => {
   describe("Cleanup", () => {
     it("should remove event listeners from adapter on cleanup", () => {
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -635,7 +635,7 @@ describe("SolanaWalletAdapter", () => {
       }) as any;
 
       // Store reference to the wrapped version
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
       const wrappedSendTx = adapter.sendTransaction;
@@ -662,7 +662,7 @@ describe("SolanaWalletAdapter", () => {
       const connection = createMockConnection({
         getSignatureStatuses: async () => ({ value: [null] }),
       });
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         connection,
       });
@@ -689,7 +689,7 @@ describe("SolanaWalletAdapter", () => {
         publicKey: createMockPublicKey(),
         connected: true,
       }) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter1,
       });
       await new Promise((r) => setTimeout(r, 50));
@@ -715,7 +715,7 @@ describe("SolanaWalletAdapter", () => {
 
     it("should handle setting wallet to null", () => {
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -793,7 +793,7 @@ describe("SolanaWalletAdapter", () => {
         connected: true,
       }) as any;
       const context = createMockContext(adapter1) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: context,
       });
 
@@ -826,7 +826,7 @@ describe("SolanaWalletAdapter", () => {
         connected: true,
       }) as any;
       const context = createMockContext(adapter) as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: context,
       });
 
@@ -849,7 +849,7 @@ describe("SolanaWalletAdapter", () => {
 
     it("should be a no-op for non-context wallets", async () => {
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -865,7 +865,7 @@ describe("SolanaWalletAdapter", () => {
   describe("Disconnect Guards", () => {
     it("should not emit disconnect when no prior connection exists", async () => {
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -881,7 +881,7 @@ describe("SolanaWalletAdapter", () => {
 
     it("should emit disconnect only when prior connection exists", async () => {
       const adapter = createMockAdapter() as any;
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -910,7 +910,7 @@ describe("SolanaWalletAdapter", () => {
         connected: true,
       }) as any;
 
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
 
@@ -945,7 +945,7 @@ describe("SolanaWalletAdapter", () => {
         connected: true,
       }) as any;
 
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter1,
       });
 
@@ -982,7 +982,7 @@ describe("SolanaWalletAdapter", () => {
         sendTransaction: async () => "tx_sig",
       }) as any;
 
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         cluster: "mainnet-beta",
       });
@@ -1017,7 +1017,7 @@ describe("SolanaWalletAdapter", () => {
         },
       }) as any;
 
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         cluster: "mainnet-beta",
       });
@@ -1057,7 +1057,7 @@ describe("SolanaWalletAdapter", () => {
         sendTransaction: async () => "sig",
       }) as any;
 
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         cluster: "devnet",
       });
@@ -1091,7 +1091,7 @@ describe("SolanaWalletAdapter", () => {
       // Explicitly ensure no signMessage at wrap time
       delete adapter.signMessage;
 
-      const handler = new SolanaWalletAdapter(mockFormo as any, {
+      const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
         cluster: "devnet",
       });
@@ -1129,7 +1129,7 @@ describe("SolanaWalletAdapter", () => {
       it(`should block ${name} address`, async () => {
         const systemPk = createMockPublicKey(address);
         const adapter = createMockAdapter() as any;
-        const handler = new SolanaWalletAdapter(mockFormo as any, {
+        const handler = new SolanaAdapter(mockFormo as any, {
           wallet: adapter,
         });
 

@@ -56,7 +56,7 @@ class EventFactory implements IEventFactory {
    * @param address The address to validate
    * @returns The validated address or null if invalid
    */
-  private validateMultiChainAddress(address: string | null | undefined): Address | null {
+  private validateAddress(address: string | null | undefined): Address | null {
     if (!address) {
       return null;
     }
@@ -340,7 +340,7 @@ class EventFactory implements IEventFactory {
 
     // Handle address - convert undefined to null for consistency
     // Supports both EVM (hex) and Solana (Base58) addresses
-    const validAddress = this.validateMultiChainAddress(formoEvent.address);
+    const validAddress = this.validateAddress(formoEvent.address);
     commonEventData.address = validAddress;
 
     const processedEvent = mergeDeepRight(
@@ -656,7 +656,7 @@ class EventFactory implements IEventFactory {
     // Set address if not already set by the specific event generator
     // Supports both EVM (hex) and Solana (Base58) addresses
     if (formoEvent.address === undefined || formoEvent.address === null) {
-      formoEvent.address = this.validateMultiChainAddress(address);
+      formoEvent.address = this.validateAddress(address);
     }
     formoEvent.user_id = userId || null;
 
