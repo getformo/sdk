@@ -17,9 +17,8 @@ import {
   TransactionStatus,
   UTMParameters,
 } from "../types";
-import { toChecksumAddress, toSnakeCase } from "../utils";
-import { getValidAddress } from "../utils/address";
-import { isSolanaAddress, getValidSolanaAddress } from "../solana/address";
+import { toSnakeCase } from "../utils";
+import { validateAddress } from "../utils/address";
 import { getCurrentTimeFormatted } from "../utils/timestamp";
 import { isUndefined } from "../validators";
 import { logger } from "../logger";
@@ -51,28 +50,16 @@ class EventFactory implements IEventFactory {
 
   /**
    * Validate an address for both EVM and Solana chains.
-   * For EVM addresses, returns checksummed format.
-   * For Solana addresses, returns the Base58 address as-is.
+   * Uses chainId for strict validation when available.
    * @param address The address to validate
+   * @param chainId Optional chain ID for strict chain-specific validation
    * @returns The validated address or null if invalid
    */
-  private validateAddress(address: string | null | undefined): Address | null {
+  private validateEventAddress(address: string | null | undefined, chainId?: ChainID): Address | null {
     if (!address) {
       return null;
     }
-
-    // Try EVM address validation first
-    const validEvmAddress = getValidAddress(address);
-    if (validEvmAddress) {
-      return toChecksumAddress(validEvmAddress);
-    }
-
-    // Check if it's a valid Solana address (Base58, no 0x prefix)
-    if (isSolanaAddress(address)) {
-      return getValidSolanaAddress(address);
-    }
-
-    return null;
+    return validateAddress(address, chainId) || null;
   }
   private getTimezone(): string {
     try {
@@ -339,8 +326,9 @@ class EventFactory implements IEventFactory {
     commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     // Handle address - convert undefined to null for consistency
-    // Supports both EVM (hex) and Solana (Base58) addresses
-    const validAddress = this.validateAddress(formoEvent.address);
+    // Uses chainId for strict chain-specific validation
+    const eventChainId = formoEvent.properties?.chainId as ChainID | undefined;
+    const validAddress = this.validateEventAddress(formoEvent.address, eventChainId);
     commonEventData.address = validAddress;
 
     const processedEvent = mergeDeepRight(
@@ -654,9 +642,10 @@ class EventFactory implements IEventFactory {
     }
 
     // Set address if not already set by the specific event generator
-    // Supports both EVM (hex) and Solana (Base58) addresses
+    // Uses chainId for strict chain-specific validation
     if (formoEvent.address === undefined || formoEvent.address === null) {
-      formoEvent.address = this.validateAddress(address);
+      const chainId = 'chainId' in event ? (event.chainId as ChainID) : undefined;
+      formoEvent.address = this.validateEventAddress(address, chainId);
     }
     formoEvent.user_id = userId || null;
 

@@ -189,4 +189,5 @@ describe("Per-chain state isolation", () => {
     expect(formo.currentAddress).to.equal(EVM_ADDRESS);
     expect(formo.currentChainId).to.equal(137);
   });
+
 });
