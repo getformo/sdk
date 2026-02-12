@@ -770,7 +770,7 @@ export class WagmiEventHandler {
    * Clean up all subscriptions
    */
   public cleanup(): void {
-    logger.info("WagmiEventHandler: Cleaning up subscriptions");
+    logger.debug("WagmiEventHandler: Cleaning up subscriptions");
     
     for (const unsubscribe of this.unsubscribers) {
       try {
@@ -784,7 +784,7 @@ export class WagmiEventHandler {
     this.processedMutations.clear();
     this.processedQueries.clear();
     this.pendingTransactions.clear();
-    logger.info("WagmiEventHandler: Cleanup complete");
+    logger.debug("WagmiEventHandler: Cleanup complete");
   }
 }
 

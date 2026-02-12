@@ -1078,7 +1078,7 @@ export class SolanaAdapter {
    * Clean up all resources
    */
   public cleanup(): void {
-    logger.info("SolanaAdapter: Cleaning up");
+    logger.debug("SolanaAdapter: Cleaning up");
 
     // Set cleanup flag to stop any ongoing polls
     this.isCleanedUp = true;
@@ -1103,6 +1103,6 @@ export class SolanaAdapter {
     this.wallet = null;
     this.connection = null;
 
-    logger.info("SolanaAdapter: Cleanup complete");
+    logger.debug("SolanaAdapter: Cleanup complete");
   }
 }

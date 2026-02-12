@@ -292,7 +292,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {void}
    */
   public cleanup(): void {
-    logger.info("FormoAnalytics: Cleaning up resources");
+    logger.debug("FormoAnalytics: Cleaning up resources");
 
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
@@ -313,7 +313,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
-    logger.info("FormoAnalytics: Cleanup complete");
+    logger.debug("FormoAnalytics: Cleanup complete");
   }
 
   /**
