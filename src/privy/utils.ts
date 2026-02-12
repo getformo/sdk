@@ -122,6 +122,18 @@ export function extractPrivyProperties(
     }
   }
 
+  // Use OAuth emails as fallback for email if still blank
+  // Priority: email -> google -> apple -> linkedin
+  if (!properties.email) {
+    if (properties.google) {
+      properties.email = properties.google;
+    } else if (properties.apple) {
+      properties.email = properties.apple;
+    } else if (properties.linkedin) {
+      properties.email = properties.linkedin;
+    }
+  }
+
   if (!properties.phone) {
     const phoneAccount = accounts.find((account) => account.type === "phone");
     if (phoneAccount?.number) {
