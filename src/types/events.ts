@@ -51,9 +51,9 @@ export interface DetectAPIEvent {
 }
 export interface IdentifyAPIEvent {
   type: "identify";
-  address: string;
-  providerName: string;
-  rdns: string;
+  address?: Address;
+  providerName?: string;
+  rdns?: string;
   userId?: Nullable<string>;
 }
 export interface ChainAPIEvent {

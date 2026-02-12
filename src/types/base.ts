@@ -92,8 +92,8 @@ export interface IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
   identify(
-    params: {
-      address: Address;
+    params?: {
+      address?: Address;
       providerName?: string;
       userId?: string;
       rdns?: string;
