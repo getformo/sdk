@@ -8,6 +8,8 @@ import {
 } from "../validators";
 import { isNullish } from "../validators/object";
 import { BLOCKED_ADDRESSES } from "../constants";
+import { isSolanaAddress, getValidSolanaAddress } from "../solana/address";
+import { SOLANA_CHAIN_IDS } from "../solana/types";
 
 /**
  * Private helper function to validate and trim an address
@@ -98,4 +100,57 @@ export const toChecksumAddress = (address: Address): string => {
   }
 
   return checksumAddress;
+};
+
+/**
+ * Validates an EVM address and returns it in checksummed format.
+ * @param address The address to validate
+ * @returns The checksummed address or undefined if invalid
+ */
+export const validateAndChecksumAddress = (address: string): Address | undefined => {
+  const validAddress = getValidAddress(address);
+  return validAddress ? toChecksumAddress(validAddress) : undefined;
+};
+
+/**
+ * Validates an address for both EVM and Solana chains.
+ * For EVM addresses, returns checksummed format.
+ * For Solana addresses, returns the Base58 address as-is.
+ *
+ * When chainId is explicitly provided, validation is strict:
+ * - Solana chainId → only Solana validation
+ * - Non-Solana chainId → only EVM validation
+ * When chainId is omitted, EVM is tried first with Solana fallback.
+ *
+ * @param address The address to validate
+ * @param chainId Optional chain ID to determine address type
+ * @returns The validated address or undefined if invalid
+ */
+export const validateAddress = (
+  address: string,
+  chainId?: number
+): Address | undefined => {
+  const solanaChainIds = Object.values(SOLANA_CHAIN_IDS);
+
+  // Explicit Solana chainId → validate ONLY as Solana
+  if (chainId !== undefined && chainId !== null && solanaChainIds.includes(chainId)) {
+    return getValidSolanaAddress(address) || undefined;
+  }
+
+  // Explicit non-Solana chainId → validate ONLY as EVM
+  if (chainId !== undefined && chainId !== null) {
+    return validateAndChecksumAddress(address);
+  }
+
+  // No chainId → try EVM first, then Solana fallback
+  const validEvmAddress = validateAndChecksumAddress(address);
+  if (validEvmAddress) {
+    return validEvmAddress;
+  }
+
+  if (isSolanaAddress(address)) {
+    return getValidSolanaAddress(address) || undefined;
+  }
+
+  return undefined;
 };

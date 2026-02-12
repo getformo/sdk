@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.26.0",
+  "version": "1.27.0",
   "packageManager": "pnpm@9.0.0",
   "repository": {
     "type": "git",
@@ -66,7 +66,7 @@
     "ts-loader": "^9.3.1",
     "ts-node": "^10.8.2",
     "typescript": "^5.7.3",
-    "webpack": "^5.74.0",
+    "webpack": "^5.104.1",
     "webpack-cli": "^4.10.0"
   },
   "scripts": {
@@ -94,13 +94,29 @@
     "@tanstack/react-query": ">=5.0.0",
     "@types/react": ">=16.14.34",
     "react": ">=16.14.0",
-    "wagmi": ">=2.0.0"
+    "viem": ">=2.0.0",
+    "wagmi": ">=2.0.0",
+    "@solana/wallet-adapter-base": ">=0.9.0",
+    "@solana/wallet-adapter-react": ">=0.15.0",
+    "@solana/web3.js": ">=1.70.0"
   },
   "peerDependenciesMeta": {
     "@tanstack/react-query": {
       "optional": true
     },
+    "viem": {
+      "optional": true
+    },
     "wagmi": {
+      "optional": true
+    },
+    "@solana/wallet-adapter-base": {
+      "optional": true
+    },
+    "@solana/wallet-adapter-react": {
+      "optional": true
+    },
+    "@solana/web3.js": {
       "optional": true
     }
   },

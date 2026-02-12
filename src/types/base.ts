@@ -7,6 +7,7 @@ import {
 } from "./events";
 import { EIP1193Provider } from "./provider";
 import { ReactNode } from "react";
+import { SolanaOptions } from "../solana/types";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID
@@ -14,6 +15,18 @@ export type ChainID = number;
 
 // Address (EVM, Solana, etc.)
 export type Address = string;
+
+// Per-chain namespace state (internal)
+export type ChainNamespace = 'evm' | 'solana';
+
+export interface ChainState {
+  address?: Address;
+  chainId?: ChainID;
+}
+
+export interface EvmChainState extends ChainState {
+  provider?: EIP1193Provider;
+}
 
 export type ValidInputTypes = Uint8Array | bigint | string | number | boolean;
 export interface IFormoAnalytics {
@@ -71,6 +84,8 @@ export interface IFormoAnalytics {
       to?: string;
       value?: string;
       transactionHash?: string;
+      function_name?: string;
+      function_args?: Record<string, unknown>;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -207,6 +222,14 @@ export interface Options {
    * @requires @tanstack/react-query@>=5.0.0 (for mutation tracking)
    */
   wagmi?: WagmiOptions;
+  /**
+   * Solana Wallet Adapter integration configuration
+   * When provided, the SDK will track Solana wallet events in addition to EVM wallet events
+   * This works alongside EIP-1193/Wagmi tracking - you can track both EVM and Solana wallets
+   * @requires @solana/wallet-adapter-base (optional peer dependency)
+   * @requires @solana/wallet-adapter-react (optional peer dependency, for React apps)
+   */
+  solana?: SolanaOptions;
   /**
    * Custom API host for sending events through your own domain to bypass ad blockers
    * - If not provided, events are sent directly to events.formo.so
