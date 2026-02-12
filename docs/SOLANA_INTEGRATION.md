@@ -27,7 +27,7 @@ The Formo Analytics SDK now supports integration with [Solana Wallet Adapter](ht
 ```
 Solana Wallet Adapter (Phantom, Solflare, etc.)
                     ↓
-         SolanaWalletAdapterHandler
+         SolanaWalletAdapter
                     ↓
            FormoAnalytics SDK
                     ↓
@@ -36,7 +36,7 @@ Solana Wallet Adapter (Phantom, Solflare, etc.)
 
 ### Key Components
 
-#### 1. **SolanaWalletAdapterHandler** (`src/solana/SolanaWalletAdapterHandler.ts`)
+#### 1. **SolanaWalletAdapter** (`src/solana/SolanaWalletAdapter.ts`)
 
 The core orchestrator that hooks into Solana Wallet Adapter's event system:
 
@@ -49,7 +49,7 @@ The core orchestrator that hooks into Solana Wallet Adapter's event system:
 
 Comprehensive TypeScript interfaces for Solana integration:
 
-- `SolanaWalletAdapter`: Single wallet adapter interface
+- `ISolanaWalletAdapter`: Single wallet adapter interface
 - `SolanaWalletContext`: useWallet() hook context interface
 - `SolanaCluster`: Network types (mainnet-beta, testnet, devnet, localnet)
 - `SOLANA_CHAIN_IDS`: Mapping of clusters to numeric chain IDs
@@ -267,7 +267,7 @@ interface SolanaOptions {
    * The Solana wallet adapter instance or wallet context
    * Can be a single wallet adapter or the useWallet() context
    */
-  wallet?: SolanaWalletAdapter | SolanaWalletContext;
+  wallet?: ISolanaWalletAdapter | SolanaWalletContext;
 
   /**
    * The Solana connection for tracking transaction confirmations

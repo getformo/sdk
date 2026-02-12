@@ -4,11 +4,11 @@ export * from "./FormoAnalytics";
 export * from "./types";
 
 // Solana integration exports
-export { SolanaWalletAdapterHandler } from "./solana";
+export { SolanaWalletAdapter } from "./solana";
 export type {
   SolanaOptions,
   SolanaCluster,
-  SolanaWalletAdapter,
+  ISolanaWalletAdapter,
   SolanaWalletContext,
   SolanaPublicKey,
   SolanaConnection,

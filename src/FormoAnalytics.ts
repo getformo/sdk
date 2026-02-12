@@ -49,7 +49,7 @@ import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import {
-  SolanaWalletAdapterHandler,
+  SolanaWalletAdapter,
   isSolanaAddress,
   getValidSolanaAddress,
   SOLANA_CHAIN_IDS,
@@ -108,19 +108,19 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Only initialized when options.solana is provided
    * Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
    */
-  private solanaHandler?: SolanaWalletAdapterHandler;
+  private solanaHandler?: SolanaWalletAdapter;
 
   /**
    * Pending Solana connection set before handler was initialized.
    * Applied when handler is lazily created via setSolanaWallet().
    */
-  private pendingSolanaConnection?: Parameters<SolanaWalletAdapterHandler["setConnection"]>[0];
+  private pendingSolanaConnection?: Parameters<SolanaWalletAdapter["setConnection"]>[0];
 
   /**
    * Pending Solana cluster set before handler was initialized.
    * Applied when handler is lazily created via setSolanaWallet().
    */
-  private pendingSolanaCluster?: Parameters<SolanaWalletAdapterHandler["setCluster"]>[0];
+  private pendingSolanaCluster?: Parameters<SolanaWalletAdapter["setCluster"]>[0];
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -220,7 +220,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
     if (options.solana) {
       logger.info("FormoAnalytics: Initializing Solana wallet tracking");
-      this.solanaHandler = new SolanaWalletAdapterHandler(this, {
+      this.solanaHandler = new SolanaWalletAdapter(this, {
         wallet: options.solana.wallet,
         connection: options.solana.connection,
         cluster: options.solana.cluster,
@@ -2095,7 +2095,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Get the Solana wallet adapter handler instance
    * Useful for advanced integration scenarios
    */
-  get solana(): SolanaWalletAdapterHandler | undefined {
+  get solana(): SolanaWalletAdapter | undefined {
     return this.solanaHandler;
   }
 
@@ -2108,13 +2108,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    *
    * @param wallet The new Solana wallet adapter or context
    */
-  public setSolanaWallet(wallet: Parameters<SolanaWalletAdapterHandler["setWallet"]>[0]): void {
+  public setSolanaWallet(wallet: Parameters<SolanaWalletAdapter["setWallet"]>[0]): void {
     if (this.solanaHandler) {
       this.solanaHandler.setWallet(wallet);
     } else if (wallet) {
       logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
       // Use pending values if set, otherwise fall back to initial options
-      this.solanaHandler = new SolanaWalletAdapterHandler(this, {
+      this.solanaHandler = new SolanaWalletAdapter(this, {
         wallet,
         connection: this.pendingSolanaConnection ?? this.options.solana?.connection,
         cluster: this.pendingSolanaCluster ?? this.options.solana?.cluster,
@@ -2130,7 +2130,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Required for transaction confirmation polling.
    * @param connection The new Solana connection
    */
-  public setSolanaConnection(connection: Parameters<SolanaWalletAdapterHandler["setConnection"]>[0]): void {
+  public setSolanaConnection(connection: Parameters<SolanaWalletAdapter["setConnection"]>[0]): void {
     if (this.solanaHandler) {
       this.solanaHandler.setConnection(connection);
     } else {
@@ -2143,7 +2143,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Update the Solana cluster/network.
    * @param cluster The Solana cluster (mainnet-beta, testnet, devnet, localnet)
    */
-  public setSolanaCluster(cluster: Parameters<SolanaWalletAdapterHandler["setCluster"]>[0]): void {
+  public setSolanaCluster(cluster: Parameters<SolanaWalletAdapter["setCluster"]>[0]): void {
     if (this.solanaHandler) {
       this.solanaHandler.setCluster(cluster);
     } else {

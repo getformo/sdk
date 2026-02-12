@@ -6,7 +6,7 @@ import {
   DEFAULT_SOLANA_CHAIN_ID,
   isSolanaWalletContext,
   isSolanaWalletAdapter,
-  SolanaWalletAdapter,
+  ISolanaWalletAdapter,
   SolanaWalletContext,
   WalletReadyState,
 } from "../../src/solana/types";
@@ -69,7 +69,7 @@ describe("Solana Types", () => {
     });
 
     it("should return false for wallet adapter objects", () => {
-      const mockAdapter: Partial<SolanaWalletAdapter> = {
+      const mockAdapter: Partial<ISolanaWalletAdapter> = {
         name: "Test Wallet",
         url: "https://test.wallet",
         icon: "icon.png",
@@ -83,7 +83,7 @@ describe("Solana Types", () => {
         off: () => {},
       };
 
-      expect(isSolanaWalletContext(mockAdapter as SolanaWalletAdapter)).to.be
+      expect(isSolanaWalletContext(mockAdapter as ISolanaWalletAdapter)).to.be
         .false;
     });
 
@@ -100,7 +100,7 @@ describe("Solana Types", () => {
 
   describe("isSolanaWalletAdapter", () => {
     it("should return true for wallet adapter objects", () => {
-      const mockAdapter: Partial<SolanaWalletAdapter> = {
+      const mockAdapter: Partial<ISolanaWalletAdapter> = {
         name: "Test Wallet",
         url: "https://test.wallet",
         icon: "icon.png",
@@ -114,7 +114,7 @@ describe("Solana Types", () => {
         off: () => {},
       };
 
-      expect(isSolanaWalletAdapter(mockAdapter as SolanaWalletAdapter)).to.be
+      expect(isSolanaWalletAdapter(mockAdapter as ISolanaWalletAdapter)).to.be
         .true;
     });
 

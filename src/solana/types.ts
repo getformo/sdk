@@ -71,7 +71,7 @@ export type WalletAdapterState =
  * Solana wallet adapter interface
  * Based on @solana/wallet-adapter-base WalletAdapter
  */
-export interface SolanaWalletAdapter {
+export interface ISolanaWalletAdapter {
   name: string;
   url: string;
   icon: string;
@@ -169,7 +169,7 @@ export interface SendTransactionOptions {
  * This is { adapter, readyState }, not a direct adapter.
  */
 export interface SolanaWalletEntry {
-  adapter: SolanaWalletAdapter;
+  adapter: ISolanaWalletAdapter;
   readyState: WalletReadyState;
 }
 
@@ -217,7 +217,7 @@ export interface SolanaOptions {
    * The Solana wallet adapter instance or wallet context
    * Can be a single wallet adapter or the useWallet() context
    */
-  wallet?: SolanaWalletAdapter | SolanaWalletContext;
+  wallet?: ISolanaWalletAdapter | SolanaWalletContext;
 
   /**
    * The Solana connection for tracking transaction confirmations
@@ -250,7 +250,7 @@ export type UnsubscribeFn = () => void;
  * Check if an object is a SolanaWalletContext (has wallets array)
  */
 export function isSolanaWalletContext(
-  obj: SolanaWalletAdapter | SolanaWalletContext | undefined | null
+  obj: ISolanaWalletAdapter | SolanaWalletContext | undefined | null
 ): obj is SolanaWalletContext {
   return (
     obj !== null &&
@@ -262,11 +262,11 @@ export function isSolanaWalletContext(
 }
 
 /**
- * Check if an object is a SolanaWalletAdapter
+ * Check if an object is a ISolanaWalletAdapter
  */
 export function isSolanaWalletAdapter(
-  obj: SolanaWalletAdapter | SolanaWalletContext | undefined | null
-): obj is SolanaWalletAdapter {
+  obj: ISolanaWalletAdapter | SolanaWalletContext | undefined | null
+): obj is ISolanaWalletAdapter {
   return (
     obj !== null &&
     obj !== undefined &&

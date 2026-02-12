@@ -1,5 +1,5 @@
 /**
- * SolanaWalletAdapterHandler
+ * SolanaWalletAdapter
  *
  * Handles wallet event tracking by hooking into Solana Wallet Adapter events.
  * This provides integration with the @solana/wallet-adapter ecosystem.
@@ -11,7 +11,7 @@ import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import {
-  SolanaWalletAdapter,
+  ISolanaWalletAdapter,
   SolanaWalletContext,
   SolanaConnection,
   SolanaCluster,
@@ -75,9 +75,9 @@ function safeDecodeMessage(message: Uint8Array): string {
   }
 }
 
-export class SolanaWalletAdapterHandler {
+export class SolanaWalletAdapter {
   private formo: FormoAnalytics;
-  private wallet: SolanaWalletAdapter | SolanaWalletContext | null = null;
+  private wallet: ISolanaWalletAdapter | SolanaWalletContext | null = null;
   private connection: SolanaConnection | null = null;
   private cluster: SolanaCluster;
   private chainId: number;
@@ -106,20 +106,20 @@ export class SolanaWalletAdapterHandler {
   /**
    * Original adapter methods that we wrap for tracking
    */
-  private originalAdapterSendTransaction?: SolanaWalletAdapter["sendTransaction"];
-  private originalAdapterSignMessage?: SolanaWalletAdapter["signMessage"];
-  private originalAdapterSignTransaction?: SolanaWalletAdapter["signTransaction"];
+  private originalAdapterSendTransaction?: ISolanaWalletAdapter["sendTransaction"];
+  private originalAdapterSignMessage?: ISolanaWalletAdapter["signMessage"];
+  private originalAdapterSignTransaction?: ISolanaWalletAdapter["signTransaction"];
 
   /**
    * Reference to the wrapped adapter (to restore methods on cleanup)
    */
-  private wrappedAdapter?: SolanaWalletAdapter;
+  private wrappedAdapter?: ISolanaWalletAdapter;
 
   /**
    * Reference to the adapter we bound event listeners to (for context wallets).
    * Used to detect when context.wallet changes and rebind listeners.
    */
-  private currentBoundAdapter?: SolanaWalletAdapter;
+  private currentBoundAdapter?: ISolanaWalletAdapter;
 
   /**
    * Track active polling timeout IDs for cleanup
@@ -134,7 +134,7 @@ export class SolanaWalletAdapterHandler {
   constructor(
     formoAnalytics: FormoAnalytics,
     options: {
-      wallet?: SolanaWalletAdapter | SolanaWalletContext;
+      wallet?: ISolanaWalletAdapter | SolanaWalletContext;
       connection?: SolanaConnection;
       cluster?: SolanaCluster;
     }
@@ -145,7 +145,7 @@ export class SolanaWalletAdapterHandler {
     this.cluster = options.cluster || "mainnet-beta";
     this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
-    logger.info("SolanaWalletAdapterHandler: Initializing Solana integration", {
+    logger.info("SolanaWalletAdapter: Initializing Solana integration", {
       cluster: this.cluster,
       chainId: this.chainId,
       hasWallet: !!this.wallet,
@@ -185,8 +185,25 @@ export class SolanaWalletAdapterHandler {
    * Update the wallet instance (useful for React context updates)
    */
   public setWallet(
-    wallet: SolanaWalletAdapter | SolanaWalletContext | null
+    wallet: ISolanaWalletAdapter | SolanaWalletContext | null
   ): void {
+    // For context-based wallets, if the inner adapter hasn't changed,
+    // just update the context reference without tearing down wrapping.
+    // This prevents React re-renders from clearing our method wraps.
+    if (
+      wallet &&
+      isSolanaWalletContext(wallet) &&
+      this.wallet &&
+      isSolanaWalletContext(this.wallet)
+    ) {
+      const newAdapter = this.getAdapterFromContext(wallet);
+      if (newAdapter && newAdapter === this.wrappedAdapter) {
+        // Same adapter, just update the context reference
+        this.wallet = wallet;
+        return;
+      }
+    }
+
     // Restore original methods on previous wallet before cleaning up
     this.restoreOriginalMethods();
 
@@ -248,7 +265,7 @@ export class SolanaWalletAdapterHandler {
           chainId: this.chainId,
           address: this.trackingState.lastAddress,
         }).catch((error) => {
-          logger.error("SolanaWalletAdapterHandler: Error emitting chain event", error);
+          logger.error("SolanaWalletAdapter: Error emitting chain event", error);
         });
       }
     }
@@ -269,7 +286,7 @@ export class SolanaWalletAdapterHandler {
       return;
     }
 
-    logger.info("SolanaWalletAdapterHandler: Setting up wallet listeners");
+    logger.info("SolanaWalletAdapter: Setting up wallet listeners");
 
     // Handle both WalletContext (from useWallet) and direct WalletAdapter
     if (isSolanaWalletContext(this.wallet)) {
@@ -281,13 +298,13 @@ export class SolanaWalletAdapterHandler {
     // Check if already connected
     this.checkInitialConnection().catch((error) => {
       logger.error(
-        "SolanaWalletAdapterHandler: Error checking initial connection",
+        "SolanaWalletAdapter: Error checking initial connection",
         error
       );
     });
 
     logger.info(
-      "SolanaWalletAdapterHandler: Wallet listeners set up successfully"
+      "SolanaWalletAdapter: Wallet listeners set up successfully"
     );
   }
 
@@ -327,7 +344,7 @@ export class SolanaWalletAdapterHandler {
     // If adapter changed, rebind listeners and rewrap methods
     if (currentAdapter !== this.currentBoundAdapter) {
       logger.info(
-        "SolanaWalletAdapterHandler: Detected wallet adapter change, rebinding"
+        "SolanaWalletAdapter: Detected wallet adapter change, rebinding"
       );
 
       // Restore methods on old adapter and clean up listeners
@@ -342,7 +359,7 @@ export class SolanaWalletAdapterHandler {
         // Check if new adapter is already connected
         this.checkInitialConnection().catch((error) => {
           logger.error(
-            "SolanaWalletAdapterHandler: Error checking initial connection after adapter change",
+            "SolanaWalletAdapter: Error checking initial connection after adapter change",
             error
           );
         });
@@ -365,7 +382,7 @@ export class SolanaWalletAdapterHandler {
         unsubscribe();
       } catch (error) {
         logger.error(
-          "SolanaWalletAdapterHandler: Error cleaning up adapter listener",
+          "SolanaWalletAdapter: Error cleaning up adapter listener",
           error
         );
       }
@@ -378,7 +395,7 @@ export class SolanaWalletAdapterHandler {
    * Register a listener on an adapter and track its unsubscriber
    */
   private registerAdapterListener(
-    adapter: SolanaWalletAdapter,
+    adapter: ISolanaWalletAdapter,
     event: string,
     handler: (...args: unknown[]) => void
   ): void {
@@ -390,7 +407,7 @@ export class SolanaWalletAdapterHandler {
   /**
    * Set up event listeners on an adapter (connect/disconnect events)
    */
-  private setupAdapterEventListenersOnly(adapter: SolanaWalletAdapter): void {
+  private setupAdapterEventListenersOnly(adapter: ISolanaWalletAdapter): void {
     this.currentBoundAdapter = adapter;
 
     this.registerAdapterListener(adapter, "connect", (publicKey: unknown) =>
@@ -400,14 +417,14 @@ export class SolanaWalletAdapterHandler {
       this.handleDisconnect()
     );
     this.registerAdapterListener(adapter, "error", (error: unknown) =>
-      logger.error("SolanaWalletAdapterHandler: Wallet error", error)
+      logger.error("SolanaWalletAdapter: Wallet error", error)
     );
   }
 
   /**
    * Set up listeners for a direct wallet adapter
    */
-  private setupAdapterListeners(adapter: SolanaWalletAdapter): void {
+  private setupAdapterListeners(adapter: ISolanaWalletAdapter): void {
     this.setupAdapterEventListenersOnly(adapter);
     this.wrapAdapterMethods(adapter);
   }
@@ -415,12 +432,12 @@ export class SolanaWalletAdapterHandler {
   /**
    * Wrap wallet adapter methods for transaction/signature tracking
    */
-  private wrapAdapterMethods(adapter: SolanaWalletAdapter): void {
+  private wrapAdapterMethods(adapter: ISolanaWalletAdapter): void {
     // Guard against double-wrapping the same adapter (e.g., React re-renders)
     // If we already wrapped this adapter, skip to prevent capturing wrapped methods as originals
     if (this.wrappedAdapter === adapter) {
       logger.debug(
-        "SolanaWalletAdapterHandler: Adapter already wrapped, skipping"
+        "SolanaWalletAdapter: Adapter already wrapped, skipping"
       );
       return;
     }
@@ -562,7 +579,7 @@ export class SolanaWalletAdapterHandler {
           this.trackingState.lastChainId === this.chainId
         ) {
           logger.debug(
-            "SolanaWalletAdapterHandler: Already tracking this address, skipping duplicate connect",
+            "SolanaWalletAdapter: Already tracking this address, skipping duplicate connect",
             { address, chainId: this.chainId }
           );
           return;
@@ -572,7 +589,7 @@ export class SolanaWalletAdapterHandler {
         this.trackingState.lastChainId = this.chainId;
 
         logger.info(
-          "SolanaWalletAdapterHandler: Already connected on initialization",
+          "SolanaWalletAdapter: Already connected on initialization",
           {
             address,
             chainId: this.chainId,
@@ -604,7 +621,7 @@ export class SolanaWalletAdapterHandler {
   private async handleConnect(publicKey: SolanaPublicKey): Promise<void> {
     if (this.trackingState.isProcessing) {
       logger.debug(
-        "SolanaWalletAdapterHandler: Already processing, skipping connect"
+        "SolanaWalletAdapter: Already processing, skipping connect"
       );
       return;
     }
@@ -615,19 +632,19 @@ export class SolanaWalletAdapterHandler {
       const address = publicKeyToAddress(publicKey);
       if (!address) {
         logger.warn(
-          "SolanaWalletAdapterHandler: Invalid public key on connect"
+          "SolanaWalletAdapter: Invalid public key on connect"
         );
         return;
       }
 
       if (isBlockedSolanaAddress(address)) {
         logger.debug(
-          "SolanaWalletAdapterHandler: Blocked address, skipping connect event"
+          "SolanaWalletAdapter: Blocked address, skipping connect event"
         );
         return;
       }
 
-      logger.info("SolanaWalletAdapterHandler: Wallet connected", {
+      logger.info("SolanaWalletAdapter: Wallet connected", {
         address,
         chainId: this.chainId,
         walletName: this.getWalletName(),
@@ -651,7 +668,7 @@ export class SolanaWalletAdapterHandler {
       }
     } catch (error) {
       logger.error(
-        "SolanaWalletAdapterHandler: Error handling connect",
+        "SolanaWalletAdapter: Error handling connect",
         error
       );
     } finally {
@@ -665,7 +682,7 @@ export class SolanaWalletAdapterHandler {
   private async handleDisconnect(): Promise<void> {
     if (this.trackingState.isProcessing) {
       logger.debug(
-        "SolanaWalletAdapterHandler: Already processing, skipping disconnect"
+        "SolanaWalletAdapter: Already processing, skipping disconnect"
       );
       return;
     }
@@ -674,7 +691,7 @@ export class SolanaWalletAdapterHandler {
     // This prevents emitting events with undefined address/chainId
     if (!this.trackingState.lastAddress) {
       logger.debug(
-        "SolanaWalletAdapterHandler: No prior connection tracked, skipping disconnect event"
+        "SolanaWalletAdapter: No prior connection tracked, skipping disconnect event"
       );
       return;
     }
@@ -682,7 +699,7 @@ export class SolanaWalletAdapterHandler {
     this.trackingState.isProcessing = true;
 
     try {
-      logger.info("SolanaWalletAdapterHandler: Wallet disconnected", {
+      logger.info("SolanaWalletAdapter: Wallet disconnected", {
         address: this.trackingState.lastAddress,
         chainId: this.trackingState.lastChainId,
       });
@@ -699,7 +716,7 @@ export class SolanaWalletAdapterHandler {
       this.trackingState.lastChainId = undefined;
     } catch (error) {
       logger.error(
-        "SolanaWalletAdapterHandler: Error handling disconnect",
+        "SolanaWalletAdapter: Error handling disconnect",
         error
       );
     } finally {
@@ -727,7 +744,7 @@ export class SolanaWalletAdapterHandler {
     // Prefer getSignatureStatuses (standard web3.js API) over getSignatureStatus (custom wrapper)
     if (!conn || (!conn.getSignatureStatuses && !conn.getSignatureStatus)) {
       logger.debug(
-        "SolanaWalletAdapterHandler: No connection for confirmation polling"
+        "SolanaWalletAdapter: No connection for confirmation polling"
       );
       // Clean up pendingTransactions entry since we can't poll for confirmation
       this.pendingTransactions.delete(signature);
@@ -783,7 +800,7 @@ export class SolanaWalletAdapterHandler {
           if (status.err) {
             // Transaction failed
             logger.info(
-              "SolanaWalletAdapterHandler: Transaction reverted",
+              "SolanaWalletAdapter: Transaction reverted",
               {
                 signature,
                 error: status.err,
@@ -807,7 +824,7 @@ export class SolanaWalletAdapterHandler {
           ) {
             // Transaction confirmed
             logger.info(
-              "SolanaWalletAdapterHandler: Transaction confirmed",
+              "SolanaWalletAdapter: Transaction confirmed",
               {
                 signature,
                 confirmationStatus: status.confirmationStatus,
@@ -827,7 +844,7 @@ export class SolanaWalletAdapterHandler {
         }
       } catch (error) {
         logger.error(
-          "SolanaWalletAdapterHandler: Error polling transaction status",
+          "SolanaWalletAdapter: Error polling transaction status",
           error
         );
       }
@@ -924,7 +941,7 @@ export class SolanaWalletAdapterHandler {
    * In @solana/wallet-adapter-react, context.wallet is { adapter, readyState },
    * not a direct adapter.
    */
-  private getAdapterFromContext(context: SolanaWalletContext): SolanaWalletAdapter | null {
+  private getAdapterFromContext(context: SolanaWalletContext): ISolanaWalletAdapter | null {
     const wallet = context.wallet;
     if (!wallet) return null;
 
@@ -970,7 +987,7 @@ export class SolanaWalletAdapterHandler {
         unsubscribe();
       } catch (error) {
         logger.error(
-          "SolanaWalletAdapterHandler: Error during listener cleanup",
+          "SolanaWalletAdapter: Error during listener cleanup",
           error
         );
       }
@@ -983,7 +1000,7 @@ export class SolanaWalletAdapterHandler {
    * Clean up all resources
    */
   public cleanup(): void {
-    logger.info("SolanaWalletAdapterHandler: Cleaning up");
+    logger.info("SolanaWalletAdapter: Cleaning up");
 
     // Set cleanup flag to stop any ongoing polls
     this.isCleanedUp = true;
@@ -1004,6 +1021,6 @@ export class SolanaWalletAdapterHandler {
     this.wallet = null;
     this.connection = null;
 
-    logger.info("SolanaWalletAdapterHandler: Cleanup complete");
+    logger.info("SolanaWalletAdapter: Cleanup complete");
   }
 }
