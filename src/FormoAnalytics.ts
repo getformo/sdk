@@ -354,7 +354,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.setChainState(chainId, { address: validAddress, chainId });
+    this.setChainState(chainId, { address: validAddress });
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -470,7 +470,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.setChainState(chainId, { chainId });
+    this.setChainState(chainId, {});
 
     await this.trackEvent(
       EventType.CHAIN,
@@ -2285,7 +2285,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   /**
    * Update per-chain state and sync the derived currentAddress/currentChainId.
    * Accepts either a namespace string ('evm'/'solana') or a chainId number
-   * to resolve the namespace automatically.
+   * to resolve the namespace automatically. When a chainId number is passed,
+   * it is also stored as the namespace's chainId (unless explicitly overridden
+   * in the update object).
    */
   private setChainState(
     namespaceOrChainId: ChainNamespace | ChainID | undefined,
@@ -2296,7 +2298,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       : this.getNamespace(namespaceOrChainId);
     const ns = this._chainState[namespace];
     if ('address' in update) ns.address = update.address;
-    if ('chainId' in update) ns.chainId = update.chainId;
+    if ('chainId' in update) {
+      ns.chainId = update.chainId;
+    } else if (typeof namespaceOrChainId === 'number') {
+      ns.chainId = namespaceOrChainId;
+    }
     if (namespace === 'evm' && 'provider' in update) {
       (ns as EvmChainState).provider = update.provider;
     }
