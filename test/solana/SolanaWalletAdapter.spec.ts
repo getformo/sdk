@@ -122,9 +122,9 @@ describe("SolanaWalletAdapter", () => {
     sandbox = sinon.createSandbox();
 
     mockFormo = {
-      trackConnectEventOnly: sandbox.stub().resolves(),
-      trackDisconnectEventOnly: sandbox.stub().resolves(),
-      trackChainEventOnly: sandbox.stub().resolves(),
+      connect: sandbox.stub().resolves(),
+      disconnect: sandbox.stub().resolves(),
+      chain: sandbox.stub().resolves(),
       transaction: sandbox.stub().resolves(),
       signature: sandbox.stub().resolves(),
       isAutocaptureEnabled: sandbox.stub().returns(true),
@@ -178,8 +178,8 @@ describe("SolanaWalletAdapter", () => {
 
     it("should not set up listeners without a wallet", () => {
       const handler = new SolanaWalletAdapter(mockFormo as any, {});
-      // No errors, no trackConnectEventOnly calls
-      expect(mockFormo.trackConnectEventOnly.called).to.be.false;
+      // No errors, no connect calls
+      expect(mockFormo.connect.called).to.be.false;
       handler.cleanup();
     });
   });
@@ -212,8 +212,8 @@ describe("SolanaWalletAdapter", () => {
       // Allow async handler to complete
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFormo.trackConnectEventOnly.calledOnce).to.be.true;
-      const callArgs = mockFormo.trackConnectEventOnly.firstCall.args;
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      const callArgs = mockFormo.connect.firstCall.args;
       expect(callArgs[0].address).to.equal(MOCK_ADDRESS);
       expect(callArgs[0].chainId).to.equal(SOLANA_CHAIN_IDS["devnet"]);
       handler.cleanup();
@@ -234,8 +234,8 @@ describe("SolanaWalletAdapter", () => {
       adapter._emit("disconnect");
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFormo.trackDisconnectEventOnly.calledOnce).to.be.true;
-      const callArgs = mockFormo.trackDisconnectEventOnly.firstCall.args;
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      const callArgs = mockFormo.disconnect.firstCall.args;
       expect(callArgs[0]?.address).to.equal(MOCK_ADDRESS);
       handler.cleanup();
     });
@@ -244,8 +244,8 @@ describe("SolanaWalletAdapter", () => {
       const pk = createMockPublicKey();
       const adapter = createMockAdapter() as any;
 
-      // Make trackConnectEventOnly slow to test reentrancy guard
-      mockFormo.trackConnectEventOnly.callsFake(
+      // Make connect slow to test reentrancy guard
+      mockFormo.connect.callsFake(
         () => new Promise((r) => setTimeout(r, 100))
       );
 
@@ -259,7 +259,7 @@ describe("SolanaWalletAdapter", () => {
       await new Promise((r) => setTimeout(r, 200));
 
       // Only one should have been processed
-      expect(mockFormo.trackConnectEventOnly.callCount).to.equal(1);
+      expect(mockFormo.connect.callCount).to.equal(1);
       handler.cleanup();
     });
 
@@ -275,7 +275,7 @@ describe("SolanaWalletAdapter", () => {
       adapter._emit("connect", systemPk);
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFormo.trackConnectEventOnly.called).to.be.false;
+      expect(mockFormo.connect.called).to.be.false;
       handler.cleanup();
     });
   });
@@ -422,6 +422,7 @@ describe("SolanaWalletAdapter", () => {
       expect(mockFormo.signature.secondCall.args[0].status).to.equal("confirmed");
       handler.cleanup();
     });
+
   });
 
   // -- Context Wallet: Adapter Wrapping --
@@ -490,8 +491,8 @@ describe("SolanaWalletAdapter", () => {
       // Allow async checkInitialConnection to run
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFormo.trackConnectEventOnly.calledOnce).to.be.true;
-      expect(mockFormo.trackConnectEventOnly.firstCall.args[0].address).to.equal(MOCK_ADDRESS);
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].address).to.equal(MOCK_ADDRESS);
       handler.cleanup();
     });
 
@@ -510,7 +511,7 @@ describe("SolanaWalletAdapter", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       // Should only have one connect event (deduplication)
-      expect(mockFormo.trackConnectEventOnly.callCount).to.equal(1);
+      expect(mockFormo.connect.callCount).to.equal(1);
       handler.cleanup();
     });
   });
@@ -545,8 +546,8 @@ describe("SolanaWalletAdapter", () => {
       // Allow .catch() to run
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFormo.trackChainEventOnly.calledOnce).to.be.true;
-      expect(mockFormo.trackChainEventOnly.firstCall.args[0].chainId).to.equal(
+      expect(mockFormo.chain.calledOnce).to.be.true;
+      expect(mockFormo.chain.firstCall.args[0].chainId).to.equal(
         SOLANA_CHAIN_IDS["devnet"]
       );
       handler.cleanup();
@@ -559,7 +560,7 @@ describe("SolanaWalletAdapter", () => {
 
       handler.setCluster("devnet");
 
-      expect(mockFormo.trackChainEventOnly.called).to.be.false;
+      expect(mockFormo.chain.called).to.be.false;
       handler.cleanup();
     });
 
@@ -576,7 +577,7 @@ describe("SolanaWalletAdapter", () => {
 
       handler.setCluster("devnet"); // same cluster
 
-      expect(mockFormo.trackChainEventOnly.called).to.be.false;
+      expect(mockFormo.chain.called).to.be.false;
       handler.cleanup();
     });
   });
@@ -599,7 +600,7 @@ describe("SolanaWalletAdapter", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       // Connect and disconnect should not be tracked
-      expect(mockFormo.trackConnectEventOnly.called).to.be.false;
+      expect(mockFormo.connect.called).to.be.false;
 
       // Transaction should not be tracked (STARTED/BROADCASTED)
       const tx = createMockTransaction();
@@ -799,7 +800,7 @@ describe("SolanaWalletAdapter", () => {
       // Connect with adapter1
       adapter1._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
-      expect(mockFormo.trackConnectEventOnly.calledOnce).to.be.true;
+      expect(mockFormo.connect.calledOnce).to.be.true;
 
       // Switch to adapter2 (simulate wallet swap)
       const adapter2 = createMockAdapter({
@@ -841,7 +842,7 @@ describe("SolanaWalletAdapter", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       // Should emit disconnect
-      expect(mockFormo.trackDisconnectEventOnly.called).to.be.true;
+      expect(mockFormo.disconnect.called).to.be.true;
 
       handler.cleanup();
     });
@@ -873,7 +874,7 @@ describe("SolanaWalletAdapter", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       // Should not emit disconnect event
-      expect(mockFormo.trackDisconnectEventOnly.called).to.be.false;
+      expect(mockFormo.disconnect.called).to.be.false;
 
       handler.cleanup();
     });
@@ -892,7 +893,7 @@ describe("SolanaWalletAdapter", () => {
       adapter._emit("disconnect");
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFormo.trackDisconnectEventOnly.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
 
       handler.cleanup();
     });
@@ -1044,6 +1045,74 @@ describe("SolanaWalletAdapter", () => {
     });
   });
 
+  // -- Method Re-wrapping (StandardWalletAdapter compatibility) --
+
+  describe("Method Re-wrapping", () => {
+    it("should re-wrap signMessage after external overwrite (e.g. StandardWalletAdapter._reset)", async () => {
+      const originalSignMessage = async (_msg: Uint8Array) => new Uint8Array(64);
+      const adapter = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
+        signMessage: originalSignMessage,
+        sendTransaction: async () => "sig",
+      }) as any;
+
+      const handler = new SolanaWalletAdapter(mockFormo as any, {
+        wallet: adapter,
+        cluster: "devnet",
+      });
+
+      // Wait for initial connection
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Simulate StandardWalletAdapter._reset() overwriting signMessage
+      const newOriginal = async (_msg: Uint8Array) => new Uint8Array(64);
+      adapter.signMessage = newOriginal;
+
+      // Trigger re-wrap via connect event (which calls rewrapOverwrittenMethods)
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Now call signMessage — should go through our wrapper and emit events
+      mockFormo.signature.resetHistory();
+      await adapter.signMessage(new Uint8Array([1, 2, 3]));
+
+      expect(mockFormo.signature.called).to.be.true;
+      handler.cleanup();
+    });
+
+    it("should wrap signMessage that appears after initial setup (StandardWalletAdapter._reset)", async () => {
+      // At init time, adapter has no signMessage (StandardWalletAdapter sets it lazily)
+      const adapter = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
+        sendTransaction: async () => "sig",
+      }) as any;
+      // Explicitly ensure no signMessage at wrap time
+      delete adapter.signMessage;
+
+      const handler = new SolanaWalletAdapter(mockFormo as any, {
+        wallet: adapter,
+        cluster: "devnet",
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Simulate _reset() adding signMessage after connect
+      adapter.signMessage = async (_msg: Uint8Array) => new Uint8Array(64);
+
+      // Trigger re-wrap
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      mockFormo.signature.resetHistory();
+      await adapter.signMessage(new Uint8Array([1, 2, 3]));
+
+      expect(mockFormo.signature.called).to.be.true;
+      handler.cleanup();
+    });
+  });
+
   // -- System Address Blocking --
 
   describe("System Address Blocking", () => {
@@ -1067,7 +1136,7 @@ describe("SolanaWalletAdapter", () => {
         adapter._emit("connect", systemPk);
         await new Promise((r) => setTimeout(r, 50));
 
-        expect(mockFormo.trackConnectEventOnly.called).to.be.false;
+        expect(mockFormo.connect.called).to.be.false;
         handler.cleanup();
       });
     });

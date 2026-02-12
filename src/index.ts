@@ -4,7 +4,7 @@ export * from "./FormoAnalytics";
 export * from "./types";
 
 // Solana integration exports
-export { SolanaWalletAdapter } from "./solana";
+export { SolanaWalletAdapter, SolanaManager } from "./solana";
 export type {
   SolanaOptions,
   SolanaCluster,
@@ -12,12 +12,13 @@ export type {
   SolanaWalletContext,
   SolanaPublicKey,
   SolanaConnection,
-  SolanaTrackingState,
+  SolanaConnectionState,
 } from "./solana";
 export {
   SOLANA_CHAIN_IDS,
   SOLANA_CLUSTERS_BY_ID,
   DEFAULT_SOLANA_CHAIN_ID,
+  isSolanaChainId,
   // Type guards
   isSolanaWalletContext,
   isSolanaWalletAdapter,

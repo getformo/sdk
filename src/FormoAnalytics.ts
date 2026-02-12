@@ -49,11 +49,12 @@ import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import {
-  SolanaWalletAdapter,
   isSolanaAddress,
   getValidSolanaAddress,
   SOLANA_CHAIN_IDS,
+  isSolanaChainId,
 } from "./solana";
+import { SolanaManager } from "./solana/SolanaManager";
 
 /**
  * Constants for provider switching reasons
@@ -104,23 +105,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   private wagmiHandler?: WagmiEventHandler;
 
   /**
-   * Solana Wallet Adapter handler for tracking Solana wallet events
-   * Only initialized when options.solana is provided
-   * Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
+   * Solana integration manager for tracking Solana wallet events.
+   * Only initialized when options.solana is provided or via formo.solana.
    */
-  private solanaHandler?: SolanaWalletAdapter;
-
-  /**
-   * Pending Solana connection set before handler was initialized.
-   * Applied when handler is lazily created via setSolanaWallet().
-   */
-  private pendingSolanaConnection?: Parameters<SolanaWalletAdapter["setConnection"]>[0];
-
-  /**
-   * Pending Solana cluster set before handler was initialized.
-   * Applied when handler is lazily created via setSolanaWallet().
-   */
-  private pendingSolanaCluster?: Parameters<SolanaWalletAdapter["setCluster"]>[0];
+  private solanaManager?: SolanaManager;
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -216,15 +204,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
-    // Initialize Solana handler if Solana options are provided
-    // Note: Solana tracking works alongside EVM tracking (not mutually exclusive)
+    // Initialize Solana manager if Solana options are provided
     if (options.solana) {
-      logger.info("FormoAnalytics: Initializing Solana wallet tracking");
-      this.solanaHandler = new SolanaWalletAdapter(this, {
-        wallet: options.solana.wallet,
-        connection: options.solana.connection,
-        cluster: options.solana.cluster,
-      });
+      this.solanaManager = new SolanaManager(this, options.solana);
     }
 
     this.trackPageHit();
@@ -300,10 +282,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.wagmiHandler = undefined;
     }
 
-    // Clean up Solana handler if present
-    if (this.solanaHandler) {
-      this.solanaHandler.cleanup();
-      this.solanaHandler = undefined;
+    // Clean up Solana manager if present
+    if (this.solanaManager) {
+      this.solanaManager.cleanup();
+      this.solanaManager = undefined;
     }
 
     // Clean up EIP-1193 providers if not in Wagmi mode
@@ -346,7 +328,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.currentChainId = chainId;
     const validAddress = this.validateMultiChainAddress(address, chainId);
     if (!validAddress) {
       logger.warn(
@@ -354,13 +335,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
       return;
     }
+
+    this.currentChainId = chainId;
     this.currentAddress = validAddress;
 
     await this.trackEvent(
       EventType.CONNECT,
       {
         chainId,
-        address: this.currentAddress,
+        address: validAddress,
       },
       properties,
       context,
@@ -388,11 +371,13 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     const chainId = params?.chainId || this.currentChainId;
     const address = params?.address || this.currentAddress;
+    const isSolana = isSolanaChainId(chainId);
 
-    // Get provider info for the disconnect event
-    const providerInfo = this._provider
-      ? this.getProviderInfo(this._provider)
-      : null;
+    // Only include EVM provider info for non-Solana disconnects
+    const providerInfo =
+      !isSolana && this._provider
+        ? this.getProviderInfo(this._provider)
+        : null;
 
     logger.info("Disconnect: Emitting disconnect event with:", {
       chainId,
@@ -422,130 +407,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       callback
     );
 
-    this.currentAddress = undefined;
-    this.currentChainId = undefined;
-    this.clearActiveProvider();
+    // Only clear shared state if the disconnecting chain matches the current state.
+    // This prevents a Solana disconnect from wiping EVM state (or vice versa)
+    // when both chains are active simultaneously.
+    if (this.currentChainId === chainId || this.currentChainId === undefined) {
+      this.currentAddress = undefined;
+      this.currentChainId = undefined;
+    }
+    if (!isSolana) {
+      this.clearActiveProvider();
+    }
     logger.info(
       "Wallet disconnected: Cleared currentAddress, currentChainId, and provider"
-    );
-  }
-
-  /**
-   * Internal method to emit a connect event WITHOUT mutating shared state.
-   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
-   * @internal
-   */
-  async trackConnectEventOnly(
-    params: {
-      chainId: ChainID;
-      address: Address;
-    },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void> {
-    const { chainId, address } = params;
-
-    if (chainId === undefined || chainId === null) {
-      logger.warn("trackConnectEventOnly: Chain ID cannot be null or undefined");
-      return;
-    }
-    if (!address) {
-      logger.warn("trackConnectEventOnly: Address cannot be empty");
-      return;
-    }
-
-    const validAddress = this.validateMultiChainAddress(address, chainId);
-    if (!validAddress) {
-      logger.warn(
-        `trackConnectEventOnly: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
-      );
-      return;
-    }
-
-    // Emit event WITHOUT setting this.currentAddress or this.currentChainId
-    await this.trackEvent(
-      EventType.CONNECT,
-      {
-        chainId,
-        address: validAddress,
-      },
-      properties,
-      context,
-      callback
-    );
-  }
-
-  /**
-   * Internal method to emit a disconnect event WITHOUT mutating shared state.
-   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
-   * @internal
-   */
-  async trackDisconnectEventOnly(
-    params?: {
-      chainId?: ChainID;
-      address?: Address;
-    },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void> {
-    const chainId = params?.chainId;
-    const address = params?.address;
-
-    logger.info("trackDisconnectEventOnly: Emitting disconnect event with:", {
-      chainId,
-      address,
-    });
-
-    // Emit event WITHOUT clearing this.currentAddress, this.currentChainId, or _provider
-    await this.trackEvent(
-      EventType.DISCONNECT,
-      {
-        ...(chainId !== undefined && chainId !== null && { chainId }),
-        ...(address !== undefined && address !== null && { address }),
-      },
-      properties,
-      context,
-      callback
-    );
-  }
-
-  /**
-   * Internal method to emit a chain change event WITHOUT mutating shared state.
-   * Used by Solana handler to avoid corrupting EVM wallet state in multi-chain setups.
-   * @internal
-   */
-  async trackChainEventOnly(
-    params: {
-      chainId: ChainID;
-      address: Address;
-    },
-    properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
-  ): Promise<void> {
-    const { chainId, address } = params;
-
-    if (chainId === undefined || chainId === null) {
-      logger.warn("trackChainEventOnly: chainId cannot be null or undefined");
-      return;
-    }
-    if (!address) {
-      logger.warn("trackChainEventOnly: address cannot be empty");
-      return;
-    }
-
-    // Emit event WITHOUT setting this.currentChainId
-    await this.trackEvent(
-      EventType.CHAIN,
-      {
-        chainId,
-        address,
-      },
-      properties,
-      context,
-      callback
     );
   }
 
@@ -2092,86 +1965,22 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Get the Solana wallet adapter handler instance
-   * Useful for advanced integration scenarios
-   */
-  get solana(): SolanaWalletAdapter | undefined {
-    return this.solanaHandler;
-  }
-
-  /**
-   * Update the Solana wallet instance.
-   * Useful for React apps where wallet context changes.
-   *
-   * If no Solana handler exists yet, this lazily initializes one.
-   * Call setSolanaConnection() afterwards if you need transaction confirmation tracking.
-   *
-   * @param wallet The new Solana wallet adapter or context
-   */
-  public setSolanaWallet(wallet: Parameters<SolanaWalletAdapter["setWallet"]>[0]): void {
-    if (this.solanaHandler) {
-      this.solanaHandler.setWallet(wallet);
-    } else if (wallet) {
-      logger.info("FormoAnalytics: Initializing Solana wallet tracking (lazy)");
-      // Use pending values if set, otherwise fall back to initial options
-      this.solanaHandler = new SolanaWalletAdapter(this, {
-        wallet,
-        connection: this.pendingSolanaConnection ?? this.options.solana?.connection,
-        cluster: this.pendingSolanaCluster ?? this.options.solana?.cluster,
-      });
-      // Clear pending values after use
-      this.pendingSolanaConnection = undefined;
-      this.pendingSolanaCluster = undefined;
-    }
-  }
-
-  /**
-   * Update the Solana connection instance.
-   * Required for transaction confirmation polling.
-   * @param connection The new Solana connection
-   */
-  public setSolanaConnection(connection: Parameters<SolanaWalletAdapter["setConnection"]>[0]): void {
-    if (this.solanaHandler) {
-      this.solanaHandler.setConnection(connection);
-    } else {
-      // Store for when handler is lazily created via setSolanaWallet()
-      this.pendingSolanaConnection = connection;
-    }
-  }
-
-  /**
-   * Update the Solana cluster/network.
-   * @param cluster The Solana cluster (mainnet-beta, testnet, devnet, localnet)
-   */
-  public setSolanaCluster(cluster: Parameters<SolanaWalletAdapter["setCluster"]>[0]): void {
-    if (this.solanaHandler) {
-      this.solanaHandler.setCluster(cluster);
-    } else {
-      // Store for when handler is lazily created via setSolanaWallet()
-      this.pendingSolanaCluster = cluster;
-    }
-  }
-
-  /**
-   * Sync Solana wallet state by checking if the adapter has changed.
-   * Call this in React effects when you know the wallet context may have changed
-   * but the context object reference stayed the same.
-   *
-   * This ensures connect/disconnect events from the new wallet are properly tracked
-   * without waiting for the next transaction or signature call.
+   * Access the Solana integration manager.
+   * Lazily creates one if not already initialized.
    *
    * @example
    * ```tsx
-   * const wallet = useWallet();
-   * useEffect(() => {
-   *   formo.syncSolanaWalletState();
-   * }, [wallet.wallet]); // Trigger when inner wallet changes
+   * formo.solana.setWallet(wallet);
+   * formo.solana.setConnection(connection);
+   * formo.solana.setCluster("devnet");
+   * formo.solana.syncWalletState();
    * ```
    */
-  public syncSolanaWalletState(): void {
-    if (this.solanaHandler) {
-      this.solanaHandler.syncWalletState();
+  get solana(): SolanaManager {
+    if (!this.solanaManager) {
+      this.solanaManager = new SolanaManager(this);
     }
+    return this.solanaManager;
   }
 
   private async getAddress(

@@ -8,5 +8,6 @@
  */
 
 export { SolanaWalletAdapter } from "./SolanaWalletAdapter";
+export { SolanaManager } from "./SolanaManager";
 export * from "./types";
 export * from "./address";

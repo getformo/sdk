@@ -43,6 +43,14 @@ export const SOLANA_CLUSTERS_BY_ID: Record<number, SolanaCluster> = {
 export const DEFAULT_SOLANA_CHAIN_ID = SOLANA_CHAIN_IDS["mainnet-beta"];
 
 /**
+ * Check if a chain ID belongs to a Solana network.
+ */
+export function isSolanaChainId(chainId: number | undefined | null): boolean {
+  if (chainId === undefined || chainId === null) return false;
+  return Object.values(SOLANA_CHAIN_IDS).includes(chainId);
+}
+
+/**
  * Solana PublicKey interface
  * Represents a Solana public key (32 bytes, Base58 encoded)
  */
@@ -233,9 +241,11 @@ export interface SolanaOptions {
 }
 
 /**
- * Internal tracking state for Solana event handler
+ * Internal connection state for Solana event handler.
+ * Tracks the last known wallet connection for disconnect event payloads
+ * and provides a reentrancy guard for concurrent event handling.
  */
-export interface SolanaTrackingState {
+export interface SolanaConnectionState {
   lastAddress?: string;
   lastChainId?: number;
   isProcessing: boolean;

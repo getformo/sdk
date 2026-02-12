@@ -15,7 +15,7 @@ import {
   SolanaWalletContext,
   SolanaConnection,
   SolanaCluster,
-  SolanaTrackingState,
+  SolanaConnectionState,
   SolanaPublicKey,
   TransactionSignature,
   UnsubscribeFn,
@@ -82,7 +82,7 @@ export class SolanaWalletAdapter {
   private cluster: SolanaCluster;
   private chainId: number;
   private unsubscribers: UnsubscribeFn[] = [];
-  private trackingState: SolanaTrackingState = {
+  private connectionState: SolanaConnectionState = {
     isProcessing: false,
   };
 
@@ -109,6 +109,14 @@ export class SolanaWalletAdapter {
   private originalAdapterSendTransaction?: ISolanaWalletAdapter["sendTransaction"];
   private originalAdapterSignMessage?: ISolanaWalletAdapter["signMessage"];
   private originalAdapterSignTransaction?: ISolanaWalletAdapter["signTransaction"];
+
+  /**
+   * Bound wrapper references — used to detect when external code (e.g. StandardWalletAdapter._reset())
+   * overwrites our wraps so we can re-apply them.
+   */
+  private boundWrappedSendTransaction?: ISolanaWalletAdapter["sendTransaction"];
+  private boundWrappedSignMessage?: ISolanaWalletAdapter["signMessage"];
+  private boundWrappedSignTransaction?: ISolanaWalletAdapter["signTransaction"];
 
   /**
    * Reference to the wrapped adapter (to restore methods on cleanup)
@@ -175,10 +183,13 @@ export class SolanaWalletAdapter {
       this.wrappedAdapter = undefined;
     }
 
-    // Clear original method references
+    // Clear original and bound wrapper references
     this.originalAdapterSendTransaction = undefined;
     this.originalAdapterSignMessage = undefined;
     this.originalAdapterSignTransaction = undefined;
+    this.boundWrappedSendTransaction = undefined;
+    this.boundWrappedSignMessage = undefined;
+    this.boundWrappedSignTransaction = undefined;
   }
 
   /**
@@ -231,7 +242,7 @@ export class SolanaWalletAdapter {
    * ```tsx
    * const wallet = useWallet();
    * useEffect(() => {
-   *   formo.syncSolanaWalletState();
+   *   formo.solana.syncWalletState();
    * }, [wallet.wallet]); // Trigger when inner wallet changes
    * ```
    */
@@ -254,16 +265,15 @@ export class SolanaWalletAdapter {
     this.cluster = cluster;
     this.chainId = SOLANA_CHAIN_IDS[cluster];
 
-    // Update trackingState and emit chain event if connected and cluster changed
-    if (previousCluster !== cluster && this.trackingState.lastAddress) {
-      // Always update trackingState to keep lastChainId in sync for future disconnect events
-      this.trackingState.lastChainId = this.chainId;
+    // Update connectionState and emit chain event if connected and cluster changed
+    if (previousCluster !== cluster && this.connectionState.lastAddress) {
+      // Always update connectionState to keep lastChainId in sync for future disconnect events
+      this.connectionState.lastChainId = this.chainId;
 
       if (this.formo.isAutocaptureEnabled("chain")) {
-        // Use internal method to avoid corrupting shared EVM wallet state
-        this.formo.trackChainEventOnly({
+        this.formo.chain({
           chainId: this.chainId,
-          address: this.trackingState.lastAddress,
+          address: this.connectionState.lastAddress,
         }).catch((error) => {
           logger.error("SolanaWalletAdapter: Error emitting chain event", error);
         });
@@ -366,7 +376,7 @@ export class SolanaWalletAdapter {
       } else {
         // No adapter means disconnected
         this.currentBoundAdapter = undefined;
-        if (this.trackingState.lastAddress) {
+        if (this.connectionState.lastAddress) {
           this.handleDisconnect();
         }
       }
@@ -433,12 +443,11 @@ export class SolanaWalletAdapter {
    * Wrap wallet adapter methods for transaction/signature tracking
    */
   private wrapAdapterMethods(adapter: ISolanaWalletAdapter): void {
-    // Guard against double-wrapping the same adapter (e.g., React re-renders)
-    // If we already wrapped this adapter, skip to prevent capturing wrapped methods as originals
+    // If we already wrapped this adapter, check if our wraps are still in place.
+    // StandardWalletAdapter._reset() overwrites signMessage/signTransaction
+    // on every connect/disconnect/feature-change, so we need to re-wrap those methods.
     if (this.wrappedAdapter === adapter) {
-      logger.debug(
-        "SolanaWalletAdapter: Adapter already wrapped, skipping"
-      );
+      this.rewrapOverwrittenMethods(adapter);
       return;
     }
 
@@ -448,22 +457,75 @@ export class SolanaWalletAdapter {
     // Wrap sendTransaction
     if (adapter.sendTransaction) {
       this.originalAdapterSendTransaction = adapter.sendTransaction.bind(adapter);
-      adapter.sendTransaction = this.wrappedSendTransaction.bind(this);
+      this.boundWrappedSendTransaction = this.wrappedSendTransaction.bind(this);
+      adapter.sendTransaction = this.boundWrappedSendTransaction;
     }
 
     // Wrap signMessage
     if (adapter.signMessage) {
       this.originalAdapterSignMessage = adapter.signMessage.bind(adapter);
-      adapter.signMessage = this.wrappedSignMessage.bind(this);
+      this.boundWrappedSignMessage = this.wrappedSignMessage.bind(this);
+      adapter.signMessage = this.boundWrappedSignMessage;
     }
 
     // Wrap signTransaction
     if (adapter.signTransaction) {
       this.originalAdapterSignTransaction = adapter.signTransaction.bind(adapter);
-      adapter.signTransaction = this.wrappedSignTransaction.bind(this);
+      this.boundWrappedSignTransaction = this.wrappedSignTransaction.bind(this);
+      adapter.signTransaction = this.boundWrappedSignTransaction;
     }
+
   }
 
+  /**
+   * Re-wrap methods that were overwritten by external code.
+   *
+   * StandardWalletAdapter._reset() overwrites signMessage and signTransaction
+   * as own properties on every connect/disconnect/
+   * feature-change event. This method detects which wraps were overwritten
+   * and re-applies them, capturing the new original methods.
+   */
+  private rewrapOverwrittenMethods(adapter: ISolanaWalletAdapter): void {
+    let rewrapped = false;
+
+    // signMessage
+    if (adapter.signMessage && adapter.signMessage !== this.boundWrappedSignMessage) {
+      this.originalAdapterSignMessage = adapter.signMessage.bind(adapter);
+      if (!this.boundWrappedSignMessage) {
+        this.boundWrappedSignMessage = this.wrappedSignMessage.bind(this);
+      }
+      adapter.signMessage = this.boundWrappedSignMessage;
+      rewrapped = true;
+    } else if (!adapter.signMessage && this.boundWrappedSignMessage) {
+      this.originalAdapterSignMessage = undefined;
+    }
+
+    // signTransaction
+    if (adapter.signTransaction && adapter.signTransaction !== this.boundWrappedSignTransaction) {
+      this.originalAdapterSignTransaction = adapter.signTransaction.bind(adapter);
+      if (!this.boundWrappedSignTransaction) {
+        this.boundWrappedSignTransaction = this.wrappedSignTransaction.bind(this);
+      }
+      adapter.signTransaction = this.boundWrappedSignTransaction;
+      rewrapped = true;
+    } else if (!adapter.signTransaction && this.boundWrappedSignTransaction) {
+      this.originalAdapterSignTransaction = undefined;
+    }
+
+    // sendTransaction — unlikely to be overwritten but check for completeness
+    if (adapter.sendTransaction && adapter.sendTransaction !== this.boundWrappedSendTransaction) {
+      this.originalAdapterSendTransaction = adapter.sendTransaction.bind(adapter);
+      if (!this.boundWrappedSendTransaction) {
+        this.boundWrappedSendTransaction = this.wrappedSendTransaction.bind(this);
+      }
+      adapter.sendTransaction = this.boundWrappedSendTransaction;
+      rewrapped = true;
+    }
+
+    if (rewrapped) {
+      logger.debug("SolanaWalletAdapter: Re-wrapped overwritten adapter methods");
+    }
+  }
 
   /**
    * Wrapped sendTransaction method for direct adapter
@@ -575,8 +637,8 @@ export class SolanaWalletAdapter {
         // Skip if we already tracked this address to avoid duplicate connect events
         // (e.g., when setWallet is called repeatedly with the same connected wallet)
         if (
-          this.trackingState.lastAddress === address &&
-          this.trackingState.lastChainId === this.chainId
+          this.connectionState.lastAddress === address &&
+          this.connectionState.lastChainId === this.chainId
         ) {
           logger.debug(
             "SolanaWalletAdapter: Already tracking this address, skipping duplicate connect",
@@ -585,8 +647,8 @@ export class SolanaWalletAdapter {
           return;
         }
 
-        this.trackingState.lastAddress = address;
-        this.trackingState.lastChainId = this.chainId;
+        this.connectionState.lastAddress = address;
+        this.connectionState.lastChainId = this.chainId;
 
         logger.info(
           "SolanaWalletAdapter: Already connected on initialization",
@@ -600,7 +662,7 @@ export class SolanaWalletAdapter {
         // The wallet adapter's "connect" event only fires during adapter.connect(),
         // not retroactively for already-connected wallets
         if (this.formo.isAutocaptureEnabled("connect")) {
-          await this.formo.trackConnectEventOnly(
+          await this.formo.connect(
             {
               chainId: this.chainId,
               address,
@@ -619,16 +681,24 @@ export class SolanaWalletAdapter {
    * Handle wallet connect event
    */
   private async handleConnect(publicKey: SolanaPublicKey): Promise<void> {
-    if (this.trackingState.isProcessing) {
+    if (this.connectionState.isProcessing) {
       logger.debug(
         "SolanaWalletAdapter: Already processing, skipping connect"
       );
       return;
     }
 
-    this.trackingState.isProcessing = true;
+    this.connectionState.isProcessing = true;
 
     try {
+      // Re-wrap methods that may have been overwritten.
+      // StandardWalletAdapter._reset() runs before emitting "connect",
+      // so signMessage/signTransaction may have been
+      // replaced with new own properties by the time we get here.
+      if (this.wrappedAdapter) {
+        this.rewrapOverwrittenMethods(this.wrappedAdapter);
+      }
+
       const address = publicKeyToAddress(publicKey);
       if (!address) {
         logger.warn(
@@ -650,12 +720,11 @@ export class SolanaWalletAdapter {
         walletName: this.getWalletName(),
       });
 
-      this.trackingState.lastAddress = address;
-      this.trackingState.lastChainId = this.chainId;
+      this.connectionState.lastAddress = address;
+      this.connectionState.lastChainId = this.chainId;
 
       if (this.formo.isAutocaptureEnabled("connect")) {
-        // Use internal method to avoid corrupting shared EVM wallet state
-        await this.formo.trackConnectEventOnly(
+        await this.formo.connect(
           {
             chainId: this.chainId,
             address,
@@ -672,7 +741,7 @@ export class SolanaWalletAdapter {
         error
       );
     } finally {
-      this.trackingState.isProcessing = false;
+      this.connectionState.isProcessing = false;
     }
   }
 
@@ -680,7 +749,7 @@ export class SolanaWalletAdapter {
    * Handle wallet disconnect event
    */
   private async handleDisconnect(): Promise<void> {
-    if (this.trackingState.isProcessing) {
+    if (this.connectionState.isProcessing) {
       logger.debug(
         "SolanaWalletAdapter: Already processing, skipping disconnect"
       );
@@ -689,38 +758,37 @@ export class SolanaWalletAdapter {
 
     // Only emit disconnect if we have a prior tracked connection
     // This prevents emitting events with undefined address/chainId
-    if (!this.trackingState.lastAddress) {
+    if (!this.connectionState.lastAddress) {
       logger.debug(
         "SolanaWalletAdapter: No prior connection tracked, skipping disconnect event"
       );
       return;
     }
 
-    this.trackingState.isProcessing = true;
+    this.connectionState.isProcessing = true;
 
     try {
       logger.info("SolanaWalletAdapter: Wallet disconnected", {
-        address: this.trackingState.lastAddress,
-        chainId: this.trackingState.lastChainId,
+        address: this.connectionState.lastAddress,
+        chainId: this.connectionState.lastChainId,
       });
 
       if (this.formo.isAutocaptureEnabled("disconnect")) {
-        // Use internal method to avoid corrupting shared EVM wallet state
-        await this.formo.trackDisconnectEventOnly({
-          chainId: this.trackingState.lastChainId,
-          address: this.trackingState.lastAddress,
+        await this.formo.disconnect({
+          chainId: this.connectionState.lastChainId,
+          address: this.connectionState.lastAddress,
         });
       }
 
-      this.trackingState.lastAddress = undefined;
-      this.trackingState.lastChainId = undefined;
+      this.connectionState.lastAddress = undefined;
+      this.connectionState.lastChainId = undefined;
     } catch (error) {
       logger.error(
         "SolanaWalletAdapter: Error handling disconnect",
         error
       );
     } finally {
-      this.trackingState.isProcessing = false;
+      this.connectionState.isProcessing = false;
     }
   }
 
@@ -879,8 +947,8 @@ export class SolanaWalletAdapter {
    */
   private getCurrentAddress(): string | null {
     // First check tracking state
-    if (this.trackingState.lastAddress) {
-      return this.trackingState.lastAddress;
+    if (this.connectionState.lastAddress) {
+      return this.connectionState.lastAddress;
     }
 
     // Then check wallet, filtering out blocked addresses (system programs, etc.)

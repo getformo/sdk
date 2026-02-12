@@ -189,11 +189,11 @@ function WalletTracker() {
 
   // Update Solana handler when wallet/connection changes
   useEffect(() => {
-    formo?.setSolanaWallet(wallet);
+    formo?.solana.setWallet(wallet);
   }, [wallet, formo]);
 
   useEffect(() => {
-    formo?.setSolanaConnection(connection);
+    formo?.solana.setConnection(connection);
   }, [connection, formo]);
 
   return null;
@@ -422,7 +422,7 @@ solana: { wallet: useWallet(), cluster: 'mainnet-beta' }
 **Check 2**: Update wallet when it changes (React)
 ```typescript
 useEffect(() => {
-  formo?.setSolanaWallet(wallet);
+  formo?.solana.setWallet(wallet);
 }, [wallet]);
 ```
 
