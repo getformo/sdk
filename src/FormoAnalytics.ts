@@ -354,7 +354,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.setChainState(this.resolveNamespace(chainId), { address: validAddress, chainId });
+    this.setChainState(chainId, { address: validAddress, chainId });
 
     await this.trackEvent(
       EventType.CONNECT,
@@ -426,7 +426,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Clear the disconnecting chain's namespace state.
     // Per-chain isolation ensures a Solana disconnect never wipes EVM state (and vice versa).
-    this.clearChainState(isSolana ? 'solana' : 'evm');
+    this.clearChainState(chainId);
     logger.info(
       "Wallet disconnected: Cleared currentAddress, currentChainId, and provider"
     );
@@ -470,7 +470,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    this.setChainState(this.resolveNamespace(chainId), { chainId });
+    this.setChainState(chainId, { chainId });
 
     await this.trackEvent(
       EventType.CHAIN,
@@ -2276,19 +2276,24 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Resolve which namespace a chainId belongs to.
+   * Determine which namespace a chainId belongs to.
    */
-  private resolveNamespace(chainId?: ChainID): ChainNamespace {
+  private getNamespace(chainId?: ChainID): ChainNamespace {
     return isSolanaChainId(chainId) ? 'solana' : 'evm';
   }
 
   /**
    * Update per-chain state and sync the derived currentAddress/currentChainId.
+   * Accepts either a namespace string ('evm'/'solana') or a chainId number
+   * to resolve the namespace automatically.
    */
   private setChainState(
-    namespace: ChainNamespace,
+    namespaceOrChainId: ChainNamespace | ChainID | undefined,
     update: { address?: Address; chainId?: ChainID; provider?: EIP1193Provider }
   ): void {
+    const namespace = typeof namespaceOrChainId === 'string'
+      ? namespaceOrChainId
+      : this.getNamespace(namespaceOrChainId);
     const ns = this._chainState[namespace];
     if ('address' in update) ns.address = update.address;
     if ('chainId' in update) ns.chainId = update.chainId;
@@ -2300,9 +2305,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Clear per-chain state for a given namespace and sync derived state.
+   * Clear per-chain state for a given namespace (or chainId) and sync derived state.
    */
-  private clearChainState(namespace: ChainNamespace): void {
+  private clearChainState(namespaceOrChainId: ChainNamespace | ChainID | undefined): void {
+    const namespace = typeof namespaceOrChainId === 'string'
+      ? namespaceOrChainId
+      : this.getNamespace(namespaceOrChainId);
     if (namespace === 'evm') {
       this._chainState.evm = {};
     } else {
