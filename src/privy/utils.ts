@@ -4,30 +4,33 @@
 
 import {
   PrivyLinkedAccount,
-  PrivyLinkedAccountSummary,
   PrivyProfileProperties,
   PrivyUser,
+  PrivyWalletInfo,
 } from "./types";
 
 /**
  * Extract wallet profile properties from a Privy user object.
  *
- * Maps Privy user data (email, phone, social accounts, wallets, etc.)
+ * Maps Privy user data (email, social accounts, wallets, etc.)
  * into a flat property object suitable for use with `identify()`.
- * Includes a `linkedAccounts` summary array with essential identifiers
- * for each linked account.
  *
  * @param user - The Privy user object from `usePrivy()`
  * @returns A flat object of profile properties
  *
  * @example
  * ```ts
+ * import { extractPrivyProperties, getPrivyWalletAddresses } from '@formo/analytics';
+ *
  * const { user } = usePrivy();
  * if (user) {
- *   formo.identify(
- *     { address: user.wallet?.address, userId: user.id },
- *     extractPrivyProperties(user)
- *   );
+ *   const properties = extractPrivyProperties(user);
+ *   const wallets = getPrivyWalletAddresses(user);
+ *
+ *   // Identify each linked wallet with the same Privy properties
+ *   for (const wallet of wallets) {
+ *     formo.identify({ address: wallet.address }, properties);
+ *   }
  * }
  * ```
  */
@@ -40,7 +43,6 @@ export function extractPrivyProperties(
     privyDid: user.id,
     privyCreatedAt: user.createdAt,
     linkedAccountTypes: getLinkedAccountTypes(accounts),
-    linkedAccounts: summarizeLinkedAccounts(accounts),
     walletCount: countWallets(accounts),
     hasEmbeddedWallet: hasEmbeddedWallet(accounts),
     hasMfa: (user.mfaMethods?.length ?? 0) > 0,
@@ -224,49 +226,45 @@ export function extractPrivyProperties(
 }
 
 /**
+ * Get all wallet addresses from a Privy user's linked accounts.
+ *
+ * Use this to identify each linked wallet separately.
+ *
+ * @param user - The Privy user object from `usePrivy()`
+ * @returns Array of wallet info objects with address and metadata
+ *
+ * @example
+ * ```ts
+ * const { user } = usePrivy();
+ * if (user) {
+ *   const properties = extractPrivyProperties(user);
+ *   const wallets = getPrivyWalletAddresses(user);
+ *
+ *   for (const wallet of wallets) {
+ *     formo.identify({ address: wallet.address }, properties);
+ *   }
+ * }
+ * ```
+ */
+export function getPrivyWalletAddresses(user: PrivyUser): PrivyWalletInfo[] {
+  const accounts = user.linkedAccounts || [];
+
+  return accounts
+    .filter((a) => a.type === "wallet" && a.address)
+    .map((a) => ({
+      address: a.address!,
+      walletClient: a.walletClientType || a.walletClient,
+      chainType: a.chainType,
+      isEmbedded:
+        a.walletClientType === "privy" || a.walletClient === "privy",
+    }));
+}
+
+/**
  * Get unique linked account types from a user's linked accounts.
  */
 function getLinkedAccountTypes(accounts: PrivyLinkedAccount[]): string[] {
   return Array.from(new Set(accounts.map((a) => a.type)));
-}
-
-/**
- * Summarize linked accounts into a compact format for analytics.
- */
-function summarizeLinkedAccounts(
-  accounts: PrivyLinkedAccount[]
-): PrivyLinkedAccountSummary[] {
-  return accounts.map((account) => {
-    const summary: PrivyLinkedAccountSummary = {
-      type: account.type,
-    };
-
-    if (account.address) {
-      summary.address = account.address;
-    }
-
-    if (account.username) {
-      summary.username = account.username;
-    }
-
-    if (account.walletClientType || account.walletClient) {
-      summary.walletClient = account.walletClientType || account.walletClient;
-    }
-
-    if (account.chainType) {
-      summary.chainType = account.chainType;
-    }
-
-    if (account.fid) {
-      summary.fid = account.fid;
-    }
-
-    if (account.verifiedAt != null) {
-      summary.verified = true;
-    }
-
-    return summary;
-  });
 }
 
 /**

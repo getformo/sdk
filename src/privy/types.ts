@@ -157,7 +157,6 @@ export interface PrivyProfileProperties {
   privyCreatedAt?: number;
   email?: string;
   linkedAccountTypes: string[];
-  linkedAccounts: PrivyLinkedAccountSummary[];
   walletCount: number;
   hasEmbeddedWallet: boolean;
   isGuest?: boolean;
@@ -179,15 +178,11 @@ export interface PrivyProfileProperties {
 }
 
 /**
- * Summarized linked account for analytics.
- * Contains the essential identifiers without sensitive or verbose fields.
+ * Wallet info extracted from Privy linked accounts.
  */
-export interface PrivyLinkedAccountSummary {
-  type: string;
-  address?: string;
-  username?: string;
+export interface PrivyWalletInfo {
+  address: string;
   walletClient?: string;
   chainType?: string;
-  fid?: number;
-  verified?: boolean;
+  isEmbedded: boolean;
 }
