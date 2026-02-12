@@ -643,7 +643,11 @@ class EventFactory implements IEventFactory {
 
     // Set address if not already set by the specific event generator
     // Uses chainId for strict chain-specific validation
-    if (formoEvent.address === undefined || formoEvent.address === null) {
+    // Skip backfill for identify events to prevent stale address being used
+    if (
+      (formoEvent.address === undefined || formoEvent.address === null) &&
+      event.type !== "identify"
+    ) {
       const chainId = 'chainId' in event ? (event.chainId as ChainID) : undefined;
       formoEvent.address = this.validateEventAddress(address, chainId);
     }
