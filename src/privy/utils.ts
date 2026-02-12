@@ -17,9 +17,7 @@ import {
  * Includes a `linkedAccounts` summary array with essential identifiers
  * for each linked account.
  *
- * Supports both Privy SDK (camelCase) and REST API (snake_case) formats.
- *
- * @param user - The Privy user object from `usePrivy()` or the Privy API
+ * @param user - The Privy user object from `usePrivy()`
  * @returns A flat object of profile properties
  *
  * @example
@@ -36,20 +34,16 @@ import {
 export function extractPrivyProperties(
   user: PrivyUser
 ): PrivyProfileProperties {
-  // Support both SDK (camelCase) and API (snake_case) linked_accounts
-  const accounts = user.linkedAccounts || user.linked_accounts || [];
-  const createdAt = user.createdAt ?? user.created_at;
-  const isGuest = user.isGuest ?? user.is_guest;
-  const mfaCount = user.mfaMethods?.length ?? user.mfa_methods?.length ?? 0;
+  const accounts = user.linkedAccounts || [];
 
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
-    privyCreatedAt: createdAt,
+    privyCreatedAt: user.createdAt,
     linkedAccountTypes: getLinkedAccountTypes(accounts),
     linkedAccounts: summarizeLinkedAccounts(accounts),
     walletCount: countWallets(accounts),
     hasEmbeddedWallet: hasEmbeddedWallet(accounts),
-    hasMfa: mfaCount > 0,
+    hasMfa: (user.mfaMethods?.length ?? 0) > 0,
   };
 
   // Email
@@ -63,14 +57,11 @@ export function extractPrivyProperties(
   }
 
   // Guest status
-  if (isGuest !== undefined) {
-    properties.isGuest = isGuest;
+  if (user.isGuest !== undefined) {
+    properties.isGuest = user.isGuest;
   }
 
   // Social accounts - extract usernames/identifiers
-  // Matches all convenience accessors from the Privy user object:
-  // https://docs.privy.io/user-management/users/the-user-object
-
   if (user.apple?.email) {
     properties.apple = user.apple.email;
   }
@@ -123,12 +114,11 @@ export function extractPrivyProperties(
     properties.twitter = user.twitter.username;
   }
 
+  // Fallback to linkedAccounts if convenience accessors are not populated
   if (!properties.email) {
     const emailAccount = accounts.find((account) => account.type === "email");
     if (emailAccount?.address) {
       properties.email = emailAccount.address;
-    } else if (emailAccount?.email) {
-      properties.email = emailAccount.email;
     }
   }
 
@@ -140,39 +130,25 @@ export function extractPrivyProperties(
   }
 
   if (!properties.apple) {
-    const appleAccount = accounts.find(
-      (account) => account.type === "apple_oauth"
-    );
+    const appleAccount = accounts.find((a) => a.type === "apple_oauth");
     if (appleAccount?.email) {
       properties.apple = appleAccount.email;
-    } else if (appleAccount?.address) {
-      properties.apple = appleAccount.address;
     }
   }
 
   if (!properties.discord) {
-    const discordAccount = accounts.find(
-      (account) => account.type === "discord_oauth"
-    );
+    const discordAccount = accounts.find((a) => a.type === "discord_oauth");
     if (discordAccount?.username) {
       properties.discord = discordAccount.username;
-    } else if (discordAccount?.email) {
-      properties.discord = discordAccount.email;
-    } else if (discordAccount?.name) {
-      properties.discord = discordAccount.name;
     }
   }
 
   if (!properties.farcaster) {
-    const farcasterAccount = accounts.find(
-      (account) => account.type === "farcaster"
-    );
+    const farcasterAccount = accounts.find((a) => a.type === "farcaster");
     if (farcasterAccount?.username) {
       properties.farcaster = farcasterAccount.username;
     } else if (farcasterAccount?.displayName) {
       properties.farcaster = farcasterAccount.displayName;
-    } else if (farcasterAccount?.display_name) {
-      properties.farcaster = farcasterAccount.display_name;
     }
     if (!properties.farcasterFid && farcasterAccount?.fid) {
       properties.farcasterFid = farcasterAccount.fid;
@@ -180,85 +156,65 @@ export function extractPrivyProperties(
   }
 
   if (!properties.github) {
-    const githubAccount = accounts.find(
-      (account) => account.type === "github_oauth"
-    );
+    const githubAccount = accounts.find((a) => a.type === "github_oauth");
     if (githubAccount?.username) {
       properties.github = githubAccount.username;
-    } else if (githubAccount?.name) {
-      properties.github = githubAccount.name;
     }
   }
 
   if (!properties.google) {
-    const googleAccount = accounts.find(
-      (account) => account.type === "google_oauth"
-    );
+    const googleAccount = accounts.find((a) => a.type === "google_oauth");
     if (googleAccount?.email) {
       properties.google = googleAccount.email;
     }
   }
 
   if (!properties.instagram) {
-    const instagramAccount = accounts.find(
-      (account) => account.type === "instagram_oauth"
-    );
+    const instagramAccount = accounts.find((a) => a.type === "instagram_oauth");
     if (instagramAccount?.username) {
       properties.instagram = instagramAccount.username;
     }
   }
 
   if (!properties.line) {
-    const lineAccount = accounts.find((account) => account.type === "line");
+    const lineAccount = accounts.find((a) => a.type === "line");
     if (lineAccount?.email) {
       properties.line = lineAccount.email;
     }
   }
 
   if (!properties.linkedin) {
-    const linkedinAccount = accounts.find(
-      (account) => account.type === "linkedin_oauth"
-    );
+    const linkedinAccount = accounts.find((a) => a.type === "linkedin_oauth");
     if (linkedinAccount?.email) {
       properties.linkedin = linkedinAccount.email;
     }
   }
 
   if (!properties.spotify) {
-    const spotifyAccount = accounts.find(
-      (account) => account.type === "spotify_oauth"
-    );
+    const spotifyAccount = accounts.find((a) => a.type === "spotify_oauth");
     if (spotifyAccount?.email) {
       properties.spotify = spotifyAccount.email;
     }
   }
 
   if (!properties.telegram) {
-    const telegramAccount = accounts.find(
-      (account) => account.type === "telegram"
-    );
+    const telegramAccount = accounts.find((a) => a.type === "telegram");
     if (telegramAccount?.username) {
       properties.telegram = telegramAccount.username;
     } else if (telegramAccount?.telegramUserId) {
       properties.telegram = telegramAccount.telegramUserId;
-    } else if (telegramAccount?.telegram_user_id) {
-      properties.telegram = telegramAccount.telegram_user_id;
     }
   }
 
   if (!properties.tiktok) {
-    const tiktokAccount = accounts.find(
-      (account) => account.type === "tiktok_oauth"
-    );
+    const tiktokAccount = accounts.find((a) => a.type === "tiktok_oauth");
     if (tiktokAccount?.username) {
       properties.tiktok = tiktokAccount.username;
     }
   }
 
   if (!properties.twitter) {
-    const twitterAccount = accounts.find(
-      (account) => account.type === "twitter_oauth"
-    );
+    const twitterAccount = accounts.find((a) => a.type === "twitter_oauth");
     if (twitterAccount?.username) {
       properties.twitter = twitterAccount.username;
     }
@@ -276,7 +232,6 @@ function getLinkedAccountTypes(accounts: PrivyLinkedAccount[]): string[] {
 
 /**
  * Summarize linked accounts into a compact format for analytics.
- * Extracts only the essential identifiers (type, address/username, wallet info).
  */
 function summarizeLinkedAccounts(
   accounts: PrivyLinkedAccount[]
@@ -286,40 +241,27 @@ function summarizeLinkedAccounts(
       type: account.type,
     };
 
-    // Address (for email and wallet types)
     if (account.address) {
       summary.address = account.address;
     }
 
-    // Username (for social account types)
     if (account.username) {
       summary.username = account.username;
     }
 
-    // Wallet-specific fields (support both naming conventions)
-    const walletClient =
-      account.walletClientType ||
-      account.walletClient ||
-      account.wallet_client_type ||
-      account.wallet_client;
-    if (walletClient) {
-      summary.walletClient = walletClient;
+    if (account.walletClientType || account.walletClient) {
+      summary.walletClient = account.walletClientType || account.walletClient;
     }
 
-    const chainType = account.chainType || account.chain_type;
-    if (chainType) {
-      summary.chainType = chainType;
+    if (account.chainType) {
+      summary.chainType = account.chainType;
     }
 
-    // Farcaster FID
     if (account.fid) {
       summary.fid = account.fid;
     }
 
-    // Verified status
-    // Use null check to handle timestamp of 0 correctly
-    const verifiedAt = account.verifiedAt ?? account.verified_at;
-    if (verifiedAt != null) {
+    if (account.verifiedAt != null) {
       summary.verified = true;
     }
 
@@ -341,9 +283,6 @@ function hasEmbeddedWallet(accounts: PrivyLinkedAccount[]): boolean {
   return accounts.some(
     (a) =>
       a.type === "wallet" &&
-      (a.walletClientType === "privy" ||
-        a.walletClient === "privy" ||
-        a.wallet_client_type === "privy" ||
-        a.wallet_client === "privy")
+      (a.walletClientType === "privy" || a.walletClient === "privy")
   );
 }
