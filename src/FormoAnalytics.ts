@@ -22,7 +22,6 @@ import {
   FormoAnalyticsSession,
   SESSION_WALLET_DETECTED_KEY,
   SESSION_WALLET_IDENTIFIED_KEY,
-  SESSION_WALLET_USER_IDENTIFIED_KEY,
 } from "./session";
 import {
   Address,
@@ -249,7 +248,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
-    cookie().remove(SESSION_WALLET_USER_IDENTIFIED_KEY);
   }
 
   /**
@@ -684,14 +682,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           : undefined;
 
       let isAlreadyIdentified = false;
-      if (validAddress && userId) {
-        // Only check the wallet-user pair — allows enrichment even if either was seen alone
-        isAlreadyIdentified = this.session.isWalletUserIdentified(
-          validAddress,
-          userId,
-          rdns || ""
-        );
-      } else if (validAddress) {
+      if (validAddress) {
         isAlreadyIdentified = this.session.isWalletIdentified(validAddress, rdns || "");
       } else if (anonymousIdentifyKey) {
         isAlreadyIdentified = this.session.isWalletIdentified(anonymousIdentifyKey, rdns || "");
@@ -722,11 +713,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Mark as identified before emitting the event
       if (validAddress) {
         this.session.markWalletIdentified(validAddress, rdns || "");
-      }
-      if (validAddress && userId) {
-        this.session.markWalletUserIdentified(validAddress, userId, rdns || "");
-      }
-      if (anonymousIdentifyKey) {
+      } else if (anonymousIdentifyKey) {
         this.session.markWalletIdentified(anonymousIdentifyKey, rdns || "");
       }
 
