@@ -156,11 +156,6 @@ export interface PrivyProfileProperties {
   privyDid: string;
   privyCreatedAt?: number;
   email?: string;
-  linkedAccountTypes: string[];
-  walletCount: number;
-  hasEmbeddedWallet: boolean;
-  isGuest?: boolean;
-  hasMfa: boolean;
   apple?: string;
   discord?: string;
   twitter?: string;

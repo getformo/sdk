@@ -42,20 +42,11 @@ export function extractPrivyProperties(
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
     privyCreatedAt: user.createdAt,
-    linkedAccountTypes: getLinkedAccountTypes(accounts),
-    walletCount: countWallets(accounts),
-    hasEmbeddedWallet: hasEmbeddedWallet(accounts),
-    hasMfa: (user.mfaMethods?.length ?? 0) > 0,
   };
 
   // Email
   if (user.email?.address) {
     properties.email = user.email.address;
-  }
-
-  // Guest status
-  if (user.isGuest !== undefined) {
-    properties.isGuest = user.isGuest;
   }
 
   // Social accounts - extract usernames/identifiers
@@ -258,29 +249,4 @@ export function getPrivyWalletAddresses(user: PrivyUser): PrivyWalletInfo[] {
       isEmbedded:
         a.walletClientType === "privy" || a.walletClient === "privy",
     }));
-}
-
-/**
- * Get unique linked account types from a user's linked accounts.
- */
-function getLinkedAccountTypes(accounts: PrivyLinkedAccount[]): string[] {
-  return Array.from(new Set(accounts.map((a) => a.type)));
-}
-
-/**
- * Count the number of wallet-type linked accounts.
- */
-function countWallets(accounts: PrivyLinkedAccount[]): number {
-  return accounts.filter((a) => a.type === "wallet").length;
-}
-
-/**
- * Check if the user has a Privy embedded wallet.
- */
-function hasEmbeddedWallet(accounts: PrivyLinkedAccount[]): boolean {
-  return accounts.some(
-    (a) =>
-      a.type === "wallet" &&
-      (a.walletClientType === "privy" || a.walletClient === "privy")
-  );
 }
