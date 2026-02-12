@@ -156,7 +156,6 @@ export interface PrivyProfileProperties {
   privyDid: string;
   privyCreatedAt?: number;
   email?: string;
-  phone?: string;
   linkedAccountTypes: string[];
   linkedAccounts: PrivyLinkedAccountSummary[];
   walletCount: number;

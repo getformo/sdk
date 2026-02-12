@@ -51,11 +51,6 @@ export function extractPrivyProperties(
     properties.email = user.email.address;
   }
 
-  // Phone
-  if (user.phone?.number) {
-    properties.phone = user.phone.number;
-  }
-
   // Guest status
   if (user.isGuest !== undefined) {
     properties.isGuest = user.isGuest;
@@ -119,25 +114,6 @@ export function extractPrivyProperties(
     const emailAccount = accounts.find((account) => account.type === "email");
     if (emailAccount?.address) {
       properties.email = emailAccount.address;
-    }
-  }
-
-  // Use OAuth emails as fallback for email if still blank
-  // Priority: email -> google -> apple -> linkedin
-  if (!properties.email) {
-    if (properties.google) {
-      properties.email = properties.google;
-    } else if (properties.apple) {
-      properties.email = properties.apple;
-    } else if (properties.linkedin) {
-      properties.email = properties.linkedin;
-    }
-  }
-
-  if (!properties.phone) {
-    const phoneAccount = accounts.find((account) => account.type === "phone");
-    if (phoneAccount?.number) {
-      properties.phone = phoneAccount.number;
     }
   }
 
@@ -229,6 +205,18 @@ export function extractPrivyProperties(
     const twitterAccount = accounts.find((a) => a.type === "twitter_oauth");
     if (twitterAccount?.username) {
       properties.twitter = twitterAccount.username;
+    }
+  }
+
+  // Use OAuth emails as fallback for email if still blank
+  // Priority: email -> google -> apple -> linkedin
+  if (!properties.email) {
+    if (properties.google) {
+      properties.email = properties.google;
+    } else if (properties.apple) {
+      properties.email = properties.apple;
+    } else if (properties.linkedin) {
+      properties.email = properties.linkedin;
     }
   }
 
