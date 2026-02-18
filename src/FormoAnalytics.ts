@@ -606,13 +606,14 @@ export class FormoAnalytics implements IFormoAnalytics {
    * formo.identify({ address: '0x...', userId: 'user123' });
    *
    * // With Privy user (using extractPrivyProperties utility)
-   * import { extractPrivyProperties } from '@formo/analytics';
+   * import { extractPrivyProperties, getPrivyWalletAddresses } from '@formo/analytics';
    * const { user } = usePrivy();
    * if (user) {
-   *   formo.identify(
-   *     { address: user.wallet?.address, userId: user.id },
-   *     extractPrivyProperties(user)
-   *   );
+   *   const properties = extractPrivyProperties(user);
+   *   const wallets = getPrivyWalletAddresses(user);
+   *   for (const wallet of wallets) {
+   *     formo.identify({ address: wallet.address, userId: user.id }, properties);
+   *   }
    * }
    * ```
    */
