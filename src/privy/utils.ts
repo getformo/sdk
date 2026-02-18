@@ -28,7 +28,7 @@ import {
  *
  *   // Identify each linked wallet with the same Privy properties
  *   for (const wallet of wallets) {
- *     formo.identify({ address: wallet.address }, properties);
+ *     formo.identify({ address: wallet.address, userId: user.id }, properties);
  *   }
  * }
  * ```
@@ -224,7 +224,7 @@ export function extractPrivyProperties(
  *   const wallets = getPrivyWalletAddresses(user);
  *
  *   for (const wallet of wallets) {
- *     formo.identify({ address: wallet.address }, properties);
+ *     formo.identify({ address: wallet.address, userId: user.id }, properties);
  *   }
  * }
  * ```

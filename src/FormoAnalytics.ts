@@ -708,7 +708,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
       // Explicit identify
       logger.info("Identify", address, userId, providerName, rdns);
-      const validAddress = validateAndChecksumAddress(address);
+      const validAddress = validateAddress(address);
       if (validAddress) {
         this.currentAddress = validAddress;
       } else {
