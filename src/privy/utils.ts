@@ -9,35 +9,35 @@ import {
 } from "./types";
 
 /**
- * Extract wallet profile properties from a Privy user object.
+ * Extract profile properties and wallet addresses from a Privy user object.
  *
- * Maps Privy user data (email, social accounts, wallets, etc.)
- * into a flat property object suitable for use with `identify()`.
+ * Parses the Privy user's linked accounts into a flat properties object
+ * (email, social accounts, etc.) and extracts all linked wallet addresses.
  *
  * @param user - The Privy user object from `usePrivy()`
- * @returns A flat object of profile properties
+ * @returns An object with `properties` and `wallets`
  *
  * @example
  * ```ts
- * import { extractPrivyProperties, getPrivyWalletAddresses } from '@formo/analytics';
+ * import { parsePrivyProperties } from '@formo/analytics';
  *
  * const { user } = usePrivy();
  * if (user) {
- *   const properties = extractPrivyProperties(user);
- *   const wallets = getPrivyWalletAddresses(user);
+ *   const { properties, wallets } = parsePrivyProperties(user);
  *
- *   // Identify each linked wallet with the same Privy properties
  *   for (const wallet of wallets) {
  *     formo.identify({ address: wallet.address, userId: user.id }, properties);
  *   }
  * }
  * ```
  */
-export function extractPrivyProperties(
-  user: PrivyUser
-): PrivyProfileProperties {
+export function parsePrivyProperties(user: PrivyUser): {
+  properties: PrivyProfileProperties;
+  wallets: PrivyWalletInfo[];
+} {
   const accounts = user.linkedAccounts || [];
 
+  // Extract profile properties
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
     privyCreatedAt: user.createdAt,
@@ -205,34 +205,8 @@ export function extractPrivyProperties(
     }
   }
 
-  return properties;
-}
-
-/**
- * Get all wallet addresses from a Privy user's linked accounts.
- *
- * Use this to identify each linked wallet separately.
- *
- * @param user - The Privy user object from `usePrivy()`
- * @returns Array of wallet info objects with address and metadata
- *
- * @example
- * ```ts
- * const { user } = usePrivy();
- * if (user) {
- *   const properties = extractPrivyProperties(user);
- *   const wallets = getPrivyWalletAddresses(user);
- *
- *   for (const wallet of wallets) {
- *     formo.identify({ address: wallet.address, userId: user.id }, properties);
- *   }
- * }
- * ```
- */
-export function getPrivyWalletAddresses(user: PrivyUser): PrivyWalletInfo[] {
-  const accounts = user.linkedAccounts || [];
-
-  return accounts
+  // Extract wallet addresses
+  const wallets: PrivyWalletInfo[] = accounts
     .filter((a) => a.type === "wallet" && a.address)
     .map((a) => ({
       address: a.address!,
@@ -241,4 +215,6 @@ export function getPrivyWalletAddresses(user: PrivyUser): PrivyWalletInfo[] {
       isEmbedded:
         a.walletClientType === "privy" || a.walletClient === "privy",
     }));
+
+  return { properties, wallets };
 }
