@@ -5,7 +5,7 @@
  * This module exports the property extraction utility and related types.
  */
 
-export { extractPrivyProperties, getPrivyWalletAddresses } from "./utils";
+export { parsePrivyProperties } from "./utils";
 export type {
   PrivyUser,
   PrivyLinkedAccount,
