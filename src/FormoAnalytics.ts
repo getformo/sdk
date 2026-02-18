@@ -590,18 +590,35 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits an identify event with current wallet address and provider info.
-   * @param {string} params.address
-   * @param {string} params.userId
-   * @param {string} params.rdns
-   * @param {string} params.providerName
-   * @param {IFormoEventProperties} properties
+   *
+   * @param {string} params.address - Wallet address
+   * @param {string} params.userId - External user ID
+   * @param {string} params.rdns - Provider reverse domain name
+   * @param {string} params.providerName - Provider display name
+   * @param {IFormoEventProperties} properties - Additional properties to include with the identify event
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
+   *
+   * @example
+   * ```ts
+   * // Basic identify
+   * formo.identify({ address: '0x...', userId: 'user123' });
+   *
+   * // With Privy user
+   * import { parsePrivyProperties } from '@formo/analytics';
+   * const { user } = usePrivy();
+   * if (user) {
+   *   const { properties, wallets } = parsePrivyProperties(user);
+   *   for (const wallet of wallets) {
+   *     formo.identify({ address: wallet.address, userId: user.id }, properties);
+   *   }
+   * }
+   * ```
    */
   async identify(
     params?: {
-      address?: Address;
+      address: Address;
       providerName?: string;
       userId?: string;
       rdns?: string;
@@ -680,18 +697,22 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
+      const { address, providerName, userId, rdns } = params;
+
+      // Runtime validation: address is required
+      if (!address) {
+        logger.warn?.("identify() called without address - address is required");
+        return;
+      }
+
       // Explicit identify
-      const { userId, address, providerName, rdns } = params;
       logger.info("Identify", address, userId, providerName, rdns);
-      let validAddress: Address | undefined = undefined;
-      if (address) {
-        validAddress = validateAndChecksumAddress(address);
-        this.currentAddress = validAddress || undefined;
-        if (!validAddress) {
-          logger.warn?.("Invalid address provided to identify:", address);
-        }
+      const validAddress = validateAddress(address);
+      if (validAddress) {
+        this.currentAddress = validAddress;
       } else {
-        this.currentAddress = undefined;
+        logger.warn?.("Invalid address provided to identify:", address);
+        return;
       }
       if (userId) {
         this.currentUserId = userId;
@@ -699,17 +720,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Check for duplicate identify events in this session
-      // Handle both cases: with rdns (address:rdns) and without rdns (address only)
-      const isAlreadyIdentified = validAddress
-        ? this.session.isWalletIdentified(validAddress, rdns || "")
-        : false;
+      const isAlreadyIdentified = this.session.isWalletIdentified(validAddress, rdns || "");
 
       logger.debug("Identify: Checking deduplication", {
         validAddress,
         rdns,
         providerName,
-        hasValidAddress: !!validAddress,
-        hasRdns: !!rdns,
+        userId,
         isAlreadyIdentified,
       });
 
@@ -725,10 +742,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Mark as identified before emitting the event
-      // Mark even if rdns is empty to prevent duplicate empty identifies
-      if (validAddress) {
-        this.session.markWalletIdentified(validAddress, rdns || "");
-      }
+      this.session.markWalletIdentified(validAddress, rdns || "");
 
       await this.trackEvent(
         EventType.IDENTIFY,

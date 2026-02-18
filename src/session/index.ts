@@ -132,8 +132,9 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     const identifiedKey = this.generateIdentificationKey(address, rdns);
     const identifiedWallets =
       cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
-    
-    if (!identifiedWallets.includes(identifiedKey)) {
+    const alreadyExists = identifiedWallets.includes(identifiedKey);
+
+    if (!alreadyExists) {
       identifiedWallets.push(identifiedKey);
       const newValue = identifiedWallets.join(",");
       cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
