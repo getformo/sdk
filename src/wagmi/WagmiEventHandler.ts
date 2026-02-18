@@ -108,6 +108,11 @@ export class WagmiEventHandler {
 
     logger.info("WagmiEventHandler: Initializing Wagmi integration");
 
+    // Seed tracking state from current wagmi state if wallet is already connected.
+    // This handles the case where the SDK initializes after wagmi auto-reconnects,
+    // since subscribe() only fires on state transitions, not the current state.
+    this.initializeFromCurrentState();
+
     // Set up connection/disconnection/chain listeners
     this.setupConnectionListeners();
 
@@ -118,6 +123,35 @@ export class WagmiEventHandler {
     } else {
       logger.warn(
         "WagmiEventHandler: QueryClient not provided, signature and transaction events will not be tracked"
+      );
+    }
+  }
+
+  /**
+   * Seed trackingState if wagmi is already in a connected state.
+   * This ensures transaction/signature events have an address available
+   * even when the SDK initializes after wagmi auto-reconnects.
+   */
+  private initializeFromCurrentState(): void {
+    try {
+      const state = this.getState();
+      if (state.status === "connected") {
+        const address = this.getConnectedAddress(state);
+        const chainId = state.chainId;
+        if (address) {
+          this.trackingState.lastAddress = address;
+          this.trackingState.lastChainId = chainId;
+          this.trackingState.lastStatus = "connected";
+          logger.info(
+            "WagmiEventHandler: Wallet already connected, seeded tracking state",
+            { address, chainId }
+          );
+        }
+      }
+    } catch (error) {
+      logger.error(
+        "WagmiEventHandler: Error reading initial state:",
+        error
       );
     }
   }
