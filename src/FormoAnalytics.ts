@@ -47,6 +47,7 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
+import { extractBuilderCodes } from "./utils/builderCode";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
@@ -554,6 +555,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       transactionHash,
       function_name,
       function_args,
+      builder_codes,
     }: {
       status: TransactionStatus;
       chainId: ChainID;
@@ -564,6 +566,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       transactionHash?: string;
       function_name?: string;
       function_args?: Record<string, unknown>;
+      builder_codes?: string[];
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -581,6 +584,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         ...(transactionHash && { transactionHash }),
         ...(function_name && { function_name }),
         ...(function_args && { function_args }),
+        ...(builder_codes && builder_codes.length > 0 && { builder_codes }),
       },
       properties,
       context,
@@ -2129,12 +2133,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
 
+    const builder_codes = extractBuilderCodes(data);
+
     return {
       chainId: this._evmChainId || (await this.getCurrentChainId(provider)),
       data,
       address: validAddress,
       to,
       value,
+      ...(builder_codes && { builder_codes }),
     };
   }
 

@@ -24,6 +24,7 @@ import {
   extractFunctionArgs,
   buildSafeFunctionArgs,
 } from "./utils";
+import { extractBuilderCodes } from "../utils/builderCode";
 
 /**
  * Built-in transaction fields that could collide with function args.
@@ -39,6 +40,7 @@ const RESERVED_FIELDS = new Set([
   "transactionHash",
   "function_name",
   "function_args",
+  "builder_codes",
 ]);
 
 /**
@@ -94,6 +96,7 @@ export class WagmiEventHandler {
     value?: string;
     function_name?: string;
     function_args?: Record<string, unknown>;
+    builder_codes?: string[];
     safeFunctionArgs?: Record<string, unknown>;
   }>();
 
@@ -430,6 +433,7 @@ export class WagmiEventHandler {
           ...(pendingTx?.value && { value: pendingTx.value }),
           ...(pendingTx?.function_name && { function_name: pendingTx.function_name }),
           ...(pendingTx?.function_args && { function_args: pendingTx.function_args }),
+          ...(pendingTx?.builder_codes && { builder_codes: pendingTx.builder_codes }),
         },
         // Spread function args as additional properties (only colliding keys are prefixed)
         pendingTx?.safeFunctionArgs
@@ -645,6 +649,9 @@ export class WagmiEventHandler {
         to = variables.to;
       }
 
+      // Extract builder codes from transaction data (ERC-8021)
+      const builder_codes = extractBuilderCodes(data);
+
       logger.info("WagmiEventHandler: Tracking transaction event", {
         status,
         mutationType,
@@ -652,6 +659,7 @@ export class WagmiEventHandler {
         chainId,
         transactionHash,
         function_name,
+        ...(builder_codes && { builder_codes }),
       });
 
       // Build safeFunctionArgs with collision handling and struct flattening
@@ -669,6 +677,7 @@ export class WagmiEventHandler {
           ...(value && { value }),
           ...(function_name && { function_name }),
           ...(function_args && { function_args }),
+          ...(builder_codes && { builder_codes }),
           ...(safeFunctionArgs && { safeFunctionArgs }),
         };
         this.pendingTransactions.set(normalizedHash, txDetails);
@@ -698,6 +707,7 @@ export class WagmiEventHandler {
           ...(transactionHash && { transactionHash }),
           ...(function_name && { function_name }),
           ...(function_args && { function_args }),
+          ...(builder_codes && { builder_codes }),
         },
         // Spread function args as additional properties (only colliding keys are prefixed)
         safeFunctionArgs
