@@ -1,6 +1,6 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import { extractBuilderCodes } from "../../src/utils/builderCode";
+import { extractBuilderCode } from "../../src/utils/builderCode";
 
 /**
  * Helper to build an ERC-8021 data suffix for Schema 0.
@@ -25,54 +25,62 @@ function buildErc8021Suffix(codes: string[]): string {
   return codesHex + codesLength + schemaId + ercMarker;
 }
 
-describe("extractBuilderCodes", () => {
+describe("extractBuilderCode", () => {
   describe("valid ERC-8021 suffixes", () => {
     it("should extract a single builder code", () => {
       const suffix = buildErc8021Suffix(["myapp"]);
       const data = "0xabcdef" + suffix;
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["myapp"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("myapp");
     });
 
-    it("should extract multiple comma-separated builder codes", () => {
+    it("should extract multiple codes as comma-separated string", () => {
       const suffix = buildErc8021Suffix(["app1", "app2", "wallet1"]);
       const data = "0xabcdef" + suffix;
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["app1", "app2", "wallet1"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("app1,app2,wallet1");
     });
 
     it("should work with just the suffix (no original calldata)", () => {
       const suffix = buildErc8021Suffix(["builder"]);
       const data = "0x" + suffix;
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["builder"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("builder");
     });
 
     it("should work without 0x prefix", () => {
       const suffix = buildErc8021Suffix(["abc123"]);
       const data = "deadbeef" + suffix;
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["abc123"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("abc123");
     });
 
     it("should handle uppercase hex input", () => {
       const suffix = buildErc8021Suffix(["mycode"]);
       const data = "0xABCDEF" + suffix.toUpperCase();
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["mycode"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("mycode");
     });
 
     it("should handle codes with alphanumeric characters", () => {
       const suffix = buildErc8021Suffix(["base-app-v2"]);
       const data = "0x1234" + suffix;
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["base-app-v2"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("base-app-v2");
+    });
+
+    it("should extract two codes as comma-separated string", () => {
+      const suffix = buildErc8021Suffix(["uniswap", "base"]);
+      const data = "0xabcdef" + suffix;
+
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("uniswap,base");
     });
 
     it("should handle a real-world example with function calldata", () => {
@@ -84,26 +92,26 @@ describe("extractBuilderCodes", () => {
       const suffix = buildErc8021Suffix(["morpho"]);
       const data = "0x" + transferCalldata + suffix;
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["morpho"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("morpho");
     });
   });
 
   describe("invalid or absent suffixes", () => {
     it("should return undefined for null input", () => {
-      expect(extractBuilderCodes(null)).to.be.undefined;
+      expect(extractBuilderCode(null)).to.be.undefined;
     });
 
     it("should return undefined for undefined input", () => {
-      expect(extractBuilderCodes(undefined)).to.be.undefined;
+      expect(extractBuilderCode(undefined)).to.be.undefined;
     });
 
     it("should return undefined for empty string", () => {
-      expect(extractBuilderCodes("")).to.be.undefined;
+      expect(extractBuilderCode("")).to.be.undefined;
     });
 
     it("should return undefined for non-string input", () => {
-      expect(extractBuilderCodes(123 as any)).to.be.undefined;
+      expect(extractBuilderCode(123 as any)).to.be.undefined;
     });
 
     it("should return undefined for calldata without ERC-8021 marker", () => {
@@ -112,16 +120,16 @@ describe("extractBuilderCodes", () => {
         "0000000000000000000000001234567890abcdef1234567890abcdef12345678" +
         "0000000000000000000000000000000000000000000000000de0b6b3a7640000";
 
-      expect(extractBuilderCodes(data)).to.be.undefined;
+      expect(extractBuilderCode(data)).to.be.undefined;
     });
 
     it("should return undefined for data that is too short", () => {
-      expect(extractBuilderCodes("0x1234")).to.be.undefined;
+      expect(extractBuilderCode("0x1234")).to.be.undefined;
     });
 
     it("should return undefined for data with partial ERC marker", () => {
       expect(
-        extractBuilderCodes("0xabcdef8021802180218021802180218021")
+        extractBuilderCode("0xabcdef8021802180218021802180218021")
       ).to.be.undefined;
     });
   });
@@ -133,7 +141,7 @@ describe("extractBuilderCodes", () => {
       const ercMarker = "80218021802180218021802180218021";
       const data = "0xabcdef" + "00" + schemaId + ercMarker;
 
-      expect(extractBuilderCodes(data)).to.be.undefined;
+      expect(extractBuilderCode(data)).to.be.undefined;
     });
 
     it("should return undefined if codesLength exceeds available data", () => {
@@ -142,15 +150,15 @@ describe("extractBuilderCodes", () => {
       const ercMarker = "80218021802180218021802180218021";
       const data = "0x" + "aabb" + "ff" + schemaId + ercMarker;
 
-      expect(extractBuilderCodes(data)).to.be.undefined;
+      expect(extractBuilderCode(data)).to.be.undefined;
     });
 
     it("should handle single character builder code", () => {
       const suffix = buildErc8021Suffix(["x"]);
       const data = "0xab" + suffix;
 
-      const result = extractBuilderCodes(data);
-      expect(result).to.deep.equal(["x"]);
+      const result = extractBuilderCode(data);
+      expect(result).to.equal("x");
     });
 
     it("should return undefined for unsupported schema IDs", () => {
@@ -166,7 +174,7 @@ describe("extractBuilderCodes", () => {
       const ercMarker = "80218021802180218021802180218021";
       const data = "0xabcdef" + codesHex + codesLength + schemaId + ercMarker;
 
-      expect(extractBuilderCodes(data)).to.be.undefined;
+      expect(extractBuilderCode(data)).to.be.undefined;
     });
   });
 });

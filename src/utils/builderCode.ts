@@ -30,14 +30,14 @@ const SCHEMA_ID_BASE = "00";
 const COMMA_BYTE = 0x2c;
 
 /**
- * Extract builder codes from transaction calldata by parsing the ERC-8021 suffix.
+ * Extract builder code from transaction calldata by parsing the ERC-8021 suffix.
  *
  * @param data - The transaction calldata hex string (with or without 0x prefix)
- * @returns An array of builder code strings, or undefined if no valid ERC-8021 suffix is found
+ * @returns A comma-separated string of builder codes (e.g. "uniswap,base"), or undefined if no valid ERC-8021 suffix is found
  */
-export function extractBuilderCodes(
+export function extractBuilderCode(
   data: string | undefined | null
-): string[] | undefined {
+): string | undefined {
   if (!data || typeof data !== "string") {
     return undefined;
   }
@@ -116,5 +116,5 @@ export function extractBuilderCodes(
     codes.push(String.fromCharCode(...current));
   }
 
-  return codes.length > 0 ? codes : undefined;
+  return codes.length > 0 ? codes.join(",") : undefined;
 }
