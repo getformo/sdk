@@ -624,7 +624,7 @@ export class WagmiEventHandler {
 
       if (mutationType === "writeContract") {
         // For writeContract, extract function info and encode data
-        const { abi, functionName: fnName, args, address: contractAddress } = variables;
+        const { abi, functionName: fnName, args, address: contractAddress, dataSuffix } = variables;
         to = contractAddress;
         function_name = fnName;
 
@@ -635,7 +635,10 @@ export class WagmiEventHandler {
           // Encode the function data synchronously if viem is available
           const encodedData = encodeWriteContractData(abi, fnName, args);
           if (encodedData) {
-            data = encodedData;
+            // Append dataSuffix (e.g. ERC-8021 builder code) if present
+            data = dataSuffix
+              ? `${encodedData}${dataSuffix.replace(/^0x/, "")}`
+              : encodedData;
             logger.debug(
               "WagmiEventHandler: Encoded writeContract data",
               data.substring(0, 10)
