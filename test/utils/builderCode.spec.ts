@@ -26,7 +26,16 @@ function buildErc8021Suffix(codes: string[]): string {
 }
 
 describe("extractBuilderCodes", () => {
-  describe("valid ERC-8021 suffixes", () => {
+  describe("Schema 0 - canonical registry", () => {
+    it("should decode 'baseapp' from exact hex vector", () => {
+      // txData || "baseapp" || 7 || 0 || ercMarker
+      const data =
+        "0xdddddddd62617365617070070080218021802180218021802180218021";
+
+      const result = extractBuilderCodes(data);
+      expect(result).to.equal("baseapp");
+    });
+
     it("should extract a single builder code", () => {
       const suffix = buildErc8021Suffix(["myapp"]);
       const data = "0xabcdef" + suffix;
@@ -83,10 +92,10 @@ describe("extractBuilderCodes", () => {
       expect(result).to.equal("uniswap,base");
     });
 
-    it("should handle a real-world example with function calldata", () => {
-      // Simulate a transfer function call + ERC-8021 suffix
+    it("should handle a real-world transfer call with builder code suffix", () => {
+      // transfer(address,uint256) selector + args + ERC-8021 suffix
       const transferCalldata =
-        "a9059cbb" + // transfer(address,uint256) selector
+        "a9059cbb" +
         "0000000000000000000000001234567890abcdef1234567890abcdef12345678" +
         "0000000000000000000000000000000000000000000000000de0b6b3a7640000";
       const suffix = buildErc8021Suffix(["morpho"]);
@@ -94,6 +103,76 @@ describe("extractBuilderCodes", () => {
 
       const result = extractBuilderCodes(data);
       expect(result).to.equal("morpho");
+    });
+  });
+
+  describe("Schema 1 - custom registry", () => {
+    it("should decode 'baseapp,morpho' from exact hex vector", () => {
+      // txData || registryAddress (20 bytes) || chainId (8453=0x2105) || chainIdLength (2) ||
+      // "baseapp,morpho" || codesLength (14=0x0E) || schemaId (1) || ercMarker
+      const data =
+        "0xdddddddd" +
+        "cccccccccccccccccccccccccccccccccccccccc" +
+        "2105" +
+        "02" +
+        "626173656170702c6d6f7270686f" +
+        "0e" +
+        "01" +
+        "80218021802180218021802180218021";
+
+      const result = extractBuilderCodes(data);
+      expect(result).to.equal("baseapp,morpho");
+    });
+
+    it("should extract a single code with custom registry", () => {
+      // registryAddress (20 bytes) + chainId (1 byte, chainId=1) + chainIdLength (1) +
+      // "myapp" + codesLength (5) + schemaId (1) + ercMarker
+      const registryAddress = "aabbccddee11223344556677889900aabbccddee";
+      const chainId = "01"; // chainId = 1
+      const chainIdLength = "01";
+      const codesHex = "6d79617070"; // "myapp"
+      const codesLength = "05";
+      const schemaId = "01";
+      const ercMarker = "80218021802180218021802180218021";
+      const data =
+        "0xabcdef" +
+        registryAddress +
+        chainId +
+        chainIdLength +
+        codesHex +
+        codesLength +
+        schemaId +
+        ercMarker;
+
+      const result = extractBuilderCodes(data);
+      expect(result).to.equal("myapp");
+    });
+
+    it("should extract three codes with custom registry on Base", () => {
+      const registryAddress = "1111111111111111111111111111111111111111";
+      const chainId = "2105"; // Base mainnet = 8453
+      const chainIdLength = "02";
+      const codesStr = "app1,app2,app3";
+      const codesHex = Array.from(codesStr)
+        .map((c) => c.charCodeAt(0).toString(16).padStart(2, "0"))
+        .join("");
+      const codesLength = (codesHex.length / 2)
+        .toString(16)
+        .padStart(2, "0");
+      const schemaId = "01";
+      const ercMarker = "80218021802180218021802180218021";
+      const data =
+        "0xdeadbeef" +
+        registryAddress +
+        chainId +
+        chainIdLength +
+        codesHex +
+        codesLength +
+        schemaId +
+        ercMarker;
+
+      const result = extractBuilderCodes(data);
+      expect(result).to.equal("app1,app2,app3");
     });
   });
 
@@ -132,11 +211,28 @@ describe("extractBuilderCodes", () => {
         extractBuilderCodes("0xabcdef8021802180218021802180218021")
       ).to.be.undefined;
     });
+
+    it("should return undefined for unknown schemaId (0xFF)", () => {
+      // txData || unknown schemaId || ercMarker
+      const data =
+        "0xddddddddff80218021802180218021802180218021";
+
+      expect(extractBuilderCodes(data)).to.be.undefined;
+    });
+
+    it("should return undefined for unknown schemaId (0x02)", () => {
+      const codesHex = "6d79617070"; // "myapp"
+      const codesLength = "05";
+      const schemaId = "02";
+      const ercMarker = "80218021802180218021802180218021";
+      const data = "0xabcdef" + codesHex + codesLength + schemaId + ercMarker;
+
+      expect(extractBuilderCodes(data)).to.be.undefined;
+    });
   });
 
   describe("edge cases", () => {
     it("should return undefined if codesLength is 0", () => {
-      // Manually build a suffix with codesLength = 0
       const schemaId = "00";
       const ercMarker = "80218021802180218021802180218021";
       const data = "0xabcdef" + "00" + schemaId + ercMarker;
@@ -145,7 +241,6 @@ describe("extractBuilderCodes", () => {
     });
 
     it("should return undefined if codesLength exceeds available data", () => {
-      // Build suffix claiming 255 bytes of codes but only has a few
       const schemaId = "00";
       const ercMarker = "80218021802180218021802180218021";
       const data = "0x" + "aabb" + "ff" + schemaId + ercMarker;
@@ -162,7 +257,6 @@ describe("extractBuilderCodes", () => {
     });
 
     it("should return undefined if codes contain non-printable bytes", () => {
-      // Build a suffix where codes contain a control character (0x01)
       const codesHex = "6d79" + "01" + "617070"; // "my" + 0x01 + "app"
       const codesLength = (codesHex.length / 2)
         .toString(16)
@@ -175,7 +269,6 @@ describe("extractBuilderCodes", () => {
     });
 
     it("should return undefined if codes contain extended ASCII bytes", () => {
-      // Build a suffix where codes contain 0xFF
       const codesHex = "6d79" + "ff" + "617070"; // "my" + 0xFF + "app"
       const codesLength = (codesHex.length / 2)
         .toString(16)
@@ -188,7 +281,6 @@ describe("extractBuilderCodes", () => {
     });
 
     it("should return undefined for unsupported schema IDs", () => {
-      // Build a suffix with schemaId = 0x01 instead of 0x00
       const codesStr = "myapp";
       const codesHex = Array.from(codesStr)
         .map((c) => c.charCodeAt(0).toString(16).padStart(2, "0"))
@@ -196,7 +288,7 @@ describe("extractBuilderCodes", () => {
       const codesLength = (codesHex.length / 2)
         .toString(16)
         .padStart(2, "0");
-      const schemaId = "01"; // Unsupported schema
+      const schemaId = "03"; // Unsupported schema
       const ercMarker = "80218021802180218021802180218021";
       const data = "0xabcdef" + codesHex + codesLength + schemaId + ercMarker;
 
