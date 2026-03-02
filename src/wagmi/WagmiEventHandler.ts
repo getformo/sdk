@@ -21,6 +21,7 @@ import {
 } from "./types";
 import {
   encodeWriteContractData,
+  concatCalldataWithSuffix,
   extractFunctionArgs,
   buildSafeFunctionArgs,
 } from "./utils";
@@ -635,10 +636,8 @@ export class WagmiEventHandler {
           // Encode the function data synchronously if viem is available
           const encodedData = encodeWriteContractData(abi, fnName, args);
           if (encodedData) {
-            // Append dataSuffix (e.g. ERC-8021 builder code) if present
-            data = dataSuffix
-              ? `${encodedData}${dataSuffix.replace(/^0x/, "")}`
-              : encodedData;
+            // Include dataSuffix (ERC-8021 builder code) so extractBuilderCodes sees full calldata
+            data = concatCalldataWithSuffix(encodedData, dataSuffix);
             logger.debug(
               "WagmiEventHandler: Encoded writeContract data",
               data.substring(0, 10)
