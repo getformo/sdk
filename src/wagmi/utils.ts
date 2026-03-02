@@ -103,14 +103,20 @@ type EncodeFunctionDataFn = (params: {
   args?: unknown[];
 }) => string;
 
+/** Type for viem's concatHex function */
+type ConcatHexFn = (hex: `0x${string}`[]) => `0x${string}`;
+
 // Cached viem module reference
-let viemModule: { encodeFunctionData: EncodeFunctionDataFn } | null | undefined;
+let viemModule: {
+  encodeFunctionData: EncodeFunctionDataFn;
+  concatHex?: ConcatHexFn;
+} | null | undefined;
 
 /**
  * Try to load viem synchronously via require
  * Returns null if viem is not available
  */
-function tryLoadViem(): { encodeFunctionData: EncodeFunctionDataFn } | null {
+function tryLoadViem(): typeof viemModule {
   if (viemModule !== undefined) {
     return viemModule;
   }
@@ -122,6 +128,7 @@ function tryLoadViem(): { encodeFunctionData: EncodeFunctionDataFn } | null {
     if (viem?.encodeFunctionData) {
       viemModule = {
         encodeFunctionData: viem.encodeFunctionData as EncodeFunctionDataFn,
+        concatHex: viem.concatHex as ConcatHexFn | undefined,
       };
       return viemModule;
     }
@@ -131,6 +138,28 @@ function tryLoadViem(): { encodeFunctionData: EncodeFunctionDataFn } | null {
 
   viemModule = null;
   return null;
+}
+
+/**
+ * Concatenate encoded calldata with an optional ERC-8021 dataSuffix (e.g. builder codes).
+ * Uses viem's concatHex when available for correct hex handling.
+ */
+export function concatCalldataWithSuffix(
+  encodedData: string,
+  dataSuffix: string | undefined
+): string {
+  if (!dataSuffix || dataSuffix === "0x") {
+    return encodedData;
+  }
+  const viem = tryLoadViem();
+  if (viem?.concatHex) {
+    return viem.concatHex([
+      encodedData as `0x${string}`,
+      dataSuffix as `0x${string}`,
+    ]);
+  }
+  const suffixHex = dataSuffix.replace(/^0x/i, "");
+  return `${encodedData}${suffixHex}`;
 }
 
 /**
