@@ -161,6 +161,32 @@ describe("extractBuilderCode", () => {
       expect(result).to.equal("x");
     });
 
+    it("should return undefined if codes contain non-printable bytes", () => {
+      // Build a suffix where codes contain a control character (0x01)
+      const codesHex = "6d79" + "01" + "617070"; // "my" + 0x01 + "app"
+      const codesLength = (codesHex.length / 2)
+        .toString(16)
+        .padStart(2, "0");
+      const schemaId = "00";
+      const ercMarker = "80218021802180218021802180218021";
+      const data = "0xabcdef" + codesHex + codesLength + schemaId + ercMarker;
+
+      expect(extractBuilderCode(data)).to.be.undefined;
+    });
+
+    it("should return undefined if codes contain extended ASCII bytes", () => {
+      // Build a suffix where codes contain 0xFF
+      const codesHex = "6d79" + "ff" + "617070"; // "my" + 0xFF + "app"
+      const codesLength = (codesHex.length / 2)
+        .toString(16)
+        .padStart(2, "0");
+      const schemaId = "00";
+      const ercMarker = "80218021802180218021802180218021";
+      const data = "0xabcdef" + codesHex + codesLength + schemaId + ercMarker;
+
+      expect(extractBuilderCode(data)).to.be.undefined;
+    });
+
     it("should return undefined for unsupported schema IDs", () => {
       // Build a suffix with schemaId = 0x01 instead of 0x00
       const codesStr = "myapp";

@@ -47,8 +47,8 @@ export function extractBuilderCode(
     ? data.slice(2).toLowerCase()
     : data.toLowerCase();
 
-  // Minimum suffix size: 1 byte codesLength + 1 byte schemaId + 16 bytes marker = 18 bytes = 36 hex chars
-  if (hex.length < 36) {
+  // Minimum suffix: 1+ byte codes + 1 byte codesLength + 1 byte schemaId + 16 bytes marker = 19 bytes = 38 hex chars
+  if (hex.length < 38) {
     return undefined;
   }
 
@@ -93,7 +93,12 @@ export function extractBuilderCode(
   // Step 5: Decode ASCII codes, splitting on comma (0x2C)
   const bytes: number[] = [];
   for (let i = 0; i < codesHex.length; i += 2) {
-    bytes.push(parseInt(codesHex.slice(i, i + 2), 16));
+    const byte = parseInt(codesHex.slice(i, i + 2), 16);
+    // Reject non-printable or non-ASCII bytes (allow comma 0x2C as delimiter)
+    if (byte < 0x20 || byte > 0x7e) {
+      return undefined;
+    }
+    bytes.push(byte);
   }
 
   // Split on comma delimiter and decode each code as ASCII
