@@ -45,8 +45,8 @@ function decodeCodes(codesHex: string): string | undefined {
   const bytes: number[] = [];
   for (let i = 0; i < codesHex.length; i += 2) {
     const byte = parseInt(codesHex.slice(i, i + 2), 16);
-    // Reject non-printable or non-ASCII bytes
-    if (byte < 0x20 || byte > 0x7e) {
+    // Reject NaN (invalid hex), non-printable or non-ASCII bytes
+    if (isNaN(byte) || byte < 0x20 || byte > 0x7e) {
       return undefined;
     }
     bytes.push(byte);

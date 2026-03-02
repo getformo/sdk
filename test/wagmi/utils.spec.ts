@@ -4,10 +4,44 @@ import {
   extractFunctionArgs,
   flattenObject,
   buildSafeFunctionArgs,
+  concatCalldataWithSuffix,
   AbiItem,
 } from "../../src/wagmi/utils";
 
 describe("wagmi/utils", () => {
+  describe("concatCalldataWithSuffix", () => {
+    const base = "0xa9059cbb00000000000000000000000000000000";
+
+    it("concatenates calldata and suffix when dataSuffix is present", () => {
+      const suffix = "0x74657374070080218021802180218021802180218021";
+      const result = concatCalldataWithSuffix(base, suffix);
+      expect(result).to.equal(base + suffix.slice(2));
+    });
+
+    it("returns encodedData unchanged when dataSuffix is undefined", () => {
+      expect(concatCalldataWithSuffix(base, undefined)).to.equal(base);
+    });
+
+    it("returns encodedData unchanged when dataSuffix is empty string", () => {
+      expect(concatCalldataWithSuffix(base, "")).to.equal(base);
+    });
+
+    it("returns encodedData unchanged when dataSuffix is '0x'", () => {
+      expect(concatCalldataWithSuffix(base, "0x")).to.equal(base);
+    });
+
+    it("returns encodedData unchanged when dataSuffix length <= 2", () => {
+      expect(concatCalldataWithSuffix(base, "0x")).to.equal(base);
+      expect(concatCalldataWithSuffix(base, "ab")).to.equal(base);
+    });
+
+    it("strips 0x from suffix in fallback path (suffix without prefix)", () => {
+      const suffixNoPrefix = "74657374070080218021802180218021802180218021";
+      const result = concatCalldataWithSuffix(base, "0x" + suffixNoPrefix);
+      expect(result).to.equal(base + suffixNoPrefix);
+    });
+  });
+
   describe("flattenObject", () => {
     it("should return flat object unchanged", () => {
       const result = flattenObject({
