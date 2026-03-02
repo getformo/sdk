@@ -30,9 +30,9 @@ describe("wagmi/utils", () => {
       expect(concatCalldataWithSuffix(base, "0x")).to.equal(base);
     });
 
-    it("returns encodedData unchanged when dataSuffix length <= 2", () => {
-      expect(concatCalldataWithSuffix(base, "0x")).to.equal(base);
-      expect(concatCalldataWithSuffix(base, "ab")).to.equal(base);
+    it("concatenates valid short suffix (e.g. 1-byte hex 'ab')", () => {
+      expect(concatCalldataWithSuffix(base, "ab")).to.equal(base + "ab");
+      expect(concatCalldataWithSuffix(base, "0xab")).to.equal(base + "ab");
     });
 
     it("strips 0x from suffix in fallback path (suffix without prefix)", () => {

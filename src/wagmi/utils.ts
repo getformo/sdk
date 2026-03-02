@@ -148,7 +148,7 @@ export function concatCalldataWithSuffix(
   encodedData: string,
   dataSuffix: string | undefined
 ): string {
-  if (!dataSuffix || dataSuffix === "0x" || dataSuffix.length <= 2) {
+  if (!dataSuffix || dataSuffix === "0x") {
     return encodedData;
   }
   const viem = tryLoadViem();
