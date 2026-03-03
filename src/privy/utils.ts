@@ -210,8 +210,8 @@ export function parsePrivyProperties(user: PrivyUser): {
     .filter((a) => a.type === "wallet" && a.address)
     .map((a) => ({
       address: a.address!,
-      walletClient: a.walletClientType || a.walletClient,
-      chainType: a.chainType,
+      walletClient: (a.walletClientType || a.walletClient) ?? undefined,
+      chainType: a.chainType ?? undefined,
       isEmbedded:
         a.walletClientType === "privy" || a.walletClient === "privy",
     }));
