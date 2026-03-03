@@ -207,7 +207,7 @@ export function parsePrivyProperties(user: PrivyUser): {
 
   // Extract wallet addresses
   const wallets: PrivyWalletInfo[] = accounts
-    .filter((a) => a.type === "wallet" && a.address)
+    .filter((a) => (a.type === "wallet" || a.type === "smart_wallet") && a.address)
     .map((a) => ({
       address: a.address!,
       walletClient: (a.walletClientType || a.walletClient) ?? undefined,

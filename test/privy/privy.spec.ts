@@ -11,7 +11,7 @@ describe("Privy Utilities", () => {
       it("should extract core identifiers", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",
-          createdAt: 1699900000000,
+          createdAt: new Date(1699900000000),
         };
 
         const { properties } = parsePrivyProperties(user);
@@ -34,10 +34,10 @@ describe("Privy Utilities", () => {
       it("should extract social account usernames", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",
-          twitter: { username: "twitteruser" },
-          discord: { username: "discorduser#1234" },
-          github: { username: "ghuser" },
-          farcaster: { username: "fname", fid: 12345 },
+          twitter: { subject: "tw1", username: "twitteruser", name: null, profilePictureUrl: null },
+          discord: { subject: "dc1", username: "discorduser#1234", email: null },
+          github: { subject: "gh1", username: "ghuser", name: null },
+          farcaster: { fid: 12345, ownerAddress: "0x0", username: "fname", displayName: null, bio: null, pfp: null },
         };
 
         const { properties } = parsePrivyProperties(user);
@@ -53,11 +53,11 @@ describe("Privy Utilities", () => {
       it("should extract social account emails", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",
-          google: { email: "user@gmail.com" },
-          apple: { email: "user@icloud.com" },
-          linkedin: { email: "user@company.com" },
-          spotify: { email: "user@spotify.com" },
-          line: { email: "user@line.me" },
+          google: { subject: "g1", email: "user@gmail.com", name: null },
+          apple: { subject: "a1", email: "user@icloud.com" },
+          linkedin: { subject: "li1", email: "user@company.com", name: null, vanityName: null },
+          spotify: { subject: "sp1", email: "user@spotify.com", name: null },
+          line: { subject: "ln1", email: "user@line.me", name: null },
         };
 
         const { properties } = parsePrivyProperties(user);
@@ -72,7 +72,7 @@ describe("Privy Utilities", () => {
       it("should fall back to google email if email is blank", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",
-          google: { email: "user@gmail.com" },
+          google: { subject: "g1", email: "user@gmail.com", name: null },
         };
 
         const { properties } = parsePrivyProperties(user);
@@ -83,7 +83,7 @@ describe("Privy Utilities", () => {
       it("should fall back to apple email if email and google are blank", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",
-          apple: { email: "user@icloud.com" },
+          apple: { subject: "a1", email: "user@icloud.com" },
         };
 
         const { properties } = parsePrivyProperties(user);
@@ -94,7 +94,7 @@ describe("Privy Utilities", () => {
       it("should fall back to linkedin email if email, google, and apple are blank", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",
-          linkedin: { email: "user@company.com" },
+          linkedin: { subject: "li1", email: "user@company.com", name: null, vanityName: null },
         };
 
         const { properties } = parsePrivyProperties(user);
@@ -106,7 +106,7 @@ describe("Privy Utilities", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",
           email: { address: "direct@example.com" },
-          google: { email: "user@gmail.com" },
+          google: { subject: "g1", email: "user@gmail.com", name: null },
         };
 
         const { properties } = parsePrivyProperties(user);
@@ -228,6 +228,31 @@ describe("Privy Utilities", () => {
 
         expect(wallets).to.have.length(1);
         expect(wallets[0].address).to.equal("0x1111111111111111111111111111111111111111");
+      });
+
+      it("should extract smart wallet accounts", () => {
+        const user: PrivyUser = {
+          id: "did:privy:abc123",
+          linkedAccounts: [
+            {
+              type: "wallet",
+              address: "0x1111111111111111111111111111111111111111",
+              walletClientType: "metamask",
+            },
+            {
+              type: "smart_wallet",
+              address: "0x3333333333333333333333333333333333333333",
+              walletClientType: "privy",
+            },
+          ],
+        };
+
+        const { wallets } = parsePrivyProperties(user);
+
+        expect(wallets).to.have.length(2);
+        expect(wallets[0].address).to.equal("0x1111111111111111111111111111111111111111");
+        expect(wallets[1].address).to.equal("0x3333333333333333333333333333333333333333");
+        expect(wallets[1].isEmbedded).to.be.true;
       });
 
       it("should filter out wallets without addresses", () => {
