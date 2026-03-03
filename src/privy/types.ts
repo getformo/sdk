@@ -15,6 +15,7 @@ export type PrivyAccountType =
   | "email"
   | "phone"
   | "wallet"
+  | "smart_wallet"
   | "farcaster"
   | "telegram"
   | "apple_oauth"
@@ -26,10 +27,12 @@ export type PrivyAccountType =
   | "spotify_oauth"
   | "tiktok_oauth"
   | "twitter_oauth"
-  | "line"
+  | "twitch_oauth"
+  | "line_oauth"
   | "custom_auth"
   | "passkey"
   | "cross_app"
+  | "guest"
   | string;
 
 /**
@@ -73,9 +76,8 @@ export interface PrivyLinkedAccount {
   lastName?: string;
 
   // Verification timestamps
-  firstVerifiedAt?: number | null;
-  latestVerifiedAt?: number | null;
-  verifiedAt?: number | null;
+  firstVerifiedAt?: Date | null;
+  latestVerifiedAt?: Date | null;
 }
 
 /**
@@ -89,8 +91,8 @@ export interface PrivyUser {
   /** Privy user ID in DID format (e.g., "did:privy:cm3np...") */
   id: string;
 
-  /** Account creation timestamp (Privy SDK returns Date, but number is also accepted) */
-  createdAt?: Date | number;
+  /** Account creation timestamp */
+  createdAt?: Date;
 
   /** All linked accounts */
   linkedAccounts?: PrivyLinkedAccount[];

@@ -40,7 +40,7 @@ export function parsePrivyProperties(user: PrivyUser): {
   // Extract profile properties
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
-    privyCreatedAt: user.createdAt instanceof Date ? user.createdAt.getTime() : user.createdAt,
+    privyCreatedAt: user.createdAt?.getTime(),
   };
 
   // Email
@@ -150,7 +150,7 @@ export function parsePrivyProperties(user: PrivyUser): {
   }
 
   if (!properties.line) {
-    const lineAccount = accounts.find((a) => a.type === "line");
+    const lineAccount = accounts.find((a) => a.type === "line_oauth");
     if (lineAccount?.email) {
       properties.line = lineAccount.email;
     }
