@@ -40,7 +40,7 @@ export function parsePrivyProperties(user: PrivyUser): {
   // Extract profile properties
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
-    privyCreatedAt: user.createdAt,
+    privyCreatedAt: user.createdAt instanceof Date ? user.createdAt.getTime() : user.createdAt,
   };
 
   // Email

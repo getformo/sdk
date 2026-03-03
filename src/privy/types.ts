@@ -89,8 +89,8 @@ export interface PrivyUser {
   /** Privy user ID in DID format (e.g., "did:privy:cm3np...") */
   id: string;
 
-  /** Account creation timestamp */
-  createdAt?: number;
+  /** Account creation timestamp (Privy SDK returns Date, but number is also accepted) */
+  createdAt?: Date | number;
 
   /** All linked accounts */
   linkedAccounts?: PrivyLinkedAccount[];
