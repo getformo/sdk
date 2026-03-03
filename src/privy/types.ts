@@ -15,6 +15,7 @@ export type PrivyAccountType =
   | "email"
   | "phone"
   | "wallet"
+  | "smart_wallet"
   | "farcaster"
   | "telegram"
   | "apple_oauth"
@@ -26,10 +27,12 @@ export type PrivyAccountType =
   | "spotify_oauth"
   | "tiktok_oauth"
   | "twitter_oauth"
-  | "line"
+  | "twitch_oauth"
+  | "line_oauth"
   | "custom_auth"
   | "passkey"
   | "cross_app"
+  | "guest"
   | string;
 
 /**
@@ -40,42 +43,41 @@ export interface PrivyLinkedAccount {
   type: PrivyAccountType;
 
   // Email / wallet address
-  address?: string;
+  address?: string | null;
 
   // Phone number
-  number?: string;
+  number?: string | null;
 
   // Social account fields
-  username?: string;
-  name?: string;
-  displayName?: string;
-  subject?: string;
-  email?: string;
+  username?: string | null;
+  name?: string | null;
+  displayName?: string | null;
+  subject?: string | null;
+  email?: string | null;
 
   // Wallet-specific fields
-  chainType?: string;
-  walletClient?: string;
-  walletClientType?: string;
-  connectorType?: string;
+  chainType?: string | null;
+  walletClient?: string | null;
+  walletClientType?: string | null;
+  connectorType?: string | null;
   delegated?: boolean;
 
   // Farcaster-specific fields
-  fid?: number;
-  ownerAddress?: string;
-  bio?: string;
-  pfp?: string;
-  url?: string;
-  signerPublicKey?: string;
+  fid?: number | null;
+  ownerAddress?: string | null;
+  bio?: string | null;
+  pfp?: string | null;
+  url?: string | null;
+  signerPublicKey?: string | null;
 
   // Telegram-specific fields
-  telegramUserId?: string;
-  firstName?: string;
-  lastName?: string;
+  telegramUserId?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
 
   // Verification timestamps
-  firstVerifiedAt?: number | null;
-  latestVerifiedAt?: number | null;
-  verifiedAt?: number | null;
+  firstVerifiedAt?: Date | null;
+  latestVerifiedAt?: Date | null;
 }
 
 /**
@@ -90,7 +92,7 @@ export interface PrivyUser {
   id: string;
 
   /** Account creation timestamp */
-  createdAt?: number;
+  createdAt?: Date;
 
   /** All linked accounts */
   linkedAccounts?: PrivyLinkedAccount[];
@@ -108,34 +110,35 @@ export interface PrivyUser {
     walletClientType?: string;
     connectorType?: string;
   };
-  google?: { email?: string; name?: string; subject?: string };
-  discord?: { username?: string; subject?: string; email?: string };
+  google?: { subject: string; email: string; name: string | null };
+  discord?: { subject: string; username: string | null; email: string | null };
   twitter?: {
-    username?: string;
-    name?: string;
-    subject?: string;
-    profilePictureUrl?: string;
+    subject: string;
+    username: string | null;
+    name: string | null;
+    profilePictureUrl: string | null;
   };
   farcaster?: {
-    fid?: number;
-    username?: string;
-    displayName?: string;
-    ownerAddress?: string;
-    bio?: string;
-    pfp?: string;
+    fid: number | null;
+    ownerAddress: string;
+    username: string | null;
+    displayName: string | null;
+    bio: string | null;
+    pfp: string | null;
   };
-  github?: { username?: string; name?: string; subject?: string };
-  linkedin?: { email?: string; name?: string; subject?: string };
-  apple?: { email?: string; subject?: string };
-  instagram?: { username?: string; subject?: string };
-  spotify?: { email?: string; name?: string; subject?: string };
-  tiktok?: { username?: string; name?: string; subject?: string };
-  line?: { email?: string; name?: string; subject?: string };
+  github?: { subject: string; username: string | null; name: string | null };
+  linkedin?: { subject: string; name: string | null; email: string | null; vanityName: string | null };
+  apple?: { subject: string; email: string };
+  instagram?: { subject: string; username: string | null };
+  spotify?: { subject: string; email: string | null; name: string | null };
+  tiktok?: { subject: string; username: string | null; name: string | null };
+  line?: { subject: string; name: string | null; email: string | null };
   telegram?: {
-    telegramUserId?: string;
-    username?: string;
-    firstName?: string;
-    lastName?: string;
+    telegramUserId: string;
+    firstName: string | null;
+    lastName: string | null;
+    username: string | null;
+    photoUrl: string | null;
   };
 
   /** MFA methods */

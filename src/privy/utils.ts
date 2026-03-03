@@ -40,7 +40,7 @@ export function parsePrivyProperties(user: PrivyUser): {
   // Extract profile properties
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
-    privyCreatedAt: user.createdAt,
+    privyCreatedAt: user.createdAt?.getTime(),
   };
 
   // Email
@@ -150,7 +150,7 @@ export function parsePrivyProperties(user: PrivyUser): {
   }
 
   if (!properties.line) {
-    const lineAccount = accounts.find((a) => a.type === "line");
+    const lineAccount = accounts.find((a) => a.type === "line_oauth");
     if (lineAccount?.email) {
       properties.line = lineAccount.email;
     }
@@ -207,11 +207,11 @@ export function parsePrivyProperties(user: PrivyUser): {
 
   // Extract wallet addresses
   const wallets: PrivyWalletInfo[] = accounts
-    .filter((a) => a.type === "wallet" && a.address)
+    .filter((a) => (a.type === "wallet" || a.type === "smart_wallet") && a.address)
     .map((a) => ({
       address: a.address!,
-      walletClient: a.walletClientType || a.walletClient,
-      chainType: a.chainType,
+      walletClient: (a.walletClientType || a.walletClient) ?? undefined,
+      chainType: a.chainType ?? undefined,
       isEmbedded:
         a.walletClientType === "privy" || a.walletClient === "privy",
     }));
