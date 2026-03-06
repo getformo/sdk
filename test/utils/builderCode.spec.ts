@@ -33,7 +33,7 @@ describe("extractBuilderCodes", () => {
         "0xdddddddd62617365617070070080218021802180218021802180218021";
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("baseapp");
+      expect(result).to.deep.equal({ builder_codes: "baseapp" });
     });
 
     it("should extract a single builder code", () => {
@@ -41,7 +41,7 @@ describe("extractBuilderCodes", () => {
       const data = "0xabcdef" + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("myapp");
+      expect(result).to.deep.equal({ builder_codes: "myapp" });
     });
 
     it("should extract multiple codes as comma-separated string", () => {
@@ -49,7 +49,7 @@ describe("extractBuilderCodes", () => {
       const data = "0xabcdef" + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("app1,app2,wallet1");
+      expect(result).to.deep.equal({ builder_codes: "app1,app2,wallet1" });
     });
 
     it("should work with just the suffix (no original calldata)", () => {
@@ -57,7 +57,7 @@ describe("extractBuilderCodes", () => {
       const data = "0x" + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("builder");
+      expect(result).to.deep.equal({ builder_codes: "builder" });
     });
 
     it("should work without 0x prefix", () => {
@@ -65,7 +65,7 @@ describe("extractBuilderCodes", () => {
       const data = "deadbeef" + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("abc123");
+      expect(result).to.deep.equal({ builder_codes: "abc123" });
     });
 
     it("should handle uppercase hex input", () => {
@@ -73,7 +73,7 @@ describe("extractBuilderCodes", () => {
       const data = "0xABCDEF" + suffix.toUpperCase();
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("mycode");
+      expect(result).to.deep.equal({ builder_codes: "mycode" });
     });
 
     it("should handle codes with alphanumeric characters", () => {
@@ -81,7 +81,7 @@ describe("extractBuilderCodes", () => {
       const data = "0x1234" + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("base-app-v2");
+      expect(result).to.deep.equal({ builder_codes: "base-app-v2" });
     });
 
     it("should extract two codes as comma-separated string", () => {
@@ -89,7 +89,7 @@ describe("extractBuilderCodes", () => {
       const data = "0xabcdef" + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("uniswap,base");
+      expect(result).to.deep.equal({ builder_codes: "uniswap,base" });
     });
 
     it("should handle a real-world transfer call with builder code suffix", () => {
@@ -102,12 +102,21 @@ describe("extractBuilderCodes", () => {
       const data = "0x" + transferCalldata + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("morpho");
+      expect(result).to.deep.equal({ builder_codes: "morpho" });
+    });
+
+    it("should not include registry fields for Schema 0", () => {
+      const suffix = buildErc8021Suffix(["myapp"]);
+      const data = "0xabcdef" + suffix;
+
+      const result = extractBuilderCodes(data);
+      expect(result).to.not.have.property("builder_codes_registry_chain_id");
+      expect(result).to.not.have.property("builder_codes_registry_address");
     });
   });
 
   describe("Schema 1 - custom registry", () => {
-    it("should decode 'baseapp,morpho' from exact hex vector", () => {
+    it("should decode 'baseapp,morpho' with registry fields from exact hex vector", () => {
       // txData || registryAddress (20 bytes) || chainId (8453=0x2105) || chainIdLength (2) ||
       // "baseapp,morpho" || codesLength (14=0x0E) || schemaId (1) || ercMarker
       const data =
@@ -121,7 +130,11 @@ describe("extractBuilderCodes", () => {
         "80218021802180218021802180218021";
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("baseapp,morpho");
+      expect(result).to.deep.equal({
+        builder_codes: "baseapp,morpho",
+        builder_codes_registry_chain_id: "8453",
+        builder_codes_registry_address: "0xcccccccccccccccccccccccccccccccccccccccc",
+      });
     });
 
     it("should extract a single code with custom registry", () => {
@@ -145,7 +158,11 @@ describe("extractBuilderCodes", () => {
         ercMarker;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("myapp");
+      expect(result).to.deep.equal({
+        builder_codes: "myapp",
+        builder_codes_registry_chain_id: "1",
+        builder_codes_registry_address: "0x" + registryAddress,
+      });
     });
 
     it("should extract three codes with custom registry on Base", () => {
@@ -172,7 +189,24 @@ describe("extractBuilderCodes", () => {
         ercMarker;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("app1,app2,app3");
+      expect(result).to.deep.equal({
+        builder_codes: "app1,app2,app3",
+        builder_codes_registry_chain_id: "8453",
+        builder_codes_registry_address: "0x" + registryAddress,
+      });
+    });
+
+    it("should return codes without registry fields when registry data is insufficient", () => {
+      // Schema 1 with codes but not enough preceding data for registry fields
+      const codesHex = "6d79617070"; // "myapp"
+      const codesLength = "05";
+      const schemaId = "01";
+      const ercMarker = "80218021802180218021802180218021";
+      // No room for registryAddress + chainId before codes
+      const data = "0x" + codesHex + codesLength + schemaId + ercMarker;
+
+      const result = extractBuilderCodes(data);
+      expect(result).to.deep.equal({ builder_codes: "myapp" });
     });
   });
 
@@ -253,7 +287,7 @@ describe("extractBuilderCodes", () => {
       const data = "0xab" + suffix;
 
       const result = extractBuilderCodes(data);
-      expect(result).to.equal("x");
+      expect(result).to.deep.equal({ builder_codes: "x" });
     });
 
     it("should return undefined if codes contain non-printable bytes", () => {

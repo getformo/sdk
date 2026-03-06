@@ -113,15 +113,77 @@ function readCodes(
   return { codes, codesStart };
 }
 
+/** Registry address length in hex characters (20 bytes = 40 hex chars) */
+const REGISTRY_ADDRESS_HEX_LENGTH = 40;
+
+/**
+ * Result of extracting builder codes from transaction calldata.
+ */
+export interface BuilderCodesResult {
+  /** Comma-separated builder codes (e.g. "uniswap,base") */
+  builder_codes: string;
+  /** Registry chain ID (decimal string) — from Schema 1 calldata */
+  builder_codes_registry_chain_id?: string;
+  /** Registry address (checksummed hex with 0x prefix) — from Schema 1 calldata */
+  builder_codes_registry_address?: string;
+}
+
+/**
+ * Read chainIdLength, chainId, and registryAddress from Schema 1 data,
+ * positioned before the codes field.
+ *
+ * @param hex - Full hex string (lowercase, no 0x prefix)
+ * @param endPos - Hex char position where the registry data ends (i.e. codesStart)
+ * @returns Object with registryAddress and chainId, or undefined if invalid
+ */
+function readRegistryFields(
+  hex: string,
+  endPos: number
+): { registryAddress: string; chainId: string } | undefined {
+  // Read chainIdLength (1 byte before endPos)
+  const chainIdLengthStart = endPos - 2;
+  if (chainIdLengthStart < 0) {
+    return undefined;
+  }
+  const chainIdLength = parseInt(hex.slice(chainIdLengthStart, endPos), 16);
+  if (chainIdLength === 0 || isNaN(chainIdLength)) {
+    return undefined;
+  }
+
+  // Read chainId
+  const chainIdHexLength = chainIdLength * 2;
+  const chainIdStart = chainIdLengthStart - chainIdHexLength;
+  if (chainIdStart < 0) {
+    return undefined;
+  }
+  const chainIdHex = hex.slice(chainIdStart, chainIdLengthStart);
+  const chainId = parseInt(chainIdHex, 16);
+  if (isNaN(chainId)) {
+    return undefined;
+  }
+
+  // Read registryAddress (20 bytes before chainId)
+  const registryAddressStart = chainIdStart - REGISTRY_ADDRESS_HEX_LENGTH;
+  if (registryAddressStart < 0) {
+    return undefined;
+  }
+  const registryAddressHex = hex.slice(registryAddressStart, chainIdStart);
+
+  return {
+    registryAddress: "0x" + registryAddressHex,
+    chainId: chainId.toString(),
+  };
+}
+
 /**
  * Extract builder codes from transaction calldata by parsing the ERC-8021 suffix.
  *
  * @param data - The transaction calldata hex string (with or without 0x prefix)
- * @returns A comma-separated string of builder codes (e.g. "uniswap,base"), or undefined if no valid ERC-8021 suffix is found
+ * @returns A BuilderCodesResult with codes and optional registry fields, or undefined if no valid ERC-8021 suffix is found
  */
 export function extractBuilderCodes(
   data: string | undefined | null
-): string | undefined {
+): BuilderCodesResult | undefined {
   if (!data || typeof data !== "string") {
     return undefined;
   }
@@ -152,11 +214,25 @@ export function extractBuilderCodes(
   const schemaId = hex.slice(schemaIdStart, markerStart);
 
   // Step 3: Parse based on schemaId
-  if (schemaId === SCHEMA_ID_CANONICAL || schemaId === SCHEMA_ID_CUSTOM_REGISTRY) {
-    // Both Schema 0 and Schema 1 have codes in the same position
-    // (immediately before schemaId when parsing backwards)
+  if (schemaId === SCHEMA_ID_CANONICAL) {
     const result = readCodes(hex, schemaIdStart);
-    return result?.codes;
+    if (!result) return undefined;
+    return { builder_codes: result.codes };
+  }
+
+  if (schemaId === SCHEMA_ID_CUSTOM_REGISTRY) {
+    const codesResult = readCodes(hex, schemaIdStart);
+    if (!codesResult) return undefined;
+
+    const registryFields = readRegistryFields(hex, codesResult.codesStart);
+
+    return {
+      builder_codes: codesResult.codes,
+      ...(registryFields && {
+        builder_codes_registry_chain_id: registryFields.chainId,
+        builder_codes_registry_address: registryFields.registryAddress,
+      }),
+    };
   }
 
   // Unknown schema - cannot parse

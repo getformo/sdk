@@ -42,6 +42,8 @@ const RESERVED_FIELDS = new Set([
   "function_name",
   "function_args",
   "builder_codes",
+  "builder_codes_registry_chain_id",
+  "builder_codes_registry_address",
 ]);
 
 /**
@@ -98,6 +100,8 @@ export class WagmiEventHandler {
     function_name?: string;
     function_args?: Record<string, unknown>;
     builder_codes?: string;
+    builder_codes_registry_chain_id?: string;
+    builder_codes_registry_address?: string;
     safeFunctionArgs?: Record<string, unknown>;
   }>();
 
@@ -435,6 +439,8 @@ export class WagmiEventHandler {
           ...(pendingTx?.function_name && { function_name: pendingTx.function_name }),
           ...(pendingTx?.function_args && { function_args: pendingTx.function_args }),
           ...(pendingTx?.builder_codes && { builder_codes: pendingTx.builder_codes }),
+          ...(pendingTx?.builder_codes_registry_chain_id && { builder_codes_registry_chain_id: pendingTx.builder_codes_registry_chain_id }),
+          ...(pendingTx?.builder_codes_registry_address && { builder_codes_registry_address: pendingTx.builder_codes_registry_address }),
         },
         // Spread function args as additional properties (only colliding keys are prefixed)
         pendingTx?.safeFunctionArgs
@@ -652,7 +658,15 @@ export class WagmiEventHandler {
       }
 
       // Extract builder codes from transaction data (ERC-8021)
-      const builder_codes = extractBuilderCodes(data);
+      const builderCodesResult = extractBuilderCodes(data);
+      const builderCodesConfig = this.formo.options?.builderCodes;
+
+      // Merge: Schema 1 calldata values take precedence over config defaults
+      const builder_codes = builderCodesResult?.builder_codes;
+      const builder_codes_registry_chain_id =
+        builderCodesResult?.builder_codes_registry_chain_id ?? builderCodesConfig?.registryChainId;
+      const builder_codes_registry_address =
+        builderCodesResult?.builder_codes_registry_address ?? builderCodesConfig?.registryAddress;
 
       logger.info("WagmiEventHandler: Tracking transaction event", {
         status,
@@ -680,6 +694,8 @@ export class WagmiEventHandler {
           ...(function_name && { function_name }),
           ...(function_args && { function_args }),
           ...(builder_codes && { builder_codes }),
+          ...(builder_codes && builder_codes_registry_chain_id && { builder_codes_registry_chain_id }),
+          ...(builder_codes && builder_codes_registry_address && { builder_codes_registry_address }),
           ...(safeFunctionArgs && { safeFunctionArgs }),
         };
         this.pendingTransactions.set(normalizedHash, txDetails);
@@ -710,6 +726,8 @@ export class WagmiEventHandler {
           ...(function_name && { function_name }),
           ...(function_args && { function_args }),
           ...(builder_codes && { builder_codes }),
+          ...(builder_codes && builder_codes_registry_chain_id && { builder_codes_registry_chain_id }),
+          ...(builder_codes && builder_codes_registry_address && { builder_codes_registry_address }),
         },
         // Spread function args as additional properties (only colliding keys are prefixed)
         safeFunctionArgs
