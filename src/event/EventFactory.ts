@@ -495,9 +495,6 @@ class EventFactory implements IEventFactory {
     transactionHash?: string,
     function_name?: string,
     function_args?: Record<string, unknown>,
-    builder_codes?: string,
-    builder_codes_registry_chain_id?: string,
-    builder_codes_registry_address?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext
   ) {
@@ -511,9 +508,6 @@ class EventFactory implements IEventFactory {
         ...(transactionHash && { transactionHash }),
         ...(function_name && { function_name }),
         ...(function_args && { function_args }),
-        ...(builder_codes && { builder_codes }),
-        ...(builder_codes_registry_chain_id && { builder_codes_registry_chain_id }),
-        ...(builder_codes_registry_address && { builder_codes_registry_address }),
         ...properties,
       },
       address,
@@ -633,9 +627,6 @@ class EventFactory implements IEventFactory {
           event.transactionHash,
           event.function_name,
           event.function_args,
-          event.builder_codes,
-          event.builder_codes_registry_chain_id,
-          event.builder_codes_registry_address,
           event.properties,
           event.context
         );

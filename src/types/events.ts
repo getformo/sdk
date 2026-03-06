@@ -72,9 +72,6 @@ export interface TransactionAPIEvent {
   transactionHash?: string;
   function_name?: string;
   function_args?: Record<string, unknown>;
-  builder_codes?: string;
-  builder_codes_registry_chain_id?: string;
-  builder_codes_registry_address?: string;
 }
 export interface SignatureAPIEvent {
   type: "signature";

@@ -203,19 +203,6 @@ export interface WagmiOptions {
   queryClient?: any;
 }
 
-/**
- * Configuration options for ERC-8021 builder codes registry defaults.
- * These values are included in transaction events whenever builder codes are detected.
- * For Schema 0 (canonical registry), these provide the registry context not present in calldata.
- * For Schema 1 (custom registry), values from calldata take precedence.
- */
-export interface BuilderCodesOptions {
-  /** Default registry chain ID (decimal string, e.g. "8453" for Base) */
-  registryChainId?: string;
-  /** Default registry address (checksummed hex with 0x prefix) */
-  registryAddress?: string;
-}
-
 export interface Options {
   provider?: EIP1193Provider;
   tracking?: boolean | TrackingOptions;
@@ -265,12 +252,6 @@ export interface Options {
    * Allows customizing how referral codes are detected from query parameters and URL paths
    * @example { queryParams: ["via"], pathPattern: "/r/([^/]+)" }
    */
-  /**
-   * Default registry values for ERC-8021 builder codes
-   * Used when builder codes are detected in transaction calldata
-   * @example { registryChainId: "8453", registryAddress: "0x..." }
-   */
-  builderCodes?: BuilderCodesOptions;
   referral?: ReferralOptions;
   /**
    * Optional error handler for analytics network failures.
