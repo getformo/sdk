@@ -224,6 +224,12 @@ describe("Consent Management", () => {
       expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
     });
 
+    it("should not fail for 4-part public suffixes like s3.amazonaws.com.cn", () => {
+      setupDomain("https://mybucket.s3.amazonaws.com.cn");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
     it("should not fail when hostname is a bare public suffix", () => {
       // e.g., someone visits github.io directly — no registrable domain
       setupDomain("https://github.io");

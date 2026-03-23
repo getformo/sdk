@@ -20,11 +20,15 @@ import { secureHash } from '../utils/hash';
  * When in doubt, getApexDomain() returns null (no domain attribute),
  * which is safe.
  */
+const PUBLIC_SUFFIXES_4 = new Set([
+  // AWS China — 4-part public suffixes
+  's3.amazonaws.com.cn', 'compute.amazonaws.com.cn',
+]);
+
 const PUBLIC_SUFFIXES_3 = new Set([
   // AWS — subdomains of amazonaws.com are themselves public suffixes
   's3.amazonaws.com', 'compute.amazonaws.com',
   'elb.amazonaws.com', 'execute-api.amazonaws.com',
-  's3.amazonaws.com.cn', 'compute.amazonaws.com.cn',
 ]);
 
 const PUBLIC_SUFFIXES_2 = new Set([
@@ -62,15 +66,22 @@ const PUBLIC_SUFFIXES_2 = new Set([
 /**
  * Determine the number of parts in the public suffix for a given hostname.
  * Returns 1 for standard TLDs (.com, .io), 2 for known two-part suffixes
- * (.co.uk, github.io), 3 for known three-part suffixes (s3.amazonaws.com).
+ * (.co.uk, github.io), 3 for known three-part suffixes (s3.amazonaws.com),
+ * 4 for known four-part suffixes (s3.amazonaws.com.cn).
  * Returns -1 if the hostname itself IS a public suffix (no registrable domain).
  */
 function getPublicSuffixLength(parts: string[]): number {
-  // Check 3-part suffixes first (longest match wins)
+  // Check longest suffixes first (longest match wins)
+  if (parts.length >= 4) {
+    const last4 = parts.slice(-4).join('.');
+    if (PUBLIC_SUFFIXES_4.has(last4)) {
+      return parts.length < 5 ? -1 : 4;
+    }
+  }
+
   if (parts.length >= 3) {
     const last3 = parts.slice(-3).join('.');
     if (PUBLIC_SUFFIXES_3.has(last3)) {
-      // Hostname is or sits under a 3-part suffix — need 4+ parts for a registrable domain
       return parts.length < 4 ? -1 : 3;
     }
   }
