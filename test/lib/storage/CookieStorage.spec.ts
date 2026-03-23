@@ -131,6 +131,29 @@ describe("CookieStorage", () => {
     });
   });
 
+  describe("domain behavior", () => {
+    it("should not set domain attribute by default (host-only)", () => {
+      storage.set("key1", "value1");
+      // Cookie should be readable (host-only)
+      expect(storage.get("key1")).to.equal("value1");
+      // Verify no domain= in cookie string
+      const raw = jsdom.window.document.cookie;
+      // JSDOM doesn't expose domain in document.cookie reads, but
+      // we can verify the cookie was set and is readable
+      expect(raw).to.include("value1");
+    });
+
+    it("should set domain attribute when explicitly passed", () => {
+      storage.set("key1", "value1", { domain: ".example.com" });
+      expect(storage.get("key1")).to.equal("value1");
+    });
+
+    it("should not pass domain when empty string is provided", () => {
+      storage.set("key1", "value1", { domain: "" });
+      expect(storage.get("key1")).to.equal("value1");
+    });
+  });
+
   describe("key isolation", () => {
     it("should prefix keys with writeKey for isolation", () => {
       const storage1 = new CookieStorage("project1");

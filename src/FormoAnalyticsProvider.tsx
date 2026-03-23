@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, FC } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { initStorageManager } from "./storage";
+import { setCookieScope } from "./storage/cookiePolicy";
 import { logger } from "./logger";
 import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
 
@@ -51,6 +52,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
   const [sdk, setSdk] = useState<IFormoAnalytics>(defaultContext);
   const sdkRef = useRef<IFormoAnalytics>(defaultContext);
   initStorageManager(writeKey);
+  setCookieScope(options?.cookieScope ?? 'host');
 
   // Create a stable key from options that ignores complex objects and functions
   // We only care about serializable config values that would affect SDK behavior
@@ -61,6 +63,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
     const serializableOptions = {
       tracking: options.tracking,
       autocapture: options.autocapture,
+      cookieScope: options.cookieScope,
       apiHost: options.apiHost,
       flushAt: options.flushAt,
       flushInterval: options.flushInterval,

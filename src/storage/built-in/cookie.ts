@@ -9,11 +9,6 @@ class CookieStorage extends StorageBlueprint {
     );
   }
 
-  private getDomainAttribute(): string {
-    const domain = getApexDomain();
-    return domain ? `.${domain}` : "";
-  }
-
   public override set(
     key: string,
     value: string,
@@ -22,16 +17,16 @@ class CookieStorage extends StorageBlueprint {
     const expires = options?.expires;
     const maxAge = options?.maxAge;
     const path = options?.path || "/";
-    const domain = options?.domain ?? this.getDomainAttribute();
+    const domain = options?.domain || "";
     const sameSite = options?.sameSite;
     const secure = options?.secure || false;
 
     const encodedKey = encodeURIComponent(this.getKey(key));
 
-    // Expire any legacy host-only cookie on the current host so it
-    // doesn't shadow the domain-wide cookie in document.cookie reads.
-    // This only clears the cookie on the current host; host-only cookies
-    // on sibling hosts are not visible and cannot be cleared from here.
+    // When writing a domain-wide cookie, expire any legacy host-only cookie
+    // on the current host so it doesn't shadow the domain-wide cookie in
+    // document.cookie reads. This only clears the cookie on the current host;
+    // host-only cookies on sibling hosts are not visible and cannot be cleared.
     if (domain) {
       document.cookie = `${encodedKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
     }
@@ -66,12 +61,13 @@ class CookieStorage extends StorageBlueprint {
 
   public override remove(key: string): void {
     const encodedKey = encodeURIComponent(this.getKey(key));
-    // Expire both host-only (current host only) and domain-wide cookies.
-    // Cannot clear host-only cookies written on a different host.
+    // Always expire host-only cookie
     document.cookie = `${encodedKey}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
-    const domain = this.getDomainAttribute();
+    // Also expire apex-domain cookie if a valid apex domain exists,
+    // so that remove() works regardless of the current cookieScope setting.
+    const domain = getApexDomain();
     if (domain) {
-      document.cookie = `${encodedKey}=; path=/; domain=${domain}; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+      document.cookie = `${encodedKey}=; path=/; domain=.${domain}; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     }
   }
 }
