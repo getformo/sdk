@@ -29,9 +29,10 @@ export class StorageManager {
           storage = this.createStorage("memoryStorage");
           break;
         }
+        const prevType = currentType;
         currentType = TYPES[index + 1];
         logger.warn(
-          `Storage ${type} is not available, trying ${currentType}`
+          `Storage ${prevType} is not available, trying ${currentType}`
         );
         storage = this.createStorage(currentType);
       }

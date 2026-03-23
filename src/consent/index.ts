@@ -145,6 +145,11 @@ export function setConsentFlag(projectId: string, key: string, value: string): v
     // Enhanced privacy settings: Secure (HTTPS), SameSite=Strict for consent cookies
     const domain = getApexDomain();
     const domainAttr = domain ? `; domain=.${domain}` : '';
+    // Expire any legacy host-only cookie (pre-domain-attribute versions) so it
+    // doesn't shadow the new domain-wide cookie in document.cookie reads.
+    if (domain) {
+      document.cookie = `${projectSpecificKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    }
     document.cookie = `${projectSpecificKey}=${encodeURIComponent(value)}; expires=${expires}; path=/${domainAttr}; SameSite=Strict${isSecure ? '; Secure' : ''}`;
   }
 }
