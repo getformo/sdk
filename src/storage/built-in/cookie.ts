@@ -1,11 +1,17 @@
 import StorageBlueprint from "./blueprint";
 import { CookieOptions } from "../type";
+import { getApexDomain } from "../../utils/domain";
 
 class CookieStorage extends StorageBlueprint {
   public override isAvailable(): boolean {
     return (
       typeof document !== "undefined" && typeof document.cookie === "string"
     );
+  }
+
+  private getDomainAttribute(): string {
+    const domain = getApexDomain();
+    return domain ? `.${domain}` : "";
   }
 
   public override set(
@@ -16,13 +22,19 @@ class CookieStorage extends StorageBlueprint {
     const expires = options?.expires;
     const maxAge = options?.maxAge;
     const path = options?.path || "/";
-    const domain = options?.domain;
+    const domain = options?.domain ?? this.getDomainAttribute();
     const sameSite = options?.sameSite;
     const secure = options?.secure || false;
 
-    let cookie = `${encodeURIComponent(this.getKey(key))}=${encodeURIComponent(
-      value
-    )}`;
+    const encodedKey = encodeURIComponent(this.getKey(key));
+
+    // Expire any legacy host-only cookie so it doesn't shadow the
+    // domain-wide cookie in document.cookie reads.
+    if (domain) {
+      document.cookie = `${encodedKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
+    }
+
+    let cookie = `${encodedKey}=${encodeURIComponent(value)}`;
     if (maxAge) {
       cookie += "; max-age=" + maxAge;
     } else if (expires) {
@@ -51,9 +63,13 @@ class CookieStorage extends StorageBlueprint {
   }
 
   public override remove(key: string): void {
-    document.cookie = `${encodeURIComponent(
-      this.getKey(key)
-    )}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    const encodedKey = encodeURIComponent(this.getKey(key));
+    // Expire both host-only and domain-wide cookies
+    document.cookie = `${encodedKey}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    const domain = this.getDomainAttribute();
+    if (domain) {
+      document.cookie = `${encodedKey}=; path=/; domain=${domain}; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    }
   }
 }
 
