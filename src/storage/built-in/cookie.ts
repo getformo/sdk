@@ -32,7 +32,7 @@ class CookieStorage extends StorageBlueprint {
     } else {
       // When writing a host-only cookie (no domain), expire any previously
       // written apex-domain cookie so it doesn't shadow the new host cookie.
-      // This handles the transition from cookieScope: 'apex' back to 'host'.
+      // This handles the transition from crossSubdomainCookies: true to false.
       const apexDomain = getApexDomain();
       if (apexDomain) {
         document.cookie = `${encodedKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=.${apexDomain}`;
@@ -72,7 +72,7 @@ class CookieStorage extends StorageBlueprint {
     // Always expire host-only cookie
     document.cookie = `${encodedKey}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     // Also expire apex-domain cookie if a valid apex domain exists,
-    // so that remove() works regardless of the current cookieScope setting.
+    // so that remove() works regardless of crossSubdomainCookies.
     const domain = getApexDomain();
     if (domain) {
       document.cookie = `${encodedKey}=; path=/; domain=.${domain}; expires=Thu, 01 Jan 1970 00:00:00 GMT`;

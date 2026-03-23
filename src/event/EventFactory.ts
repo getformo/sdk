@@ -323,7 +323,7 @@ class EventFactory implements IEventFactory {
       version: VERSION,
     } as Partial<IFormoEvent>;
 
-    commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY, this.options?.cookieScope);
+    commonEventData.anonymous_id = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY, this.options?.crossSubdomainCookies);
 
     // Handle address - convert undefined to null for consistency
     // Uses chainId for strict chain-specific validation

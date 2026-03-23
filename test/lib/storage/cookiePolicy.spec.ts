@@ -16,29 +16,29 @@ describe("cookiePolicy", () => {
   });
 
   describe("getIdentityCookieDomain", () => {
-    it("should default to 'host' and return empty string", () => {
+    it("should default to host-only and return empty string", () => {
       getApexDomainStub.returns("example.com");
       expect(getIdentityCookieDomain()).to.equal("");
     });
 
-    it("should return empty string when scope is 'host'", () => {
+    it("should return empty string when crossSubdomainCookies is false", () => {
       getApexDomainStub.returns("example.com");
-      expect(getIdentityCookieDomain("host")).to.equal("");
+      expect(getIdentityCookieDomain(false)).to.equal("");
     });
 
-    it("should return apex domain when scope is 'apex' and domain is available", () => {
+    it("should return apex domain when crossSubdomainCookies is true and domain is available", () => {
       getApexDomainStub.returns("example.com");
-      expect(getIdentityCookieDomain("apex")).to.equal(".example.com");
+      expect(getIdentityCookieDomain(true)).to.equal(".example.com");
     });
 
-    it("should return empty string when scope is 'apex' but on localhost", () => {
+    it("should return empty string when crossSubdomainCookies is true but on localhost", () => {
       getApexDomainStub.returns(null);
-      expect(getIdentityCookieDomain("apex")).to.equal("");
+      expect(getIdentityCookieDomain(true)).to.equal("");
     });
 
-    it("should return empty string when scope is 'apex' but on IP address", () => {
+    it("should return empty string when crossSubdomainCookies is true but on IP address", () => {
       getApexDomainStub.returns(null);
-      expect(getIdentityCookieDomain("apex")).to.equal("");
+      expect(getIdentityCookieDomain(true)).to.equal("");
     });
   });
 });

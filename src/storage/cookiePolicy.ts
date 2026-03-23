@@ -2,22 +2,21 @@
  * Cookie domain policy — centralizes the decision of whether identity
  * cookies should be host-scoped or apex-scoped.
  *
- * - 'host' (default): no domain attribute → cookie scoped to current host
- * - 'apex': domain set to .apexDomain → shared across subdomains
+ * - false (default): no domain attribute → cookie scoped to current host
+ * - true: domain set to .apexDomain → shared across subdomains
  */
 import { getApexDomain } from "../utils/domain";
 
 /**
- * Returns the domain attribute string for identity cookies based on
- * the configured scope.
- * - 'host' → "" (no domain attribute, host-only)
- * - 'apex' → ".example.com" when a valid apex domain is detected,
+ * Returns the domain attribute string for identity cookies.
+ * - false → "" (no domain attribute, host-only)
+ * - true  → ".example.com" when a valid apex domain is detected,
  *            or "" on localhost / IP / single-label hosts
  *
- * @param scope The cookie scope for this SDK instance. Defaults to 'host'.
+ * @param crossSubdomain Whether cookies should be shared across subdomains.
  */
-export function getIdentityCookieDomain(scope: 'host' | 'apex' = 'host'): string {
-  if (scope !== 'apex') return "";
+export function getIdentityCookieDomain(crossSubdomain = false): string {
+  if (!crossSubdomain) return "";
   const domain = getApexDomain();
   return domain ? `.${domain}` : "";
 }

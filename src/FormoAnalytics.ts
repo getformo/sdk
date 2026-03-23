@@ -135,8 +135,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private isWagmiMode: boolean = false;
 
-  /** Instance-level cookie scope so multiple SDK instances don't interfere. */
-  private cookieScope: 'host' | 'apex';
+  /** Instance-level flag so multiple SDK instances don't interfere. */
+  private crossSubdomainCookies: boolean;
 
   config: Config;
   currentChainId?: ChainID;
@@ -165,7 +165,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Check if Wagmi mode is enabled
     this.isWagmiMode = !!options.wagmi;
-    this.cookieScope = options.cookieScope ?? 'host';
+    this.crossSubdomainCookies = options.crossSubdomainCookies ?? false;
 
     this.session = new FormoAnalyticsSession();
     this.currentUserId =
@@ -721,7 +721,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       if (userId) {
         this.currentUserId = userId;
-        const domain = getIdentityCookieDomain(this.cookieScope);
+        const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
         cookie().set(SESSION_USER_ID_KEY, userId, {
           path: "/",
           ...(domain ? { domain } : {}),

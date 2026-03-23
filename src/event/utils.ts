@@ -3,16 +3,16 @@ import { generateNativeUUID } from "../utils";
 import { cookie } from "../storage";
 import { getIdentityCookieDomain } from "../storage/cookiePolicy";
 
-const generateAnonymousId = (key: string, cookieScope?: 'host' | 'apex'): AnonymousID => {
+const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): AnonymousID => {
   const storedAnonymousId = cookie().get(key);
   const anonymousId = (
     storedAnonymousId && typeof storedAnonymousId === "string"
       ? storedAnonymousId
       : generateNativeUUID()
   ) as AnonymousID;
-  const domain = getIdentityCookieDomain(cookieScope);
-  // Re-set the cookie with the configured scope. When cookieScope is 'apex',
-  // this migrates legacy host-only cookies on the current host to the apex
+  const domain = getIdentityCookieDomain(crossSubdomainCookies);
+  // Re-set the cookie with the configured scope. When crossSubdomainCookies
+  // is true, this migrates legacy host-only cookies on the current host to the apex
   // domain. Note: host-only cookies on other hosts (e.g. a cookie set on
   // example.com is not visible from app.example.com) cannot be migrated
   // until the user revisits that host.
