@@ -2,7 +2,7 @@ import type { UUID } from "crypto";
 import { sha256 } from 'ethereum-cryptography/sha256';
 import { utf8ToBytes, bytesToHex } from 'ethereum-cryptography/utils';
 
-export function hash(input: string): string {
+export async function hash(input: string): Promise<string> {
   const bytes = utf8ToBytes(input);
   const hashBytes = sha256(bytes);
   return bytesToHex(hashBytes);
