@@ -181,7 +181,12 @@ export class EventQueue implements IEventQueue {
     }
 
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
-    this.payloadHashes.clear();
+
+    // Only remove hashes for flushed items so duplicate detection remains
+    // active for events still in the queue.
+    for (const item of items) {
+      this.payloadHashes.delete(item.message.message_id);
+    }
 
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
