@@ -9,7 +9,7 @@ import {
   TEventType,
 } from "./constants";
 import { cookie, initStorageManager } from "./storage";
-import { setCookieScope, getIdentityCookieDomain } from "./storage/cookiePolicy";
+import { getIdentityCookieDomain } from "./storage/cookiePolicy";
 import { EventManager, IEventManager } from "./event";
 import { EventQueue } from "./queue";
 import { logger, Logger } from "./logger";
@@ -241,7 +241,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     options?: Options
   ): Promise<FormoAnalytics> {
     initStorageManager(writeKey);
-    setCookieScope(options?.cookieScope ?? 'host');
     const analytics = new FormoAnalytics(writeKey, options);
 
     // Skip provider detection in Wagmi mode

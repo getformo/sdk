@@ -17,7 +17,7 @@ const generateAnonymousId = (key: string, cookieScope?: 'host' | 'apex'): Anonym
   // example.com is not visible from app.example.com) cannot be migrated
   // until the user revisits that host.
   cookie().set(key, anonymousId, {
-    maxAge: Date.now() + 1000 * 60 * 60 * 24 * 365, // 1 year
+    expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toUTCString(), // 1 year
     path: "/",
     ...(domain ? { domain } : {}),
   });
