@@ -84,6 +84,21 @@ function getPublicSuffixLength(parts: string[]): number {
     }
   }
 
+  // If the second-to-last label looks like a common SLD prefix (com, co, org,
+  // etc.) but we didn't match it above, it's likely an unrecognized multi-part
+  // public suffix (e.g. .com.ua, .co.ke). Return null to fall back to safe
+  // host-only cookies rather than risk setting domain=.com.ua.
+  if (parts.length >= 3) {
+    const COMMON_SLD_PREFIXES = new Set([
+      'com', 'co', 'net', 'org', 'gov', 'edu', 'ac', 'or', 'ne', 'go',
+      'gen', 'web', 'in', 'me',
+    ]);
+    const secondToLast = parts[parts.length - 2];
+    if (COMMON_SLD_PREFIXES.has(secondToLast)) {
+      return -1;
+    }
+  }
+
   // Default: single-part TLD (.com, .io, .app, etc.)
   return parts.length < 2 ? -1 : 1;
 }

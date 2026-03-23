@@ -177,7 +177,13 @@ export class EventQueue implements IEventQueue {
     }
 
     if (this.pendingFlush) {
-      await this.pendingFlush;
+      // During page leave (drainAll), skip awaiting the pending flush.
+      // Browser lifecycle events (pagehide/beforeunload) do not wait for
+      // async operations — if we yield here the page may be terminated
+      // before the keepalive fetch for the remaining items is dispatched.
+      if (!drainAll) {
+        await this.pendingFlush;
+      }
     }
 
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
