@@ -56,6 +56,8 @@ export interface IFormoAnalyticsSession {
  * 
  * Session data expires at end of day (86400 seconds).
  */
+const MAX_SESSION_ENTRIES = 20;
+
 export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
    * Generate a unique key for wallet identification tracking
@@ -91,6 +93,9 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     const rdnses = cookie().get(SESSION_WALLET_DETECTED_KEY)?.split(",") || [];
     if (!rdnses.includes(rdns)) {
       rdnses.push(rdns);
+      if (rdnses.length > MAX_SESSION_ENTRIES) {
+        rdnses.splice(0, rdnses.length - MAX_SESSION_ENTRIES);
+      }
       cookie().set(SESSION_WALLET_DETECTED_KEY, rdnses.join(","), {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
@@ -136,6 +141,9 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
 
     if (!alreadyExists) {
       identifiedWallets.push(identifiedKey);
+      if (identifiedWallets.length > MAX_SESSION_ENTRIES) {
+        identifiedWallets.splice(0, identifiedWallets.length - MAX_SESSION_ENTRIES);
+      }
       const newValue = identifiedWallets.join(",");
       cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day

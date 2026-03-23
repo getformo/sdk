@@ -49,6 +49,16 @@ describe("isNetworkError", () => {
       const error = new TypeError("terminated");
       expect(isNetworkError(error)).to.be.true;
     });
+
+    it("should return true for DOMException TimeoutError", () => {
+      const error = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      expect(isNetworkError(error)).to.be.true;
+    });
+
+    it("should return true for DOMException NetworkError", () => {
+      const error = new DOMException("Failed to fetch", "NetworkError");
+      expect(isNetworkError(error)).to.be.true;
+    });
   });
 
   describe("non-network errors", () => {

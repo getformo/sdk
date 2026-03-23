@@ -104,11 +104,14 @@ export class SolanaAdapter {
   >();
 
   /**
-   * Original adapter methods that we wrap for tracking
+   * Per-adapter original methods stored in a WeakMap to prevent routing
+   * to the wrong wallet after switching adapters.
    */
-  private originalAdapterSendTransaction?: ISolanaAdapter["sendTransaction"];
-  private originalAdapterSignMessage?: ISolanaAdapter["signMessage"];
-  private originalAdapterSignTransaction?: ISolanaAdapter["signTransaction"];
+  private adapterOriginals = new WeakMap<ISolanaAdapter, {
+    sendTransaction?: ISolanaAdapter["sendTransaction"];
+    signMessage?: ISolanaAdapter["signMessage"];
+    signTransaction?: ISolanaAdapter["signTransaction"];
+  }>();
 
   /**
    * Bound wrapper references — used to detect when external code (e.g. StandardWalletAdapter._reset())
@@ -171,22 +174,23 @@ export class SolanaAdapter {
   private restoreOriginalMethods(): void {
     // Restore adapter methods
     if (this.wrappedAdapter) {
-      if (this.originalAdapterSendTransaction) {
-        this.wrappedAdapter.sendTransaction = this.originalAdapterSendTransaction;
-      }
-      if (this.originalAdapterSignMessage) {
-        this.wrappedAdapter.signMessage = this.originalAdapterSignMessage;
-      }
-      if (this.originalAdapterSignTransaction) {
-        this.wrappedAdapter.signTransaction = this.originalAdapterSignTransaction;
+      const originals = this.adapterOriginals.get(this.wrappedAdapter);
+      if (originals) {
+        if (originals.sendTransaction) {
+          this.wrappedAdapter.sendTransaction = originals.sendTransaction;
+        }
+        if (originals.signMessage) {
+          this.wrappedAdapter.signMessage = originals.signMessage;
+        }
+        if (originals.signTransaction) {
+          this.wrappedAdapter.signTransaction = originals.signTransaction;
+        }
+        this.adapterOriginals.delete(this.wrappedAdapter);
       }
       this.wrappedAdapter = undefined;
     }
 
-    // Clear original and bound wrapper references
-    this.originalAdapterSendTransaction = undefined;
-    this.originalAdapterSignMessage = undefined;
-    this.originalAdapterSignTransaction = undefined;
+    // Clear bound wrapper references
     this.boundWrappedSendTransaction = undefined;
     this.boundWrappedSignMessage = undefined;
     this.boundWrappedSignTransaction = undefined;
@@ -464,27 +468,34 @@ export class SolanaAdapter {
     // Store reference to adapter for cleanup
     this.wrappedAdapter = adapter;
 
+    const originals: {
+      sendTransaction?: ISolanaAdapter["sendTransaction"];
+      signMessage?: ISolanaAdapter["signMessage"];
+      signTransaction?: ISolanaAdapter["signTransaction"];
+    } = {};
+
     // Wrap sendTransaction
     if (adapter.sendTransaction) {
-      this.originalAdapterSendTransaction = adapter.sendTransaction.bind(adapter);
+      originals.sendTransaction = adapter.sendTransaction.bind(adapter);
       this.boundWrappedSendTransaction = this.wrappedSendTransaction.bind(this);
       adapter.sendTransaction = this.boundWrappedSendTransaction;
     }
 
     // Wrap signMessage
     if (adapter.signMessage) {
-      this.originalAdapterSignMessage = adapter.signMessage.bind(adapter);
+      originals.signMessage = adapter.signMessage.bind(adapter);
       this.boundWrappedSignMessage = this.wrappedSignMessage.bind(this);
       adapter.signMessage = this.boundWrappedSignMessage;
     }
 
     // Wrap signTransaction
     if (adapter.signTransaction) {
-      this.originalAdapterSignTransaction = adapter.signTransaction.bind(adapter);
+      originals.signTransaction = adapter.signTransaction.bind(adapter);
       this.boundWrappedSignTransaction = this.wrappedSignTransaction.bind(this);
       adapter.signTransaction = this.boundWrappedSignTransaction;
     }
 
+    this.adapterOriginals.set(adapter, originals);
   }
 
   /**
@@ -497,40 +508,43 @@ export class SolanaAdapter {
    */
   private rewrapOverwrittenMethods(adapter: ISolanaAdapter): void {
     let rewrapped = false;
+    const originals = this.adapterOriginals.get(adapter) || {};
 
     // signMessage
     if (adapter.signMessage && adapter.signMessage !== this.boundWrappedSignMessage) {
-      this.originalAdapterSignMessage = adapter.signMessage.bind(adapter);
+      originals.signMessage = adapter.signMessage.bind(adapter);
       if (!this.boundWrappedSignMessage) {
         this.boundWrappedSignMessage = this.wrappedSignMessage.bind(this);
       }
       adapter.signMessage = this.boundWrappedSignMessage;
       rewrapped = true;
     } else if (!adapter.signMessage && this.boundWrappedSignMessage) {
-      this.originalAdapterSignMessage = undefined;
+      originals.signMessage = undefined;
     }
 
     // signTransaction
     if (adapter.signTransaction && adapter.signTransaction !== this.boundWrappedSignTransaction) {
-      this.originalAdapterSignTransaction = adapter.signTransaction.bind(adapter);
+      originals.signTransaction = adapter.signTransaction.bind(adapter);
       if (!this.boundWrappedSignTransaction) {
         this.boundWrappedSignTransaction = this.wrappedSignTransaction.bind(this);
       }
       adapter.signTransaction = this.boundWrappedSignTransaction;
       rewrapped = true;
     } else if (!adapter.signTransaction && this.boundWrappedSignTransaction) {
-      this.originalAdapterSignTransaction = undefined;
+      originals.signTransaction = undefined;
     }
 
     // sendTransaction — unlikely to be overwritten but check for completeness
     if (adapter.sendTransaction && adapter.sendTransaction !== this.boundWrappedSendTransaction) {
-      this.originalAdapterSendTransaction = adapter.sendTransaction.bind(adapter);
+      originals.sendTransaction = adapter.sendTransaction.bind(adapter);
       if (!this.boundWrappedSendTransaction) {
         this.boundWrappedSendTransaction = this.wrappedSendTransaction.bind(this);
       }
       adapter.sendTransaction = this.boundWrappedSendTransaction;
       rewrapped = true;
     }
+
+    this.adapterOriginals.set(adapter, originals);
 
     if (rewrapped) {
       logger.debug("SolanaAdapter: Re-wrapped overwritten adapter methods");
@@ -547,7 +561,8 @@ export class SolanaAdapter {
   ): Promise<TransactionSignature> {
     this.checkAndRebindContextAdapter();
 
-    if (!this.originalAdapterSendTransaction) {
+    const originals = this.wrappedAdapter ? this.adapterOriginals.get(this.wrappedAdapter) : undefined;
+    if (!originals?.sendTransaction) {
       throw new Error("sendTransaction not available");
     }
 
@@ -558,7 +573,7 @@ export class SolanaAdapter {
     this.emitTransactionEvent(TransactionStatus.STARTED, address, chainId);
 
     try {
-      const signature = await this.originalAdapterSendTransaction(
+      const signature = await originals.sendTransaction(
         transaction,
         connection,
         options
@@ -587,7 +602,8 @@ export class SolanaAdapter {
   private async wrappedSignMessage(message: Uint8Array): Promise<Uint8Array> {
     this.checkAndRebindContextAdapter();
 
-    if (!this.originalAdapterSignMessage) {
+    const originals = this.wrappedAdapter ? this.adapterOriginals.get(this.wrappedAdapter) : undefined;
+    if (!originals?.signMessage) {
       throw new Error("signMessage not available");
     }
 
@@ -598,7 +614,7 @@ export class SolanaAdapter {
     this.emitSignatureEvent(SignatureStatus.REQUESTED, address, chainId, messageString);
 
     try {
-      const signature = await this.originalAdapterSignMessage(message);
+      const signature = await originals.signMessage(message);
       const signatureHex = uint8ArrayToHex(signature);
       this.emitSignatureEvent(SignatureStatus.CONFIRMED, address, chainId, messageString, signatureHex);
       return signature;
@@ -616,7 +632,8 @@ export class SolanaAdapter {
   ): Promise<SolanaTransaction> {
     this.checkAndRebindContextAdapter();
 
-    if (!this.originalAdapterSignTransaction) {
+    const originals = this.wrappedAdapter ? this.adapterOriginals.get(this.wrappedAdapter) : undefined;
+    if (!originals?.signTransaction) {
       throw new Error("signTransaction not available");
     }
 
@@ -627,7 +644,7 @@ export class SolanaAdapter {
     this.emitSignatureEvent(SignatureStatus.REQUESTED, address, chainId, message);
 
     try {
-      const signedTx = await this.originalAdapterSignTransaction(transaction);
+      const signedTx = await originals.signTransaction(transaction);
       this.emitSignatureEvent(SignatureStatus.CONFIRMED, address, chainId, message);
       return signedTx;
     } catch (error) {

@@ -9,7 +9,11 @@ export function toSnakeCase(obj: any, omitKeys: string[] = []) {
   const convert = (data: any): any => {
     if (Array.isArray(data)) {
       return data.map(convert); // Recursively handle array elements
-    } else if (data !== null && typeof data === "object") {
+    } else if (
+      data !== null &&
+      typeof data === "object" &&
+      (data.constructor === Object || Object.getPrototypeOf(data) === null)
+    ) {
       return Object.keys(data).reduce((acc: any, key) => {
         // If the key is in omitKeys, keep it as it is
         const resultKey = omitKeys.includes(key) ? key : toSnake(key);

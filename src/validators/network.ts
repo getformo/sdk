@@ -1,6 +1,11 @@
 const objectToString = Object.prototype.toString;
 
-const isError = (value: any) => objectToString.call(value) === "[object Error]";
+const isError = (value: any) => {
+  const tag = objectToString.call(value);
+  return tag === "[object Error]" || tag === "[object DOMException]";
+};
+
+const errorNames = new Set(["TypeError", "TimeoutError", "NetworkError"]);
 
 const errorMessages = new Set([
   "network error", // Chrome
@@ -11,13 +16,14 @@ const errorMessages = new Set([
   "Network request failed", // `cross-fetch`
   "fetch failed", // Undici (Node.js)
   "terminated", // Undici (Node.js)
+  "The operation was aborted due to timeout", // AbortSignal.timeout()
 ]);
 
 export function isNetworkError(error: any) {
   const isValid =
     error &&
     isError(error) &&
-    error.name === "TypeError" &&
+    errorNames.has(error.name) &&
     typeof error.message === "string";
 
   if (!isValid) {

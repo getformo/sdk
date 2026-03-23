@@ -10,6 +10,19 @@
 import { secureHash } from '../utils/hash';
 
 /**
+ * Extract the apex domain for cookie sharing across subdomains.
+ * Returns null for localhost, IP addresses, or single-level domains.
+ */
+function getApexDomain(): string | null {
+  if (typeof window === 'undefined') return null;
+  const hostname = window.location.hostname;
+  if (hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return null;
+  const parts = hostname.split('.');
+  if (parts.length < 2) return null;
+  return parts.slice(-2).join('.');
+}
+
+/**
  * Generate a project-specific cookie key to avoid conflicts between different Formo projects
  * Uses hashed writeKey for privacy and security
  * @param projectId - The project identifier (writeKey)
@@ -38,7 +51,9 @@ export function setConsentFlag(projectId: string, key: string, value: string): v
     const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year (GDPR compliant)
     const isSecure = window?.location?.protocol === 'https:';
     // Enhanced privacy settings: Secure (HTTPS), SameSite=Strict for consent cookies
-    document.cookie = `${projectSpecificKey}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Strict${isSecure ? '; Secure' : ''}`;
+    const domain = getApexDomain();
+    const domainAttr = domain ? `; domain=.${domain}` : '';
+    document.cookie = `${projectSpecificKey}=${encodeURIComponent(value)}; expires=${expires}; path=/${domainAttr}; SameSite=Strict${isSecure ? '; Secure' : ''}`;
   }
 }
 

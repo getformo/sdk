@@ -104,6 +104,12 @@ describe("isBlockedAddress", () => {
       expect(isBlockedAddress(variant)).to.be.true;
     });
   });
+
+  it("should block addresses with invalid mixed-case checksums", () => {
+    // These have deliberately wrong checksums but should still be blocked
+    expect(isBlockedAddress("0x000000000000000000000000000000000000dEAD")).to.be.true;
+    expect(isBlockedAddress("0x000000000000000000000000000000000000DeAd")).to.be.true;
+  });
 });
 
 describe("validateAddress", () => {

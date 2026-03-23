@@ -107,12 +107,12 @@ export class EventQueue implements IEventQueue {
 
     this.onPageLeave(async (isAccessible: boolean) => {
       if (isAccessible === false) {
-        await this.flush();
+        await this.flush(undefined, true);
       }
     });
   }
 
-  private async generateMessageId(event: IFormoEvent): Promise<string> {
+  private generateMessageId(event: IFormoEvent): string {
     const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
@@ -122,9 +122,9 @@ export class EventQueue implements IEventQueue {
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
 
-    const message_id = await this.generateMessageId(event);
+    const message_id = this.generateMessageId(event);
     // check if the message already exists
-    if (await this.isDuplicate(message_id)) {
+    if (this.isDuplicate(message_id)) {
       logger.warn(
         `Event already enqueued, try again after ${millisecondsToSecond(
           this.flushIntervalMs
@@ -163,7 +163,7 @@ export class EventQueue implements IEventQueue {
     }
   }
 
-  async flush(callback?: (...args: any) => void) {
+  async flush(callback?: (...args: any) => void, drainAll = false) {
     callback = callback || noop;
 
     if (this.timer) {
@@ -180,7 +180,7 @@ export class EventQueue implements IEventQueue {
       await this.pendingFlush;
     }
 
-    const items = this.queue.splice(0, this.flushAt);
+    const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
     this.payloadHashes.clear();
 
     // Generate sent_at once for the entire batch
@@ -330,7 +330,7 @@ export class EventQueue implements IEventQueue {
     return false;
   }
 
-  private async isDuplicate(eventId: string) {
+  private isDuplicate(eventId: string) {
     // check if exists a message with identical payload within 1 minute
     if (this.payloadHashes.has(eventId)) return true;
 
@@ -382,13 +382,13 @@ export class EventQueue implements IEventQueue {
 
     // Catches the page being hidden, including scenarios like closing the tab.
     document.addEventListener("pagehide", () => {
-      isAccessible = document.visibilityState === "hidden";
+      isAccessible = document.visibilityState !== "hidden";
       handleOnLeave();
     });
 
     // Catches visibility changes, such as switching tabs or minimizing the browser.
     document.addEventListener("visibilitychange", () => {
-      isAccessible = true;
+      isAccessible = document.visibilityState !== "hidden";
       if (document.visibilityState === "hidden") {
         handleOnLeave();
       } else {
