@@ -28,8 +28,10 @@ class CookieStorage extends StorageBlueprint {
 
     const encodedKey = encodeURIComponent(this.getKey(key));
 
-    // Expire any legacy host-only cookie so it doesn't shadow the
-    // domain-wide cookie in document.cookie reads.
+    // Expire any legacy host-only cookie on the current host so it
+    // doesn't shadow the domain-wide cookie in document.cookie reads.
+    // This only clears the cookie on the current host; host-only cookies
+    // on sibling hosts are not visible and cannot be cleared from here.
     if (domain) {
       document.cookie = `${encodedKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
     }
@@ -64,7 +66,8 @@ class CookieStorage extends StorageBlueprint {
 
   public override remove(key: string): void {
     const encodedKey = encodeURIComponent(this.getKey(key));
-    // Expire both host-only and domain-wide cookies
+    // Expire both host-only (current host only) and domain-wide cookies.
+    // Cannot clear host-only cookies written on a different host.
     document.cookie = `${encodedKey}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     const domain = this.getDomainAttribute();
     if (domain) {
