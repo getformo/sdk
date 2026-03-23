@@ -165,6 +165,60 @@ describe("Consent Management", () => {
     });
   });
 
+  describe("multi-part TLD handling", () => {
+    function setupDomain(url: string) {
+      // Close existing jsdom before creating a new one
+      if (jsdom) jsdom.window.close();
+      jsdom = new JSDOM("<!DOCTYPE html><html><body></body></html>", { url });
+      Object.defineProperty(global, "window", {
+        value: jsdom.window,
+        writable: true,
+        configurable: true,
+      });
+      Object.defineProperty(global, "document", {
+        value: jsdom.window.document,
+        writable: true,
+        configurable: true,
+      });
+    }
+
+    it("should not fail for co.uk domains", () => {
+      setupDomain("https://app.example.co.uk");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for com.au domains", () => {
+      setupDomain("https://app.example.com.au");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for github.io domains", () => {
+      setupDomain("https://mysite.github.io");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for herokuapp.com domains", () => {
+      setupDomain("https://myapp.herokuapp.com");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should work on simple two-part domains", () => {
+      setupDomain("https://example.com");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should work on localhost", () => {
+      setupDomain("http://localhost:3000");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+  });
+
   describe("cookie persistence", () => {
     it("should set cookie with 1-year expiration", () => {
       // This is implicit in the implementation

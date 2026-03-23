@@ -10,8 +10,46 @@
 import { secureHash } from '../utils/hash';
 
 /**
+ * Known multi-part public suffixes where setting a cookie would be rejected by browsers.
+ * This is not exhaustive but covers the most common cases. When in doubt,
+ * getApexDomain() returns null (no domain attribute), which is safe.
+ */
+const MULTI_PART_TLDS = new Set([
+  // Country-code second-level domains
+  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'net.uk',
+  'com.au', 'net.au', 'org.au', 'edu.au',
+  'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
+  'com.br', 'org.br', 'net.br',
+  'co.nz', 'net.nz', 'org.nz',
+  'co.za', 'org.za', 'web.za',
+  'com.cn', 'net.cn', 'org.cn',
+  'co.in', 'net.in', 'org.in', 'gen.in',
+  'co.kr', 'or.kr', 'ne.kr',
+  'com.mx', 'org.mx', 'net.mx',
+  'com.tw', 'org.tw', 'net.tw',
+  'com.hk', 'org.hk', 'net.hk',
+  'com.sg', 'org.sg', 'net.sg', 'edu.sg',
+  'co.il', 'org.il', 'net.il',
+  'com.ar', 'org.ar', 'net.ar',
+  'com.tr', 'org.tr', 'net.tr',
+  'co.th', 'or.th', 'in.th',
+  'com.my', 'org.my', 'net.my',
+  'com.pk', 'org.pk', 'net.pk',
+  'com.ng', 'org.ng', 'net.ng',
+  'com.ph', 'org.ph', 'net.ph',
+  'com.eg', 'org.eg', 'net.eg',
+  'co.id', 'or.id', 'web.id',
+  // Platform public suffixes (browsers reject cookies on these)
+  'github.io', 'gitlab.io', 'herokuapp.com', 'vercel.app',
+  'netlify.app', 'pages.dev', 'workers.dev', 'fly.dev',
+  'azurewebsites.net', 'cloudfront.net', 'amazonaws.com',
+  'web.app', 'firebaseapp.com',
+]);
+
+/**
  * Extract the apex domain for cookie sharing across subdomains.
- * Returns null for localhost, IP addresses, or single-level domains.
+ * Returns null for localhost, IP addresses, single-level domains,
+ * or when the apex domain cannot be reliably determined.
  */
 function getApexDomain(): string | null {
   if (typeof window === 'undefined') return null;
@@ -19,7 +57,16 @@ function getApexDomain(): string | null {
   if (hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return null;
   const parts = hostname.split('.');
   if (parts.length < 2) return null;
-  return parts.slice(-2).join('.');
+
+  // Check if the last two parts form a known multi-part TLD
+  const lastTwo = parts.slice(-2).join('.');
+  if (MULTI_PART_TLDS.has(lastTwo)) {
+    // Need at least 3 parts to have a registrable domain (e.g., example.co.uk)
+    if (parts.length < 3) return null;
+    return parts.slice(-3).join('.');
+  }
+
+  return lastTwo;
 }
 
 /**
@@ -103,15 +150,8 @@ function deleteCookieDirectly(cookieName: string): void {
   document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
   
   // Try to clear from parent domain if it's a proper multi-level domain
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    const parts = hostname.split('.');
-    
-    // Only try parent domain deletion for proper domains with multiple parts
-    // Skip localhost and single-level domains
-    if (parts.length >= 2 && hostname !== 'localhost') {
-      const domain = parts.slice(-2).join('.');
-      document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
-    }
+  const domain = getApexDomain();
+  if (domain) {
+    document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
   }
 }
