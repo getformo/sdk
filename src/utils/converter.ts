@@ -4,7 +4,16 @@ const toSnake = (str: string) =>
     .replace(/[\s-]+/g, "_")
     .toLowerCase();
 
-// Converts object keys to snake_case, omitting keys in the omitKeys array
+/**
+ * Recursively converts object keys from camelCase to snake_case.
+ *
+ * Only plain objects (those whose constructor is Object or whose prototype is null)
+ * have their keys converted. Non-plain objects such as Date, Uint8Array, RegExp,
+ * and class instances are returned as-is to prevent data corruption.
+ *
+ * @param obj - The value to convert. Primitives and non-plain objects pass through unchanged.
+ * @param omitKeys - Keys to exclude from conversion (kept verbatim).
+ */
 export function toSnakeCase(obj: any, omitKeys: string[] = []) {
   const convert = (data: any): any => {
     if (Array.isArray(data)) {
