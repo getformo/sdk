@@ -29,6 +29,14 @@ class CookieStorage extends StorageBlueprint {
     // host-only cookies on sibling hosts are not visible and cannot be cleared.
     if (domain) {
       document.cookie = `${encodedKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
+    } else {
+      // When writing a host-only cookie (no domain), expire any previously
+      // written apex-domain cookie so it doesn't shadow the new host cookie.
+      // This handles the transition from cookieScope: 'apex' back to 'host'.
+      const apexDomain = getApexDomain();
+      if (apexDomain) {
+        document.cookie = `${encodedKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=.${apexDomain}`;
+      }
     }
 
     let cookie = `${encodedKey}=${encodeURIComponent(value)}`;
