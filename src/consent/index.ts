@@ -10,11 +10,24 @@
 import { secureHash } from '../utils/hash';
 
 /**
- * Known multi-part public suffixes where setting a cookie would be rejected by browsers.
- * This is not exhaustive but covers the most common cases. When in doubt,
- * getApexDomain() returns null (no domain attribute), which is safe.
+ * Known public suffixes where browsers reject cookies.
+ * Organized by number of parts (checked longest-first) so that
+ * 3-part suffixes like s3.amazonaws.com are matched before the
+ * 2-part amazonaws.com would be.
+ *
+ * Not exhaustive — when no match is found the hostname is assumed
+ * to have a single-part TLD, which is correct for .com/.io/.app/etc.
+ * When in doubt, getApexDomain() returns null (no domain attribute),
+ * which is safe.
  */
-const MULTI_PART_TLDS = new Set([
+const PUBLIC_SUFFIXES_3 = new Set([
+  // AWS — subdomains of amazonaws.com are themselves public suffixes
+  's3.amazonaws.com', 'compute.amazonaws.com',
+  'elb.amazonaws.com', 'execute-api.amazonaws.com',
+  's3.amazonaws.com.cn', 'compute.amazonaws.com.cn',
+]);
+
+const PUBLIC_SUFFIXES_2 = new Set([
   // Country-code second-level domains
   'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'net.uk',
   'com.au', 'net.au', 'org.au', 'edu.au',
@@ -42,9 +55,36 @@ const MULTI_PART_TLDS = new Set([
   // Platform public suffixes (browsers reject cookies on these)
   'github.io', 'gitlab.io', 'herokuapp.com', 'vercel.app',
   'netlify.app', 'pages.dev', 'workers.dev', 'fly.dev',
-  'azurewebsites.net', 'cloudfront.net', 'amazonaws.com',
+  'azurewebsites.net', 'cloudfront.net',
   'web.app', 'firebaseapp.com',
 ]);
+
+/**
+ * Determine the number of parts in the public suffix for a given hostname.
+ * Returns 1 for standard TLDs (.com, .io), 2 for known two-part suffixes
+ * (.co.uk, github.io), 3 for known three-part suffixes (s3.amazonaws.com).
+ * Returns -1 if the hostname itself IS a public suffix (no registrable domain).
+ */
+function getPublicSuffixLength(parts: string[]): number {
+  // Check 3-part suffixes first (longest match wins)
+  if (parts.length >= 3) {
+    const last3 = parts.slice(-3).join('.');
+    if (PUBLIC_SUFFIXES_3.has(last3)) {
+      // Hostname is or sits under a 3-part suffix — need 4+ parts for a registrable domain
+      return parts.length < 4 ? -1 : 3;
+    }
+  }
+
+  if (parts.length >= 2) {
+    const last2 = parts.slice(-2).join('.');
+    if (PUBLIC_SUFFIXES_2.has(last2)) {
+      return parts.length < 3 ? -1 : 2;
+    }
+  }
+
+  // Default: single-part TLD (.com, .io, .app, etc.)
+  return parts.length < 2 ? -1 : 1;
+}
 
 /**
  * Extract the apex domain for cookie sharing across subdomains.
@@ -58,15 +98,9 @@ function getApexDomain(): string | null {
   const parts = hostname.split('.');
   if (parts.length < 2) return null;
 
-  // Check if the last two parts form a known multi-part TLD
-  const lastTwo = parts.slice(-2).join('.');
-  if (MULTI_PART_TLDS.has(lastTwo)) {
-    // Need at least 3 parts to have a registrable domain (e.g., example.co.uk)
-    if (parts.length < 3) return null;
-    return parts.slice(-3).join('.');
-  }
-
-  return lastTwo;
+  const suffixLen = getPublicSuffixLength(parts);
+  if (suffixLen === -1) return null; // hostname is itself a public suffix
+  return parts.slice(-(suffixLen + 1)).join('.');
 }
 
 /**
