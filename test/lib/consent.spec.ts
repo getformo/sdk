@@ -6,6 +6,7 @@ import {
   getConsentFlag,
   removeConsentFlag,
 } from "../../src/consent";
+import { _resetApexDomainCache } from "../../src/utils/domain";
 
 describe("Consent Management", () => {
   let jsdom: JSDOM;
@@ -42,6 +43,7 @@ describe("Consent Management", () => {
     if (jsdom) {
       jsdom.window.close();
     }
+    _resetApexDomainCache();
   });
 
   describe("setConsentFlag", () => {

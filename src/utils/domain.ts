@@ -1,121 +1,76 @@
 /**
  * Domain utilities for cross-subdomain cookie sharing.
  *
- * Known public suffixes where browsers reject cookies.
- * Organized by number of parts (checked longest-first) so that
- * 3-part suffixes like s3.amazonaws.com are matched before the
- * 2-part amazonaws.com would be.
- *
- * Not exhaustive — when no match is found the hostname is assumed
- * to have a single-part TLD, which is correct for .com/.io/.app/etc.
- * When in doubt, getApexDomain() returns null (no domain attribute),
- * which is safe.
+ * Uses a cookie-probe approach: tries setting a test cookie on progressively
+ * shorter domain candidates until the browser accepts one. This is
+ * self-maintaining — no hardcoded public suffix lists to keep up to date.
+ * The browser itself is the authority on which domains accept cookies.
  */
-const PUBLIC_SUFFIXES_4 = new Set([
-  // AWS China — 4-part public suffixes
-  's3.amazonaws.com.cn', 'compute.amazonaws.com.cn',
-]);
 
-const PUBLIC_SUFFIXES_3 = new Set([
-  // AWS — subdomains of amazonaws.com are themselves public suffixes
-  's3.amazonaws.com', 'compute.amazonaws.com',
-  'elb.amazonaws.com', 'execute-api.amazonaws.com',
-]);
+const TEST_COOKIE_NAME = '__formo_domain_probe';
 
-const PUBLIC_SUFFIXES_2 = new Set([
-  // Country-code second-level domains
-  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'net.uk',
-  'com.au', 'net.au', 'org.au', 'edu.au',
-  'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
-  'com.br', 'org.br', 'net.br',
-  'co.nz', 'net.nz', 'org.nz',
-  'co.za', 'org.za', 'web.za',
-  'com.cn', 'net.cn', 'org.cn',
-  'co.in', 'net.in', 'org.in', 'gen.in',
-  'co.kr', 'or.kr', 'ne.kr',
-  'com.mx', 'org.mx', 'net.mx',
-  'com.tw', 'org.tw', 'net.tw',
-  'com.hk', 'org.hk', 'net.hk',
-  'com.sg', 'org.sg', 'net.sg', 'edu.sg',
-  'co.il', 'org.il', 'net.il',
-  'com.ar', 'org.ar', 'net.ar',
-  'com.tr', 'org.tr', 'net.tr',
-  'co.th', 'or.th', 'in.th',
-  'com.my', 'org.my', 'net.my',
-  'com.pk', 'org.pk', 'net.pk',
-  'com.ng', 'org.ng', 'net.ng',
-  'com.ph', 'org.ph', 'net.ph',
-  'com.eg', 'org.eg', 'net.eg',
-  'co.id', 'or.id', 'web.id',
-  // Platform public suffixes (browsers reject cookies on these)
-  'github.io', 'gitlab.io', 'herokuapp.com', 'vercel.app',
-  'netlify.app', 'pages.dev', 'workers.dev', 'fly.dev',
-  'azurewebsites.net', 'cloudfront.net',
-  'web.app', 'firebaseapp.com',
-]);
+/** Cached result so we only probe once per page load. */
+let cachedApexDomain: string | null | undefined;
 
 /**
- * Determine the number of parts in the public suffix for a given hostname.
- * Returns 1 for standard TLDs (.com, .io), 2 for known two-part suffixes
- * (.co.uk, github.io), 3 for known three-part suffixes (s3.amazonaws.com),
- * 4 for known four-part suffixes (s3.amazonaws.com.cn).
- * Returns -1 if the hostname itself IS a public suffix (no registrable domain).
+ * Try to set a test cookie on the given domain. Returns true if the browser
+ * accepted it (i.e. the cookie is readable back).
  */
-function getPublicSuffixLength(parts: string[]): number {
-  // Check longest suffixes first (longest match wins)
-  if (parts.length >= 4) {
-    const last4 = parts.slice(-4).join('.');
-    if (PUBLIC_SUFFIXES_4.has(last4)) {
-      return parts.length < 5 ? -1 : 4;
-    }
-  }
-
-  if (parts.length >= 3) {
-    const last3 = parts.slice(-3).join('.');
-    if (PUBLIC_SUFFIXES_3.has(last3)) {
-      return parts.length < 4 ? -1 : 3;
-    }
-  }
-
-  if (parts.length >= 2) {
-    const last2 = parts.slice(-2).join('.');
-    if (PUBLIC_SUFFIXES_2.has(last2)) {
-      return parts.length < 3 ? -1 : 2;
-    }
-  }
-
-  // If the second-to-last label looks like a common SLD prefix (com, co, org,
-  // etc.) but we didn't match it above, it's likely an unrecognized multi-part
-  // public suffix (e.g. .com.ua, .co.ke). Return null to fall back to safe
-  // host-only cookies rather than risk setting domain=.com.ua.
-  if (parts.length >= 3) {
-    const COMMON_SLD_PREFIXES = new Set([
-      'com', 'co', 'net', 'org', 'gov', 'edu', 'ac', 'or', 'ne', 'go',
-      'gen', 'web', 'in', 'me',
-    ]);
-    const secondToLast = parts[parts.length - 2];
-    if (COMMON_SLD_PREFIXES.has(secondToLast)) {
-      return -1;
-    }
-  }
-
-  // Default: single-part TLD (.com, .io, .app, etc.)
-  return parts.length < 2 ? -1 : 1;
+function canSetCookieOnDomain(domain: string): boolean {
+  const cookieVal = 'probe';
+  document.cookie = `${TEST_COOKIE_NAME}=${cookieVal}; domain=.${domain}; path=/; max-age=10`;
+  const accepted = document.cookie.indexOf(`${TEST_COOKIE_NAME}=${cookieVal}`) !== -1;
+  // Clean up regardless of result
+  document.cookie = `${TEST_COOKIE_NAME}=; domain=.${domain}; path=/; max-age=0`;
+  return accepted;
 }
 
 /**
- * Extract the apex domain for cookie sharing across subdomains.
- * Returns null for localhost, IP addresses, single-level domains,
- * or when the apex domain cannot be reliably determined.
+ * Extract the apex (registrable) domain for cookie sharing across subdomains.
+ *
+ * Walks up the hostname labels from shortest candidate to longest, probing
+ * with a test cookie. The shortest domain the browser accepts is the apex.
+ *
+ * Returns null for localhost, IP addresses, single-label hosts, SSR, or
+ * when no candidate domain accepts cookies (e.g. public suffix hosts like
+ * vercel.app or github.io).
+ *
+ * Results are cached for the lifetime of the page.
  */
 export function getApexDomain(): string | null {
   if (typeof window === 'undefined') return null;
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return null;
-  const parts = hostname.split('.');
-  if (parts.length < 2) return null;
+  if (cachedApexDomain !== undefined) return cachedApexDomain;
 
-  const suffixLen = getPublicSuffixLength(parts);
-  if (suffixLen === -1) return null; // hostname is itself a public suffix
-  return parts.slice(-(suffixLen + 1)).join('.');
+  const hostname = window.location.hostname;
+  if (hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+    cachedApexDomain = null;
+    return null;
+  }
+
+  const parts = hostname.split('.');
+  if (parts.length < 2) {
+    cachedApexDomain = null;
+    return null;
+  }
+
+  // Walk from the shortest candidate (last 2 labels) to the full hostname.
+  // The shortest domain the browser accepts is the apex domain.
+  for (let i = 2; i <= parts.length; i++) {
+    const candidate = parts.slice(-i).join('.');
+    if (canSetCookieOnDomain(candidate)) {
+      cachedApexDomain = candidate;
+      return candidate;
+    }
+  }
+
+  cachedApexDomain = null;
+  return null;
+}
+
+/**
+ * Reset the cached apex domain. Exposed for testing only.
+ * @internal
+ */
+export function _resetApexDomainCache(): void {
+  cachedApexDomain = undefined;
 }
