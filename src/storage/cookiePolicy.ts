@@ -2,8 +2,8 @@
  * Cookie domain policy — centralizes the decision of whether identity
  * cookies should be host-scoped or apex-scoped.
  *
- * - false (default): no domain attribute → cookie scoped to current host
- * - true: domain set to .apexDomain → shared across subdomains
+ * - true (default): domain set to .apexDomain → shared across subdomains
+ * - false: no domain attribute → cookie scoped to current host
  */
 import { getApexDomain } from "../utils/domain";
 
@@ -15,7 +15,7 @@ import { getApexDomain } from "../utils/domain";
  *
  * @param crossSubdomain Whether cookies should be shared across subdomains.
  */
-export function getIdentityCookieDomain(crossSubdomain = false): string {
+export function getIdentityCookieDomain(crossSubdomain = true): string {
   if (!crossSubdomain) return "";
   const domain = getApexDomain();
   return domain ? `.${domain}` : "";

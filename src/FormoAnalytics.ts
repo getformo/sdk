@@ -165,7 +165,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Check if Wagmi mode is enabled
     this.isWagmiMode = !!options.wagmi;
-    this.crossSubdomainCookies = options.crossSubdomainCookies ?? false;
+    this.crossSubdomainCookies = options.crossSubdomainCookies ?? true;
 
     this.session = new FormoAnalyticsSession();
     this.currentUserId =

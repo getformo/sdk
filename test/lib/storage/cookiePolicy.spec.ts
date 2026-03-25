@@ -16,9 +16,9 @@ describe("cookiePolicy", () => {
   });
 
   describe("getIdentityCookieDomain", () => {
-    it("should default to host-only and return empty string", () => {
+    it("should default to cross-subdomain and return apex domain", () => {
       getApexDomainStub.returns("example.com");
-      expect(getIdentityCookieDomain()).to.equal("");
+      expect(getIdentityCookieDomain()).to.equal(".example.com");
     });
 
     it("should return empty string when crossSubdomainCookies is false", () => {
