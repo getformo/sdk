@@ -211,11 +211,11 @@ export interface Options {
    * apex/root domain (e.g. `.example.com`), enabling cross-subdomain identity
    * sharing between app.example.com and www.example.com.
    *
-   * When `false` (default), cookies are scoped to the current host only.
+   * When `false`, cookies are scoped to the current host only.
    *
    * Session cookies (wallet detection, current URL) always remain host-scoped.
    * Consent cookies are always apex-scoped independently for compliance.
-   * @default false
+   * @default true
    */
   crossSubdomainCookies?: boolean;
   /**
