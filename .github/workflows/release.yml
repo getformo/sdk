@@ -165,8 +165,8 @@ jobs:
           EOF
           fi
           
-          # Add Other changes if exists and no features/fixes
-          if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -n "$OTHER" ]; then
+          # Add Other changes if exists
+          if [ -n "$OTHER" ]; then
             cat >> release_notes.md <<EOF
           
           ## Changes
