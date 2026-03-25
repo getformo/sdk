@@ -55,16 +55,13 @@ export const getValidAddress = (address: Address | null | undefined): string | n
  * @returns true if the address is blocked, false otherwise
  */
 export const isBlockedAddress = (address: Address | null | undefined): boolean => {
-  if (!address) return false;
-  
-  const validAddress = getValidAddress(address);
-  if (!validAddress) return false;
-  
-  // Normalize to checksum format for comparison
-  const checksumAddress = toChecksumAddress(validAddress);
-  
-  return BLOCKED_ADDRESSES.some(blockedAddr => 
-    toChecksumAddress(blockedAddr) === checksumAddress
+  if (!address || typeof address !== 'string') return false;
+
+  const normalized = address.trim().toLowerCase();
+  if (!normalized || !normalized.startsWith('0x') || normalized.length !== 42) return false;
+
+  return BLOCKED_ADDRESSES.some(blockedAddr =>
+    blockedAddr.toLowerCase() === normalized
   );
 };
 

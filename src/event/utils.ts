@@ -1,33 +1,27 @@
 import { AnonymousID } from "../types";
 import { generateNativeUUID } from "../utils";
 import { cookie } from "../storage";
+import { getIdentityCookieDomain } from "../storage/cookiePolicy";
 
-const generateAnonymousId = (key: string): AnonymousID => {
+const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): AnonymousID => {
   const storedAnonymousId = cookie().get(key);
-  if (storedAnonymousId && typeof storedAnonymousId === "string")
-    return storedAnonymousId as AnonymousID;
-  const newAnonymousId = generateNativeUUID();
-  cookie().set(key, newAnonymousId, {
-    maxAge: Date.now() + 1000 * 60 * 60 * 24 * 365, // 1 year
-    domain: getCookieDomain(),
+  const anonymousId = (
+    storedAnonymousId && typeof storedAnonymousId === "string"
+      ? storedAnonymousId
+      : generateNativeUUID()
+  ) as AnonymousID;
+  const domain = getIdentityCookieDomain(crossSubdomainCookies);
+  // Re-set the cookie with the configured scope. When crossSubdomainCookies
+  // is true, this migrates legacy host-only cookies on the current host to the apex
+  // domain. Note: host-only cookies on other hosts (e.g. a cookie set on
+  // example.com is not visible from app.example.com) cannot be migrated
+  // until the user revisits that host.
+  cookie().set(key, anonymousId, {
+    expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toUTCString(), // 1 year
     path: "/",
+    ...(domain ? { domain } : {}),
   });
-  return newAnonymousId;
+  return anonymousId;
 };
 
-function getCookieDomain(hostname: string = window.location.hostname): string {
-  // Special cases
-  if (
-    hostname.includes("localhost") ||
-    /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)
-  ) {
-    // Localhost or IP address
-    return "";
-  }
-
-  const parts = hostname.split(".");
-  if (parts.includes("www")) parts.splice(parts.indexOf("www"), 1);
-  return `.${parts.join(".")}`;
-}
-
-export { generateAnonymousId, getCookieDomain };
+export { generateAnonymousId };

@@ -61,6 +61,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
     const serializableOptions = {
       tracking: options.tracking,
       autocapture: options.autocapture,
+      crossSubdomainCookies: options.crossSubdomainCookies,
       apiHost: options.apiHost,
       flushAt: options.flushAt,
       flushInterval: options.flushInterval,

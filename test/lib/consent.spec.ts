@@ -6,6 +6,7 @@ import {
   getConsentFlag,
   removeConsentFlag,
 } from "../../src/consent";
+import { _resetApexDomainCache } from "../../src/utils/domain";
 
 describe("Consent Management", () => {
   let jsdom: JSDOM;
@@ -42,6 +43,7 @@ describe("Consent Management", () => {
     if (jsdom) {
       jsdom.window.close();
     }
+    _resetApexDomainCache();
   });
 
   describe("setConsentFlag", () => {
@@ -162,6 +164,79 @@ describe("Consent Management", () => {
       expect(getConsentFlag("project-a", "shared_flag")).to.equal("valueA");
       expect(getConsentFlag("project-b", "shared_flag")).to.equal("valueB");
       expect(getConsentFlag("project-c", "shared_flag")).to.equal("valueC");
+    });
+  });
+
+  describe("multi-part TLD handling", () => {
+    function setupDomain(url: string) {
+      // Close existing jsdom before creating a new one
+      if (jsdom) jsdom.window.close();
+      jsdom = new JSDOM("<!DOCTYPE html><html><body></body></html>", { url });
+      Object.defineProperty(global, "window", {
+        value: jsdom.window,
+        writable: true,
+        configurable: true,
+      });
+      Object.defineProperty(global, "document", {
+        value: jsdom.window.document,
+        writable: true,
+        configurable: true,
+      });
+    }
+
+    it("should not fail for co.uk domains", () => {
+      setupDomain("https://app.example.co.uk");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for com.au domains", () => {
+      setupDomain("https://app.example.com.au");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for github.io domains", () => {
+      setupDomain("https://mysite.github.io");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for herokuapp.com domains", () => {
+      setupDomain("https://myapp.herokuapp.com");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should work on simple two-part domains", () => {
+      setupDomain("https://example.com");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should work on localhost", () => {
+      setupDomain("http://localhost:3000");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for 3-part public suffixes like s3.amazonaws.com", () => {
+      setupDomain("https://mybucket.s3.amazonaws.com");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail for 4-part public suffixes like s3.amazonaws.com.cn", () => {
+      setupDomain("https://mybucket.s3.amazonaws.com.cn");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
+    });
+
+    it("should not fail when hostname is a bare public suffix", () => {
+      // e.g., someone visits github.io directly — no registrable domain
+      setupDomain("https://github.io");
+      setConsentFlag("project-123", "opt_out", "true");
+      expect(getConsentFlag("project-123", "opt_out")).to.equal("true");
     });
   });
 

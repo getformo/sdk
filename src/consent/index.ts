@@ -8,6 +8,7 @@
  */
 
 import { secureHash } from '../utils/hash';
+import { getApexDomain } from '../utils/domain';
 
 /**
  * Generate a project-specific cookie key to avoid conflicts between different Formo projects
@@ -38,7 +39,14 @@ export function setConsentFlag(projectId: string, key: string, value: string): v
     const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString(); // 1 year (GDPR compliant)
     const isSecure = window?.location?.protocol === 'https:';
     // Enhanced privacy settings: Secure (HTTPS), SameSite=Strict for consent cookies
-    document.cookie = `${projectSpecificKey}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Strict${isSecure ? '; Secure' : ''}`;
+    const domain = getApexDomain();
+    const domainAttr = domain ? `; domain=.${domain}` : '';
+    // Expire any legacy host-only cookie (pre-domain-attribute versions) so it
+    // doesn't shadow the new domain-wide cookie in document.cookie reads.
+    if (domain) {
+      document.cookie = `${projectSpecificKey}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    }
+    document.cookie = `${projectSpecificKey}=${encodeURIComponent(value)}; expires=${expires}; path=/${domainAttr}; SameSite=Strict${isSecure ? '; Secure' : ''}`;
   }
 }
 
@@ -88,15 +96,8 @@ function deleteCookieDirectly(cookieName: string): void {
   document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
   
   // Try to clear from parent domain if it's a proper multi-level domain
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    const parts = hostname.split('.');
-    
-    // Only try parent domain deletion for proper domains with multiple parts
-    // Skip localhost and single-level domains
-    if (parts.length >= 2 && hostname !== 'localhost') {
-      const domain = parts.slice(-2).join('.');
-      document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
-    }
+  const domain = getApexDomain();
+  if (domain) {
+    document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain};`;
   }
 }

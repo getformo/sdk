@@ -9,6 +9,7 @@ import {
   TEventType,
 } from "./constants";
 import { cookie, initStorageManager } from "./storage";
+import { getIdentityCookieDomain } from "./storage/cookiePolicy";
 import { EventManager, IEventManager } from "./event";
 import { EventQueue } from "./queue";
 import { logger, Logger } from "./logger";
@@ -134,6 +135,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private isWagmiMode: boolean = false;
 
+  /** Instance-level flag so multiple SDK instances don't interfere. */
+  private crossSubdomainCookies: boolean;
+
   config: Config;
   currentChainId?: ChainID;
   currentAddress?: Address;
@@ -161,6 +165,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Check if Wagmi mode is enabled
     this.isWagmiMode = !!options.wagmi;
+    this.crossSubdomainCookies = options.crossSubdomainCookies ?? false;
 
     this.session = new FormoAnalyticsSession();
     this.currentUserId =
@@ -716,7 +721,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
       if (userId) {
         this.currentUserId = userId;
-        cookie().set(SESSION_USER_ID_KEY, userId);
+        const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
+        cookie().set(SESSION_USER_ID_KEY, userId, {
+          path: "/",
+          ...(domain ? { domain } : {}),
+        });
       }
 
       // Check for duplicate identify events in this session

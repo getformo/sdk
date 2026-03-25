@@ -107,7 +107,7 @@ export class EventQueue implements IEventQueue {
 
     this.onPageLeave(async (isAccessible: boolean) => {
       if (isAccessible === false) {
-        await this.flush();
+        await this.flush(undefined, true);
       }
     });
   }
@@ -124,7 +124,7 @@ export class EventQueue implements IEventQueue {
 
     const message_id = await this.generateMessageId(event);
     // check if the message already exists
-    if (await this.isDuplicate(message_id)) {
+    if (this.isDuplicate(message_id)) {
       logger.warn(
         `Event already enqueued, try again after ${millisecondsToSecond(
           this.flushIntervalMs
@@ -163,7 +163,7 @@ export class EventQueue implements IEventQueue {
     }
   }
 
-  async flush(callback?: (...args: any) => void) {
+  async flush(callback?: (...args: any) => void, drainAll = false) {
     callback = callback || noop;
 
     if (this.timer) {
@@ -177,11 +177,22 @@ export class EventQueue implements IEventQueue {
     }
 
     if (this.pendingFlush) {
-      await this.pendingFlush;
+      // During page leave (drainAll), skip awaiting the pending flush.
+      // Browser lifecycle events (pagehide/beforeunload) do not wait for
+      // async operations — if we yield here the page may be terminated
+      // before the keepalive fetch for the remaining items is dispatched.
+      if (!drainAll) {
+        await this.pendingFlush;
+      }
     }
 
-    const items = this.queue.splice(0, this.flushAt);
-    this.payloadHashes.clear();
+    const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
+
+    // Only remove hashes for flushed items so duplicate detection remains
+    // active for events still in the queue.
+    for (const item of items) {
+      this.payloadHashes.delete(item.message.message_id);
+    }
 
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
@@ -330,7 +341,7 @@ export class EventQueue implements IEventQueue {
     return false;
   }
 
-  private async isDuplicate(eventId: string) {
+  private isDuplicate(eventId: string) {
     // check if exists a message with identical payload within 1 minute
     if (this.payloadHashes.has(eventId)) return true;
 
@@ -382,13 +393,13 @@ export class EventQueue implements IEventQueue {
 
     // Catches the page being hidden, including scenarios like closing the tab.
     document.addEventListener("pagehide", () => {
-      isAccessible = document.visibilityState === "hidden";
+      isAccessible = document.visibilityState !== "hidden";
       handleOnLeave();
     });
 
     // Catches visibility changes, such as switching tabs or minimizing the browser.
     document.addEventListener("visibilitychange", () => {
-      isAccessible = true;
+      isAccessible = document.visibilityState !== "hidden";
       if (document.visibilityState === "hidden") {
         handleOnLeave();
       } else {

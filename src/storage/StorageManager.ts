@@ -20,13 +20,21 @@ export class StorageManager {
   getStorage(type: StorageType): IStorage {
     if (!this.storages.has(type)) {
       let storage = this.createStorage(type);
+      let currentType = type;
       // If storage is not available, try next
       while (!storage.isAvailable()) {
-        const index = TYPES.indexOf(type);
+        const index = TYPES.indexOf(currentType);
+        if (index === -1 || index + 1 >= TYPES.length) {
+          // No more fallbacks, use memory storage as last resort
+          storage = this.createStorage("memoryStorage");
+          break;
+        }
+        const prevType = currentType;
+        currentType = TYPES[index + 1];
         logger.warn(
-          `Storage ${type} is not available, trying ${TYPES[index + 1]}`
+          `Storage ${prevType} is not available, trying ${currentType}`
         );
-        storage = this.createStorage(TYPES[index + 1]);
+        storage = this.createStorage(currentType);
       }
 
       // Add to cache
