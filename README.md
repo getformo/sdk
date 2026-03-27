@@ -23,8 +23,7 @@ You can install Formo on:
 - [Wagmi](https://docs.formo.so/install#wagmi) (recommended)
 - [HTML Snippet](https://docs.formo.so/install#html-snippet)
 - [React](https://docs.formo.so/install#react)
-- [Next.js app router](https://docs.formo.so/install#next-js-app-router)
-- [Next.js pages router](https://docs.formo.so/install#next-js-pages-router)
+- [Next.js](https://docs.formo.so/install#next-js)
 
 ## Configuration
 
