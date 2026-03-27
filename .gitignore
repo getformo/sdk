@@ -33,6 +33,10 @@ build/Release
 # Dependency directories
 node_modules/
 
+# Non-pnpm lockfiles (this project uses pnpm)
+package-lock.json
+yarn.lock
+
 #Build output
 dist
 
