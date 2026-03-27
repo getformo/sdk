@@ -22,7 +22,7 @@
       "require": "./dist/cjs/src/index.js"
     }
   },
-  "sideEffects": false,
+  "sideEffects": ["./dist/esm/src/index.js", "./dist/cjs/src/index.js"],
   "private": false,
   "publishConfig": {
     "access": "public",
@@ -120,5 +120,8 @@
     "@solana/web3.js": {
       "optional": true
     }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }
