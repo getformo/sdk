@@ -115,7 +115,7 @@ class EventFactory implements IEventFactory {
           result[sParam as keyof UTMParameters] = value.trim();
         }
       });
-    } catch (error) {}
+    } catch {}
     return result;
   };
 

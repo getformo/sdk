@@ -123,7 +123,6 @@ function tryLoadViem(): typeof viemModule {
 
   try {
     // Use require to load viem synchronously
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const viem = require("viem");
     if (viem?.encodeFunctionData) {
       viemModule = {
