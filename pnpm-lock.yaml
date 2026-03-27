@@ -6,6 +6,7 @@ settings:
 
 overrides:
   picomatch@2: '>=2.3.2'
+  picomatch@4: '>=4.0.4'
   diff: '>=7.0.0'
 
 importers:
@@ -41,10 +42,10 @@ importers:
         specifier: ^10.0.10
         version: 10.0.10
       '@types/node':
-        specifier: ^22.0.0
+        specifier: ^22.19.0
         version: 22.19.0
       '@types/react':
-        specifier: ^18.0.25
+        specifier: ^18.3.26
         version: 18.3.26
       '@types/sinon':
         specifier: ^17.0.4
@@ -53,10 +54,10 @@ importers:
         specifier: ^3.2.12
         version: 3.2.12
       '@typescript-eslint/eslint-plugin':
-        specifier: ^8.0.0
+        specifier: ^8.57.2
         version: 8.57.2(@typescript-eslint/parser@8.57.2(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)
       '@typescript-eslint/parser':
-        specifier: ^8.0.0
+        specifier: ^8.57.2
         version: 8.57.2(eslint@9.39.4)(typescript@5.9.3)
       c8:
         specifier: ^11.0.0
@@ -65,7 +66,7 @@ importers:
         specifier: ^4.5.0
         version: 4.5.0
       eslint:
-        specifier: ^9.0.0
+        specifier: ^9.39.4
         version: 9.39.4
       global-jsdom:
         specifier: ^8.8.0
@@ -80,7 +81,7 @@ importers:
         specifier: ^3.1.14
         version: 3.1.14
       prettier:
-        specifier: ^2.6.1
+        specifier: ^2.8.8
         version: 2.8.8
       react:
         specifier: ^18.3.1
@@ -98,16 +99,16 @@ importers:
         specifier: ^12.0.1
         version: 12.0.1
       ts-loader:
-        specifier: ^9.3.1
+        specifier: ^9.5.4
         version: 9.5.4(typescript@5.9.3)(webpack@5.104.1(webpack-cli@4.10.0))
       ts-node:
-        specifier: ^10.8.2
+        specifier: ^10.9.2
         version: 10.9.2(@types/node@22.19.0)(typescript@5.9.3)
       typescript:
-        specifier: ^5.7.3
+        specifier: ^5.9.3
         version: 5.9.3
       typescript-eslint:
-        specifier: ^8.0.0
+        specifier: ^8.57.2
         version: 8.57.2(eslint@9.39.4)(typescript@5.9.3)
       webpack:
         specifier: ^5.104.1
@@ -1087,7 +1088,7 @@ packages:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
     peerDependencies:
-      picomatch: ^3 || ^4
+      picomatch: '>=4.0.4'
     peerDependenciesMeta:
       picomatch:
         optional: true
@@ -1564,8 +1565,8 @@ packages:
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
-  picomatch@4.0.3:
-    resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
+  picomatch@4.0.4:
+    resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
 
   pkg-dir@4.2.0:
@@ -2616,7 +2617,7 @@ snapshots:
   anymatch@3.1.3:
     dependencies:
       normalize-path: 3.0.0
-      picomatch: 4.0.3
+      picomatch: 4.0.4
 
   arg@4.1.3: {}
 
@@ -3006,9 +3007,9 @@ snapshots:
 
   fastest-levenshtein@1.0.16: {}
 
-  fdir@6.5.0(picomatch@4.0.3):
+  fdir@6.5.0(picomatch@4.0.4):
     optionalDependencies:
-      picomatch: 4.0.3
+      picomatch: 4.0.4
 
   file-entry-cache@8.0.0:
     dependencies:
@@ -3340,7 +3341,7 @@ snapshots:
   micromatch@4.0.8:
     dependencies:
       braces: 3.0.3
-      picomatch: 4.0.3
+      picomatch: 4.0.4
 
   mime-db@1.52.0: {}
 
@@ -3487,7 +3488,7 @@ snapshots:
 
   picocolors@1.1.1: {}
 
-  picomatch@4.0.3: {}
+  picomatch@4.0.4: {}
 
   pkg-dir@4.2.0:
     dependencies:
@@ -3531,7 +3532,7 @@ snapshots:
 
   readdirp@3.6.0:
     dependencies:
-      picomatch: 4.0.3
+      picomatch: 4.0.4
 
   readdirp@4.1.2: {}
 
@@ -3697,8 +3698,8 @@ snapshots:
 
   tinyglobby@0.2.15:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.3)
-      picomatch: 4.0.3
+      fdir: 6.5.0(picomatch@4.0.4)
+      picomatch: 4.0.4
 
   to-regex-range@5.0.1:
     dependencies:
