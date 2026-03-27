@@ -22,7 +22,10 @@
       "require": "./dist/cjs/src/index.js"
     }
   },
-  "sideEffects": ["./dist/esm/src/index.js", "./dist/cjs/src/index.js"],
+  "sideEffects": [
+    "./dist/esm/src/index.js",
+    "./dist/cjs/src/index.js"
+  ],
   "private": false,
   "publishConfig": {
     "access": "public",
@@ -38,12 +41,13 @@
     "mipd": "0.0.7"
   },
   "devDependencies": {
-    "@size-limit/esbuild": "^11.2.0",
-    "@size-limit/file": "^11.2.0",
-    "@testing-library/react": "^13.4.0",
+    "@size-limit/esbuild": "^12.0.1",
+    "@size-limit/file": "^12.0.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
     "@types/chai": "^4.3.20",
     "@types/jsdom": "^21.1.7",
-    "@types/mocha": "^9.1.1",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.0.0",
     "@types/react": "^18.0.25",
     "@types/sinon": "^17.0.4",
@@ -55,14 +59,14 @@
     "eslint": "^9.0.0",
     "global-jsdom": "^8.8.0",
     "jsdom": "^21.1.2",
-    "mocha": "^10.0.0",
+    "mocha": "^11.7.5",
     "nodemon": "^3.1.14",
     "prettier": "^2.6.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sinon": "^19.0.5",
     "sinon-chai": "^3.7.0",
-    "size-limit": "^11.2.0",
+    "size-limit": "^12.0.1",
     "ts-loader": "^9.3.1",
     "ts-node": "^10.8.2",
     "typescript": "^5.7.3",
@@ -122,6 +126,12 @@
     }
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "picomatch@2": ">=2.3.2",
+      "diff": ">=7.0.0"
+    }
   }
 }
