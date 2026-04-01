@@ -181,6 +181,33 @@ describe("SolanaStoreHandler", () => {
       handler.cleanup();
     });
 
+    it("should emit disconnect event when wallet transitions from connected to error", () => {
+      const store = createMockStore({
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // Transition to error state
+      store._setState({
+        wallet: { status: "error", connectorId: "phantom", error: new Error("Connection lost") },
+      });
+
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]!.address).to.equal(MOCK_ADDRESS);
+
+      handler.cleanup();
+    });
+
     it("should detect already-connected wallet on initialization", () => {
       const store = createMockStore({
         wallet: {

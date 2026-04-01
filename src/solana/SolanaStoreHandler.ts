@@ -173,8 +173,11 @@ export class SolanaStoreHandler {
     wallet: SolanaWalletStatus,
     prevWallet: SolanaWalletStatus
   ): void {
-    // connected → disconnected
-    if (wallet.status === "disconnected" && prevWallet.status === "connected") {
+    // connected → disconnected or connected → error
+    if (
+      prevWallet.status === "connected" &&
+      (wallet.status === "disconnected" || wallet.status === "error")
+    ) {
       this.handleDisconnect();
     }
 
