@@ -86,6 +86,62 @@ describe("StorageManager", () => {
     });
   });
 
+  describe("null or unavailable storage fallback", () => {
+    it("should fall back when localStorage is null", () => {
+      Object.defineProperty(global, "localStorage", {
+        value: null,
+        writable: true,
+        configurable: true,
+      });
+      const sm = new StorageManager("test-write-key");
+      const storage = sm.getStorage("localStorage");
+      expect(storage).to.not.be.null;
+      expect(storage.isAvailable()).to.be.true;
+      storage.set("key", "value");
+      expect(storage.get("key")).to.equal("value");
+    });
+
+    it("should fall back when sessionStorage is null", () => {
+      Object.defineProperty(global, "sessionStorage", {
+        value: null,
+        writable: true,
+        configurable: true,
+      });
+      const sm = new StorageManager("test-write-key");
+      const storage = sm.getStorage("sessionStorage");
+      expect(storage).to.not.be.null;
+      expect(storage.isAvailable()).to.be.true;
+      storage.set("key", "value");
+      expect(storage.get("key")).to.equal("value");
+    });
+
+    it("should fall back when accessing localStorage throws", () => {
+      Object.defineProperty(global, "localStorage", {
+        get() {
+          throw new DOMException("access denied", "SecurityError");
+        },
+        configurable: true,
+      });
+      const sm = new StorageManager("test-write-key");
+      const storage = sm.getStorage("localStorage");
+      expect(storage).to.not.be.null;
+      expect(storage.isAvailable()).to.be.true;
+    });
+
+    it("should fall back when accessing sessionStorage throws", () => {
+      Object.defineProperty(global, "sessionStorage", {
+        get() {
+          throw new DOMException("access denied", "SecurityError");
+        },
+        configurable: true,
+      });
+      const sm = new StorageManager("test-write-key");
+      const storage = sm.getStorage("sessionStorage");
+      expect(storage).to.not.be.null;
+      expect(storage.isAvailable()).to.be.true;
+    });
+  });
+
   describe("storage operations", () => {
     it("should set and get values from localStorage", () => {
       const storage = storageManager.getStorage("localStorage");
