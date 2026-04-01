@@ -4,6 +4,9 @@
  * Manages the lifecycle of the SolanaAdapter, handling lazy initialization
  * and pending configuration. This keeps Solana-specific lifecycle logic out of
  * the main FormoAnalytics class.
+ *
+ * Provides explicit tracking methods (trackTransaction, trackSignature, etc.)
+ * that do not wrap or proxy wallet methods.
  */
 
 import { FormoAnalytics } from "../FormoAnalytics";
@@ -81,8 +84,84 @@ export class SolanaManager {
     this.handler?.syncWalletState();
   }
 
+  /**
+   * Track a transaction after it has been sent.
+   * Emits BROADCASTED event and starts polling for confirmation.
+   *
+   * @param signature - The transaction signature returned by sendTransaction
+   * @param connection - Optional connection override for polling
+   */
+  trackTransaction(signature: string, connection?: SolanaConnection): void {
+    this.ensureHandler();
+    this.handler!.trackTransaction(signature, connection);
+  }
+
+  /**
+   * Track a transaction lifecycle event explicitly.
+   *
+   * @param status - The transaction status
+   * @param options - Optional transaction details
+   */
+  trackTransactionStatus(
+    status: "started" | "rejected" | "broadcasted" | "confirmed" | "reverted",
+    options?: { transactionHash?: string }
+  ): void {
+    this.ensureHandler();
+    this.handler!.trackTransactionStatus(status, options);
+  }
+
+  /**
+   * Track a signature (signMessage / signTransaction) event.
+   *
+   * @param status - The signature status
+   * @param options - Details about the signature request
+   */
+  trackSignature(
+    status: "requested" | "confirmed" | "rejected",
+    options?: { message?: string; signatureHash?: string }
+  ): void {
+    this.ensureHandler();
+    this.handler!.trackSignature(status, options);
+  }
+
+  /**
+   * Explicitly track a wallet connection.
+   * Use when not using wallet-adapter (e.g., @solana/kit or wallet-standard).
+   *
+   * @param address - The connected wallet address (Base58)
+   * @param options - Optional wallet metadata
+   */
+  trackConnect(address: string, options?: { walletName?: string }): void {
+    this.ensureHandler();
+    this.handler!.trackConnect(address, options);
+  }
+
+  /**
+   * Explicitly track a wallet disconnection.
+   *
+   * @param address - Optional address override
+   */
+  trackDisconnect(address?: string): void {
+    this.ensureHandler();
+    this.handler!.trackDisconnect(address);
+  }
+
   cleanup(): void {
     this.handler?.cleanup();
     this.handler = undefined;
+  }
+
+  /**
+   * Ensure handler exists (lazy-init without a wallet for explicit tracking).
+   */
+  private ensureHandler(): void {
+    if (!this.handler) {
+      this.handler = new SolanaAdapter(this.formo, {
+        connection: this.pendingConnection,
+        cluster: this.pendingCluster,
+      });
+      this.pendingConnection = undefined;
+      this.pendingCluster = undefined;
+    }
   }
 }

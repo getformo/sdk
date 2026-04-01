@@ -1,10 +1,15 @@
 /**
  * Solana-specific type definitions for wallet event tracking
  *
- * These types provide TypeScript interfaces for Solana Wallet Adapter integration,
- * allowing the SDK to hook into Solana wallet events to track wallet interactions.
+ * These types provide TypeScript interfaces for Solana wallet integration.
+ * The SDK supports any wallet standard: @solana/wallet-adapter, wallet-standard,
+ * and @solana/kit. Connect/disconnect events can be observed via adapter listeners
+ * or tracked explicitly. Transaction and signature events are always tracked
+ * explicitly (no method wrapping).
  *
  * @see https://github.com/anza-xyz/wallet-adapter
+ * @see https://github.com/wallet-standard/wallet-standard
+ * @see https://github.com/solana-foundation/framework-kit
  */
 
 /**

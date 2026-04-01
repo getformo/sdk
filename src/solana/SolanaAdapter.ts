@@ -1,10 +1,18 @@
 /**
  * SolanaAdapter
  *
- * Handles wallet event tracking by hooking into Solana Wallet Adapter events.
- * This provides integration with the @solana/wallet-adapter ecosystem.
+ * Handles wallet event tracking for Solana wallets using explicit tracking methods.
+ * Unlike the previous wrapping approach, this adapter never modifies wallet methods.
+ * Instead, it provides explicit methods (trackTransaction, trackSignature) that
+ * developers call after wallet interactions.
  *
- * @see https://github.com/anza-xyz/wallet-adapter
+ * This design:
+ * - Works with any wallet standard (@solana/wallet-adapter, wallet-standard, @solana/kit)
+ * - Avoids the Man-in-the-Middle pattern of proxying wallet methods
+ * - Gives developers full transparency and control
+ *
+ * Connect/disconnect events are still observed via adapter `.on()` listeners when
+ * a wallet-adapter is provided, or can be tracked explicitly via trackConnect/trackDisconnect.
  */
 
 import { FormoAnalytics } from "../FormoAnalytics";
@@ -17,13 +25,10 @@ import {
   SolanaCluster,
   SolanaConnectionState,
   SolanaPublicKey,
-  TransactionSignature,
   UnsubscribeFn,
   SOLANA_CHAIN_IDS,
   isSolanaWalletContext,
   isSolanaAdapter,
-  SolanaTransaction,
-  SendTransactionOptions,
 } from "./types";
 import {
   isBlockedSolanaAddress,
@@ -104,29 +109,6 @@ export class SolanaAdapter {
   >();
 
   /**
-   * Per-adapter original methods stored in a WeakMap to prevent routing
-   * to the wrong wallet after switching adapters.
-   */
-  private adapterOriginals = new WeakMap<ISolanaAdapter, {
-    sendTransaction?: ISolanaAdapter["sendTransaction"];
-    signMessage?: ISolanaAdapter["signMessage"];
-    signTransaction?: ISolanaAdapter["signTransaction"];
-  }>();
-
-  /**
-   * Bound wrapper references — used to detect when external code (e.g. StandardWalletAdapter._reset())
-   * overwrites our wraps so we can re-apply them.
-   */
-  private boundWrappedSendTransaction?: ISolanaAdapter["sendTransaction"];
-  private boundWrappedSignMessage?: ISolanaAdapter["signMessage"];
-  private boundWrappedSignTransaction?: ISolanaAdapter["signTransaction"];
-
-  /**
-   * Reference to the wrapped adapter (to restore methods on cleanup)
-   */
-  private wrappedAdapter?: ISolanaAdapter;
-
-  /**
    * Reference to the adapter we bound event listeners to (for context wallets).
    * Used to detect when context.wallet changes and rebind listeners.
    */
@@ -169,42 +151,14 @@ export class SolanaAdapter {
   }
 
   /**
-   * Restore original methods on the wrapped adapter
-   */
-  private restoreOriginalMethods(): void {
-    // Restore adapter methods
-    if (this.wrappedAdapter) {
-      const originals = this.adapterOriginals.get(this.wrappedAdapter);
-      if (originals) {
-        if (originals.sendTransaction) {
-          this.wrappedAdapter.sendTransaction = originals.sendTransaction;
-        }
-        if (originals.signMessage) {
-          this.wrappedAdapter.signMessage = originals.signMessage;
-        }
-        if (originals.signTransaction) {
-          this.wrappedAdapter.signTransaction = originals.signTransaction;
-        }
-        this.adapterOriginals.delete(this.wrappedAdapter);
-      }
-      this.wrappedAdapter = undefined;
-    }
-
-    // Clear bound wrapper references
-    this.boundWrappedSendTransaction = undefined;
-    this.boundWrappedSignMessage = undefined;
-    this.boundWrappedSignTransaction = undefined;
-  }
-
-  /**
    * Update the wallet instance (useful for React context updates)
    */
   public setWallet(
     wallet: ISolanaAdapter | SolanaWalletContext | null
   ): void {
     // For context-based wallets, if the inner adapter hasn't changed,
-    // just update the context reference without tearing down wrapping.
-    // This prevents React re-renders from clearing our method wraps.
+    // just update the context reference without tearing down listeners.
+    // This prevents React re-renders from clearing our event listeners.
     if (
       wallet &&
       isSolanaWalletContext(wallet) &&
@@ -212,7 +166,7 @@ export class SolanaAdapter {
       isSolanaWalletContext(this.wallet)
     ) {
       const newAdapter = this.getAdapterFromContext(wallet);
-      if (newAdapter && newAdapter === this.wrappedAdapter) {
+      if (newAdapter && newAdapter === this.currentBoundAdapter) {
         // Same adapter, just update the context reference
         this.wallet = wallet;
         return;
@@ -220,12 +174,9 @@ export class SolanaAdapter {
     }
 
     // For raw adapters, skip teardown if it's the same object
-    if (wallet && wallet === this.wrappedAdapter) {
+    if (wallet && wallet === this.currentBoundAdapter) {
       return;
     }
-
-    // Restore original methods on previous wallet before cleaning up
-    this.restoreOriginalMethods();
 
     // Clear stale connection state to prevent the old adapter's
     // address/chainId from leaking into disconnect events
@@ -248,9 +199,6 @@ export class SolanaAdapter {
    * Check if the wallet adapter has changed (for context-based wallets) and rebind if needed.
    * Call this in React effects when you know the wallet context may have changed but the
    * context object reference stayed the same (e.g., user switched wallets in the wallet selector).
-   *
-   * This ensures connect/disconnect events from the new wallet are properly tracked without
-   * waiting for the next transaction or signature call.
    *
    * @example
    * ```tsx
@@ -302,6 +250,216 @@ export class SolanaAdapter {
     return this.chainId;
   }
 
+  // ============================================================
+  // Explicit Tracking API (no wrapping)
+  // ============================================================
+
+  /**
+   * Track a transaction after it has been sent.
+   * Call this after a successful `sendTransaction` call with the returned signature.
+   *
+   * Emits BROADCASTED event immediately, then polls for confirmation and emits
+   * CONFIRMED or REVERTED.
+   *
+   * @param signature - The transaction signature returned by sendTransaction
+   * @param connection - Optional connection override for polling (falls back to configured connection)
+   *
+   * @example
+   * ```tsx
+   * // With @solana/wallet-adapter
+   * const signature = await sendTransaction(transaction, connection);
+   * formo.solana.trackTransaction(signature);
+   *
+   * // With @solana/kit or wallet-standard
+   * const signature = await wallet.sendTransaction(transaction);
+   * formo.solana.trackTransaction(signature);
+   * ```
+   */
+  public trackTransaction(
+    signature: string,
+    connection?: SolanaConnection
+  ): void {
+    const chainId = this.chainId;
+    const address = this.getCurrentAddress();
+
+    this.emitTransactionEvent(TransactionStatus.BROADCASTED, address, chainId, signature);
+
+    if (address && this.formo.isAutocaptureEnabled("transaction")) {
+      this.pendingTransactions.set(signature, {
+        address,
+        startTime: Date.now(),
+      });
+      this.pollTransactionConfirmation(signature, address, chainId, connection);
+    }
+  }
+
+  /**
+   * Track a transaction lifecycle event explicitly.
+   * Use this for fine-grained control over transaction tracking.
+   *
+   * @param status - The transaction status (started, rejected, broadcasted, confirmed, reverted)
+   * @param options - Optional details about the transaction
+   *
+   * @example
+   * ```tsx
+   * // Track the full lifecycle manually
+   * formo.solana.trackTransactionStatus('started');
+   * try {
+   *   const sig = await sendTransaction(tx, connection);
+   *   formo.solana.trackTransaction(sig); // handles broadcasted + confirmation polling
+   * } catch (e) {
+   *   formo.solana.trackTransactionStatus('rejected');
+   * }
+   * ```
+   */
+  public trackTransactionStatus(
+    status: "started" | "rejected" | "broadcasted" | "confirmed" | "reverted",
+    options?: { transactionHash?: string }
+  ): void {
+    const chainId = this.chainId;
+    const address = this.getCurrentAddress();
+    const statusMap: Record<string, TransactionStatus> = {
+      started: TransactionStatus.STARTED,
+      rejected: TransactionStatus.REJECTED,
+      broadcasted: TransactionStatus.BROADCASTED,
+      confirmed: TransactionStatus.CONFIRMED,
+      reverted: TransactionStatus.REVERTED,
+    };
+    this.emitTransactionEvent(statusMap[status], address, chainId, options?.transactionHash);
+  }
+
+  /**
+   * Track a signature (signMessage / signTransaction) event.
+   *
+   * @param status - The signature status (requested, confirmed, rejected)
+   * @param options - Details about the signature request
+   *
+   * @example
+   * ```tsx
+   * // With @solana/kit
+   * formo.solana.trackSignature('requested', { message: 'Hello' });
+   * try {
+   *   const sig = await wallet.signMessage(encodedMessage);
+   *   formo.solana.trackSignature('confirmed', { message: 'Hello', signatureHash: toHex(sig) });
+   * } catch (e) {
+   *   formo.solana.trackSignature('rejected', { message: 'Hello' });
+   * }
+   * ```
+   */
+  public trackSignature(
+    status: "requested" | "confirmed" | "rejected",
+    options?: {
+      message?: string;
+      signatureHash?: string;
+    }
+  ): void {
+    const chainId = this.chainId;
+    const address = this.getCurrentAddress();
+    const statusMap: Record<string, SignatureStatus> = {
+      requested: SignatureStatus.REQUESTED,
+      confirmed: SignatureStatus.CONFIRMED,
+      rejected: SignatureStatus.REJECTED,
+    };
+    this.emitSignatureEvent(
+      statusMap[status],
+      address,
+      chainId,
+      options?.message || "",
+      options?.signatureHash
+    );
+  }
+
+  /**
+   * Explicitly track a wallet connection.
+   * Use this when not using wallet-adapter (e.g., with @solana/kit or wallet-standard)
+   * where connect/disconnect events aren't automatically observed.
+   *
+   * @param address - The connected wallet address (Base58 encoded)
+   * @param options - Optional wallet metadata
+   *
+   * @example
+   * ```tsx
+   * // With @solana/kit
+   * const account = await wallet.connect();
+   * formo.solana.trackConnect(account.address);
+   * ```
+   */
+  public trackConnect(
+    address: string,
+    options?: { walletName?: string }
+  ): void {
+    if (isBlockedSolanaAddress(address)) {
+      logger.debug("SolanaAdapter: Blocked address, skipping trackConnect");
+      return;
+    }
+
+    // Deduplicate
+    if (
+      this.connectionState.lastAddress === address &&
+      this.connectionState.lastChainId === this.chainId
+    ) {
+      logger.debug("SolanaAdapter: Already tracking this address, skipping duplicate trackConnect");
+      return;
+    }
+
+    this.connectionState.lastAddress = address;
+    this.connectionState.lastChainId = this.chainId;
+
+    if (this.formo.isAutocaptureEnabled("connect")) {
+      const walletName = options?.walletName || this.getWalletName();
+      this.formo.connect(
+        {
+          chainId: this.chainId,
+          address,
+        },
+        {
+          providerName: walletName,
+          rdns: `sol.wallet.${walletName.toLowerCase().replace(/\s+/g, "")}`,
+        }
+      ).catch((error) => {
+        logger.error("SolanaAdapter: Error emitting trackConnect event", error);
+      });
+    }
+  }
+
+  /**
+   * Explicitly track a wallet disconnection.
+   * Use this when not using wallet-adapter (e.g., with @solana/kit or wallet-standard).
+   *
+   * @param address - Optional address override (defaults to last tracked address)
+   *
+   * @example
+   * ```tsx
+   * await wallet.disconnect();
+   * formo.solana.trackDisconnect();
+   * ```
+   */
+  public trackDisconnect(address?: string): void {
+    const disconnectAddress = address || this.connectionState.lastAddress;
+    const disconnectChainId = this.connectionState.lastChainId;
+
+    if (!disconnectAddress) {
+      logger.debug("SolanaAdapter: No address for trackDisconnect, skipping");
+      return;
+    }
+
+    if (this.formo.isAutocaptureEnabled("disconnect")) {
+      this.formo.disconnect({
+        chainId: disconnectChainId,
+        address: disconnectAddress,
+      }).catch((error) => {
+        logger.error("SolanaAdapter: Error emitting trackDisconnect event", error);
+      });
+    }
+
+    this.connectionState.lastAddress = undefined;
+    this.connectionState.lastChainId = undefined;
+  }
+
+  // ============================================================
+  // Wallet Adapter Event Listeners (observation, not wrapping)
+  // ============================================================
+
   /**
    * Set up listeners for wallet events
    */
@@ -316,7 +474,7 @@ export class SolanaAdapter {
     if (isSolanaWalletContext(this.wallet)) {
       this.setupContextListeners(this.wallet);
     } else if (isSolanaAdapter(this.wallet)) {
-      this.setupAdapterListeners(this.wallet);
+      this.setupAdapterEventListenersOnly(this.wallet);
     }
 
     // Check if already connected
@@ -336,27 +494,15 @@ export class SolanaAdapter {
    * Set up listeners for a wallet context (useWallet)
    */
   private setupContextListeners(context: SolanaWalletContext): void {
-    // The wallet-adapter-react useWallet() returns wallet as { adapter, readyState },
-    // so we need to extract the actual adapter which has .on()/.off() methods.
-    //
-    // IMPORTANT: We wrap methods on the adapter (not the context) because
-    // useWallet() returns a new object reference on each render. Components
-    // that call useWallet() independently get their own sendTransaction/signMessage
-    // callbacks that delegate to adapter.sendTransaction/adapter.signMessage.
-    // Wrapping the context object only mutates the FormoProvider's reference,
-    // not what other components receive from useWallet().
     const adapter = this.getAdapterFromContext(context);
     if (adapter) {
       this.setupAdapterEventListenersOnly(adapter);
-      // Wrap adapter methods so all components using useWallet() are tracked
-      this.wrapAdapterMethods(adapter);
     }
   }
 
   /**
    * Check if the adapter inside a wallet context has changed (e.g., user switched wallets).
-   * If so, rebind event listeners and rewrap methods on the new adapter.
-   * This handles the case where context.wallet changes but the context object reference stays the same.
+   * If so, rebind event listeners on the new adapter.
    */
   private checkAndRebindContextAdapter(): void {
     if (!this.wallet || !isSolanaWalletContext(this.wallet)) {
@@ -365,20 +511,18 @@ export class SolanaAdapter {
 
     const currentAdapter = this.getAdapterFromContext(this.wallet);
 
-    // If adapter changed, rebind listeners and rewrap methods
+    // If adapter changed, rebind listeners
     if (currentAdapter !== this.currentBoundAdapter) {
       logger.info(
         "SolanaAdapter: Detected wallet adapter change, rebinding"
       );
 
-      // Restore methods on old adapter and clean up listeners
-      this.restoreOriginalMethods();
+      // Clean up listeners on old adapter
       this.cleanupAdapterListenersOnly();
 
       // Set up on new adapter
       if (currentAdapter) {
         this.setupAdapterEventListenersOnly(currentAdapter);
-        this.wrapAdapterMethods(currentAdapter);
 
         // Check if new adapter is already connected
         this.checkInitialConnection().catch((error) => {
@@ -429,7 +573,7 @@ export class SolanaAdapter {
   }
 
   /**
-   * Set up event listeners on an adapter (connect/disconnect events)
+   * Set up event listeners on an adapter (connect/disconnect events only — no method wrapping)
    */
   private setupAdapterEventListenersOnly(adapter: ISolanaAdapter): void {
     this.currentBoundAdapter = adapter;
@@ -446,214 +590,6 @@ export class SolanaAdapter {
   }
 
   /**
-   * Set up listeners for a direct wallet adapter
-   */
-  private setupAdapterListeners(adapter: ISolanaAdapter): void {
-    this.setupAdapterEventListenersOnly(adapter);
-    this.wrapAdapterMethods(adapter);
-  }
-
-  /**
-   * Wrap wallet adapter methods for transaction/signature tracking
-   */
-  private wrapAdapterMethods(adapter: ISolanaAdapter): void {
-    // If we already wrapped this adapter, check if our wraps are still in place.
-    // StandardWalletAdapter._reset() overwrites signMessage/signTransaction
-    // on every connect/disconnect/feature-change, so we need to re-wrap those methods.
-    if (this.wrappedAdapter === adapter) {
-      this.rewrapOverwrittenMethods(adapter);
-      return;
-    }
-
-    // Store reference to adapter for cleanup
-    this.wrappedAdapter = adapter;
-
-    const originals: {
-      sendTransaction?: ISolanaAdapter["sendTransaction"];
-      signMessage?: ISolanaAdapter["signMessage"];
-      signTransaction?: ISolanaAdapter["signTransaction"];
-    } = {};
-
-    // Wrap sendTransaction
-    if (adapter.sendTransaction) {
-      originals.sendTransaction = adapter.sendTransaction.bind(adapter);
-      this.boundWrappedSendTransaction = this.wrappedSendTransaction.bind(this);
-      adapter.sendTransaction = this.boundWrappedSendTransaction;
-    }
-
-    // Wrap signMessage
-    if (adapter.signMessage) {
-      originals.signMessage = adapter.signMessage.bind(adapter);
-      this.boundWrappedSignMessage = this.wrappedSignMessage.bind(this);
-      adapter.signMessage = this.boundWrappedSignMessage;
-    }
-
-    // Wrap signTransaction
-    if (adapter.signTransaction) {
-      originals.signTransaction = adapter.signTransaction.bind(adapter);
-      this.boundWrappedSignTransaction = this.wrappedSignTransaction.bind(this);
-      adapter.signTransaction = this.boundWrappedSignTransaction;
-    }
-
-    this.adapterOriginals.set(adapter, originals);
-  }
-
-  /**
-   * Re-wrap methods that were overwritten by external code.
-   *
-   * StandardWalletAdapter._reset() overwrites signMessage and signTransaction
-   * as own properties on every connect/disconnect/
-   * feature-change event. This method detects which wraps were overwritten
-   * and re-applies them, capturing the new original methods.
-   */
-  private rewrapOverwrittenMethods(adapter: ISolanaAdapter): void {
-    let rewrapped = false;
-    const originals = this.adapterOriginals.get(adapter) || {};
-
-    // signMessage
-    if (adapter.signMessage && adapter.signMessage !== this.boundWrappedSignMessage) {
-      originals.signMessage = adapter.signMessage.bind(adapter);
-      if (!this.boundWrappedSignMessage) {
-        this.boundWrappedSignMessage = this.wrappedSignMessage.bind(this);
-      }
-      adapter.signMessage = this.boundWrappedSignMessage;
-      rewrapped = true;
-    } else if (!adapter.signMessage && this.boundWrappedSignMessage) {
-      originals.signMessage = undefined;
-    }
-
-    // signTransaction
-    if (adapter.signTransaction && adapter.signTransaction !== this.boundWrappedSignTransaction) {
-      originals.signTransaction = adapter.signTransaction.bind(adapter);
-      if (!this.boundWrappedSignTransaction) {
-        this.boundWrappedSignTransaction = this.wrappedSignTransaction.bind(this);
-      }
-      adapter.signTransaction = this.boundWrappedSignTransaction;
-      rewrapped = true;
-    } else if (!adapter.signTransaction && this.boundWrappedSignTransaction) {
-      originals.signTransaction = undefined;
-    }
-
-    // sendTransaction — unlikely to be overwritten but check for completeness
-    if (adapter.sendTransaction && adapter.sendTransaction !== this.boundWrappedSendTransaction) {
-      originals.sendTransaction = adapter.sendTransaction.bind(adapter);
-      if (!this.boundWrappedSendTransaction) {
-        this.boundWrappedSendTransaction = this.wrappedSendTransaction.bind(this);
-      }
-      adapter.sendTransaction = this.boundWrappedSendTransaction;
-      rewrapped = true;
-    }
-
-    this.adapterOriginals.set(adapter, originals);
-
-    if (rewrapped) {
-      logger.debug("SolanaAdapter: Re-wrapped overwritten adapter methods");
-    }
-  }
-
-  /**
-   * Wrapped sendTransaction method for direct adapter
-   */
-  private async wrappedSendTransaction(
-    transaction: SolanaTransaction,
-    connection: SolanaConnection,
-    options?: SendTransactionOptions
-  ): Promise<TransactionSignature> {
-    this.checkAndRebindContextAdapter();
-
-    const originals = this.wrappedAdapter ? this.adapterOriginals.get(this.wrappedAdapter) : undefined;
-    if (!originals?.sendTransaction) {
-      throw new Error("sendTransaction not available");
-    }
-
-    // Capture chainId at call time to ensure consistency across all events
-    const chainId = this.chainId;
-    const address = this.getCurrentAddress();
-
-    this.emitTransactionEvent(TransactionStatus.STARTED, address, chainId);
-
-    try {
-      const signature = await originals.sendTransaction(
-        transaction,
-        connection,
-        options
-      );
-
-      this.emitTransactionEvent(TransactionStatus.BROADCASTED, address, chainId, signature);
-
-      if (address && this.formo.isAutocaptureEnabled("transaction")) {
-        this.pendingTransactions.set(signature, {
-          address,
-          startTime: Date.now(),
-        });
-        this.pollTransactionConfirmation(signature, address, chainId, connection);
-      }
-
-      return signature;
-    } catch (error) {
-      this.emitTransactionEvent(TransactionStatus.REJECTED, address, chainId);
-      throw error;
-    }
-  }
-
-  /**
-   * Wrapped signMessage method for direct adapter
-   */
-  private async wrappedSignMessage(message: Uint8Array): Promise<Uint8Array> {
-    this.checkAndRebindContextAdapter();
-
-    const originals = this.wrappedAdapter ? this.adapterOriginals.get(this.wrappedAdapter) : undefined;
-    if (!originals?.signMessage) {
-      throw new Error("signMessage not available");
-    }
-
-    const chainId = this.chainId;
-    const address = this.getCurrentAddress();
-    const messageString = safeDecodeMessage(message);
-
-    this.emitSignatureEvent(SignatureStatus.REQUESTED, address, chainId, messageString);
-
-    try {
-      const signature = await originals.signMessage(message);
-      const signatureHex = uint8ArrayToHex(signature);
-      this.emitSignatureEvent(SignatureStatus.CONFIRMED, address, chainId, messageString, signatureHex);
-      return signature;
-    } catch (error) {
-      this.emitSignatureEvent(SignatureStatus.REJECTED, address, chainId, messageString);
-      throw error;
-    }
-  }
-
-  /**
-   * Wrapped signTransaction method for direct adapter
-   */
-  private async wrappedSignTransaction(
-    transaction: SolanaTransaction
-  ): Promise<SolanaTransaction> {
-    this.checkAndRebindContextAdapter();
-
-    const originals = this.wrappedAdapter ? this.adapterOriginals.get(this.wrappedAdapter) : undefined;
-    if (!originals?.signTransaction) {
-      throw new Error("signTransaction not available");
-    }
-
-    const chainId = this.chainId;
-    const address = this.getCurrentAddress();
-    const message = "[Transaction Signature]";
-
-    this.emitSignatureEvent(SignatureStatus.REQUESTED, address, chainId, message);
-
-    try {
-      const signedTx = await originals.signTransaction(transaction);
-      this.emitSignatureEvent(SignatureStatus.CONFIRMED, address, chainId, message);
-      return signedTx;
-    } catch (error) {
-      this.emitSignatureEvent(SignatureStatus.REJECTED, address, chainId, message);
-      throw error;
-    }
-  }
-
-  /**
    * Check initial connection state
    */
   private async checkInitialConnection(): Promise<void> {
@@ -662,7 +598,6 @@ export class SolanaAdapter {
       const address = publicKeyToAddress(publicKey);
       if (address && !isBlockedSolanaAddress(address)) {
         // Skip if we already tracked this address to avoid duplicate connect events
-        // (e.g., when setWallet is called repeatedly with the same connected wallet)
         if (
           this.connectionState.lastAddress === address &&
           this.connectionState.lastChainId === this.chainId
@@ -685,9 +620,6 @@ export class SolanaAdapter {
           }
         );
 
-        // Emit connect event for already-connected wallets (common in auto-connect scenarios)
-        // The wallet adapter's "connect" event only fires during adapter.connect(),
-        // not retroactively for already-connected wallets
         if (this.formo.isAutocaptureEnabled("connect")) {
           await this.formo.connect(
             {
@@ -718,14 +650,6 @@ export class SolanaAdapter {
     this.connectionState.isProcessing = true;
 
     try {
-      // Re-wrap methods that may have been overwritten.
-      // StandardWalletAdapter._reset() runs before emitting "connect",
-      // so signMessage/signTransaction may have been
-      // replaced with new own properties by the time we get here.
-      if (this.wrappedAdapter) {
-        this.rewrapOverwrittenMethods(this.wrappedAdapter);
-      }
-
       const address = publicKeyToAddress(publicKey);
       if (!address) {
         logger.warn(
@@ -784,7 +708,6 @@ export class SolanaAdapter {
     }
 
     // Only emit disconnect if we have a prior tracked connection
-    // This prevents emitting events with undefined address/chainId
     if (!this.connectionState.lastAddress) {
       logger.debug(
         "SolanaAdapter: No prior connection tracked, skipping disconnect event"
@@ -876,9 +799,6 @@ export class SolanaAdapter {
         if (status) {
           const signatureKey = `${signature}:${status.confirmationStatus}`;
 
-          // Only deduplicate terminal states (confirmed/finalized/err) to prevent
-          // duplicate event emissions. Do NOT deduplicate intermediate states like
-          // "processed" since we need to keep polling until a terminal state.
           const isTerminalState =
             !!status.err ||
             status.confirmationStatus === "confirmed" ||
@@ -893,7 +813,6 @@ export class SolanaAdapter {
           }
 
           if (status.err) {
-            // Transaction failed
             logger.info(
               "SolanaAdapter: Transaction reverted",
               {
@@ -917,7 +836,6 @@ export class SolanaAdapter {
             status.confirmationStatus === "confirmed" ||
             status.confirmationStatus === "finalized"
           ) {
-            // Transaction confirmed
             logger.info(
               "SolanaAdapter: Transaction confirmed",
               {
@@ -1033,8 +951,6 @@ export class SolanaAdapter {
 
   /**
    * Extract the actual adapter (with .on/.off) from a wallet context.
-   * In @solana/wallet-adapter-react, context.wallet is { adapter, readyState },
-   * not a direct adapter.
    */
   private getAdapterFromContext(context: SolanaWalletContext): ISolanaAdapter | null {
     const wallet = context.wallet;
@@ -1066,7 +982,6 @@ export class SolanaAdapter {
 
   /**
    * Get wallet RDNS (reverse domain name)
-   * For Solana wallets, we construct an RDNS-like identifier
    */
   private getWalletRdns(): string {
     const name = this.getWalletName().toLowerCase().replace(/\s+/g, "");
@@ -1113,9 +1028,6 @@ export class SolanaAdapter {
     // Clear connection state to prevent stale data
     this.connectionState.lastAddress = undefined;
     this.connectionState.lastChainId = undefined;
-
-    // Restore original methods on wrapped adapter
-    this.restoreOriginalMethods();
 
     this.wallet = null;
     this.connection = null;

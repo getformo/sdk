@@ -112,12 +112,6 @@ describe("SolanaAdapter", () => {
     ...overrides,
   });
 
-  const createMockTransaction = (): SolanaTransaction => ({
-    serialize: () => new Uint8Array(32),
-    feePayer: createMockPublicKey(),
-    recentBlockhash: "mock_blockhash",
-  });
-
   beforeEach(() => {
     sandbox = sinon.createSandbox();
 
@@ -196,6 +190,24 @@ describe("SolanaAdapter", () => {
       expect(adapter._listeners.get("connect")?.size).to.be.greaterThan(0);
       expect(adapter._listeners.get("disconnect")?.size).to.be.greaterThan(0);
       expect(adapter._listeners.get("error")?.size).to.be.greaterThan(0);
+      handler.cleanup();
+    });
+
+    it("should NOT modify adapter methods (no wrapping)", () => {
+      const originalSendTransaction = async () => "original_result";
+      const originalSignMessage = async () => new Uint8Array(64);
+      const adapter = createMockAdapter({
+        sendTransaction: originalSendTransaction,
+        signMessage: originalSignMessage,
+      }) as any;
+
+      const handler = new SolanaAdapter(mockFormo as any, {
+        wallet: adapter,
+      });
+
+      // Adapter methods should remain untouched
+      expect(adapter.sendTransaction).to.equal(originalSendTransaction);
+      expect(adapter.signMessage).to.equal(originalSignMessage);
       handler.cleanup();
     });
 
@@ -280,14 +292,38 @@ describe("SolanaAdapter", () => {
     });
   });
 
-  // -- Direct Adapter: Method Wrapping --
+  // -- Explicit Transaction Tracking --
 
-  describe("Direct Adapter: Method Wrapping", () => {
-    it("should wrap sendTransaction and track STARTED/BROADCASTED events", async () => {
+  describe("Explicit Transaction Tracking", () => {
+    it("should emit BROADCASTED event on trackTransaction", async () => {
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        sendTransaction: async () => "tx_sig_123",
+      }) as any;
+      const handler = new SolanaAdapter(mockFormo as any, {
+        wallet: adapter,
+        cluster: "devnet",
+      });
+
+      // Connect first to set up address
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      handler.trackTransaction("tx_sig_123");
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      expect(mockFormo.transaction.firstCall.args[0].status).to.equal("broadcasted");
+      expect(mockFormo.transaction.firstCall.args[0].transactionHash).to.equal("tx_sig_123");
+      expect(mockFormo.transaction.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+
+      handler.cleanup();
+    });
+
+    it("should poll for confirmation after trackTransaction", async function () {
+      this.timeout(5000);
+      const adapter = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
       }) as any;
       const connection = createMockConnection();
       const handler = new SolanaAdapter(mockFormo as any, {
@@ -295,34 +331,64 @@ describe("SolanaAdapter", () => {
         connection,
       });
 
-      // Connect first
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      // Call wrapped sendTransaction
-      const tx = createMockTransaction();
-      const sig = await adapter.sendTransaction(tx, connection);
+      handler.trackTransaction("tx_sig_123");
 
-      expect(sig).to.equal("tx_sig_123");
-      expect(mockFormo.transaction.calledTwice).to.be.true;
+      // Wait for polling to complete (poll interval is 2s)
+      await new Promise((r) => setTimeout(r, 3000));
 
-      // First call: STARTED
-      expect(mockFormo.transaction.firstCall.args[0].status).to.equal("started");
-      // Second call: BROADCASTED with signature
-      expect(mockFormo.transaction.secondCall.args[0].status).to.equal("broadcasted");
-      expect(mockFormo.transaction.secondCall.args[0].transactionHash).to.equal("tx_sig_123");
+      // Should have BROADCASTED + CONFIRMED
+      expect(mockFormo.transaction.callCount).to.be.greaterThanOrEqual(2);
+      const lastCall = mockFormo.transaction.lastCall.args[0];
+      expect(lastCall.status).to.equal("confirmed");
+      expect(lastCall.transactionHash).to.equal("tx_sig_123");
 
       handler.cleanup();
     });
 
-    it("should track REJECTED on sendTransaction failure", async () => {
-      const error = new Error("User rejected");
+    it("should track REVERTED transactions", async function () {
+      this.timeout(5000);
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        sendTransaction: async () => {
-          throw error;
-        },
+      }) as any;
+      const connection = createMockConnection({
+        getSignatureStatuses: async () => ({
+          value: [
+            {
+              slot: 1,
+              confirmations: 1,
+              err: { InstructionError: [0, "Custom"] },
+              confirmationStatus: "confirmed" as const,
+            },
+          ],
+        }),
+      });
+      const handler = new SolanaAdapter(mockFormo as any, {
+        wallet: adapter,
+        connection,
+      });
+
+      adapter._emit("connect", createMockPublicKey());
+      await new Promise((r) => setTimeout(r, 50));
+
+      handler.trackTransaction("tx_sig_fail");
+
+      // Wait for polling (poll interval is 2s)
+      await new Promise((r) => setTimeout(r, 3000));
+
+      const lastCall = mockFormo.transaction.lastCall.args[0];
+      expect(lastCall.status).to.equal("reverted");
+
+      handler.cleanup();
+    });
+
+    it("should emit STARTED and REJECTED via trackTransactionStatus", async () => {
+      const adapter = createMockAdapter({
+        publicKey: createMockPublicKey(),
+        connected: true,
       }) as any;
       const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
@@ -331,13 +397,8 @@ describe("SolanaAdapter", () => {
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      const tx = createMockTransaction();
-      try {
-        await adapter.sendTransaction(tx, createMockConnection());
-        expect.fail("Should have thrown");
-      } catch (e) {
-        expect(e).to.equal(error);
-      }
+      handler.trackTransactionStatus("started");
+      handler.trackTransactionStatus("rejected");
 
       expect(mockFormo.transaction.calledTwice).to.be.true;
       expect(mockFormo.transaction.firstCall.args[0].status).to.equal("started");
@@ -345,13 +406,15 @@ describe("SolanaAdapter", () => {
 
       handler.cleanup();
     });
+  });
 
-    it("should wrap signMessage and track signature events", async () => {
-      const mockSigBytes = new Uint8Array([1, 2, 3]);
+  // -- Explicit Signature Tracking --
+
+  describe("Explicit Signature Tracking", () => {
+    it("should track signature events via trackSignature", async () => {
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        signMessage: async () => mockSigBytes,
       }) as any;
       const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
@@ -360,26 +423,22 @@ describe("SolanaAdapter", () => {
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      const message = new TextEncoder().encode("Hello Solana");
-      const result = await adapter.signMessage(message);
+      handler.trackSignature("requested", { message: "Hello Solana" });
+      handler.trackSignature("confirmed", { message: "Hello Solana", signatureHash: "abcdef" });
 
-      expect(result).to.equal(mockSigBytes);
       expect(mockFormo.signature.calledTwice).to.be.true;
       expect(mockFormo.signature.firstCall.args[0].status).to.equal("requested");
+      expect(mockFormo.signature.firstCall.args[0].message).to.equal("Hello Solana");
       expect(mockFormo.signature.secondCall.args[0].status).to.equal("confirmed");
-      expect(mockFormo.signature.secondCall.args[0].signatureHash).to.equal("010203");
+      expect(mockFormo.signature.secondCall.args[0].signatureHash).to.equal("abcdef");
 
       handler.cleanup();
     });
 
-    it("should track REJECTED on signMessage failure", async () => {
-      const error = new Error("Rejected");
+    it("should track REJECTED signature", async () => {
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        signMessage: async () => {
-          throw error;
-        },
       }) as any;
       const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
@@ -388,44 +447,80 @@ describe("SolanaAdapter", () => {
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      try {
-        await adapter.signMessage(new Uint8Array([1]));
-        expect.fail("Should have thrown");
-      } catch (e) {
-        expect(e).to.equal(error);
-      }
+      handler.trackSignature("requested", { message: "Sign this" });
+      handler.trackSignature("rejected", { message: "Sign this" });
 
       expect(mockFormo.signature.secondCall.args[0].status).to.equal("rejected");
       handler.cleanup();
     });
+  });
 
-    it("should wrap signTransaction and track signature events", async () => {
-      const signedTx = createMockTransaction();
-      const adapter = createMockAdapter({
-        publicKey: createMockPublicKey(),
-        connected: true,
-        signTransaction: async () => signedTx,
-      }) as any;
+  // -- Explicit Connect/Disconnect Tracking --
+
+  describe("Explicit Connect/Disconnect Tracking", () => {
+    it("should track connection via trackConnect", () => {
       const handler = new SolanaAdapter(mockFormo as any, {
-        wallet: adapter,
+        cluster: "devnet",
       });
 
-      adapter._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
+      handler.trackConnect(MOCK_ADDRESS, { walletName: "Phantom" });
 
-      const result = await adapter.signTransaction(createMockTransaction());
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].address).to.equal(MOCK_ADDRESS);
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+      expect(mockFormo.connect.firstCall.args[1]!.providerName).to.equal("Phantom");
 
-      expect(result).to.equal(signedTx);
-      expect(mockFormo.signature.calledTwice).to.be.true;
-      expect(mockFormo.signature.firstCall.args[0].status).to.equal("requested");
-      expect(mockFormo.signature.firstCall.args[0].message).to.equal("[Transaction Signature]");
-      expect(mockFormo.signature.secondCall.args[0].status).to.equal("confirmed");
       handler.cleanup();
     });
 
+    it("should track disconnection via trackDisconnect", () => {
+      const handler = new SolanaAdapter(mockFormo as any, {});
+
+      // Connect first
+      handler.trackConnect(MOCK_ADDRESS);
+
+      // Then disconnect
+      handler.trackDisconnect();
+
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]!.address).to.equal(MOCK_ADDRESS);
+
+      handler.cleanup();
+    });
+
+    it("should skip trackDisconnect when no prior connection", () => {
+      const handler = new SolanaAdapter(mockFormo as any, {});
+
+      handler.trackDisconnect();
+
+      expect(mockFormo.disconnect.called).to.be.false;
+
+      handler.cleanup();
+    });
+
+    it("should deduplicate trackConnect for same address", () => {
+      const handler = new SolanaAdapter(mockFormo as any, {});
+
+      handler.trackConnect(MOCK_ADDRESS);
+      handler.trackConnect(MOCK_ADDRESS); // duplicate
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      handler.cleanup();
+    });
+
+    it("should block system addresses in trackConnect", () => {
+      const handler = new SolanaAdapter(mockFormo as any, {});
+
+      handler.trackConnect("11111111111111111111111111111111");
+
+      expect(mockFormo.connect.called).to.be.false;
+
+      handler.cleanup();
+    });
   });
 
-  // -- Context Wallet: Adapter Wrapping --
+  // -- Context Wallet --
 
   describe("Context Wallet", () => {
     it("should extract adapter from context and set up listeners", () => {
@@ -440,27 +535,20 @@ describe("SolanaAdapter", () => {
       handler.cleanup();
     });
 
-    it("should wrap adapter methods (not context) for tracking", async () => {
+    it("should NOT modify adapter methods in context mode", () => {
+      const originalSendTransaction = async () => "ctx_sig";
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        sendTransaction: async () => "ctx_sig",
+        sendTransaction: originalSendTransaction,
       }) as any;
       const context = createMockContext(adapter);
       const handler = new SolanaAdapter(mockFormo as any, {
         wallet: context,
       });
 
-      // Connect via adapter event
-      adapter._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Call sendTransaction on the adapter (which context delegates to)
-      const tx = createMockTransaction();
-      const sig = await adapter.sendTransaction(tx, createMockConnection());
-
-      expect(sig).to.equal("ctx_sig");
-      expect(mockFormo.transaction.called).to.be.true;
+      // Adapter methods should remain untouched
+      expect(adapter.sendTransaction).to.equal(originalSendTransaction);
       handler.cleanup();
     });
 
@@ -590,7 +678,6 @@ describe("SolanaAdapter", () => {
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        sendTransaction: async () => "sig",
       }) as any;
       const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
@@ -599,13 +686,15 @@ describe("SolanaAdapter", () => {
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      // Connect and disconnect should not be tracked
+      // Connect should not be tracked
       expect(mockFormo.connect.called).to.be.false;
 
-      // Transaction should not be tracked (STARTED/BROADCASTED)
-      const tx = createMockTransaction();
-      await adapter.sendTransaction(tx, createMockConnection());
+      // Explicit tracking should also respect autocapture
+      handler.trackTransaction("tx_sig");
       expect(mockFormo.transaction.called).to.be.false;
+
+      handler.trackSignature("requested", { message: "test" });
+      expect(mockFormo.signature.called).to.be.false;
 
       handler.cleanup();
     });
@@ -629,34 +718,29 @@ describe("SolanaAdapter", () => {
       expect(adapter._listeners.get("connect")?.size ?? 0).to.equal(0);
     });
 
-    it("should restore original adapter methods on cleanup", async () => {
+    it("should NOT modify adapter methods on cleanup (nothing to restore)", () => {
+      const originalSendTransaction = async () => "original_result";
       const adapter = createMockAdapter({
-        sendTransaction: async () => "original_result",
+        sendTransaction: originalSendTransaction,
       }) as any;
 
-      // Store reference to the wrapped version
       const handler = new SolanaAdapter(mockFormo as any, {
         wallet: adapter,
       });
-      const wrappedSendTx = adapter.sendTransaction;
+
+      // Method should still be the original
+      expect(adapter.sendTransaction).to.equal(originalSendTransaction);
 
       handler.cleanup();
 
-      // After cleanup, sendTransaction should no longer be the wrapped version
-      expect(adapter.sendTransaction).to.not.equal(wrappedSendTx);
-      // And calling it should return the original result directly without tracking
-      const result = await adapter.sendTransaction!(
-        createMockTransaction(),
-        createMockConnection()
-      );
-      expect(result).to.equal("original_result");
+      // Should still be the original after cleanup
+      expect(adapter.sendTransaction).to.equal(originalSendTransaction);
     });
 
     it("should cancel active polling timeouts on cleanup", async () => {
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        sendTransaction: async () => "pending_sig",
       }) as any;
       // Connection that never confirms (always returns null)
       const connection = createMockConnection({
@@ -670,8 +754,7 @@ describe("SolanaAdapter", () => {
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      const tx = createMockTransaction();
-      await adapter.sendTransaction(tx, connection);
+      handler.trackTransaction("pending_sig");
 
       // Cleanup should cancel polling without errors
       handler.cleanup();
@@ -899,87 +982,13 @@ describe("SolanaAdapter", () => {
     });
   });
 
-  // -- Double-Wrapping Prevention --
-
-  describe("Double-Wrapping Prevention", () => {
-    it("should not double-wrap the same adapter on setWallet", async () => {
-      const originalSendTransaction = async () => "original_result";
-      const adapter = createMockAdapter({
-        sendTransaction: originalSendTransaction,
-        publicKey: createMockPublicKey(),
-        connected: true,
-      }) as any;
-
-      const handler = new SolanaAdapter(mockFormo as any, {
-        wallet: adapter,
-      });
-
-      // Connect and do a transaction
-      adapter._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
-
-      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
-      const callCountAfterFirst = mockFormo.transaction.callCount;
-
-      // Setting the same wallet again should restore and re-wrap cleanly
-      handler.setWallet(adapter);
-
-      // Re-connect after setWallet
-      adapter._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Second transaction should emit correct number of events (not doubled)
-      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
-
-      // Should have added the same number of calls (STARTED + BROADCASTED)
-      const callsForSecondTx = mockFormo.transaction.callCount - callCountAfterFirst;
-      expect(callsForSecondTx).to.equal(2); // STARTED + BROADCASTED, not 4
-
-      handler.cleanup();
-    });
-
-    it("should properly re-wrap when switching to different adapter", async () => {
-      const adapter1 = createMockAdapter({
-        sendTransaction: async () => "result1",
-        publicKey: createMockPublicKey(),
-        connected: true,
-      }) as any;
-
-      const handler = new SolanaAdapter(mockFormo as any, {
-        wallet: adapter1,
-      });
-
-      adapter1._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
-
-      const adapter2 = createMockAdapter({
-        sendTransaction: async () => "result2",
-        publicKey: createMockPublicKey(MOCK_ADDRESS_2),
-        connected: true,
-      }) as any;
-
-      handler.setWallet(adapter2);
-      adapter2._emit("connect", createMockPublicKey(MOCK_ADDRESS_2));
-      await new Promise((r) => setTimeout(r, 50));
-
-      const result = await adapter2.sendTransaction(
-        createMockTransaction(),
-        createMockConnection()
-      );
-      expect(result).to.equal("result2");
-
-      handler.cleanup();
-    });
-  });
-
   // -- ChainId Consistency --
 
   describe("ChainId Consistency", () => {
-    it("should use captured chainId for all events in transaction lifecycle", async () => {
+    it("should use current chainId for trackTransaction", async () => {
       const adapter = createMockAdapter({
         publicKey: createMockPublicKey(),
         connected: true,
-        sendTransaction: async () => "tx_sig",
       }) as any;
 
       const handler = new SolanaAdapter(mockFormo as any, {
@@ -990,125 +999,12 @@ describe("SolanaAdapter", () => {
       adapter._emit("connect", createMockPublicKey());
       await new Promise((r) => setTimeout(r, 50));
 
-      // Call sendTransaction
-      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
+      handler.trackTransaction("tx_sig");
 
-      // Both STARTED and BROADCASTED should have mainnet-beta chainId
       expect(mockFormo.transaction.firstCall.args[0].chainId).to.equal(
         SOLANA_CHAIN_IDS["mainnet-beta"]
       );
-      expect(mockFormo.transaction.secondCall.args[0].chainId).to.equal(
-        SOLANA_CHAIN_IDS["mainnet-beta"]
-      );
 
-      handler.cleanup();
-    });
-
-    it("should use captured chainId even if setCluster called during transaction", async () => {
-      let clusterChangeCallback: (() => void) | null = null;
-
-      const adapter = createMockAdapter({
-        publicKey: createMockPublicKey(),
-        connected: true,
-        sendTransaction: async () => {
-          // Simulate setCluster being called while waiting for approval
-          if (clusterChangeCallback) clusterChangeCallback();
-          return "tx_sig";
-        },
-      }) as any;
-
-      const handler = new SolanaAdapter(mockFormo as any, {
-        wallet: adapter,
-        cluster: "mainnet-beta",
-      });
-
-      adapter._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Set up callback to change cluster mid-transaction
-      clusterChangeCallback = () => {
-        handler.setCluster("devnet");
-      };
-
-      await adapter.sendTransaction(createMockTransaction(), createMockConnection());
-
-      // STARTED should be mainnet-beta (captured before the call)
-      expect(mockFormo.transaction.firstCall.args[0].chainId).to.equal(
-        SOLANA_CHAIN_IDS["mainnet-beta"]
-      );
-      // BROADCASTED should also be mainnet-beta (captured at call time)
-      expect(mockFormo.transaction.secondCall.args[0].chainId).to.equal(
-        SOLANA_CHAIN_IDS["mainnet-beta"]
-      );
-
-      handler.cleanup();
-    });
-  });
-
-  // -- Method Re-wrapping (StandardWalletAdapter compatibility) --
-
-  describe("Method Re-wrapping", () => {
-    it("should re-wrap signMessage after external overwrite (e.g. StandardWalletAdapter._reset)", async () => {
-      const originalSignMessage = async (_msg: Uint8Array) => new Uint8Array(64);
-      const adapter = createMockAdapter({
-        publicKey: createMockPublicKey(),
-        connected: true,
-        signMessage: originalSignMessage,
-        sendTransaction: async () => "sig",
-      }) as any;
-
-      const handler = new SolanaAdapter(mockFormo as any, {
-        wallet: adapter,
-        cluster: "devnet",
-      });
-
-      // Wait for initial connection
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Simulate StandardWalletAdapter._reset() overwriting signMessage
-      const newOriginal = async (_msg: Uint8Array) => new Uint8Array(64);
-      adapter.signMessage = newOriginal;
-
-      // Trigger re-wrap via connect event (which calls rewrapOverwrittenMethods)
-      adapter._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Now call signMessage — should go through our wrapper and emit events
-      mockFormo.signature.resetHistory();
-      await adapter.signMessage(new Uint8Array([1, 2, 3]));
-
-      expect(mockFormo.signature.called).to.be.true;
-      handler.cleanup();
-    });
-
-    it("should wrap signMessage that appears after initial setup (StandardWalletAdapter._reset)", async () => {
-      // At init time, adapter has no signMessage (StandardWalletAdapter sets it lazily)
-      const adapter = createMockAdapter({
-        publicKey: createMockPublicKey(),
-        connected: true,
-        sendTransaction: async () => "sig",
-      }) as any;
-      // Explicitly ensure no signMessage at wrap time
-      delete adapter.signMessage;
-
-      const handler = new SolanaAdapter(mockFormo as any, {
-        wallet: adapter,
-        cluster: "devnet",
-      });
-
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Simulate _reset() adding signMessage after connect
-      adapter.signMessage = async (_msg: Uint8Array) => new Uint8Array(64);
-
-      // Trigger re-wrap
-      adapter._emit("connect", createMockPublicKey());
-      await new Promise((r) => setTimeout(r, 50));
-
-      mockFormo.signature.resetHistory();
-      await adapter.signMessage(new Uint8Array([1, 2, 3]));
-
-      expect(mockFormo.signature.called).to.be.true;
       handler.cleanup();
     });
   });
