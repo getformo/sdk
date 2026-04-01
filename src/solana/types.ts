@@ -227,13 +227,31 @@ export interface SolanaWalletContext {
  */
 export interface SolanaOptions {
   /**
-   * The Solana wallet adapter instance or wallet context
-   * Can be a single wallet adapter or the useWallet() context
+   * The framework-kit client store (client.store) for automatic event tracking.
+   * When provided, wallet connect/disconnect and transaction events are tracked
+   * automatically by subscribing to zustand store state changes.
+   *
+   * This is the recommended approach for apps using @solana-foundation/framework-kit.
+   *
+   * @example
+   * ```tsx
+   * import { createClient } from '@solana-foundation/framework-kit';
+   * const client = createClient({ endpoint, walletConnectors: autoDiscover() });
+   * const formo = await Formo.init(writeKey, { solana: { store: client.store } });
+   * ```
+   */
+  store?: import("./storeTypes").SolanaClientStore;
+
+  /**
+   * The Solana wallet adapter instance or wallet context.
+   * @deprecated Use `store` for automatic tracking with framework-kit,
+   * or use the explicit tracking methods (formo.solana.trackTransaction, etc.) instead.
    */
   wallet?: ISolanaAdapter | SolanaWalletContext;
 
   /**
-   * The Solana connection for tracking transaction confirmations
+   * The Solana connection for tracking transaction confirmations.
+   * Only needed when using explicit tracking mode (not store mode).
    */
   connection?: SolanaConnection;
 
@@ -242,7 +260,6 @@ export interface SolanaOptions {
    * @default "mainnet-beta"
    */
   cluster?: SolanaCluster;
-
 }
 
 /**

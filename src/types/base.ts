@@ -235,11 +235,14 @@ export interface Options {
    */
   wagmi?: WagmiOptions;
   /**
-   * Solana Wallet Adapter integration configuration
+   * Solana integration configuration
    * When provided, the SDK will track Solana wallet events in addition to EVM wallet events
-   * This works alongside EIP-1193/Wagmi tracking - you can track both EVM and Solana wallets
-   * @requires @solana/wallet-adapter-base (optional peer dependency)
-   * @requires @solana/wallet-adapter-react (optional peer dependency, for React apps)
+   *
+   * Two modes are supported:
+   * - **Store mode** (recommended): Pass `store: client.store` from framework-kit for automatic tracking
+   * - **Explicit tracking**: Use `formo.solana.trackTransaction()`, `formo.solana.trackSignature()`, etc.
+   *
+   * @see https://github.com/solana-foundation/framework-kit
    */
   solana?: SolanaOptions;
   /**
