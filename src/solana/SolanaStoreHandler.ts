@@ -344,10 +344,11 @@ export class SolanaStoreHandler {
           if (!this.transactionSenders.has(key)) {
             this.transactionSenders.set(key, { address, chainId });
           }
+          const sender = this.transactionSenders.get(key)!;
           this.formo.transaction({
             status: TransactionStatus.BROADCASTED,
-            chainId,
-            address,
+            chainId: sender.chainId,
+            address: sender.address,
             transactionHash: signature,
           });
         }
