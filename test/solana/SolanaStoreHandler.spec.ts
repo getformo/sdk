@@ -260,6 +260,46 @@ describe("SolanaStoreHandler", () => {
     });
   });
 
+    it("should handle account switch (connected → connected with different address)", () => {
+      const MOCK_ADDRESS_2 = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV";
+      const store = createMockStore({
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      // Initial connect
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // Switch to different account within same wallet
+      store._setState({
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS_2 },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+      });
+
+      // Should disconnect old address and connect new one
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]!.address).to.equal(MOCK_ADDRESS);
+      expect(mockFormo.connect.calledTwice).to.be.true;
+      expect(mockFormo.connect.secondCall.args[0].address).to.equal(MOCK_ADDRESS_2);
+
+      handler.cleanup();
+    });
+
   // -- Transaction Tracking --
 
   describe("Transaction Tracking", () => {

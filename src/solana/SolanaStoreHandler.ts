@@ -181,8 +181,16 @@ export class SolanaStoreHandler {
       this.handleDisconnect();
     }
 
-    // * → connected
+    // * → connected (new connection)
     if (wallet.status === "connected" && prevWallet.status !== "connected") {
+      this.handleConnect(wallet);
+    } else if (
+      wallet.status === "connected" &&
+      prevWallet.status === "connected" &&
+      wallet.session.account.address !== prevWallet.session.account.address
+    ) {
+      // connected(addressA) → connected(addressB): account switch
+      this.handleDisconnect();
       this.handleConnect(wallet);
     }
 
