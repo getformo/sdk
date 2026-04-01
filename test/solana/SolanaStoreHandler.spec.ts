@@ -385,7 +385,7 @@ describe("SolanaStoreHandler", () => {
       expect(lastCall.transactionHash).to.equal("tx_sig_123");
     });
 
-    it("should emit REVERTED when transaction fails after sending", () => {
+    it("should emit REVERTED when transaction fails after being sent (waiting)", () => {
       store._setState({
         transactions: {
           tx1: { status: "sending", lastUpdatedAt: Date.now() },
@@ -393,12 +393,33 @@ describe("SolanaStoreHandler", () => {
       });
       store._setState({
         transactions: {
-          tx1: { status: "failed", error: "InstructionError", lastUpdatedAt: Date.now() },
+          tx1: { status: "waiting", signature: "tx_sig", lastUpdatedAt: Date.now() },
+        },
+      });
+      store._setState({
+        transactions: {
+          tx1: { status: "failed", signature: "tx_sig", error: "InstructionError", lastUpdatedAt: Date.now() },
         },
       });
 
       const lastCall = mockFormo.transaction.lastCall.args[0];
       expect(lastCall.status).to.equal("reverted");
+    });
+
+    it("should emit REJECTED when transaction fails during sending", () => {
+      store._setState({
+        transactions: {
+          tx1: { status: "sending", lastUpdatedAt: Date.now() },
+        },
+      });
+      store._setState({
+        transactions: {
+          tx1: { status: "failed", error: "User rejected", lastUpdatedAt: Date.now() },
+        },
+      });
+
+      const lastCall = mockFormo.transaction.lastCall.args[0];
+      expect(lastCall.status).to.equal("rejected");
     });
 
     it("should emit REJECTED when transaction fails before sending", () => {

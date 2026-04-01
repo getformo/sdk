@@ -382,10 +382,10 @@ export class SolanaStoreHandler {
         const signature = tx.signature;
         const prevStatus = prevTx?.status;
 
-        // If it failed before being sent (rejected by user or build error), emit REJECTED
-        // If it failed after being sent (on-chain failure), emit REVERTED
+        // If it failed after being sent and confirmed as failed on-chain, emit REVERTED.
+        // Otherwise (rejected by user, build error, RPC rejection), emit REJECTED.
         const status =
-          prevStatus === "sending" || prevStatus === "waiting"
+          prevStatus === "waiting"
             ? TransactionStatus.REVERTED
             : TransactionStatus.REJECTED;
 
