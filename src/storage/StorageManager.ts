@@ -48,13 +48,11 @@ export class StorageManager {
       case "cookieStorage":
         return new CookieStorage(this.writeKey);
       case "localStorage":
-      case "sessionStorage": {
-        const backend = this.getWebStorage(type);
-        if (backend) {
-          return new WebStorage(this.writeKey, backend);
-        }
-        return new MemoryStorage(this.writeKey);
-      }
+      case "sessionStorage":
+        return new WebStorage(
+          this.writeKey,
+          this.getWebStorage(type) as Storage
+        );
       case "memoryStorage":
       default:
         return new MemoryStorage(this.writeKey);
