@@ -154,6 +154,7 @@ export class SolanaManager {
    * @param connection - Optional connection override for polling
    */
   trackTransaction(signature: string, connection?: SolanaConnection): void {
+    if (this.warnIfStoreMode("trackTransaction")) return;
     this.ensureHandler();
     this.handler!.trackTransaction(signature, connection);
   }
@@ -168,6 +169,7 @@ export class SolanaManager {
     status: "started" | "rejected" | "broadcasted" | "confirmed" | "reverted",
     options?: { transactionHash?: string }
   ): void {
+    if (this.warnIfStoreMode("trackTransactionStatus")) return;
     this.ensureHandler();
     this.handler!.trackTransactionStatus(status, options);
   }
@@ -182,6 +184,7 @@ export class SolanaManager {
     status: "requested" | "confirmed" | "rejected",
     options?: { message?: string; signatureHash?: string }
   ): void {
+    if (this.warnIfStoreMode("trackSignature")) return;
     this.ensureHandler();
     this.handler!.trackSignature(status, options);
   }
@@ -196,6 +199,7 @@ export class SolanaManager {
    * @param options - Optional wallet metadata
    */
   trackConnect(address: string, options?: { walletName?: string }): void {
+    if (this.warnIfStoreMode("trackConnect")) return;
     this.ensureHandler();
     this.handler!.trackConnect(address, options);
   }
@@ -208,6 +212,7 @@ export class SolanaManager {
    * @param address - Optional address override
    */
   trackDisconnect(address?: string): void {
+    if (this.warnIfStoreMode("trackDisconnect")) return;
     this.ensureHandler();
     this.handler!.trackDisconnect(address);
   }
@@ -217,6 +222,21 @@ export class SolanaManager {
     this.storeHandler = undefined;
     this.handler?.cleanup();
     this.handler = undefined;
+  }
+
+  /**
+   * Guard against calling explicit tracking methods in store mode.
+   * Returns true (caller should return) if store mode is active.
+   */
+  private warnIfStoreMode(method: string): boolean {
+    if (this.storeHandler) {
+      logger.warn(
+        `SolanaManager: ${method}() ignored — store mode is active. ` +
+        "Events are tracked automatically via the store subscription."
+      );
+      return true;
+    }
+    return false;
   }
 
   /**
