@@ -7,7 +7,6 @@ import { SOLANA_CHAIN_IDS } from "../../src/solana/types";
 import {
   SolanaClientStore,
   SolanaClientState,
-  SolanaWalletStatus,
   SolanaTransactionRecord,
 } from "../../src/solana/storeTypes";
 

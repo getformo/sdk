@@ -8,7 +8,6 @@ import {
   SolanaWalletContext,
   SolanaConnection,
   SolanaPublicKey,
-  SolanaTransaction,
   WalletReadyState,
   SOLANA_CHAIN_IDS,
   SolanaWalletEntry,

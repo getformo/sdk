@@ -51,35 +51,6 @@ function cleanupOldEntries(
   }
 }
 
-/**
- * Convert a Uint8Array to a hex string (browser-compatible alternative to Buffer.from().toString('hex'))
- */
-function uint8ArrayToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/**
- * Safely decode a Uint8Array message to string.
- * Falls back to hex representation if TextDecoder is unavailable (some Node environments).
- */
-function safeDecodeMessage(message: Uint8Array): string {
-  try {
-    if (typeof TextDecoder !== "undefined") {
-      return new TextDecoder().decode(message);
-    }
-    // Fallback for Node environments without TextDecoder global
-    if (typeof Buffer !== "undefined") {
-      return Buffer.from(message).toString("utf-8");
-    }
-    // Last resort: hex representation
-    return `0x${uint8ArrayToHex(message)}`;
-  } catch {
-    return `0x${uint8ArrayToHex(message)}`;
-  }
-}
-
 export class SolanaAdapter {
   private formo: FormoAnalytics;
   private wallet: ISolanaAdapter | SolanaWalletContext | null = null;
@@ -279,6 +250,7 @@ export class SolanaAdapter {
     signature: string,
     connection?: SolanaConnection
   ): void {
+    this.checkAndRebindContextAdapter();
     const chainId = this.chainId;
     const address = this.getCurrentAddress();
 
@@ -316,6 +288,7 @@ export class SolanaAdapter {
     status: "started" | "rejected" | "broadcasted" | "confirmed" | "reverted",
     options?: { transactionHash?: string }
   ): void {
+    this.checkAndRebindContextAdapter();
     const chainId = this.chainId;
     const address = this.getCurrentAddress();
     const statusMap: Record<string, TransactionStatus> = {
@@ -353,6 +326,7 @@ export class SolanaAdapter {
       signatureHash?: string;
     }
   ): void {
+    this.checkAndRebindContextAdapter();
     const chainId = this.chainId;
     const address = this.getCurrentAddress();
     const statusMap: Record<string, SignatureStatus> = {
@@ -436,7 +410,7 @@ export class SolanaAdapter {
    */
   public trackDisconnect(address?: string): void {
     const disconnectAddress = address || this.connectionState.lastAddress;
-    const disconnectChainId = this.connectionState.lastChainId;
+    const disconnectChainId = this.connectionState.lastChainId ?? this.chainId;
 
     if (!disconnectAddress) {
       logger.debug("SolanaAdapter: No address for trackDisconnect, skipping");
