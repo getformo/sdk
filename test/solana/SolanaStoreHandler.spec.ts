@@ -113,8 +113,17 @@ describe("SolanaStoreHandler", () => {
   // -- Constructor --
 
   describe("Constructor", () => {
-    it("should initialize with default cluster", () => {
-      const store = createMockStore();
+    it("should auto-detect cluster from store endpoint", () => {
+      const store = createMockStore(); // default endpoint is devnet
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+      handler.cleanup();
+    });
+
+    it("should default to mainnet-beta when endpoint is unrecognized", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://custom-rpc.example.com", status: "ready" },
+      });
       const handler = new SolanaStoreHandler(mockFormo as any, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
       handler.cleanup();
@@ -258,7 +267,6 @@ describe("SolanaStoreHandler", () => {
 
       handler.cleanup();
     });
-  });
 
     it("should handle account switch (connected → connected with different address)", () => {
       const MOCK_ADDRESS_2 = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV";
@@ -299,6 +307,7 @@ describe("SolanaStoreHandler", () => {
 
       handler.cleanup();
     });
+  });
 
   // -- Transaction Tracking --
 
@@ -447,6 +456,140 @@ describe("SolanaStoreHandler", () => {
 
       // Should only have one STARTED (deduplicated)
       expect(mockFormo.transaction.callCount).to.equal(1);
+    });
+  });
+
+  // -- Transaction survives disconnect --
+
+  describe("Transaction events after disconnect", () => {
+    it("should emit CONFIRMED even after wallet disconnects", () => {
+      const store = createMockStore({
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      mockFormo.transaction.resetHistory();
+
+      // Start transaction
+      store._setState({
+        transactions: { tx1: { status: "sending", lastUpdatedAt: Date.now() } },
+      });
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      expect(mockFormo.transaction.firstCall.args[0].status).to.equal("started");
+
+      // Disconnect while tx is in-flight
+      store._setState({ wallet: { status: "disconnected" } });
+
+      // Transaction confirms after disconnect
+      store._setState({
+        transactions: { tx1: { status: "confirmed", signature: "sig123", lastUpdatedAt: Date.now() } },
+      });
+
+      // Should still emit CONFIRMED with the original sender address
+      const confirmedCall = mockFormo.transaction.lastCall.args[0];
+      expect(confirmedCall.status).to.equal("confirmed");
+      expect(confirmedCall.address).to.equal(MOCK_ADDRESS);
+      expect(confirmedCall.transactionHash).to.equal("sig123");
+
+      handler.cleanup();
+    });
+  });
+
+  // -- Signature Tracking in Store Mode --
+
+  describe("Signature Tracking", () => {
+    it("should emit signature events via trackSignature", () => {
+      const store = createMockStore({
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      handler.trackSignature("requested", { message: "Hello" });
+      handler.trackSignature("confirmed", { message: "Hello", signatureHash: "abc" });
+
+      expect(mockFormo.signature.calledTwice).to.be.true;
+      expect(mockFormo.signature.firstCall.args[0].status).to.equal("requested");
+      expect(mockFormo.signature.firstCall.args[0].address).to.equal(MOCK_ADDRESS);
+      expect(mockFormo.signature.secondCall.args[0].status).to.equal("confirmed");
+      expect(mockFormo.signature.secondCall.args[0].signatureHash).to.equal("abc");
+
+      handler.cleanup();
+    });
+
+    it("should not emit signature events when not connected", () => {
+      const store = createMockStore();
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      handler.trackSignature("requested", { message: "Hello" });
+
+      expect(mockFormo.signature.called).to.be.false;
+
+      handler.cleanup();
+    });
+  });
+
+  // -- Cluster Detection --
+
+  describe("Cluster Detection", () => {
+    it("should detect devnet from store endpoint", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+
+      handler.cleanup();
+    });
+
+    it("should detect testnet from store endpoint", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.testnet.solana.com", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["testnet"]);
+
+      handler.cleanup();
+    });
+
+    it("should detect localnet from localhost endpoint", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "http://localhost:8899", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["localnet"]);
+
+      handler.cleanup();
+    });
+
+    it("should prefer explicit cluster option over auto-detection", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store, {
+        cluster: "mainnet-beta",
+      });
+
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+
+      handler.cleanup();
     });
   });
 

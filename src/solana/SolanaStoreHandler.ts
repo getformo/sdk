@@ -14,7 +14,7 @@
  */
 
 import { FormoAnalytics } from "../FormoAnalytics";
-import { TransactionStatus } from "../types/events";
+import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import {
   SolanaClientStore,
@@ -67,6 +67,13 @@ export class SolanaStoreHandler {
    */
   private startedTransactions = new Set<string>();
 
+  /**
+   * Per-transaction sender address captured at STARTED time.
+   * Ensures terminal events (confirmed/failed) are attributed correctly
+   * even if the wallet disconnects before the transaction settles.
+   */
+  private transactionSenders = new Map<string, { address: string; chainId: number }>();
+
   constructor(
     formoAnalytics: FormoAnalytics,
     store: SolanaClientStore,
@@ -74,7 +81,7 @@ export class SolanaStoreHandler {
   ) {
     this.formo = formoAnalytics;
     this.store = store;
-    this.cluster = options?.cluster || "mainnet-beta";
+    this.cluster = options?.cluster || this.detectClusterFromStore(store) || "mainnet-beta";
     this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
     logger.info("SolanaStoreHandler: Initializing framework-kit store integration", {
@@ -269,17 +276,19 @@ export class SolanaStoreHandler {
     transactions: Record<string, SolanaTransactionRecord>,
     prevTransactions: Record<string, SolanaTransactionRecord>
   ): void {
-    const address = this.lastAddress;
-    if (!address) {
-      return;
-    }
-
     // Check each transaction for status changes
     for (const [key, tx] of Object.entries(transactions)) {
       const prevTx = prevTransactions[key];
 
       // Skip if status hasn't changed
       if (prevTx && prevTx.status === tx.status) {
+        continue;
+      }
+
+      // For new transactions (sending), use current address.
+      // For terminal states, fall back to the address captured at STARTED time.
+      const address = this.lastAddress || this.transactionSenders.get(key)?.address;
+      if (!address) {
         continue;
       }
 
@@ -314,6 +323,10 @@ export class SolanaStoreHandler {
           this.startedTransactions.add(key);
           cleanupOldEntries(this.startedTransactions);
 
+          // Capture sender for this transaction so terminal events are attributed
+          // correctly even if the wallet disconnects before the tx settles.
+          this.transactionSenders.set(key, { address, chainId });
+
           this.formo.transaction({
             status: TransactionStatus.STARTED,
             chainId,
@@ -327,6 +340,10 @@ export class SolanaStoreHandler {
         // "waiting" means the tx was sent and we have a signature — emit BROADCASTED
         const signature = tx.signature;
         if (signature) {
+          // Ensure sender is captured (in case we missed "sending")
+          if (!this.transactionSenders.has(key)) {
+            this.transactionSenders.set(key, { address, chainId });
+          }
           this.formo.transaction({
             status: TransactionStatus.BROADCASTED,
             chainId,
@@ -338,6 +355,9 @@ export class SolanaStoreHandler {
       }
 
       case "confirmed": {
+        const sender = this.transactionSenders.get(key);
+        const txAddress = sender?.address || address;
+        const txChainId = sender?.chainId || chainId;
         const signature = tx.signature;
         logger.info("SolanaStoreHandler: Transaction confirmed", {
           key,
@@ -346,14 +366,19 @@ export class SolanaStoreHandler {
 
         this.formo.transaction({
           status: TransactionStatus.CONFIRMED,
-          chainId,
-          address,
+          chainId: txChainId,
+          address: txAddress,
           ...(signature && { transactionHash: signature }),
         });
+
+        this.transactionSenders.delete(key);
         break;
       }
 
       case "failed": {
+        const sender = this.transactionSenders.get(key);
+        const txAddress = sender?.address || address;
+        const txChainId = sender?.chainId || chainId;
         const signature = tx.signature;
         const prevStatus = prevTx?.status;
 
@@ -373,14 +398,79 @@ export class SolanaStoreHandler {
 
         this.formo.transaction({
           status,
-          chainId,
-          address,
+          chainId: txChainId,
+          address: txAddress,
           ...(signature && { transactionHash: signature }),
         });
+
+        this.transactionSenders.delete(key);
         break;
       }
 
       // "idle" — no event needed
+    }
+  }
+
+  // ============================================================
+  // Explicit Signature Tracking (no store state for signatures)
+  // ============================================================
+
+  /**
+   * Track a signature event. Framework-kit's store does not track signMessage
+   * or signTransaction state, so this must be called explicitly.
+   * Uses the store's current wallet address for attribution.
+   */
+  public trackSignature(
+    status: "requested" | "confirmed" | "rejected",
+    options?: { message?: string; signatureHash?: string }
+  ): void {
+    const address = this.lastAddress;
+    if (!address || !this.formo.isAutocaptureEnabled("signature")) {
+      return;
+    }
+
+    const statusMap: Record<string, SignatureStatus> = {
+      requested: SignatureStatus.REQUESTED,
+      confirmed: SignatureStatus.CONFIRMED,
+      rejected: SignatureStatus.REJECTED,
+    };
+
+    this.formo.signature({
+      status: statusMap[status],
+      chainId: this.chainId,
+      address,
+      message: options?.message || "",
+      ...(options?.signatureHash && { signatureHash: options.signatureHash }),
+    });
+  }
+
+  /**
+   * Get the current tracked address (if connected).
+   */
+  public getCurrentAddress(): string | undefined {
+    return this.lastAddress;
+  }
+
+  // ============================================================
+  // Cluster Detection
+  // ============================================================
+
+  /**
+   * Attempt to detect the Solana cluster from the store's endpoint URL.
+   */
+  private detectClusterFromStore(store: SolanaClientStore): SolanaCluster | null {
+    try {
+      const endpoint = store.getState().cluster.endpoint;
+      if (!endpoint) return null;
+      const lower = endpoint.toLowerCase();
+      if (lower.includes("devnet")) return "devnet";
+      if (lower.includes("testnet")) return "testnet";
+      if (lower.includes("localhost") || lower.includes("127.0.0.1")) return "localnet";
+      // mainnet-beta is the default for production endpoints
+      if (lower.includes("mainnet")) return "mainnet-beta";
+      return null;
+    } catch {
+      return null;
     }
   }
 
@@ -401,6 +491,7 @@ export class SolanaStoreHandler {
     this.unsubscribers = [];
     this.processedTransactions.clear();
     this.startedTransactions.clear();
+    this.transactionSenders.clear();
     this.lastAddress = undefined;
     this.lastChainId = undefined;
 

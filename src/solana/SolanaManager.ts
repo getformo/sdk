@@ -177,6 +177,10 @@ export class SolanaManager {
   /**
    * Track a signature (signMessage / signTransaction) event.
    *
+   * This method works in both store mode and explicit mode.
+   * Framework-kit's store does not track signature state, so this is always
+   * called explicitly regardless of integration mode.
+   *
    * @param status - The signature status
    * @param options - Details about the signature request
    */
@@ -184,7 +188,11 @@ export class SolanaManager {
     status: "requested" | "confirmed" | "rejected",
     options?: { message?: string; signatureHash?: string }
   ): void {
-    if (this.warnIfStoreMode("trackSignature")) return;
+    // In store mode, route through store handler (has the wallet address)
+    if (this.storeHandler) {
+      this.storeHandler.trackSignature(status, options);
+      return;
+    }
     this.ensureHandler();
     this.handler!.trackSignature(status, options);
   }
