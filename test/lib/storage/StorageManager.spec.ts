@@ -3,6 +3,8 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { StorageManager } from "../../../src/storage/StorageManager";
+import { secureHash } from "../../../src/utils/hash";
+import { KEY_PREFIX } from "../../../src/storage/constant";
 
 describe("StorageManager", () => {
   let jsdom: JSDOM;
@@ -87,58 +89,68 @@ describe("StorageManager", () => {
   });
 
   describe("null or unavailable storage fallback", () => {
-    it("should fall back when localStorage is null", () => {
+    const writeKey = "test-write-key";
+    const storageKey = `${KEY_PREFIX}_${secureHash(writeKey)}_key`;
+
+    it("should fall back to sessionStorage when localStorage is null", () => {
       Object.defineProperty(global, "localStorage", {
         value: null,
         writable: true,
         configurable: true,
       });
-      const sm = new StorageManager("test-write-key");
+      const sm = new StorageManager(writeKey);
       const storage = sm.getStorage("localStorage");
-      expect(storage).to.not.be.null;
       expect(storage.isAvailable()).to.be.true;
       storage.set("key", "value");
-      expect(storage.get("key")).to.equal("value");
+      // Prove the value landed in sessionStorage, not memory
+      expect(jsdom.window.sessionStorage.getItem(storageKey)).to.equal("value");
     });
 
-    it("should fall back when sessionStorage is null", () => {
-      Object.defineProperty(global, "sessionStorage", {
-        value: null,
-        writable: true,
-        configurable: true,
-      });
-      const sm = new StorageManager("test-write-key");
-      const storage = sm.getStorage("sessionStorage");
-      expect(storage).to.not.be.null;
-      expect(storage.isAvailable()).to.be.true;
-      storage.set("key", "value");
-      expect(storage.get("key")).to.equal("value");
-    });
-
-    it("should fall back when accessing localStorage throws", () => {
+    it("should fall back to sessionStorage when localStorage throws", () => {
       Object.defineProperty(global, "localStorage", {
         get() {
           throw new DOMException("access denied", "SecurityError");
         },
         configurable: true,
       });
-      const sm = new StorageManager("test-write-key");
+      const sm = new StorageManager(writeKey);
       const storage = sm.getStorage("localStorage");
-      expect(storage).to.not.be.null;
       expect(storage.isAvailable()).to.be.true;
+      storage.set("key", "value");
+      expect(jsdom.window.sessionStorage.getItem(storageKey)).to.equal("value");
     });
 
-    it("should fall back when accessing sessionStorage throws", () => {
+    it("should fall back to memoryStorage when sessionStorage is null", () => {
       Object.defineProperty(global, "sessionStorage", {
-        get() {
-          throw new DOMException("access denied", "SecurityError");
-        },
+        value: null,
+        writable: true,
         configurable: true,
       });
-      const sm = new StorageManager("test-write-key");
+      const sm = new StorageManager(writeKey);
       const storage = sm.getStorage("sessionStorage");
-      expect(storage).to.not.be.null;
       expect(storage.isAvailable()).to.be.true;
+      storage.set("key", "value");
+      expect(storage.get("key")).to.equal("value");
+      // Prove the value did NOT land in any web storage (i.e. it's in memory)
+      expect(jsdom.window.localStorage.getItem(storageKey)).to.be.null;
+    });
+
+    it("should fall back to memoryStorage when both web storages are null", () => {
+      Object.defineProperty(global, "localStorage", {
+        value: null,
+        writable: true,
+        configurable: true,
+      });
+      Object.defineProperty(global, "sessionStorage", {
+        value: null,
+        writable: true,
+        configurable: true,
+      });
+      const sm = new StorageManager(writeKey);
+      const storage = sm.getStorage("localStorage");
+      expect(storage.isAvailable()).to.be.true;
+      storage.set("key", "value");
+      expect(storage.get("key")).to.equal("value");
     });
   });
 
