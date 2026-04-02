@@ -18,7 +18,6 @@ import { TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import {
   SolanaClientStore,
-  SolanaClientState,
   SolanaTransactionRecord,
   SolanaWalletStatus,
 } from "./storeTypes";
