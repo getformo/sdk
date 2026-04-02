@@ -74,6 +74,12 @@ export class SolanaStoreHandler {
    */
   private transactionSenders = new Map<string, { address: string; chainId: number }>();
 
+  /**
+   * Whether the cluster was explicitly set (via options or setCluster).
+   * When true, auto-detection from the store endpoint is disabled.
+   */
+  private explicitCluster: boolean;
+
   constructor(
     formoAnalytics: FormoAnalytics,
     store: SolanaClientStore,
@@ -81,6 +87,7 @@ export class SolanaStoreHandler {
   ) {
     this.formo = formoAnalytics;
     this.store = store;
+    this.explicitCluster = !!options?.cluster;
     this.cluster = options?.cluster || this.detectClusterFromStore(store) || "mainnet-beta";
     this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
@@ -101,6 +108,7 @@ export class SolanaStoreHandler {
    * Update the cluster/network.
    */
   public setCluster(cluster: SolanaCluster): void {
+    this.explicitCluster = true;
     const previousCluster = this.cluster;
     this.cluster = cluster;
     this.chainId = SOLANA_CHAIN_IDS[cluster];
@@ -132,10 +140,13 @@ export class SolanaStoreHandler {
    * (the cluster subscription may not have fired yet).
    */
   private resolveCurrentChainId(): number {
-    const detected = this.detectClusterFromStore(this.store);
-    if (detected) {
-      this.cluster = detected;
-      this.chainId = SOLANA_CHAIN_IDS[detected];
+    // Don't auto-detect if the cluster was explicitly set
+    if (!this.explicitCluster) {
+      const detected = this.detectClusterFromStore(this.store);
+      if (detected) {
+        this.cluster = detected;
+        this.chainId = SOLANA_CHAIN_IDS[detected];
+      }
     }
     return this.chainId;
   }
@@ -301,6 +312,11 @@ export class SolanaStoreHandler {
   }
 
   private handleClusterChange(endpoint: string): void {
+    // Don't auto-detect if the cluster was explicitly set
+    if (this.explicitCluster) {
+      return;
+    }
+
     const detected = this.detectClusterFromEndpoint(endpoint);
     if (!detected) {
       return;

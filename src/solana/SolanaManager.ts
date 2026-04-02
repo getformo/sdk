@@ -20,6 +20,7 @@ import { SolanaClientStore } from "./storeTypes";
 
 export class SolanaManager {
   private storeHandler?: SolanaStoreHandler;
+  private pendingCluster?: SolanaCluster;
 
   constructor(
     private formo: FormoAnalytics,
@@ -30,6 +31,9 @@ export class SolanaManager {
       this.storeHandler = new SolanaStoreHandler(formo, options.store, {
         cluster: options.cluster,
       });
+    } else if (options?.cluster) {
+      // Store pending cluster for when setStore is called later
+      this.pendingCluster = options.cluster;
     }
   }
 
@@ -52,8 +56,9 @@ export class SolanaManager {
   setStore(store: SolanaClientStore, options?: { cluster?: SolanaCluster }): void {
     this.storeHandler?.cleanup();
     this.storeHandler = new SolanaStoreHandler(this.formo, store, {
-      cluster: options?.cluster,
+      cluster: options?.cluster || this.pendingCluster,
     });
+    this.pendingCluster = undefined;
   }
 
   /**
