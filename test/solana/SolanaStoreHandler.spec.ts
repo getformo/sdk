@@ -696,6 +696,34 @@ describe("SolanaStoreHandler", () => {
 
       handler.cleanup();
     });
+
+    it("should use correct chainId when wallet and cluster change in same update", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+
+      // Batch both wallet connect + cluster change in one setState
+      store._setState({
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: "ready" },
+      });
+
+      // Connect event should use mainnet chainId, not stale devnet
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+
+      handler.cleanup();
+    });
   });
 
   // -- Autocapture Disabled --

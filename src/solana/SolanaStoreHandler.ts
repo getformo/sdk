@@ -126,6 +126,20 @@ export class SolanaStoreHandler {
     return this.chainId;
   }
 
+  /**
+   * Resolve the current chainId from the live store state.
+   * This ensures correctness when wallet and cluster change in the same tick
+   * (the cluster subscription may not have fired yet).
+   */
+  private resolveCurrentChainId(): number {
+    const detected = this.detectClusterFromStore(this.store);
+    if (detected) {
+      this.cluster = detected;
+      this.chainId = SOLANA_CHAIN_IDS[detected];
+    }
+    return this.chainId;
+  }
+
   // ============================================================
   // Wallet Subscription
   // ============================================================
@@ -217,19 +231,24 @@ export class SolanaStoreHandler {
       return;
     }
 
+    // Resolve chainId from live store state so batched wallet+cluster
+    // updates use the correct network even if the cluster subscription
+    // hasn't fired yet.
+    const chainId = this.resolveCurrentChainId();
+
     this.lastAddress = address;
-    this.lastChainId = this.chainId;
+    this.lastChainId = chainId;
 
     logger.info("SolanaStoreHandler: Wallet connected", {
       address,
-      chainId: this.chainId,
+      chainId,
       connector: wallet.connectorId,
     });
 
     if (this.formo.isAutocaptureEnabled("connect")) {
       const connectorName = wallet.session.connector?.name || wallet.connectorId;
       this.formo.connect(
-        { chainId: this.chainId, address },
+        { chainId, address },
         {
           providerName: connectorName,
           rdns: `sol.wallet.${connectorName.toLowerCase().replace(/\s+/g, "")}`,
