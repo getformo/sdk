@@ -10,10 +10,10 @@ export { SolanaManager } from "./solana";
 export type {
   SolanaOptions,
   SolanaCluster,
-  ISolanaAdapter,
-  SolanaWalletContext,
-  SolanaPublicKey,
-  SolanaConnection,
+} from "./solana";
+export type {
+  SolanaClientStore,
+  SolanaClientState,
 } from "./solana";
 
 if (typeof window !== "undefined") window.formofy = formofy;

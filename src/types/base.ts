@@ -235,12 +235,12 @@ export interface Options {
    */
   wagmi?: WagmiOptions;
   /**
-   * Solana integration configuration
-   * When provided, the SDK will track Solana wallet events in addition to EVM wallet events
+   * Solana integration configuration.
+   * Pass `store: client.store` from framework-kit for automatic tracking of
+   * wallet connect/disconnect and transaction events.
    *
-   * Two modes are supported:
-   * - **Store mode** (recommended): Pass `store: client.store` from framework-kit for automatic tracking
-   * - **Explicit tracking**: Use `formo.solana.trackTransaction()`, `formo.solana.trackSignature()`, etc.
+   * For signMessage/signTransaction, use formo.solana.trackSignature() or
+   * formo.signature() directly (framework-kit doesn't track these in the store).
    *
    * @see https://github.com/solana-foundation/framework-kit
    */

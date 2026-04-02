@@ -1995,10 +1995,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    *
    * @example
    * ```tsx
-   * formo.solana.setWallet(wallet);
-   * formo.solana.setConnection(connection);
+   * formo.solana.setStore(client.store);
    * formo.solana.setCluster("devnet");
-   * formo.solana.syncWalletState();
+   * formo.solana.trackSignature('requested', { message: 'Hello' });
    * ```
    */
   get solana(): SolanaManager {

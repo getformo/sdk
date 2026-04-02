@@ -1,65 +1,36 @@
 /**
  * SolanaManager
  *
- * Manages the lifecycle of Solana integrations, supporting two modes:
+ * Manages the lifecycle of the Solana store integration.
+ * Subscribes to framework-kit's zustand store for automatic event capture
+ * of wallet connect/disconnect and transaction lifecycle events.
  *
- * 1. **Store mode** (recommended): Subscribes to framework-kit's zustand store
- *    for automatic event capture — similar to the wagmi integration.
- *    Use `options.solana.store` to enable.
+ * For signMessage/signTransaction tracking (not captured by the store),
+ * use formo.solana.trackSignature() or formo.signature() directly.
  *
- * 2. **Explicit tracking mode**: Provides manual tracking methods
- *    (trackTransaction, trackSignature, etc.) for any wallet standard.
- *    Works with @solana/wallet-adapter, wallet-standard, and @solana/kit.
- *
- * @deprecated The wallet-adapter wrapping approach (setWallet with ISolanaAdapter/SolanaWalletContext)
- * is deprecated. Use store mode or explicit tracking instead.
+ * For manual event tracking without the store, use the core API directly:
+ * formo.transaction(), formo.signature(), formo.connect(), formo.disconnect().
  */
 
 import { FormoAnalytics } from "../FormoAnalytics";
 import { logger } from "../logger";
-import { SolanaAdapter } from "./SolanaAdapter";
 import { SolanaStoreHandler } from "./SolanaStoreHandler";
-import {
-  ISolanaAdapter,
-  SolanaWalletContext,
-  SolanaConnection,
-  SolanaCluster,
-  SolanaOptions,
-} from "./types";
+import { SolanaCluster, SolanaOptions } from "./types";
 import { SolanaClientStore } from "./storeTypes";
 
 export class SolanaManager {
-  private handler?: SolanaAdapter;
   private storeHandler?: SolanaStoreHandler;
-  private pendingConnection?: SolanaConnection;
-  private pendingCluster?: SolanaCluster;
 
   constructor(
     private formo: FormoAnalytics,
     options?: SolanaOptions
   ) {
-    // Store mode: subscribe to framework-kit's zustand store for autocapture
     if (options?.store) {
       logger.info("SolanaManager: Initializing store-based Solana tracking");
       this.storeHandler = new SolanaStoreHandler(formo, options.store, {
         cluster: options.cluster,
       });
-    } else if (options?.wallet) {
-      logger.info("SolanaManager: Initializing Solana wallet tracking");
-      this.handler = new SolanaAdapter(formo, {
-        wallet: options.wallet,
-        connection: options.connection,
-        cluster: options.cluster,
-      });
-    } else if (options) {
-      // Store pending values for when wallet is set later
-      this.pendingConnection = options.connection;
-      this.pendingCluster = options.cluster;
     }
-  }
-
-  get adapter(): SolanaAdapter | undefined {
-    return this.handler;
   }
 
   /**
@@ -79,185 +50,60 @@ export class SolanaManager {
    * ```
    */
   setStore(store: SolanaClientStore, options?: { cluster?: SolanaCluster }): void {
-    // Clean up any existing handlers
     this.storeHandler?.cleanup();
-    this.handler?.cleanup();
-    this.handler = undefined;
-
     this.storeHandler = new SolanaStoreHandler(this.formo, store, {
-      cluster: options?.cluster || this.pendingCluster,
+      cluster: options?.cluster,
     });
-    this.pendingConnection = undefined;
-    this.pendingCluster = undefined;
   }
 
   /**
-   * @deprecated Use setStore() for automatic tracking, or use the explicit tracking
-   * methods (trackTransaction, trackSignature, trackConnect, trackDisconnect) instead.
+   * Update the cluster/network. Only needed if the store endpoint doesn't
+   * contain a recognizable cluster name (e.g. custom RPC URLs).
+   * In most cases, the cluster is auto-detected from the store's endpoint.
    */
-  setWallet(
-    wallet: ISolanaAdapter | SolanaWalletContext | null
-  ): void {
-    // Don't set up adapter if store mode is active
-    if (this.storeHandler) {
-      logger.warn("SolanaManager: setWallet() ignored — store mode is active. Use setStore() or explicit tracking methods.");
-      return;
-    }
-
-    if (this.handler) {
-      this.handler.setWallet(wallet);
-    } else if (wallet) {
-      logger.info("SolanaManager: Initializing Solana wallet tracking (lazy)");
-      this.handler = new SolanaAdapter(this.formo, {
-        wallet,
-        connection: this.pendingConnection,
-        cluster: this.pendingCluster,
-      });
-      this.pendingConnection = undefined;
-      this.pendingCluster = undefined;
-    }
-  }
-
-  setConnection(connection: SolanaConnection | null): void {
-    if (this.handler) {
-      this.handler.setConnection(connection);
-    } else {
-      this.pendingConnection = connection ?? undefined;
-    }
-  }
-
   setCluster(cluster: SolanaCluster): void {
-    if (this.storeHandler) {
-      this.storeHandler.setCluster(cluster);
-    } else if (this.handler) {
-      this.handler.setCluster(cluster);
-    } else {
-      this.pendingCluster = cluster;
-    }
-  }
-
-  /**
-   * @deprecated Use setStore() for automatic tracking, or use the explicit tracking methods.
-   */
-  syncWalletState(): void {
-    this.handler?.syncWalletState();
-  }
-
-  /**
-   * Track a transaction after it has been sent.
-   * Emits BROADCASTED event and starts polling for confirmation.
-   *
-   * Note: In store mode, transactions are tracked automatically.
-   * This method is for explicit tracking when not using store mode.
-   *
-   * @param signature - The transaction signature returned by sendTransaction
-   * @param connection - Optional connection override for polling
-   */
-  trackTransaction(signature: string, connection?: SolanaConnection): void {
-    if (this.warnIfStoreMode("trackTransaction")) return;
-    this.ensureHandler();
-    this.handler!.trackTransaction(signature, connection);
-  }
-
-  /**
-   * Track a transaction lifecycle event explicitly.
-   *
-   * @param status - The transaction status
-   * @param options - Optional transaction details
-   */
-  trackTransactionStatus(
-    status: "started" | "rejected" | "broadcasted" | "confirmed" | "reverted",
-    options?: { transactionHash?: string }
-  ): void {
-    if (this.warnIfStoreMode("trackTransactionStatus")) return;
-    this.ensureHandler();
-    this.handler!.trackTransactionStatus(status, options);
+    this.storeHandler?.setCluster(cluster);
   }
 
   /**
    * Track a signature (signMessage / signTransaction) event.
    *
-   * This method works in both store mode and explicit mode.
-   * Framework-kit's store does not track signature state, so this is always
-   * called explicitly regardless of integration mode.
+   * Framework-kit's store does not track signature state, so this must be
+   * called explicitly. Uses the store's current wallet address for attribution.
+   *
+   * Alternatively, you can call formo.signature() directly if you have the
+   * address and chainId available.
    *
    * @param status - The signature status
    * @param options - Details about the signature request
+   *
+   * @example
+   * ```tsx
+   * formo.solana.trackSignature('requested', { message: 'Hello' });
+   * try {
+   *   const sig = await wallet.signMessage(encodedMessage);
+   *   formo.solana.trackSignature('confirmed', { message: 'Hello', signatureHash: toHex(sig) });
+   * } catch (e) {
+   *   formo.solana.trackSignature('rejected', { message: 'Hello' });
+   * }
+   * ```
    */
   trackSignature(
     status: "requested" | "confirmed" | "rejected",
     options?: { message?: string; signatureHash?: string }
   ): void {
-    // In store mode, route through store handler (has the wallet address)
     if (this.storeHandler) {
       this.storeHandler.trackSignature(status, options);
-      return;
+    } else {
+      logger.warn(
+        "SolanaManager: trackSignature() called but no store is configured. " +
+        "Use formo.solana.setStore(client.store) or call formo.signature() directly."
+      );
     }
-    this.ensureHandler();
-    this.handler!.trackSignature(status, options);
-  }
-
-  /**
-   * Explicitly track a wallet connection.
-   * Use when not using store mode or wallet-adapter.
-   *
-   * Note: In store mode, connections are tracked automatically.
-   *
-   * @param address - The connected wallet address (Base58)
-   * @param options - Optional wallet metadata
-   */
-  trackConnect(address: string, options?: { walletName?: string }): void {
-    if (this.warnIfStoreMode("trackConnect")) return;
-    this.ensureHandler();
-    this.handler!.trackConnect(address, options);
-  }
-
-  /**
-   * Explicitly track a wallet disconnection.
-   *
-   * Note: In store mode, disconnections are tracked automatically.
-   *
-   * @param address - Optional address override
-   */
-  trackDisconnect(address?: string): void {
-    if (this.warnIfStoreMode("trackDisconnect")) return;
-    this.ensureHandler();
-    this.handler!.trackDisconnect(address);
   }
 
   cleanup(): void {
     this.storeHandler?.cleanup();
     this.storeHandler = undefined;
-    this.handler?.cleanup();
-    this.handler = undefined;
-  }
-
-  /**
-   * Guard against calling explicit tracking methods in store mode.
-   * Returns true (caller should return) if store mode is active.
-   */
-  private warnIfStoreMode(method: string): boolean {
-    if (this.storeHandler) {
-      logger.warn(
-        `SolanaManager: ${method}() ignored — store mode is active. ` +
-        "Events are tracked automatically via the store subscription."
-      );
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Ensure handler exists (lazy-init without a wallet for explicit tracking).
-   */
-  private ensureHandler(): void {
-    if (!this.handler) {
-      this.handler = new SolanaAdapter(this.formo, {
-        connection: this.pendingConnection,
-        cluster: this.pendingCluster,
-      });
-      this.pendingConnection = undefined;
-      this.pendingCluster = undefined;
-    }
   }
 }
