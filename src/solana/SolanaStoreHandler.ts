@@ -428,6 +428,8 @@ export class SolanaStoreHandler {
             status: TransactionStatus.STARTED,
             chainId,
             address,
+          }).catch((error) => {
+            logger.error("SolanaStoreHandler: Error emitting transaction STARTED", error);
           });
         }
         break;
@@ -447,6 +449,8 @@ export class SolanaStoreHandler {
             chainId: sender.chainId,
             address: sender.address,
             transactionHash: signature,
+          }).catch((error) => {
+            logger.error("SolanaStoreHandler: Error emitting transaction BROADCASTED", error);
           });
         }
         break;
@@ -467,6 +471,8 @@ export class SolanaStoreHandler {
           chainId: txChainId,
           address: txAddress,
           ...(signature && { transactionHash: signature }),
+        }).catch((error) => {
+          logger.error("SolanaStoreHandler: Error emitting transaction CONFIRMED", error);
         });
 
         this.transactionSenders.delete(key);
@@ -499,6 +505,8 @@ export class SolanaStoreHandler {
           chainId: txChainId,
           address: txAddress,
           ...(signature && { transactionHash: signature }),
+        }).catch((error) => {
+          logger.error("SolanaStoreHandler: Error emitting transaction event", error);
         });
 
         this.transactionSenders.delete(key);
