@@ -99,7 +99,10 @@ export interface SolanaClusterState {
 
 /**
  * The zustand vanilla store API that framework-kit exposes via `client.store`.
- * Supports both selector-based and full-state subscriptions.
+ *
+ * Note: framework-kit's store uses vanilla zustand without the
+ * `subscribeWithSelector` middleware, so only the single-argument
+ * subscribe form (full-state listener) is supported.
  */
 export interface SolanaClientStore {
   getState(): SolanaClientState;
@@ -108,15 +111,6 @@ export interface SolanaClientStore {
    * Subscribe to all state changes.
    */
   subscribe(listener: (state: SolanaClientState, prevState: SolanaClientState) => void): () => void;
-
-  /**
-   * Subscribe to a selected slice of state (zustand vanilla API).
-   */
-  subscribe<T>(
-    selector: (state: SolanaClientState) => T,
-    listener: (selectedState: T, previousSelectedState: T) => void,
-    options?: { equalityFn?: (a: T, b: T) => boolean; fireImmediately?: boolean }
-  ): () => void;
 }
 
 /**

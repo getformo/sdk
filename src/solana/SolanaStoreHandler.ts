@@ -156,13 +156,15 @@ export class SolanaStoreHandler {
   // ============================================================
 
   private setupWalletSubscription(): void {
-    // Subscribe to wallet status changes
-    const unsubscribe = this.store.subscribe(
-      (state: SolanaClientState) => state.wallet,
-      (wallet, prevWallet) => {
-        this.handleWalletChange(wallet, prevWallet);
+    let prevWallet = this.store.getState().wallet;
+    const unsubscribe = this.store.subscribe((state) => {
+      const wallet = state.wallet;
+      if (wallet !== prevWallet) {
+        const prev = prevWallet;
+        prevWallet = wallet;
+        this.handleWalletChange(wallet, prev);
       }
-    );
+    });
     this.unsubscribers.push(unsubscribe);
 
     logger.info("SolanaStoreHandler: Wallet subscription set up");
@@ -298,14 +300,14 @@ export class SolanaStoreHandler {
   // ============================================================
 
   private setupClusterSubscription(): void {
-    const unsubscribe = this.store.subscribe(
-      (state: SolanaClientState) => state.cluster.endpoint,
-      (endpoint, prevEndpoint) => {
-        if (endpoint !== prevEndpoint) {
-          this.handleClusterChange(endpoint);
-        }
+    let prevEndpoint = this.store.getState().cluster.endpoint;
+    const unsubscribe = this.store.subscribe((state) => {
+      const endpoint = state.cluster.endpoint;
+      if (endpoint !== prevEndpoint) {
+        prevEndpoint = endpoint;
+        this.handleClusterChange(endpoint);
       }
-    );
+    });
     this.unsubscribers.push(unsubscribe);
 
     logger.info("SolanaStoreHandler: Cluster subscription set up");
@@ -354,12 +356,15 @@ export class SolanaStoreHandler {
   // ============================================================
 
   private setupTransactionSubscription(): void {
-    const unsubscribe = this.store.subscribe(
-      (state: SolanaClientState) => state.transactions,
-      (transactions, prevTransactions) => {
-        this.handleTransactionChanges(transactions, prevTransactions);
+    let prevTransactions = this.store.getState().transactions;
+    const unsubscribe = this.store.subscribe((state) => {
+      const transactions = state.transactions;
+      if (transactions !== prevTransactions) {
+        const prev = prevTransactions;
+        prevTransactions = transactions;
+        this.handleTransactionChanges(transactions, prev);
       }
-    );
+    });
     this.unsubscribers.push(unsubscribe);
 
     logger.info("SolanaStoreHandler: Transaction subscription set up");
