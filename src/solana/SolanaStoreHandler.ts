@@ -174,7 +174,7 @@ export class SolanaStoreHandler {
         });
 
         if (this.formo.isAutocaptureEnabled("connect")) {
-          const connectorName = wallet.session.connector?.name || "Unknown Solana Wallet";
+          const connectorName = wallet.session.connector?.name || wallet.connectorId;
           this.formo.connect(
             { chainId: this.chainId, address },
             {
