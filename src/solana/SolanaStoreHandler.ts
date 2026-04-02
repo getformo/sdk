@@ -14,7 +14,7 @@
  */
 
 import { FormoAnalytics } from "../FormoAnalytics";
-import { SignatureStatus, TransactionStatus } from "../types/events";
+import { TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import {
   SolanaClientStore,
@@ -485,46 +485,6 @@ export class SolanaStoreHandler {
 
       // "idle" — no event needed
     }
-  }
-
-  // ============================================================
-  // Explicit Signature Tracking (no store state for signatures)
-  // ============================================================
-
-  /**
-   * Track a signature event. Framework-kit's store does not track signMessage
-   * or signTransaction state, so this must be called explicitly.
-   * Uses the store's current wallet address for attribution.
-   */
-  public trackSignature(
-    status: "requested" | "confirmed" | "rejected",
-    options?: { message?: string; signatureHash?: string }
-  ): void {
-    const address = this.lastAddress;
-    if (!address || !this.formo.isAutocaptureEnabled("signature")) {
-      return;
-    }
-
-    const statusMap: Record<string, SignatureStatus> = {
-      requested: SignatureStatus.REQUESTED,
-      confirmed: SignatureStatus.CONFIRMED,
-      rejected: SignatureStatus.REJECTED,
-    };
-
-    this.formo.signature({
-      status: statusMap[status],
-      chainId: this.chainId,
-      address,
-      message: options?.message || "",
-      ...(options?.signatureHash && { signatureHash: options.signatureHash }),
-    });
-  }
-
-  /**
-   * Get the current tracked address (if connected).
-   */
-  public getCurrentAddress(): string | undefined {
-    return this.lastAddress;
   }
 
   // ============================================================

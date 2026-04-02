@@ -1997,7 +1997,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * ```tsx
    * formo.solana.setStore(client.store);
    * formo.solana.setCluster("devnet");
-   * formo.solana.trackSignature('requested', { message: 'Hello' });
+   * // For signatures, use formo.signature() directly
    * ```
    */
   get solana(): SolanaManager {

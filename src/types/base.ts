@@ -239,8 +239,8 @@ export interface Options {
    * Pass `store: client.store` from framework-kit for automatic tracking of
    * wallet connect/disconnect and transaction events.
    *
-   * For signMessage/signTransaction, use formo.solana.trackSignature() or
-   * formo.signature() directly (framework-kit doesn't track these in the store).
+   * For signMessage/signTransaction, use formo.signature() directly
+   * (framework-kit doesn't track these in the store).
    *
    * @see https://github.com/solana-foundation/framework-kit
    */

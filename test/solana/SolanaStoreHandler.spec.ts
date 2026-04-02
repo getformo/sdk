@@ -561,47 +561,6 @@ describe("SolanaStoreHandler", () => {
     });
   });
 
-  // -- Signature Tracking in Store Mode --
-
-  describe("Signature Tracking", () => {
-    it("should emit signature events via trackSignature", () => {
-      const store = createMockStore({
-        wallet: {
-          status: "connected",
-          connectorId: "phantom",
-          session: {
-            account: { address: MOCK_ADDRESS },
-            connector: { id: "phantom", name: "Phantom" },
-            disconnect: async () => {},
-          },
-        },
-      });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
-
-      handler.trackSignature("requested", { message: "Hello" });
-      handler.trackSignature("confirmed", { message: "Hello", signatureHash: "abc" });
-
-      expect(mockFormo.signature.calledTwice).to.be.true;
-      expect(mockFormo.signature.firstCall.args[0].status).to.equal("requested");
-      expect(mockFormo.signature.firstCall.args[0].address).to.equal(MOCK_ADDRESS);
-      expect(mockFormo.signature.secondCall.args[0].status).to.equal("confirmed");
-      expect(mockFormo.signature.secondCall.args[0].signatureHash).to.equal("abc");
-
-      handler.cleanup();
-    });
-
-    it("should not emit signature events when not connected", () => {
-      const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
-
-      handler.trackSignature("requested", { message: "Hello" });
-
-      expect(mockFormo.signature.called).to.be.false;
-
-      handler.cleanup();
-    });
-  });
-
   // -- Cluster Detection --
 
   describe("Cluster Detection", () => {

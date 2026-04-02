@@ -6,7 +6,7 @@
  * of wallet connect/disconnect and transaction lifecycle events.
  *
  * For signMessage/signTransaction tracking (not captured by the store),
- * use formo.solana.trackSignature() or formo.signature() directly.
+ * use formo.signature() directly with the address and chainId.
  *
  * For manual event tracking without the store, use the core API directly:
  * formo.transaction(), formo.signature(), formo.connect(), formo.disconnect().
@@ -63,43 +63,6 @@ export class SolanaManager {
    */
   setCluster(cluster: SolanaCluster): void {
     this.storeHandler?.setCluster(cluster);
-  }
-
-  /**
-   * Track a signature (signMessage / signTransaction) event.
-   *
-   * Framework-kit's store does not track signature state, so this must be
-   * called explicitly. Uses the store's current wallet address for attribution.
-   *
-   * Alternatively, you can call formo.signature() directly if you have the
-   * address and chainId available.
-   *
-   * @param status - The signature status
-   * @param options - Details about the signature request
-   *
-   * @example
-   * ```tsx
-   * formo.solana.trackSignature('requested', { message: 'Hello' });
-   * try {
-   *   const sig = await wallet.signMessage(encodedMessage);
-   *   formo.solana.trackSignature('confirmed', { message: 'Hello', signatureHash: toHex(sig) });
-   * } catch (e) {
-   *   formo.solana.trackSignature('rejected', { message: 'Hello' });
-   * }
-   * ```
-   */
-  trackSignature(
-    status: "requested" | "confirmed" | "rejected",
-    options?: { message?: string; signatureHash?: string }
-  ): void {
-    if (this.storeHandler) {
-      this.storeHandler.trackSignature(status, options);
-    } else {
-      logger.warn(
-        "SolanaManager: trackSignature() called but no store is configured. " +
-        "Use formo.solana.setStore(client.store) or call formo.signature() directly."
-      );
-    }
   }
 
   cleanup(): void {

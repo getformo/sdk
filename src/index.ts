@@ -7,6 +7,7 @@ export type { PrivyUser, PrivyLinkedAccount, PrivyAccountType, PrivyProfilePrope
 
 // Solana integration exports
 export { SolanaManager } from "./solana";
+export { SOLANA_CHAIN_IDS, DEFAULT_SOLANA_CHAIN_ID, isSolanaChainId } from "./solana";
 export type {
   SolanaOptions,
   SolanaCluster,
