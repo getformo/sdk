@@ -336,14 +336,16 @@ export class SolanaStoreHandler {
       chainId: this.chainId,
     });
 
-    if (this.lastAddress && this.formo.isAutocaptureEnabled("chain")) {
+    if (this.lastAddress) {
       this.lastChainId = this.chainId;
-      this.formo.chain({
-        chainId: this.chainId,
-        address: this.lastAddress,
-      }).catch((error) => {
-        logger.error("SolanaStoreHandler: Error emitting chain event", error);
-      });
+      if (this.formo.isAutocaptureEnabled("chain")) {
+        this.formo.chain({
+          chainId: this.chainId,
+          address: this.lastAddress,
+        }).catch((error) => {
+          logger.error("SolanaStoreHandler: Error emitting chain event", error);
+        });
+      }
     }
   }
 
