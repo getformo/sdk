@@ -307,6 +307,44 @@ describe("SolanaStoreHandler", () => {
 
       handler.cleanup();
     });
+
+    it("should handle connector change with same address", () => {
+      const store = createMockStore({
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[1]!.providerName).to.equal("Phantom");
+
+      // Switch connector (same address, different wallet)
+      store._setState({
+        wallet: {
+          status: "connected",
+          connectorId: "solflare",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "solflare", name: "Solflare" },
+            disconnect: async () => {},
+          },
+        },
+      });
+
+      // Should disconnect old and connect with new provider metadata
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      expect(mockFormo.connect.calledTwice).to.be.true;
+      expect(mockFormo.connect.secondCall.args[1]!.providerName).to.equal("Solflare");
+
+      handler.cleanup();
+    });
   });
 
   // -- Transaction Tracking --
@@ -609,6 +647,52 @@ describe("SolanaStoreHandler", () => {
       });
 
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+
+      handler.cleanup();
+    });
+
+    it("should react to cluster endpoint changes in the store", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+        wallet: {
+          status: "connected",
+          connectorId: "phantom",
+          session: {
+            account: { address: MOCK_ADDRESS },
+            connector: { id: "phantom", name: "Phantom" },
+            disconnect: async () => {},
+          },
+        },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+
+      // Switch to mainnet
+      store._setState({
+        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: "ready" },
+      });
+
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+      expect(mockFormo.chain.calledOnce).to.be.true;
+      expect(mockFormo.chain.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+      expect(mockFormo.chain.firstCall.args[0].address).to.equal(MOCK_ADDRESS);
+
+      handler.cleanup();
+    });
+
+    it("should not emit chain event when not connected", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+
+      store._setState({
+        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: "ready" },
+      });
+
+      // chainId should update but no event emitted
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+      expect(mockFormo.chain.called).to.be.false;
 
       handler.cleanup();
     });

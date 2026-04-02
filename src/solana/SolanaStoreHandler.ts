@@ -91,6 +91,7 @@ export class SolanaStoreHandler {
 
     this.setupWalletSubscription();
     this.setupTransactionSubscription();
+    this.setupClusterSubscription();
 
     // Check initial wallet state
     this.checkInitialWalletState();
@@ -193,12 +194,18 @@ export class SolanaStoreHandler {
       this.handleConnect(wallet);
     } else if (
       wallet.status === "connected" &&
-      prevWallet.status === "connected" &&
-      wallet.session.account.address !== prevWallet.session.account.address
+      prevWallet.status === "connected"
     ) {
-      // connected(addressA) → connected(addressB): account switch
-      this.handleDisconnect();
-      this.handleConnect(wallet);
+      // connected → connected: check for account switch OR connector change
+      const addressChanged =
+        wallet.session.account.address !== prevWallet.session.account.address;
+      const connectorChanged =
+        wallet.connectorId !== prevWallet.connectorId;
+
+      if (addressChanged || connectorChanged) {
+        this.handleDisconnect();
+        this.handleConnect(wallet);
+      }
     }
 
     this.lastWalletStatus = wallet.status;
@@ -254,6 +261,55 @@ export class SolanaStoreHandler {
 
     this.lastAddress = undefined;
     this.lastChainId = undefined;
+  }
+
+  // ============================================================
+  // Cluster Subscription
+  // ============================================================
+
+  private setupClusterSubscription(): void {
+    const unsubscribe = this.store.subscribe(
+      (state: SolanaClientState) => state.cluster.endpoint,
+      (endpoint, prevEndpoint) => {
+        if (endpoint !== prevEndpoint) {
+          this.handleClusterChange(endpoint);
+        }
+      }
+    );
+    this.unsubscribers.push(unsubscribe);
+
+    logger.info("SolanaStoreHandler: Cluster subscription set up");
+  }
+
+  private handleClusterChange(endpoint: string): void {
+    const detected = this.detectClusterFromEndpoint(endpoint);
+    if (!detected) {
+      return;
+    }
+
+    const previousCluster = this.cluster;
+    if (detected === previousCluster) {
+      return;
+    }
+
+    this.cluster = detected;
+    this.chainId = SOLANA_CHAIN_IDS[detected];
+
+    logger.info("SolanaStoreHandler: Cluster changed", {
+      from: previousCluster,
+      to: detected,
+      chainId: this.chainId,
+    });
+
+    if (this.lastAddress && this.formo.isAutocaptureEnabled("chain")) {
+      this.lastChainId = this.chainId;
+      this.formo.chain({
+        chainId: this.chainId,
+        address: this.lastAddress,
+      }).catch((error) => {
+        logger.error("SolanaStoreHandler: Error emitting chain event", error);
+      });
+    }
   }
 
   // ============================================================
@@ -462,17 +518,23 @@ export class SolanaStoreHandler {
   private detectClusterFromStore(store: SolanaClientStore): SolanaCluster | null {
     try {
       const endpoint = store.getState().cluster.endpoint;
-      if (!endpoint) return null;
-      const lower = endpoint.toLowerCase();
-      if (lower.includes("devnet")) return "devnet";
-      if (lower.includes("testnet")) return "testnet";
-      if (lower.includes("localhost") || lower.includes("127.0.0.1")) return "localnet";
-      // mainnet-beta is the default for production endpoints
-      if (lower.includes("mainnet")) return "mainnet-beta";
-      return null;
+      return this.detectClusterFromEndpoint(endpoint);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Detect cluster from an RPC endpoint URL.
+   */
+  private detectClusterFromEndpoint(endpoint: string | undefined): SolanaCluster | null {
+    if (!endpoint) return null;
+    const lower = endpoint.toLowerCase();
+    if (lower.includes("devnet")) return "devnet";
+    if (lower.includes("testnet")) return "testnet";
+    if (lower.includes("localhost") || lower.includes("127.0.0.1")) return "localnet";
+    if (lower.includes("mainnet")) return "mainnet-beta";
+    return null;
   }
 
   // ============================================================
