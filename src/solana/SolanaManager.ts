@@ -67,7 +67,11 @@ export class SolanaManager {
    * In most cases, the cluster is auto-detected from the store's endpoint.
    */
   setCluster(cluster: SolanaCluster): void {
-    this.storeHandler?.setCluster(cluster);
+    if (this.storeHandler) {
+      this.storeHandler.setCluster(cluster);
+    } else {
+      this.pendingCluster = cluster;
+    }
   }
 
   cleanup(): void {
