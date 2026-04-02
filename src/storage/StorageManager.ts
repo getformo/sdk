@@ -48,12 +48,25 @@ export class StorageManager {
       case "cookieStorage":
         return new CookieStorage(this.writeKey);
       case "localStorage":
-        return new WebStorage(this.writeKey, localStorage);
       case "sessionStorage":
-        return new WebStorage(this.writeKey, sessionStorage);
+        return new WebStorage(
+          this.writeKey,
+          this.getWebStorage(type) as Storage
+        );
       case "memoryStorage":
       default:
         return new MemoryStorage(this.writeKey);
+    }
+  }
+
+  private getWebStorage(
+    type: "localStorage" | "sessionStorage"
+  ): Storage | null {
+    try {
+      const storage = type === "localStorage" ? localStorage : sessionStorage;
+      return storage ?? null;
+    } catch {
+      return null;
     }
   }
 }
