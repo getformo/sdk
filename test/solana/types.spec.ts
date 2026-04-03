@@ -4,11 +4,7 @@ import {
   SOLANA_CHAIN_IDS,
   SOLANA_CLUSTERS_BY_ID,
   DEFAULT_SOLANA_CHAIN_ID,
-  isSolanaWalletContext,
-  isSolanaAdapter,
-  ISolanaAdapter,
-  SolanaWalletContext,
-  WalletReadyState,
+  isSolanaChainId,
 } from "../../src/solana/types";
 
 describe("Solana Types", () => {
@@ -48,98 +44,22 @@ describe("Solana Types", () => {
     });
   });
 
-  describe("isSolanaWalletContext", () => {
-    it("should return true for wallet context objects", () => {
-      const mockContext: Partial<SolanaWalletContext> = {
-        wallets: [],
-        wallet: null,
-        publicKey: null,
-        connected: false,
-        connecting: false,
-        disconnecting: false,
-        autoConnect: false,
-        select: () => {},
-        connect: async () => {},
-        disconnect: async () => {},
-        sendTransaction: async () => "",
-      };
-
-      expect(isSolanaWalletContext(mockContext as SolanaWalletContext)).to.be
-        .true;
+  describe("isSolanaChainId", () => {
+    it("should return true for Solana chain IDs", () => {
+      expect(isSolanaChainId(900001)).to.be.true;
+      expect(isSolanaChainId(900002)).to.be.true;
+      expect(isSolanaChainId(900003)).to.be.true;
+      expect(isSolanaChainId(900004)).to.be.true;
     });
 
-    it("should return false for wallet adapter objects", () => {
-      const mockAdapter: Partial<ISolanaAdapter> = {
-        name: "Test Wallet",
-        url: "https://test.wallet",
-        icon: "icon.png",
-        readyState: WalletReadyState.Installed,
-        publicKey: null,
-        connecting: false,
-        connected: false,
-        connect: async () => {},
-        disconnect: async () => {},
-        on: () => {},
-        off: () => {},
-      };
-
-      expect(isSolanaWalletContext(mockAdapter as ISolanaAdapter)).to.be
-        .false;
+    it("should return false for EVM chain IDs", () => {
+      expect(isSolanaChainId(1)).to.be.false;
+      expect(isSolanaChainId(137)).to.be.false;
     });
 
     it("should return false for null/undefined", () => {
-      expect(isSolanaWalletContext(null)).to.be.false;
-      expect(isSolanaWalletContext(undefined)).to.be.false;
-    });
-
-    it("should return false for non-objects", () => {
-      expect(isSolanaWalletContext("wallet" as any)).to.be.false;
-      expect(isSolanaWalletContext(123 as any)).to.be.false;
-    });
-  });
-
-  describe("isSolanaAdapter", () => {
-    it("should return true for wallet adapter objects", () => {
-      const mockAdapter: Partial<ISolanaAdapter> = {
-        name: "Test Wallet",
-        url: "https://test.wallet",
-        icon: "icon.png",
-        readyState: WalletReadyState.Installed,
-        publicKey: null,
-        connecting: false,
-        connected: false,
-        connect: async () => {},
-        disconnect: async () => {},
-        on: () => {},
-        off: () => {},
-      };
-
-      expect(isSolanaAdapter(mockAdapter as ISolanaAdapter)).to.be
-        .true;
-    });
-
-    it("should return false for wallet context objects", () => {
-      const mockContext: Partial<SolanaWalletContext> = {
-        wallets: [],
-        wallet: null,
-        publicKey: null,
-        connected: false,
-        connecting: false,
-        disconnecting: false,
-        autoConnect: false,
-        select: () => {},
-        connect: async () => {},
-        disconnect: async () => {},
-        sendTransaction: async () => "",
-      };
-
-      expect(isSolanaAdapter(mockContext as SolanaWalletContext)).to.be
-        .false;
-    });
-
-    it("should return false for null/undefined", () => {
-      expect(isSolanaAdapter(null)).to.be.false;
-      expect(isSolanaAdapter(undefined)).to.be.false;
+      expect(isSolanaChainId(null)).to.be.false;
+      expect(isSolanaChainId(undefined)).to.be.false;
     });
   });
 });

@@ -135,6 +135,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private isWagmiMode: boolean = false;
 
+  /**
+   * Flag indicating if EVM provider tracking is disabled.
+   * When true, all EIP-1193/EIP-6963 detection and wrapping is skipped.
+   */
+  private isEvmDisabled: boolean = false;
+
   /** Instance-level flag so multiple SDK instances don't interfere. */
   private crossSubdomainCookies: boolean;
 
@@ -165,6 +171,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Check if Wagmi mode is enabled
     this.isWagmiMode = !!options.wagmi;
+    this.isEvmDisabled = options.evm === false;
     this.crossSubdomainCookies = options.crossSubdomainCookies ?? true;
     // Normalize so downstream consumers (EventFactory) read the resolved value.
     options.crossSubdomainCookies = this.crossSubdomainCookies;
@@ -206,8 +213,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info("User has previously opted out of tracking");
     }
 
-    // Initialize Wagmi handler if Wagmi mode is enabled
-    if (this.isWagmiMode && options.wagmi) {
+    // Initialize EVM provider tracking (unless explicitly disabled)
+    if (this.isEvmDisabled) {
+      logger.info("FormoAnalytics: EVM provider tracking disabled");
+    } else if (this.isWagmiMode && options.wagmi) {
       logger.info("FormoAnalytics: Initializing in Wagmi mode");
       this.wagmiHandler = new WagmiEventHandler(
         this,
@@ -245,8 +254,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Skip provider detection in Wagmi mode
-    if (!analytics.isWagmiMode) {
+    // Skip provider detection in Wagmi mode or when EVM is disabled
+    if (analytics.isEvmDisabled) {
+      logger.info("FormoAnalytics: Skipping provider detection (EVM disabled)");
+    } else if (!analytics.isWagmiMode) {
       // Auto-detect wallet provider
       analytics._providers = await analytics.getProviders();
       await analytics.detectWallets(analytics._providers);
@@ -1995,10 +2006,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    *
    * @example
    * ```tsx
-   * formo.solana.setWallet(wallet);
-   * formo.solana.setConnection(connection);
+   * formo.solana.setStore(client.store);
    * formo.solana.setCluster("devnet");
-   * formo.solana.syncWalletState();
+   * // For signatures, use formo.signature() directly
    * ```
    */
   get solana(): SolanaManager {

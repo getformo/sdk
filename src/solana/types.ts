@@ -1,10 +1,10 @@
 /**
  * Solana-specific type definitions for wallet event tracking
  *
- * These types provide TypeScript interfaces for Solana Wallet Adapter integration,
- * allowing the SDK to hook into Solana wallet events to track wallet interactions.
+ * Core types for the Solana integration: cluster mappings, chain ID utilities,
+ * and configuration options. Framework-kit store types are in storeTypes.ts.
  *
- * @see https://github.com/anza-xyz/wallet-adapter
+ * @see https://github.com/solana-foundation/framework-kit
  */
 
 /**
@@ -52,7 +52,7 @@ export function isSolanaChainId(chainId: number | undefined | null): boolean {
 
 /**
  * Solana PublicKey interface
- * Represents a Solana public key (32 bytes, Base58 encoded)
+ * Used by address validation utilities.
  */
 export interface SolanaPublicKey {
   toBase58(): string;
@@ -62,227 +62,35 @@ export interface SolanaPublicKey {
 }
 
 /**
- * Solana transaction signature (64 bytes, Base58 encoded)
+ * Unsubscribe function type
  */
-export type TransactionSignature = string;
-
-/**
- * Solana wallet adapter state
- */
-export type WalletAdapterState =
-  | "connected"
-  | "disconnected"
-  | "connecting"
-  | "disconnecting";
-
-/**
- * Solana wallet adapter interface
- * Based on @solana/wallet-adapter-base WalletAdapter
- */
-export interface ISolanaAdapter {
-  name: string;
-  url: string;
-  icon: string;
-  readyState: WalletReadyState;
-  publicKey: SolanaPublicKey | null;
-  connecting: boolean;
-  connected: boolean;
-
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  sendTransaction?(
-    transaction: SolanaTransaction,
-    connection: SolanaConnection,
-    options?: SendTransactionOptions
-  ): Promise<TransactionSignature>;
-  signTransaction?(
-    transaction: SolanaTransaction
-  ): Promise<SolanaTransaction>;
-  signAllTransactions?(
-    transactions: SolanaTransaction[]
-  ): Promise<SolanaTransaction[]>;
-  signMessage?(message: Uint8Array): Promise<Uint8Array>;
-
-  on(event: "connect", listener: (publicKey: SolanaPublicKey) => void): void;
-  on(event: "disconnect", listener: () => void): void;
-  on(event: "error", listener: (error: WalletError) => void): void;
-  on(event: "readyStateChange", listener: (readyState: WalletReadyState) => void): void;
-  off(event: string, listener: (...args: unknown[]) => void): void;
-  removeAllListeners?(event?: string): void;
-}
-
-/**
- * Solana wallet ready state
- */
-export enum WalletReadyState {
-  Installed = "Installed",
-  NotDetected = "NotDetected",
-  Loadable = "Loadable",
-  Unsupported = "Unsupported",
-}
-
-/**
- * Solana wallet error
- */
-export interface WalletError extends Error {
-  error?: unknown;
-}
-
-/**
- * Solana transaction interface (minimal)
- */
-export interface SolanaTransaction {
-  signature?: Uint8Array;
-  serialize(): Uint8Array;
-  feePayer?: SolanaPublicKey;
-  recentBlockhash?: string;
-}
-
-/**
- * Solana connection interface (minimal)
- */
-export interface SolanaConnection {
-  rpcEndpoint: string;
-  commitment?: string;
-  getSignatureStatus?(
-    signature: string
-  ): Promise<{ value: SignatureStatus | null }>;
-  getSignatureStatuses?(
-    signatures: string[]
-  ): Promise<{ value: (SignatureStatus | null)[] }>;
-}
-
-/**
- * Solana signature status
- */
-export interface SignatureStatus {
-  slot: number;
-  confirmations: number | null;
-  err: unknown | null;
-  confirmationStatus?: "processed" | "confirmed" | "finalized";
-}
-
-/**
- * Send transaction options
- */
-export interface SendTransactionOptions {
-  skipPreflight?: boolean;
-  preflightCommitment?: string;
-  maxRetries?: number;
-  minContextSlot?: number;
-}
-
-/**
- * Wallet entry as returned by @solana/wallet-adapter-react useWallet().wallet
- * This is { adapter, readyState }, not a direct adapter.
- */
-export interface SolanaWalletEntry {
-  adapter: ISolanaAdapter;
-  readyState: WalletReadyState;
-}
-
-/**
- * @deprecated Use SolanaWalletEntry instead
- */
-export type SolanaWallet = SolanaWalletEntry;
-
-/**
- * Solana Wallet Context interface
- * Based on @solana/wallet-adapter-react useWallet hook
- * @see https://github.com/anza-xyz/wallet-adapter/blob/master/packages/core/react/src/useWallet.ts
- */
-export interface SolanaWalletContext {
-  autoConnect: boolean;
-  wallets: SolanaWalletEntry[];
-  wallet: SolanaWalletEntry | null;
-  publicKey: SolanaPublicKey | null;
-  connecting: boolean;
-  connected: boolean;
-  disconnecting: boolean;
-
-  select(walletName: string | null): void;
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  sendTransaction(
-    transaction: SolanaTransaction,
-    connection: SolanaConnection,
-    options?: SendTransactionOptions
-  ): Promise<TransactionSignature>;
-  signTransaction?(
-    transaction: SolanaTransaction
-  ): Promise<SolanaTransaction>;
-  signAllTransactions?(
-    transactions: SolanaTransaction[]
-  ): Promise<SolanaTransaction[]>;
-  signMessage?(message: Uint8Array): Promise<Uint8Array>;
-}
+export type UnsubscribeFn = () => void;
 
 /**
  * Solana options for FormoAnalytics
  */
 export interface SolanaOptions {
   /**
-   * The Solana wallet adapter instance or wallet context
-   * Can be a single wallet adapter or the useWallet() context
+   * The framework-kit client store (client.store) for automatic event tracking.
+   * When provided, wallet connect/disconnect and transaction events are tracked
+   * automatically by subscribing to zustand store state changes.
+   *
+   * This is the recommended approach for apps using @solana-foundation/framework-kit.
+   *
+   * @example
+   * ```tsx
+   * import { createClient } from '@solana-foundation/framework-kit';
+   * const client = createClient({ endpoint, walletConnectors: autoDiscover() });
+   * const formo = await Formo.init(writeKey, { solana: { store: client.store } });
+   * ```
    */
-  wallet?: ISolanaAdapter | SolanaWalletContext;
+  store?: import("./storeTypes").SolanaClientStore;
 
   /**
-   * The Solana connection for tracking transaction confirmations
-   */
-  connection?: SolanaConnection;
-
-  /**
-   * The Solana cluster/network
-   * @default "mainnet-beta"
+   * The Solana cluster/network.
+   * Usually auto-detected from the store's endpoint URL.
+   * Only needed for custom RPC URLs that don't contain a recognizable cluster name.
+   * @default auto-detected, or "mainnet-beta" if detection fails
    */
   cluster?: SolanaCluster;
-
-}
-
-/**
- * Internal connection state for Solana event handler.
- * Tracks the last known wallet connection for disconnect event payloads
- * and provides a reentrancy guard for concurrent event handling.
- */
-export interface SolanaConnectionState {
-  lastAddress?: string;
-  lastChainId?: number;
-  isProcessing: boolean;
-}
-
-/**
- * Unsubscribe function type
- */
-export type UnsubscribeFn = () => void;
-
-/**
- * Check if an object is a SolanaWalletContext (has wallets array)
- */
-export function isSolanaWalletContext(
-  obj: ISolanaAdapter | SolanaWalletContext | undefined | null
-): obj is SolanaWalletContext {
-  return (
-    obj !== null &&
-    obj !== undefined &&
-    typeof obj === "object" &&
-    "wallets" in obj &&
-    Array.isArray((obj as SolanaWalletContext).wallets)
-  );
-}
-
-/**
- * Check if an object is a ISolanaAdapter
- */
-export function isSolanaAdapter(
-  obj: ISolanaAdapter | SolanaWalletContext | undefined | null
-): obj is ISolanaAdapter {
-  return (
-    obj !== null &&
-    obj !== undefined &&
-    typeof obj === "object" &&
-    "name" in obj &&
-    "connect" in obj &&
-    !("wallets" in obj)
-  );
 }

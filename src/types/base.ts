@@ -227,6 +227,14 @@ export interface Options {
    */
   autocapture?: boolean | AutocaptureOptions;
   /**
+   * EVM provider tracking.
+   * Set to `false` to disable all EVM provider detection and tracking
+   * (EIP-1193, EIP-6963, window.ethereum). Useful for Solana-only apps
+   * that don't need EVM wallet event capture.
+   * @default true
+   */
+  evm?: boolean;
+  /**
    * Wagmi integration configuration
    * When provided, the SDK will hook into Wagmi's event system instead of wrapping EIP-1193 providers
    * This replaces the default provider tracking with Wagmi's config.subscribe() and MutationCache
@@ -235,11 +243,14 @@ export interface Options {
    */
   wagmi?: WagmiOptions;
   /**
-   * Solana Wallet Adapter integration configuration
-   * When provided, the SDK will track Solana wallet events in addition to EVM wallet events
-   * This works alongside EIP-1193/Wagmi tracking - you can track both EVM and Solana wallets
-   * @requires @solana/wallet-adapter-base (optional peer dependency)
-   * @requires @solana/wallet-adapter-react (optional peer dependency, for React apps)
+   * Solana integration configuration.
+   * Pass `store: client.store` from framework-kit for automatic tracking of
+   * wallet connect/disconnect and transaction events.
+   *
+   * For signMessage/signTransaction, use formo.signature() directly
+   * (framework-kit doesn't track these in the store).
+   *
+   * @see https://github.com/solana-foundation/framework-kit
    */
   solana?: SolanaOptions;
   /**

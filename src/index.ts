@@ -7,13 +7,14 @@ export type { PrivyUser, PrivyLinkedAccount, PrivyAccountType, PrivyProfilePrope
 
 // Solana integration exports
 export { SolanaManager } from "./solana";
+export { SOLANA_CHAIN_IDS, DEFAULT_SOLANA_CHAIN_ID, isSolanaChainId } from "./solana";
 export type {
   SolanaOptions,
   SolanaCluster,
-  ISolanaAdapter,
-  SolanaWalletContext,
-  SolanaPublicKey,
-  SolanaConnection,
+} from "./solana";
+export type {
+  SolanaClientStore,
+  SolanaClientState,
 } from "./solana";
 
 if (typeof window !== "undefined") window.formofy = formofy;

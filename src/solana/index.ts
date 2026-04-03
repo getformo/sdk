@@ -1,13 +1,17 @@
 /**
  * Solana integration module
  *
- * Provides integration with Solana Wallet Adapter for wallet event tracking.
- * This module exports the SolanaAdapter and related types.
+ * Provides automatic event capture for Solana wallets via framework-kit's
+ * zustand store. Connect/disconnect and transaction events are tracked
+ * automatically. Signature events (signMessage/signTransaction) require
+ * explicit tracking via formo.signature() since framework-kit
+ * doesn't track these in store state.
  *
- * @see https://github.com/anza-xyz/wallet-adapter
+ * @see https://github.com/solana-foundation/framework-kit
  */
 
-export { SolanaAdapter } from "./SolanaAdapter";
+export { SolanaStoreHandler } from "./SolanaStoreHandler";
 export { SolanaManager } from "./SolanaManager";
 export * from "./types";
+export * from "./storeTypes";
 export * from "./address";
