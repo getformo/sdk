@@ -227,6 +227,14 @@ export interface Options {
    */
   autocapture?: boolean | AutocaptureOptions;
   /**
+   * EVM provider tracking.
+   * Set to `false` to disable all EVM provider detection and tracking
+   * (EIP-1193, EIP-6963, window.ethereum). Useful for Solana-only apps
+   * that don't need EVM wallet event capture.
+   * @default true
+   */
+  evm?: boolean;
+  /**
    * Wagmi integration configuration
    * When provided, the SDK will hook into Wagmi's event system instead of wrapping EIP-1193 providers
    * This replaces the default provider tracking with Wagmi's config.subscribe() and MutationCache
