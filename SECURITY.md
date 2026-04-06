@@ -38,7 +38,7 @@ When loading the SDK via a `<script>` tag from a CDN (e.g. unpkg), you should us
 
 ```html
 <script
-  src="https://unpkg.com/@formo/analytics@latest/dist/index.umd.min.js"
+  src="https://unpkg.com/@formo/analytics@1.0.0/dist/index.umd.min.js"
   integrity="sha384-<HASH>"
   crossorigin="anonymous"
 ></script>
@@ -55,6 +55,12 @@ The SDK is compatible with strict Content Security Policies. The minimum require
 ```
 script-src 'self';
 connect-src 'self' https://events.formo.so;
+```
+
+If using a custom `apiHost` (first-party proxy), add your proxy domain to `connect-src`:
+
+```
+connect-src 'self' https://events.formo.so https://your-proxy.example.com;
 ```
 
 If loading via CDN, add the CDN origin to `script-src`:
