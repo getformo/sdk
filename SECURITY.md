@@ -137,10 +137,6 @@ Consent flags are stored in project-specific cookies and persist across sessions
 | **Signature** | Status, chain ID, address, message content, signature hash | On `personal_sign` / `eth_signTypedData_v4` (if autocapture enabled) |
 | **Identity** | Anonymous ID (UUID), optional user ID | Every event |
 
-### Privy Integration
-
-When using the optional Privy integration, calling `parsePrivyProperties()` and passing the result to `formo.identify()` will include linked social profile identifiers (email, Twitter username, Discord username, etc.) alongside the wallet address. This is **opt-in** — the integrator explicitly calls this function and controls what data is sent.
-
 ### Controlling Data Collection
 
 - **Disable EVM tracking entirely:** `{ evm: false }`
