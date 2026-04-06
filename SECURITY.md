@@ -44,7 +44,7 @@ When loading the SDK via a `<script>` tag from a CDN (e.g. unpkg), you should us
 ></script>
 ```
 
-SRI hashes for each release are published alongside the package. See the [SRI documentation](https://docs.formo.so/security/sri) for per-version hashes and verification instructions.
+SRI hashes for each release are published alongside the package. See the [SRI documentation](https://docs.formo.so/security/sri) for per-version hashes and verification instructions, or check the [GitHub releases page](https://github.com/getformo/sdk/releases).
 
 **Using the npm package** (`@formo/analytics` via npm/pnpm/yarn) avoids CDN delivery risks entirely, since the package is verified by the registry and lockfile.
 
