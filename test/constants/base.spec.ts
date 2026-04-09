@@ -2,7 +2,6 @@ import { describe, it } from "mocha";
 import { expect } from "chai";
 import {
   SESSION_TRAFFIC_SOURCE_KEY,
-  SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
   LOCAL_ANONYMOUS_ID_KEY,
   CONSENT_OPT_OUT_KEY,
@@ -24,10 +23,6 @@ describe("Constants - Backward Compatibility", () => {
   describe("Storage key values must not change", () => {
     it("SESSION_TRAFFIC_SOURCE_KEY should have stable value", () => {
       expect(SESSION_TRAFFIC_SOURCE_KEY).to.equal("traffic-source");
-    });
-
-    it("SESSION_CURRENT_URL_KEY should have stable value", () => {
-      expect(SESSION_CURRENT_URL_KEY).to.equal("analytics-current-url");
     });
 
     it("SESSION_USER_ID_KEY should have stable value", () => {

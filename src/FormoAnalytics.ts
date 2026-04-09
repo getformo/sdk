@@ -3,7 +3,6 @@ import {
   EVENTS_API_HOST,
   EventType,
   LOCAL_ANONYMOUS_ID_KEY,
-  SESSION_CURRENT_URL_KEY,
   SESSION_USER_ID_KEY,
   CONSENT_OPT_OUT_KEY,
   TEventType,
@@ -144,6 +143,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** Instance-level flag so multiple SDK instances don't interfere. */
   private crossSubdomainCookies: boolean;
 
+  /** In-memory URL used to deduplicate SPA pageview events. */
+  private _currentUrl: string = "";
+
   config: Config;
   currentChainId?: ChainID;
   currentAddress?: Address;
@@ -243,6 +245,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.solanaManager = new SolanaManager(this, options.solana);
     }
 
+    this._currentUrl = window.location.href;
     this.trackPageHit();
     this.trackPageHits();
   }
@@ -1660,10 +1663,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async onLocationChange(): Promise<void> {
-    const currentUrl = cookie().get(SESSION_CURRENT_URL_KEY);
-
-    if (currentUrl !== window.location.href) {
-      cookie().set(SESSION_CURRENT_URL_KEY, window.location.href);
+    if (this._currentUrl !== window.location.href) {
+      this._currentUrl = window.location.href;
       this.trackPageHit();
     }
   }
