@@ -41,8 +41,8 @@
     "mipd": "0.0.7"
   },
   "devDependencies": {
-    "@size-limit/esbuild": "^12.0.1",
-    "@size-limit/file": "^12.0.1",
+    "@size-limit/esbuild": "^12.1.0",
+    "@size-limit/file": "^12.1.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/chai": "^4.3.20",
@@ -66,7 +66,7 @@
     "react-dom": "^19.2.4",
     "sinon": "^21.0.3",
     "sinon-chai": "^3.7.0",
-    "size-limit": "^12.0.1",
+    "size-limit": "^12.1.0",
     "ts-loader": "^9.5.7",
     "ts-node": "^10.8.2",
     "typescript": "^5.7.3",
