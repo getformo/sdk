@@ -64,7 +64,7 @@
     "prettier": "^3.8.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "sinon": "^21.0.3",
+    "sinon": "^21.1.2",
     "sinon-chai": "^3.7.0",
     "size-limit": "^12.1.0",
     "ts-loader": "^9.5.7",
