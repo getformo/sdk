@@ -1,6 +1,7 @@
 import { UUID } from "crypto";
 import { Address, ChainID, Nullable } from "./base";
 import { TEventChannel, TEventType } from "../constants";
+import { CLICK_ID_PARAMS } from "../event/constants";
 
 export type AnonymousID = UUID;
 
@@ -25,18 +26,7 @@ export type UTMParameters = {
   utm_content: string;
 };
 export type ClickIdParameters = {
-  gclid: string;
-  gad_source: string;
-  gbraid: string;
-  wbraid: string;
-  dclid: string;
-  fbclid: string;
-  msclkid: string;
-  yclid: string;
-  ttclid: string;
-  twclid: string;
-  li_fat_id: string;
-  rdt_cid: string;
+  [K in (typeof CLICK_ID_PARAMS)[number]]: string;
 };
 export type ITrafficSource = UTMParameters &
   ClickIdParameters & {

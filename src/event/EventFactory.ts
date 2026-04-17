@@ -125,17 +125,12 @@ class EventFactory implements IEventFactory {
     return result;
   };
 
-  private extractClickIdParameters = (url: string): ClickIdParameters => {
-    const result = Object.fromEntries(
-      CLICK_ID_PARAMS.map((k) => [k, ""])
-    ) as ClickIdParameters;
-    try {
-      const urlObj = new URL(url);
-      for (const param of CLICK_ID_PARAMS) {
-        const value = urlObj.searchParams.get(param);
-        if (value) result[param] = value.trim();
-      }
-    } catch {}
+  private extractClickIdParameters = (urlObj: URL): ClickIdParameters => {
+    const result = {} as ClickIdParameters;
+    for (const param of CLICK_ID_PARAMS) {
+      const value = urlObj.searchParams.get(param);
+      result[param] = value ? value.trim() : "";
+    }
     return result;
   };
 
@@ -173,12 +168,18 @@ class EventFactory implements IEventFactory {
     const urlObj = new URL(url);
     const contextTrafficSources: ITrafficSource = {
       ...this.extractUTMParameters(url),
-      ...this.extractClickIdParameters(url),
+      ...this.extractClickIdParameters(urlObj),
       ref: this.extractReferralParameter(urlObj),
       referrer: document.referrer,
     };
     const storedTrafficSources =
       (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {};
+
+    const mergedClickIds = {} as ClickIdParameters;
+    for (const p of CLICK_ID_PARAMS) {
+      mergedClickIds[p] =
+        contextTrafficSources[p] || storedTrafficSources?.[p] || "";
+    }
 
     const finalTrafficSources: ITrafficSource = {
       ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
@@ -202,12 +203,7 @@ class EventFactory implements IEventFactory {
         "",
       utm_term:
         contextTrafficSources.utm_term || storedTrafficSources?.utm_term || "",
-      ...(Object.fromEntries(
-        CLICK_ID_PARAMS.map((p) => [
-          p,
-          contextTrafficSources[p] || storedTrafficSources?.[p] || "",
-        ])
-      ) as ClickIdParameters),
+      ...mergedClickIds,
     };
 
     // Store to session

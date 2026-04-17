@@ -3,22 +3,18 @@ const VERSION = "0";
 
 /**
  * Paid-attribution click IDs captured from the landing-page URL and persisted
- * across the session alongside UTM parameters. Keep in sync with the
- * ClickIdParameters type in src/types/events.ts.
+ * across the session alongside UTM parameters. Keep the ClickIdParameters type
+ * in src/types/events.ts derived from this array.
  */
 const CLICK_ID_PARAMS = [
   "gclid",      // Google Ads
   "gad_source", // Google Ads (newer)
-  "gbraid",     // Google Ads iOS App
-  "wbraid",     // Google Ads iOS Web
-  "dclid",      // Google Display & Video 360
   "fbclid",     // Meta (Facebook/Instagram)
   "msclkid",    // Microsoft Ads (Bing)
-  "yclid",      // Yandex.Direct
-  "ttclid",     // TikTok Ads
   "twclid",     // Twitter/X Ads
   "li_fat_id",  // LinkedIn Ads
   "rdt_cid",    // Reddit Ads
+  "ttclid",     // TikTok Ads
 ] as const;
 
 /**
