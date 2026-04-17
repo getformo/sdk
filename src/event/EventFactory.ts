@@ -7,6 +7,7 @@ import {
   Address,
   APIEvent,
   ChainID,
+  ClickIdParameters,
   IFormoEvent,
   IFormoEventContext,
   IFormoEventProperties,
@@ -25,7 +26,12 @@ import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
 import { session } from "../storage";
 import { version } from "../version";
-import { CHANNEL, VERSION, PAGE_PROPERTIES_EXCLUDED_FIELDS } from "./constants";
+import {
+  CHANNEL,
+  CLICK_ID_PARAMS,
+  PAGE_PROPERTIES_EXCLUDED_FIELDS,
+  VERSION,
+} from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
@@ -119,6 +125,15 @@ class EventFactory implements IEventFactory {
     return result;
   };
 
+  private extractClickIdParameters = (urlObj: URL): ClickIdParameters => {
+    const result = {} as ClickIdParameters;
+    for (const param of CLICK_ID_PARAMS) {
+      const value = urlObj.searchParams.get(param);
+      result[param] = value ? value.trim() : "";
+    }
+    return result;
+  };
+
   private extractReferralParameter = (urlObj: URL): string => {
     // Strategy: Check query params first, then check path pattern if configured
     // Query params logic:
@@ -153,11 +168,18 @@ class EventFactory implements IEventFactory {
     const urlObj = new URL(url);
     const contextTrafficSources: ITrafficSource = {
       ...this.extractUTMParameters(url),
+      ...this.extractClickIdParameters(urlObj),
       ref: this.extractReferralParameter(urlObj),
       referrer: document.referrer,
     };
     const storedTrafficSources =
       (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {};
+
+    const mergedClickIds = {} as ClickIdParameters;
+    for (const p of CLICK_ID_PARAMS) {
+      mergedClickIds[p] =
+        contextTrafficSources[p] || storedTrafficSources?.[p] || "";
+    }
 
     const finalTrafficSources: ITrafficSource = {
       ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
@@ -181,6 +203,7 @@ class EventFactory implements IEventFactory {
         "",
       utm_term:
         contextTrafficSources.utm_term || storedTrafficSources?.utm_term || "",
+      ...mergedClickIds,
     };
 
     // Store to session

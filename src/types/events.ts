@@ -1,6 +1,7 @@
 import { UUID } from "crypto";
 import { Address, ChainID, Nullable } from "./base";
 import { TEventChannel, TEventType } from "../constants";
+import { CLICK_ID_PARAMS } from "../event/constants";
 
 export type AnonymousID = UUID;
 
@@ -24,10 +25,14 @@ export type UTMParameters = {
   utm_term: string;
   utm_content: string;
 };
-export type ITrafficSource = UTMParameters & {
-  ref: string;
-  referrer: string;
+export type ClickIdParameters = {
+  [K in (typeof CLICK_ID_PARAMS)[number]]: string;
 };
+export type ITrafficSource = UTMParameters &
+  ClickIdParameters & {
+    ref: string;
+    referrer: string;
+  };
 
 export interface IFormoEvent extends ICommonProperties {
   context: Nullable<IFormoEventContext>;
