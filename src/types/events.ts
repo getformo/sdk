@@ -24,10 +24,25 @@ export type UTMParameters = {
   utm_term: string;
   utm_content: string;
 };
-export type ITrafficSource = UTMParameters & {
-  ref: string;
-  referrer: string;
+export type ClickIdParameters = {
+  gclid: string;
+  gad_source: string;
+  gbraid: string;
+  wbraid: string;
+  dclid: string;
+  fbclid: string;
+  msclkid: string;
+  yclid: string;
+  ttclid: string;
+  twclid: string;
+  li_fat_id: string;
+  rdt_cid: string;
 };
+export type ITrafficSource = UTMParameters &
+  ClickIdParameters & {
+    ref: string;
+    referrer: string;
+  };
 
 export interface IFormoEvent extends ICommonProperties {
   context: Nullable<IFormoEventContext>;

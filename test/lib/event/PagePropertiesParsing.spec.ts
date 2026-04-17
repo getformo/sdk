@@ -2,7 +2,8 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import { JSDOM } from "jsdom";
 import { EventFactory } from "../../../src/event/EventFactory";
-import { initStorageManager } from "../../../src/storage";
+import { initStorageManager, session } from "../../../src/storage";
+import { SESSION_TRAFFIC_SOURCE_KEY } from "../../../src/constants";
 
 /**
  * Test suite for page event property parsing functionality
@@ -148,8 +149,21 @@ describe("Page Event Property Parsing", () => {
       properties.name,
       properties
     );
-    
+
     return event.properties || {};
+  }
+
+  /**
+   * Helper to get the event context populated by EventFactory.generatePageEvent
+   */
+  async function getPageContext(properties: Record<string, any> = {}): Promise<Record<string, any>> {
+    const event = await eventFactory.generatePageEvent(
+      properties.category,
+      properties.name,
+      properties
+    );
+
+    return (event.context as Record<string, any>) || {};
   }
 
   describe("Basic URL parsing", () => {
@@ -590,6 +604,133 @@ describe("Page Event Property Parsing", () => {
       expect(props2.param2).to.equal("value2");
       // Should not have param1 from first call
       expect((props2 as any).param1).to.be.undefined;
+    });
+  });
+
+  describe("Click ID parameters (sticky across session)", () => {
+    // The StorageManager is a singleton that persists across tests and retains
+    // traffic-source entries from earlier tests. Clear that key before each test
+    // so persistence behaviour can be asserted cleanly.
+    beforeEach(() => {
+      try {
+        session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+      } catch {}
+    });
+
+    it("should capture click IDs into context on the landing pageview", async () => {
+      setMockLocation("https://formo.so/?gclid=test123&fbclid=fb456");
+
+      const context = await getPageContext();
+
+      expect(context.gclid).to.equal("test123");
+      expect(context.fbclid).to.equal("fb456");
+    });
+
+    it("should exclude click IDs from page properties", async () => {
+      setMockLocation("https://formo.so/?gclid=test123&fbclid=fb456&custom=keep");
+
+      const props = await getPageProperties();
+
+      expect(props.gclid).to.be.undefined;
+      expect(props.fbclid).to.be.undefined;
+      // Non-click-ID query params still pass through
+      expect(props.custom).to.equal("keep");
+    });
+
+    it("should persist click IDs across subsequent pageviews in the same session", async () => {
+      // Landing page has the click ID
+      setMockLocation("https://formo.so/?gclid=test123");
+      const landingContext = await getPageContext();
+      expect(landingContext.gclid).to.equal("test123");
+
+      // Navigate to a second page without the click ID; sessionStorage persists because
+      // setMockLocation creates a new JSDOM window. Carry sessionStorage over explicitly
+      // to simulate same-session navigation.
+      const storedTrafficSource = jsdom.window.sessionStorage.getItem("traffic-source");
+
+      setMockLocation("https://formo.so/dashboard");
+      if (storedTrafficSource) {
+        jsdom.window.sessionStorage.setItem("traffic-source", storedTrafficSource);
+      }
+      (global as any).sessionStorage = jsdom.window.sessionStorage;
+      initStorageManager("test-write-key");
+      eventFactory = new EventFactory();
+
+      const secondContext = await getPageContext();
+      expect(secondContext.gclid).to.equal("test123");
+    });
+
+    it("should not leak click IDs into a fresh session", async () => {
+      // Landing page has the click ID, which gets written to sessionStorage
+      setMockLocation("https://formo.so/?gclid=test123");
+      await getPageContext();
+
+      // Simulate a brand new session (new tab): sessionStorage is empty
+      session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+
+      setMockLocation("https://formo.so/dashboard");
+      const freshContext = await getPageContext();
+      expect(freshContext.gclid).to.equal("");
+    });
+
+    it("should let a newer click ID override the stored value", async () => {
+      // First pageview stores gclid=old
+      setMockLocation("https://formo.so/?gclid=old");
+      const firstContext = await getPageContext();
+      expect(firstContext.gclid).to.equal("old");
+
+      // Carry sessionStorage over to next pageview and send a new gclid
+      const storedTrafficSource = jsdom.window.sessionStorage.getItem("traffic-source");
+      setMockLocation("https://formo.so/landing?gclid=new");
+      if (storedTrafficSource) {
+        jsdom.window.sessionStorage.setItem("traffic-source", storedTrafficSource);
+      }
+      (global as any).sessionStorage = jsdom.window.sessionStorage;
+      initStorageManager("test-write-key");
+      eventFactory = new EventFactory();
+
+      const secondContext = await getPageContext();
+      expect(secondContext.gclid).to.equal("new");
+    });
+
+    it("should capture each supported click ID vendor param", async () => {
+      setMockLocation(
+        "https://formo.so/?gclid=g1&gad_source=g2&gbraid=g3&wbraid=g4&dclid=g5&fbclid=f1&msclkid=m1&yclid=y1&ttclid=t1&twclid=t2&li_fat_id=l1&rdt_cid=r1"
+      );
+
+      const context = await getPageContext();
+
+      expect(context.gclid).to.equal("g1");
+      expect(context.gad_source).to.equal("g2");
+      expect(context.gbraid).to.equal("g3");
+      expect(context.wbraid).to.equal("g4");
+      expect(context.dclid).to.equal("g5");
+      expect(context.fbclid).to.equal("f1");
+      expect(context.msclkid).to.equal("m1");
+      expect(context.yclid).to.equal("y1");
+      expect(context.ttclid).to.equal("t1");
+      expect(context.twclid).to.equal("t2");
+      expect(context.li_fat_id).to.equal("l1");
+      expect(context.rdt_cid).to.equal("r1");
+    });
+
+    it("should default missing click IDs to empty string", async () => {
+      setMockLocation("https://formo.so/?gclid=only");
+
+      const context = await getPageContext();
+
+      expect(context.gclid).to.equal("only");
+      expect(context.fbclid).to.equal("");
+      expect(context.msclkid).to.equal("");
+      expect(context.rdt_cid).to.equal("");
+    });
+
+    it("should not capture unknown attribution-like params as click IDs", async () => {
+      setMockLocation("https://formo.so/?random_clid=abc");
+
+      const context = await getPageContext();
+
+      expect(context.random_clid).to.be.undefined;
     });
   });
 });

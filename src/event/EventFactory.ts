@@ -7,6 +7,7 @@ import {
   Address,
   APIEvent,
   ChainID,
+  ClickIdParameters,
   IFormoEvent,
   IFormoEventContext,
   IFormoEventProperties,
@@ -25,7 +26,12 @@ import { logger } from "../logger";
 import mergeDeepRight from "../ramda/mergeDeepRight";
 import { session } from "../storage";
 import { version } from "../version";
-import { CHANNEL, VERSION, PAGE_PROPERTIES_EXCLUDED_FIELDS } from "./constants";
+import {
+  CHANNEL,
+  CLICK_ID_PARAMS,
+  PAGE_PROPERTIES_EXCLUDED_FIELDS,
+  VERSION,
+} from "./constants";
 import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
@@ -119,6 +125,20 @@ class EventFactory implements IEventFactory {
     return result;
   };
 
+  private extractClickIdParameters = (url: string): ClickIdParameters => {
+    const result = Object.fromEntries(
+      CLICK_ID_PARAMS.map((k) => [k, ""])
+    ) as ClickIdParameters;
+    try {
+      const urlObj = new URL(url);
+      for (const param of CLICK_ID_PARAMS) {
+        const value = urlObj.searchParams.get(param);
+        if (value) result[param] = value.trim();
+      }
+    } catch {}
+    return result;
+  };
+
   private extractReferralParameter = (urlObj: URL): string => {
     // Strategy: Check query params first, then check path pattern if configured
     // Query params logic:
@@ -153,6 +173,7 @@ class EventFactory implements IEventFactory {
     const urlObj = new URL(url);
     const contextTrafficSources: ITrafficSource = {
       ...this.extractUTMParameters(url),
+      ...this.extractClickIdParameters(url),
       ref: this.extractReferralParameter(urlObj),
       referrer: document.referrer,
     };
@@ -181,6 +202,12 @@ class EventFactory implements IEventFactory {
         "",
       utm_term:
         contextTrafficSources.utm_term || storedTrafficSources?.utm_term || "",
+      ...(Object.fromEntries(
+        CLICK_ID_PARAMS.map((p) => [
+          p,
+          contextTrafficSources[p] || storedTrafficSources?.[p] || "",
+        ])
+      ) as ClickIdParameters),
     };
 
     // Store to session
