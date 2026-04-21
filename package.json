@@ -63,7 +63,7 @@
     "nodemon": "^3.1.14",
     "prettier": "^3.8.3",
     "react": "^19.2.5",
-    "react-dom": "^19.2.4",
+    "react-dom": "^19.2.5",
     "sinon": "^21.1.2",
     "sinon-chai": "^3.7.0",
     "size-limit": "^12.1.0",
