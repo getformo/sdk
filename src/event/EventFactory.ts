@@ -36,6 +36,8 @@ import { IEventFactory } from "./type";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
 
+const ISO_3166_ALPHA_2_REGEX = /^[A-Z]{2}$/;
+
 class EventFactory implements IEventFactory {
   private options?: Options;
   private compiledPathPattern?: RegExp;
@@ -79,9 +81,13 @@ class EventFactory implements IEventFactory {
   private getLocation(): string {
     try {
       const timezone = this.getTimezone();
-      if (timezone in COUNTRY_LIST)
-        return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
-      return timezone;
+      if (!timezone) return "";
+      const mapped = (COUNTRY_LIST as Record<string, string>)[timezone];
+      // Only emit ISO-3166 alpha-2. Anything else (including the raw
+      // timezone string) is treated as unknown.
+      return typeof mapped === "string" && ISO_3166_ALPHA_2_REGEX.test(mapped)
+        ? mapped
+        : "";
     } catch (error) {
       logger.error("Error resolving location:", error);
       return "";
