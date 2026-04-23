@@ -190,7 +190,7 @@ export const COUNTRY_LIST = {
   "America/Panama": "PA",
   "America/Pangnirtung": "CA",
   "America/Paramaribo": "SR",
-  "America/Phoenix": "US,CA",
+  "America/Phoenix": "US",
   "America/Port-au-Prince": "HT",
   "America/Port_of_Spain": "TT",
   "America/Porto_Acre": "BR",
@@ -315,6 +315,7 @@ export const COUNTRY_LIST = {
   "Asia/Pontianak": "ID",
   "Asia/Pyongyang": "KP",
   "Asia/Qatar": "QA",
+  "Asia/Kostanay": "KZ",
   "Asia/Qostanay": "KZ",
   "Asia/Qyzylorda": "KZ",
   "Asia/Rangoon": "MM",
@@ -397,59 +398,15 @@ export const COUNTRY_LIST = {
   "Canada/Pacific": "CA",
   "Canada/Saskatchewan": "CA",
   "Canada/Yukon": "CA",
-  // CET
-  CET: "CET",
   // Chile
   "Chile/Continental": "CL",
   "Chile/EasterIsland": "CL",
-  // CST6CDT
-  CST6CDT: "CST6CDT",
   // Cuba
   Cuba: "CU",
-  // EET
-  EET: "EET",
   // Egypt
   Egypt: "EG",
   // Eire
   Eire: "IE",
-  // EST
-  EST: "EST",
-  EST5EDT: "EST5EDT",
-  "Etc/GMT": "Etc/GMT",
-  "Etc/GMT+0": "Etc/GMT+0",
-  "Etc/GMT+1": "Etc/GMT+1",
-  "Etc/GMT+10": "Etc/GMT+10",
-  "Etc/GMT+11": "Etc/GMT+11",
-  "Etc/GMT+12": "Etc/GMT+12",
-  "Etc/GMT+2": "Etc/GMT+2",
-  "Etc/GMT+3": "Etc/GMT+3",
-  "Etc/GMT+4": "Etc/GMT+4",
-  "Etc/GMT+5": "Etc/GMT+5",
-  "Etc/GMT+6": "Etc/GMT+6",
-  "Etc/GMT+7": "Etc/GMT+7",
-  "Etc/GMT+8": "Etc/GMT+8",
-  "Etc/GMT+9": "Etc/GMT+9",
-  "Etc/GMT-0": "Etc/GMT-0",
-  "Etc/GMT-1": "Etc/GMT-1",
-  "Etc/GMT-10": "Etc/GMT-10",
-  "Etc/GMT-11": "Etc/GMT-11",
-  "Etc/GMT-12": "Etc/GMT-12",
-  "Etc/GMT-13": "Etc/GMT-13",
-  "Etc/GMT-14": "Etc/GMT-14",
-  "Etc/GMT-2": "Etc/GMT-2",
-  "Etc/GMT-3": "Etc/GMT-3",
-  "Etc/GMT-4": "Etc/GMT-4",
-  "Etc/GMT-5": "Etc/GMT-5",
-  "Etc/GMT-6": "Etc/GMT-6",
-  "Etc/GMT-7": "Etc/GMT-7",
-  "Etc/GMT-8": "Etc/GMT-8",
-  "Etc/GMT-9": "Etc/GMT-9",
-  "Etc/GMT0": "Etc/GMT0",
-  "Etc/Greenwich": "Etc/Greenwich",
-  "Etc/UCT": "Etc/UCT",
-  "Etc/UTC": "Etc/UTC",
-  "Etc/Universal": "Etc/Universal",
-  "Etc/Zulu": "Etc/Zulu",
   // Europe
   "Europe/Amsterdam": "NL",
   "Europe/Andorra": "AD",
@@ -515,21 +472,11 @@ export const COUNTRY_LIST = {
   "Europe/Zagreb": "HR",
   "Europe/Zaporozhye": "UA",
   "Europe/Zurich": "CH",
-  // Factory
-  Factory: "Factory",
   // GB
   GB: "GB",
   "GB-Eire": "GB",
-  // GMT
-  GMT: "GMT",
-  "GMT+0": "GMT+0",
-  "GMT-0": "GMT-0",
-  GMT0: "GMT0",
-  Greenwich: "Greenwich",
   // HK
   Hongkong: "HK",
-  // HST
-  HST: "HST",
   // Iceland
   Iceland: "IS",
   // Indian
@@ -556,15 +503,10 @@ export const COUNTRY_LIST = {
   Kwajalein: "MH",
   // Libya
   Libya: "LY",
-  // MET
-  MET: "MET",
   // Mexico
   "Mexico/BajaNorte": "MX",
   "Mexico/BajaSur": "MX",
   "Mexico/General": "MX",
-  // MST
-  MST: "MST",
-  MST7MDT: "MST7MDT",
   // Navajo
   Navajo: "US",
   // NZ
@@ -585,7 +527,7 @@ export const COUNTRY_LIST = {
   "Pacific/Galapagos": "EC",
   "Pacific/Gambier": "PF",
   "Pacific/Guadalcanal": "SB",
-  "Pacific/Guam": "GU,MP",
+  "Pacific/Guam": "GU",
   "Pacific/Honolulu": "US",
   "Pacific/Johnston": "UM",
   "Pacific/Kanton": "KI",
@@ -621,8 +563,6 @@ export const COUNTRY_LIST = {
   Portugal: "PT",
   // PRC
   PRC: "CN",
-  // PST8PDT
-  PST8PDT: "PST8PDT",
   // ROC
   ROC: "TW",
   // ROK
@@ -631,10 +571,6 @@ export const COUNTRY_LIST = {
   Singapore: "SG",
   // Turkey
   Turkey: "TR",
-  // UCT
-  UCT: "UCT",
-  // Universal
-  Universal: "Universal",
   // US
   "US/Alaska": "US",
   "US/Aleutian": "US",
@@ -648,12 +584,6 @@ export const COUNTRY_LIST = {
   "US/Mountain": "US",
   "US/Pacific": "US",
   "US/Samoa": "AS",
-  // UTC
-  UTC: "UTC",
   // W-SU
   "W-SU": "RU",
-  // WET
-  WET: "WET",
-  // Zulu
-  Zulu: "Zulu",
 } as const;

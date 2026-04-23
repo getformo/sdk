@@ -79,9 +79,13 @@ class EventFactory implements IEventFactory {
   private getLocation(): string {
     try {
       const timezone = this.getTimezone();
-      if (timezone in COUNTRY_LIST)
-        return COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
-      return timezone;
+      if (!timezone) return "";
+      const mapped = COUNTRY_LIST[timezone as keyof typeof COUNTRY_LIST];
+      // Only emit ISO-3166 alpha-2. Anything else (including the raw
+      // timezone string) is treated as unknown.
+      return typeof mapped === "string" && /^[A-Z]{2}$/.test(mapped)
+        ? mapped
+        : "";
     } catch (error) {
       logger.error("Error resolving location:", error);
       return "";
