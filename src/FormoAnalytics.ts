@@ -1494,6 +1494,29 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const request = provider.request.bind(provider);
 
+    // Synchronous re-entry guard. When `provider` is a Proxy whose `get` trap
+    // returns a wrapper that re-reads `target.request`, our installed wrapper
+    // can be reached again synchronously when we invoke `request(...)`, which
+    // would recurse without bound. Legitimate concurrent calls always cross a
+    // microtask boundary (await), so they observe `syncDepth === 0`.
+    let syncDepth = 0;
+    const safeRequest = <U>(args: RequestArguments): Promise<U | null | undefined> => {
+      if (syncDepth > 0) {
+        return Promise.reject(
+          new Error(
+            "Formo: detected synchronous re-entry into provider.request " +
+              "(likely a Proxy-trapped provider). Aborting to prevent stack overflow."
+          )
+        );
+      }
+      syncDepth++;
+      try {
+        return request<U>(args);
+      } finally {
+        syncDepth--;
+      }
+    };
+
     const wrappedRequest: WrappedRequestFunction = async <T>({
       method,
       params,
@@ -1505,7 +1528,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       ) {
         if (!this.isAutocaptureEnabled("signature")) {
           logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
-          return request({ method, params });
+          return safeRequest<T>({ method, params });
         }
         // Use current chainId if available, otherwise fetch it
         const capturedChainId =
@@ -1528,7 +1551,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         })();
 
         try {
-          const response = (await request({ method, params })) as T;
+          const response = (await safeRequest({ method, params })) as T;
           // Track signature confirmation only for truthy responses
           if (response) {
             (async () => {
@@ -1584,7 +1607,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       ) {
         if (!this.isAutocaptureEnabled("transaction")) {
           logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
-          return request({ method, params });
+          return safeRequest<T>({ method, params });
         }
         (async () => {
           try {
@@ -1599,7 +1622,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         })();
 
         try {
-          const transactionHash = (await request({
+          const transactionHash = (await safeRequest({
             method,
             params,
           })) as string;
@@ -1647,7 +1670,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       }
 
-      return request({ method, params });
+      return safeRequest<T>({ method, params });
     };
     // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
     wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
@@ -2227,6 +2250,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.removeProviderListeners(provider);
       this._trackedProviders.delete(provider);
 
+      // Clear the provider-level wrap marker so a future re-register is allowed.
+      // Without this, isProviderAlreadyWrapped would short-circuit forever.
+      try {
+        delete (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL];
+      } catch {
+        // Some providers (e.g. frozen Proxies) may refuse the delete; ignore.
+      }
+
       if (this._provider === provider) {
         this.clearActiveProvider();
       }
@@ -2288,13 +2319,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     provider: EIP1193Provider,
     currentRequest: WrappedRequestFunction | undefined
   ): boolean {
-    return !!(
+    // Fast path for plain providers: the request function itself carries the marker.
+    if (
       currentRequest &&
       typeof currentRequest === "function" &&
-      currentRequest[WRAPPED_REQUEST_SYMBOL] &&
-      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] ===
-        currentRequest
-    );
+      currentRequest[WRAPPED_REQUEST_SYMBOL]
+    ) {
+      return true;
+    }
+    // Proxy-safe path: a Proxy `get` trap can hide the function-level symbol on
+    // subsequent reads (e.g. by returning a fresh wrapper each time). The
+    // provider-level marker survives because it is stored on the underlying
+    // target via the Proxy's `set` trap.
+    if ((provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL]) {
+      return true;
+    }
+    return false;
   }
 
   /**
