@@ -761,7 +761,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const validAddress = validateAddress(address);
       if (validAddress) {
         this.currentAddress = validAddress;
-        this.persistCurrentWallet();
+        this.persistActiveWallet();
       } else {
         logger.warn?.("Invalid address provided to identify:", address);
         return;
@@ -2172,7 +2172,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const effectiveChainId = chainId ?? this._evmChainId ?? undefined;
-    this.backfillSessionAddress(validAddress, effectiveChainId);
+    this.backfillActiveWallet(validAddress, effectiveChainId);
 
     const basePayload = {
       chainId: effectiveChainId,
@@ -2215,7 +2215,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const chainId = this._evmChainId || (await this.getCurrentChainId(provider));
-    this.backfillSessionAddress(validAddress, chainId);
+    this.backfillActiveWallet(validAddress, chainId);
 
     return {
       chainId,
@@ -2234,7 +2234,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * social-login wrappers). If `accountsChanged` later fires it overwrites this
    * value in the normal way; existing connections are never clobbered.
    */
-  private backfillSessionAddress(address: Address, chainId?: ChainID): void {
+  private backfillActiveWallet(address: Address, chainId?: ChainID): void {
     if (this._evmAddress) return;
     this.setChainState('evm', { address, chainId });
   }
@@ -2451,7 +2451,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (state.address || state.chainId) {
         this.currentAddress = state.address;
         this.currentChainId = state.chainId;
-        this.persistCurrentWallet();
+        this.persistActiveWallet();
         return;
       }
     }
@@ -2462,12 +2462,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.currentAddress = otherState.address;
       this.currentChainId = otherState.chainId;
       this._activeNamespace = other;
-      this.persistCurrentWallet();
+      this.persistActiveWallet();
       return;
     }
     this.currentAddress = undefined;
     this.currentChainId = undefined;
-    this.persistCurrentWallet();
+    this.persistActiveWallet();
   }
 
   /**
@@ -2477,7 +2477,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * reconnection during which track()/page() events would otherwise ship
    * with an empty address.
    */
-  private persistCurrentWallet(): void {
+  private persistActiveWallet(): void {
     try {
       if (this.currentAddress) {
         const value = JSON.stringify({
