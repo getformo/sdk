@@ -2111,8 +2111,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       throw new Error(`Invalid address in signature payload: ${rawAddress}`);
     }
 
+    const effectiveChainId = chainId ?? this._evmChainId ?? undefined;
+    this.backfillEvmAddressIfEmpty(validAddress, effectiveChainId);
+
     const basePayload = {
-      chainId: chainId ?? this._evmChainId ?? undefined,
+      chainId: effectiveChainId,
       address: validAddress,
     };
 
@@ -2151,13 +2154,29 @@ export class FormoAnalytics implements IFormoAnalytics {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
 
+    const chainId = this._evmChainId || (await this.getCurrentChainId(provider));
+    this.backfillEvmAddressIfEmpty(validAddress, chainId);
+
     return {
-      chainId: this._evmChainId || (await this.getCurrentChainId(provider)),
+      chainId,
       data,
       address: validAddress,
       to,
       value,
     };
+  }
+
+  /**
+   * Persist an EVM address discovered through autocapture (signature / transaction)
+   * as the current EVM address when none is currently set. This lets subsequent
+   * track()/page() calls carry the address even when the underlying wallet never
+   * fires an EIP-1193 `accountsChanged` event (embedded wallets, smart accounts,
+   * social-login wrappers). If `accountsChanged` later fires it overwrites this
+   * value in the normal way; existing connections are never clobbered.
+   */
+  private backfillEvmAddressIfEmpty(address: Address, chainId?: ChainID): void {
+    if (this._evmAddress) return;
+    this.setChainState('evm', { address, chainId });
   }
 
   /**
