@@ -5,6 +5,7 @@ import {
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_USER_ID_KEY,
   CURRENT_WALLET_KEY,
+  CURRENT_WALLET_TTL_MS,
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
@@ -256,7 +257,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Seed currentAddress/currentChainId from the persisted snapshot before
     // the first page hit queues so reload-time track()/page() carry the
     // wallet even before wagmi/EIP-1193 reconnection completes.
-    this.restorePersistedWallet();
+    this.getSessionAddress();
 
     this.trackPageHit();
     this.trackPageHits();
@@ -1699,34 +1700,47 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private async trackPageHits(): Promise<void> {
-    // Capture `this`-bound disposed flag inside the wrapper closures so a
-    // cleaned-up instance still chains to the prior implementation but stops
-    // dispatching synthetic `locationchange` events. The wrappers themselves
-    // cannot be unwound (a later instance may have wrapped on top of us), but
-    // making them inert is enough to silence the orphan.
-    const oldPushState = history.pushState;
-    history.pushState = (...args) => {
-      const ret = oldPushState.apply(history, args as Parameters<typeof history.pushState>);
-      if (!this._pageHooksDisposed) {
-        window.dispatchEvent(new window.Event("locationchange"));
-      }
-      return ret;
-    };
-
-    const oldReplaceState = history.replaceState;
-    history.replaceState = (...args) => {
-      const ret = oldReplaceState.apply(history, args as Parameters<typeof history.replaceState>);
-      if (!this._pageHooksDisposed) {
-        window.dispatchEvent(new window.Event("locationchange"));
-      }
-      return ret;
-    };
+  private trackPageHits(): void {
+    // Install a single, instance-agnostic wrapper around history.pushState /
+    // replaceState so concurrent SDK instances (React Strict Mode, HMR) don't
+    // each stack their own wrapper — which would dispatch N synthetic events
+    // per navigation and produce O(N^2) onLocationChange calls. The wrapper
+    // dispatches once; per-instance bookkeeping is done by per-instance
+    // listeners that each register/unregister themselves.
+    FormoAnalytics.installHistoryHooksOnce();
 
     this._onPopStateListener = () => this.onLocationChange();
     this._onLocationChangeListener = () => this.onLocationChange();
     window.addEventListener("popstate", this._onPopStateListener);
     window.addEventListener("locationchange", this._onLocationChangeListener);
+  }
+
+  /**
+   * Wrap history.pushState / replaceState exactly once per `history` object,
+   * regardless of how many SDK instances are constructed. Uses a Symbol
+   * marker so we recognize our own wrapper across module reloads in HMR.
+   */
+  private static installHistoryHooksOnce(): void {
+    if (typeof history === "undefined" || typeof window === "undefined") return;
+    const marker = Symbol.for("formo.historyWrapped");
+    if ((history as unknown as Record<symbol, boolean>)[marker]) return;
+    (history as unknown as Record<symbol, boolean>)[marker] = true;
+
+    const dispatch = () => window.dispatchEvent(new window.Event("locationchange"));
+
+    const oldPushState = history.pushState;
+    history.pushState = function pushState(...args: Parameters<typeof history.pushState>) {
+      const ret = oldPushState.apply(this, args);
+      dispatch();
+      return ret;
+    };
+
+    const oldReplaceState = history.replaceState;
+    history.replaceState = function replaceState(...args: Parameters<typeof history.replaceState>) {
+      const ret = oldReplaceState.apply(this, args);
+      dispatch();
+      return ret;
+    };
   }
 
   private async trackPageHit(
@@ -2158,7 +2172,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const effectiveChainId = chainId ?? this._evmChainId ?? undefined;
-    this.backfillEvmAddressIfEmpty(validAddress, effectiveChainId);
+    this.backfillSessionAddress(validAddress, effectiveChainId);
 
     const basePayload = {
       chainId: effectiveChainId,
@@ -2201,7 +2215,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const chainId = this._evmChainId || (await this.getCurrentChainId(provider));
-    this.backfillEvmAddressIfEmpty(validAddress, chainId);
+    this.backfillSessionAddress(validAddress, chainId);
 
     return {
       chainId,
@@ -2220,7 +2234,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * social-login wrappers). If `accountsChanged` later fires it overwrites this
    * value in the normal way; existing connections are never clobbered.
    */
-  private backfillEvmAddressIfEmpty(address: Address, chainId?: ChainID): void {
+  private backfillSessionAddress(address: Address, chainId?: ChainID): void {
     if (this._evmAddress) return;
     this.setChainState('evm', { address, chainId });
   }
@@ -2473,8 +2487,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
         cookie().set(CURRENT_WALLET_KEY, value, {
           path: "/",
-          // Mirror the SESSION_WALLET_* cookies in src/session/index.ts.
-          expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
+          expires: new Date(Date.now() + CURRENT_WALLET_TTL_MS).toUTCString(),
           ...(domain ? { domain } : {}),
         });
       } else {
@@ -2489,7 +2502,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Seed `currentAddress`/`currentChainId` from the persisted snapshot, if
    * any. Called once during construction before the first page hit fires.
    */
-  private restorePersistedWallet(): void {
+  private getSessionAddress(): void {
     try {
       const raw = cookie().get(CURRENT_WALLET_KEY) as string | undefined;
       if (!raw) return;

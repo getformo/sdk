@@ -11,6 +11,9 @@ export const SESSION_USER_ID_KEY = "user-id";
  */
 export const CURRENT_WALLET_KEY = "current-wallet";
 
+/** TTL for the persisted wallet snapshot cookie. */
+export const CURRENT_WALLET_TTL_MS = 24 * 60 * 60 * 1000;
+
 export const LOCAL_ANONYMOUS_ID_KEY = "anonymous-id";
 
 // Consent management keys
