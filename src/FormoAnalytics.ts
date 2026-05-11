@@ -4,8 +4,8 @@ import {
   EventType,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_USER_ID_KEY,
-  CURRENT_WALLET_KEY,
-  CURRENT_WALLET_TTL_MS,
+  ACTIVE_WALLET_KEY,
+  ACTIVE_WALLET_TTL_MS,
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
@@ -257,7 +257,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Seed currentAddress/currentChainId from the persisted snapshot before
     // the first page hit queues so reload-time track()/page() carry the
     // wallet even before wagmi/EIP-1193 reconnection completes.
-    this.getSessionAddress();
+    this.loadActiveWallet();
 
     this.trackPageHit();
     this.trackPageHits();
@@ -318,7 +318,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
-    cookie().remove(CURRENT_WALLET_KEY);
+    cookie().remove(ACTIVE_WALLET_KEY);
   }
 
   /**
@@ -2485,13 +2485,13 @@ export class FormoAnalytics implements IFormoAnalytics {
           ...(this.currentChainId !== undefined && { chainId: this.currentChainId }),
         });
         const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
-        cookie().set(CURRENT_WALLET_KEY, value, {
+        cookie().set(ACTIVE_WALLET_KEY, value, {
           path: "/",
-          expires: new Date(Date.now() + CURRENT_WALLET_TTL_MS).toUTCString(),
+          expires: new Date(Date.now() + ACTIVE_WALLET_TTL_MS).toUTCString(),
           ...(domain ? { domain } : {}),
         });
       } else {
-        cookie().remove(CURRENT_WALLET_KEY);
+        cookie().remove(ACTIVE_WALLET_KEY);
       }
     } catch (err) {
       logger.warn("Failed to persist current wallet snapshot", err);
@@ -2502,16 +2502,16 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Seed `currentAddress`/`currentChainId` from the persisted snapshot, if
    * any. Called once during construction before the first page hit fires.
    */
-  private getSessionAddress(): void {
+  private loadActiveWallet(): void {
     try {
-      const raw = cookie().get(CURRENT_WALLET_KEY) as string | undefined;
+      const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
       if (!raw) return;
       const parsed = JSON.parse(raw) as { address?: string; chainId?: ChainID };
       if (!parsed?.address) return;
       const namespace = isSolanaChainId(parsed.chainId) ? "solana" : "evm";
       const validated = validateAddress(parsed.address, parsed.chainId);
       if (!validated) {
-        cookie().remove(CURRENT_WALLET_KEY);
+        cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
       const ns = this._chainState[namespace];
@@ -2522,7 +2522,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.currentChainId = parsed.chainId;
     } catch (err) {
       logger.warn("Failed to restore persisted wallet snapshot", err);
-      cookie().remove(CURRENT_WALLET_KEY);
+      cookie().remove(ACTIVE_WALLET_KEY);
     }
   }
 

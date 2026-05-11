@@ -4,7 +4,7 @@ import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
 import { initStorageManager, cookie } from "../src/storage";
-import { CURRENT_WALLET_KEY } from "../src/constants";
+import { ACTIVE_WALLET_KEY } from "../src/constants";
 
 /**
  * Regressions for two issues that produced page events with empty `address`:
@@ -62,11 +62,11 @@ describe("Address persistence and cleanup", () => {
     Object.defineProperty(global, "history", { value: jsdom.window.history, writable: true, configurable: true });
 
     initStorageManager("test-write-key");
-    cookie().remove(CURRENT_WALLET_KEY);
+    cookie().remove(ACTIVE_WALLET_KEY);
   });
 
   afterEach(() => {
-    cookie().remove(CURRENT_WALLET_KEY);
+    cookie().remove(ACTIVE_WALLET_KEY);
     sandbox.restore();
     delete (global as any).window;
     delete (global as any).document;
@@ -89,7 +89,7 @@ describe("Address persistence and cleanup", () => {
       sandbox.stub(a as any, "trackEvent").resolves();
       await a.connect({ chainId: CHAIN_ID, address: ADDRESS });
 
-      expect(cookie().get(CURRENT_WALLET_KEY)).to.be.a("string");
+      expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.a("string");
       a.cleanup();
 
       // Simulate a reload by creating a fresh instance.
@@ -133,10 +133,10 @@ describe("Address persistence and cleanup", () => {
       });
       sandbox.stub(a as any, "trackEvent").resolves();
       await a.connect({ chainId: CHAIN_ID, address: ADDRESS });
-      expect(cookie().get(CURRENT_WALLET_KEY)).to.be.a("string");
+      expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.a("string");
 
       await a.disconnect({ chainId: CHAIN_ID, address: ADDRESS });
-      expect(cookie().get(CURRENT_WALLET_KEY)).to.satisfy(
+      expect(cookie().get(ACTIVE_WALLET_KEY)).to.satisfy(
         (v: any) => v === undefined || v === null || v === ""
       );
       a.cleanup();
@@ -151,7 +151,7 @@ describe("Address persistence and cleanup", () => {
       await a.connect({ chainId: CHAIN_ID, address: ADDRESS });
 
       a.reset();
-      expect(cookie().get(CURRENT_WALLET_KEY)).to.satisfy(
+      expect(cookie().get(ACTIVE_WALLET_KEY)).to.satisfy(
         (v: any) => v === undefined || v === null || v === ""
       );
       a.cleanup();
@@ -231,13 +231,13 @@ describe("Address persistence and cleanup", () => {
     });
 
     it("ignores a corrupt persisted snapshot and clears the cookie", async () => {
-      cookie().set(CURRENT_WALLET_KEY, "not-json{");
+      cookie().set(ACTIVE_WALLET_KEY, "not-json{");
       const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
       const a = await FormoAnalytics.init("test-write-key", {
         wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
       });
       expect(a.currentAddress).to.be.undefined;
-      expect(cookie().get(CURRENT_WALLET_KEY)).to.satisfy(
+      expect(cookie().get(ACTIVE_WALLET_KEY)).to.satisfy(
         (v: any) => v === undefined || v === null || v === ""
       );
       a.cleanup();
@@ -245,7 +245,7 @@ describe("Address persistence and cleanup", () => {
 
     it("does not seed from a persisted invalid address", async () => {
       cookie().set(
-        CURRENT_WALLET_KEY,
+        ACTIVE_WALLET_KEY,
         JSON.stringify({ address: "0xnot-an-address", chainId: CHAIN_ID })
       );
       const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
@@ -265,7 +265,7 @@ describe("Address persistence and cleanup", () => {
       await a.connect({ chainId: CHAIN_ID, address: ADDRESS });
       await a.connect({ chainId: CHAIN_ID, address: OTHER_ADDRESS });
 
-      const raw = cookie().get(CURRENT_WALLET_KEY) as string;
+      const raw = cookie().get(ACTIVE_WALLET_KEY) as string;
       const parsed = JSON.parse(raw);
       expect(parsed.address).to.equal(OTHER_ADDRESS);
       a.cleanup();

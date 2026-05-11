@@ -4,15 +4,15 @@ export const SESSION_TRAFFIC_SOURCE_KEY = "traffic-source";
 export const SESSION_USER_ID_KEY = "user-id";
 
 /**
- * Persisted snapshot of the currently-active EVM wallet (address + chainId).
- * Lets the SDK seed `currentAddress`/`currentChainId` at init so the first
- * page hit after a reload carries the address, without having to wait for
- * wagmi/EIP-1193 reconnection to fire.
+ * Persisted snapshot of the currently-active EVM/Solana wallet
+ * (address + chainId). Lets the SDK seed `currentAddress`/`currentChainId`
+ * at init so the first page hit after a reload carries the address, without
+ * having to wait for wagmi/EIP-1193 reconnection to fire.
  */
-export const CURRENT_WALLET_KEY = "current-wallet";
+export const ACTIVE_WALLET_KEY = "active-wallet";
 
-/** TTL for the persisted wallet snapshot cookie. */
-export const CURRENT_WALLET_TTL_MS = 24 * 60 * 60 * 1000;
+/** TTL for the persisted active-wallet snapshot cookie. */
+export const ACTIVE_WALLET_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const LOCAL_ANONYMOUS_ID_KEY = "anonymous-id";
 
