@@ -31,6 +31,7 @@
     "access": "public",
     "provenance": true
   },
+  "homepage": "https://docs.formo.so/sdks/web",
   "author": "Yos Riady",
   "license": "MIT",
   "engines": {
