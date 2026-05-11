@@ -4,6 +4,7 @@ import {
   EventType,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_USER_ID_KEY,
+  CURRENT_WALLET_KEY,
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
@@ -146,6 +147,11 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** In-memory URL used to deduplicate SPA pageview events. */
   private _currentUrl: string = "";
 
+  /** Page-hit hooks installed in trackPageHits() so cleanup() can undo them. */
+  private _onPopStateListener?: (e: Event) => void;
+  private _onLocationChangeListener?: (e: Event) => void;
+  private _pageHooksDisposed = false;
+
   config: Config;
   currentChainId?: ChainID;
   currentAddress?: Address;
@@ -246,6 +252,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this._currentUrl = window.location.href;
+
+    // Seed currentAddress/currentChainId from the persisted snapshot before
+    // the first page hit queues so reload-time track()/page() carry the
+    // wallet even before wagmi/EIP-1193 reconnection completes.
+    this.restorePersistedWallet();
+
     this.trackPageHit();
     this.trackPageHits();
   }
@@ -305,6 +317,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
+    cookie().remove(CURRENT_WALLET_KEY);
   }
 
   /**
@@ -331,6 +344,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (!this.isWagmiMode) {
       for (const provider of Array.from(this._trackedProviders)) {
         this.untrackProvider(provider);
+      }
+    }
+
+    // Tear down page-hit hooks: remove window listeners and silence the
+    // history.pushState/replaceState wrappers so an orphaned instance (e.g.
+    // from a re-mount in React Strict Mode / HMR) stops emitting page events
+    // with stale state.
+    this._pageHooksDisposed = true;
+    if (typeof window !== "undefined") {
+      if (this._onPopStateListener) {
+        window.removeEventListener("popstate", this._onPopStateListener);
+        this._onPopStateListener = undefined;
+      }
+      if (this._onLocationChangeListener) {
+        window.removeEventListener("locationchange", this._onLocationChangeListener);
+        this._onLocationChangeListener = undefined;
       }
     }
 
@@ -731,6 +760,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const validAddress = validateAddress(address);
       if (validAddress) {
         this.currentAddress = validAddress;
+        this.persistCurrentWallet();
       } else {
         logger.warn?.("Invalid address provided to identify:", address);
         return;
@@ -1670,22 +1700,33 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   private async trackPageHits(): Promise<void> {
+    // Capture `this`-bound disposed flag inside the wrapper closures so a
+    // cleaned-up instance still chains to the prior implementation but stops
+    // dispatching synthetic `locationchange` events. The wrappers themselves
+    // cannot be unwound (a later instance may have wrapped on top of us), but
+    // making them inert is enough to silence the orphan.
     const oldPushState = history.pushState;
-    history.pushState = function pushState(...args) {
-      const ret = oldPushState.apply(this, args);
-      window.dispatchEvent(new window.Event("locationchange"));
+    history.pushState = (...args) => {
+      const ret = oldPushState.apply(history, args as Parameters<typeof history.pushState>);
+      if (!this._pageHooksDisposed) {
+        window.dispatchEvent(new window.Event("locationchange"));
+      }
       return ret;
     };
 
     const oldReplaceState = history.replaceState;
-    history.replaceState = function replaceState(...args) {
-      const ret = oldReplaceState.apply(this, args);
-      window.dispatchEvent(new window.Event("locationchange"));
+    history.replaceState = (...args) => {
+      const ret = oldReplaceState.apply(history, args as Parameters<typeof history.replaceState>);
+      if (!this._pageHooksDisposed) {
+        window.dispatchEvent(new window.Event("locationchange"));
+      }
       return ret;
     };
 
-    window.addEventListener("popstate", () => this.onLocationChange());
-    window.addEventListener("locationchange", () => this.onLocationChange());
+    this._onPopStateListener = () => this.onLocationChange();
+    this._onLocationChangeListener = () => this.onLocationChange();
+    window.addEventListener("popstate", this._onPopStateListener);
+    window.addEventListener("locationchange", this._onLocationChangeListener);
   }
 
   private async trackPageHit(
@@ -1703,6 +1744,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     setTimeout(() => {
+      // Drop in-flight page hits from an SDK instance that was torn down
+      // between scheduling and firing (e.g. provider remount in React Strict
+      // Mode / HMR). Otherwise the orphan instance would queue a page event
+      // here with its stale, never-populated `currentAddress`.
+      if (this._pageHooksDisposed) return;
       (async () => {
         try {
           await this.trackEvent(
@@ -2391,6 +2437,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (state.address || state.chainId) {
         this.currentAddress = state.address;
         this.currentChainId = state.chainId;
+        this.persistCurrentWallet();
         return;
       }
     }
@@ -2401,10 +2448,69 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.currentAddress = otherState.address;
       this.currentChainId = otherState.chainId;
       this._activeNamespace = other;
+      this.persistCurrentWallet();
       return;
     }
     this.currentAddress = undefined;
     this.currentChainId = undefined;
+    this.persistCurrentWallet();
+  }
+
+  /**
+   * Persist (or clear) the current wallet snapshot in a cookie so that the
+   * SDK can repopulate `currentAddress`/`currentChainId` at init on the next
+   * page load — closing the gap between page-show and wagmi/EIP-1193
+   * reconnection during which track()/page() events would otherwise ship
+   * with an empty address.
+   */
+  private persistCurrentWallet(): void {
+    try {
+      if (this.currentAddress) {
+        const value = JSON.stringify({
+          address: this.currentAddress,
+          ...(this.currentChainId !== undefined && { chainId: this.currentChainId }),
+        });
+        const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
+        cookie().set(CURRENT_WALLET_KEY, value, {
+          path: "/",
+          // Mirror the SESSION_WALLET_* cookies in src/session/index.ts.
+          expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
+          ...(domain ? { domain } : {}),
+        });
+      } else {
+        cookie().remove(CURRENT_WALLET_KEY);
+      }
+    } catch (err) {
+      logger.warn("Failed to persist current wallet snapshot", err);
+    }
+  }
+
+  /**
+   * Seed `currentAddress`/`currentChainId` from the persisted snapshot, if
+   * any. Called once during construction before the first page hit fires.
+   */
+  private restorePersistedWallet(): void {
+    try {
+      const raw = cookie().get(CURRENT_WALLET_KEY) as string | undefined;
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { address?: string; chainId?: ChainID };
+      if (!parsed?.address) return;
+      const namespace = isSolanaChainId(parsed.chainId) ? "solana" : "evm";
+      const validated = validateAddress(parsed.address, parsed.chainId);
+      if (!validated) {
+        cookie().remove(CURRENT_WALLET_KEY);
+        return;
+      }
+      const ns = this._chainState[namespace];
+      ns.address = validated;
+      if (parsed.chainId !== undefined) ns.chainId = parsed.chainId;
+      this._activeNamespace = namespace;
+      this.currentAddress = validated;
+      this.currentChainId = parsed.chainId;
+    } catch (err) {
+      logger.warn("Failed to restore persisted wallet snapshot", err);
+      cookie().remove(CURRENT_WALLET_KEY);
+    }
   }
 
   /**
