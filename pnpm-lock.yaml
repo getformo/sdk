@@ -91,11 +91,11 @@ importers:
         specifier: ^19.2.5
         version: 19.2.5(react@19.2.5)
       sinon:
-        specifier: ^21.1.2
-        version: 21.1.2
+        specifier: ^22.0.0
+        version: 22.0.0
       sinon-chai:
         specifier: ^3.7.0
-        version: 3.7.0(chai@4.5.0)(sinon@21.1.2)
+        version: 3.7.0(chai@4.5.0)(sinon@22.0.0)
       size-limit:
         specifier: ^12.1.0
         version: 12.1.0
@@ -409,8 +409,8 @@ packages:
   '@sinonjs/commons@3.0.1':
     resolution: {integrity: sha512-K3mCHKQ9sVh8o1C9cxkwxaOmXoAMlDxC1mYyHrjqOWEcBjYr76t96zL2zlj5dUGZ3HSw240X1qgH3Mjf1yJWpQ==}
 
-  '@sinonjs/fake-timers@15.3.2':
-    resolution: {integrity: sha512-mrn35Jl2pCpns+mE3HaZa1yPN5EYCRgiMI+135COjr2hr8Cls9DXqIZ57vZe2cz7y2XVSq92tcs6kGQcT1J8Rw==}
+  '@sinonjs/fake-timers@15.4.0':
+    resolution: {integrity: sha512-DsG+8/LscQIQg68J6Ef3dv10u6nVyetYn923s3/sus5eaGfTo1of5WMZSLf0UJc9KDuKPilPH0UDJCjvNbDNCA==}
 
   '@sinonjs/samsam@10.0.2':
     resolution: {integrity: sha512-8lVwD1Df1BmzoaOLhMcGGcz/Jyr5QY2KSB75/YK1QgKzoabTeLdIVyhXNZK9ojfSKSdirbXqdbsXXqP9/Ve8+A==}
@@ -1737,8 +1737,8 @@ packages:
       chai: ^4.0.0
       sinon: '>=4.0.0'
 
-  sinon@21.1.2:
-    resolution: {integrity: sha512-FS6mN+/bx7e2ajpXkEmOcWB6xBzWiuNoAQT18/+a20SS4U7FSYl8Ms7N6VTUxN/1JAjkx7aXp+THMC8xdpp0gA==}
+  sinon@22.0.0:
+    resolution: {integrity: sha512-sq/6DpdXOrLyfbKlXLg/Usc7xu8YXPeLkOFZRvA3bNUSA2lhbrZ06yuXbH1fkzBPCbz9O10+7hznzUsjaYNm0Q==}
 
   size-limit@12.1.0:
     resolution: {integrity: sha512-VnDS2fycANrJFVPQwjaD+h+hkISY7EB3LsPsYWje4lBCjQwwsZLxjwwRwVJKHrcj2ZqyG+DdXykWm9mbZklZrw==}
@@ -2263,7 +2263,7 @@ snapshots:
     dependencies:
       type-detect: 4.0.8
 
-  '@sinonjs/fake-timers@15.3.2':
+  '@sinonjs/fake-timers@15.4.0':
     dependencies:
       '@sinonjs/commons': 3.0.1
 
@@ -3685,15 +3685,15 @@ snapshots:
     dependencies:
       semver: 7.7.3
 
-  sinon-chai@3.7.0(chai@4.5.0)(sinon@21.1.2):
+  sinon-chai@3.7.0(chai@4.5.0)(sinon@22.0.0):
     dependencies:
       chai: 4.5.0
-      sinon: 21.1.2
+      sinon: 22.0.0
 
-  sinon@21.1.2:
+  sinon@22.0.0:
     dependencies:
       '@sinonjs/commons': 3.0.1
-      '@sinonjs/fake-timers': 15.3.2
+      '@sinonjs/fake-timers': 15.4.0
       '@sinonjs/samsam': 10.0.2
       diff: 9.0.0
 
