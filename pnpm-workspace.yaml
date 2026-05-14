@@ -1,0 +1,12 @@
+overrides:
+  picomatch@2: ">=2.3.2"
+  picomatch@4: ">=4.0.4"
+  diff: ">=8.0.4"
+  hono@<=4.12.7: 4.12.7
+audit: true
+autoInstallPeers: false
+blockExoticSubdeps: true
+minReleaseAge: 2
+minimumReleaseAge: 2880
+allowBuilds:
+  esbuild: true
