@@ -20,6 +20,11 @@
     ".": {
       "import": "./dist/esm/src/index.js",
       "require": "./dist/cjs/src/index.js"
+    },
+    "./core": {
+      "types": "./dist/esm/src/core.d.ts",
+      "import": "./dist/esm/src/core.js",
+      "require": "./dist/cjs/src/core.js"
     }
   },
   "sideEffects": [
