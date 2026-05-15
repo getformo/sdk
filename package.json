@@ -107,6 +107,12 @@
     "@tanstack/react-query": {
       "optional": true
     },
+    "@types/react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
     "viem": {
       "optional": true
     },

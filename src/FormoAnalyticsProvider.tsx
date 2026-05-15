@@ -1,8 +1,15 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, FC } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, FC, ReactNode } from "react";
 import { FormoAnalytics } from "./FormoAnalytics";
 import { initStorageManager } from "./storage";
 import { logger } from "./logger";
-import { FormoAnalyticsProviderProps, IFormoAnalytics } from "./types";
+import { IFormoAnalytics, Options } from "./types";
+
+export interface FormoAnalyticsProviderProps {
+  writeKey: string;
+  options?: Options;
+  disabled?: boolean;
+  children: ReactNode;
+}
 
 const defaultContext: IFormoAnalytics = {
   chain: () => Promise.resolve(),
