@@ -281,6 +281,7 @@ describe("WagmiEventHandler", () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       // Simulate signMessage mutation
+      const rawSig = "0x" + "ab".repeat(65); // realistic 65-byte ECDSA sig
       const mutationEvent: MutationCacheEvent = {
         type: "updated",
         mutation: {
@@ -288,7 +289,7 @@ describe("WagmiEventHandler", () => {
           options: { mutationKey: ["signMessage"] },
           state: {
             status: "success",
-            data: "0xsignature123",
+            data: rawSig,
             variables: { message: "Hello World" },
           },
         },
@@ -300,12 +301,12 @@ describe("WagmiEventHandler", () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(mockFormo.signature.calledOnce).to.be.true;
-      const signatureCall = mockFormo.signature.firstCall;
-      expect(signatureCall.args[0]).to.deep.include({
-        status: "confirmed",
-        message: "Hello World",
-        signatureHash: "0xsignature123",
-      });
+      const arg = mockFormo.signature.firstCall.args[0];
+      expect(arg.status).to.equal("confirmed");
+      expect(arg.message).to.equal("Hello World");
+      // Raw signature must NOT be passed through.
+      expect(arg.signatureHash).to.not.equal(rawSig);
+      expect(arg.signatureHash).to.match(/^[0-9a-f]+$/); // redacted token
     });
 
     it("should track signMessage mutation on pending", async () => {

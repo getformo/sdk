@@ -52,6 +52,10 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
+import {
+  redactSignatureHash,
+  redactTypedDataMessage,
+} from "./utils/signatureRedaction";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
@@ -594,6 +598,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    // Defense-in-depth backstop: producers already redact, but never let
+    // a raw-signature-shaped value leave this boundary. Idempotent —
+    // an already-redacted short token passes through unchanged.
+    const safeSignatureHash = redactSignatureHash(signatureHash);
+
     await this.trackEvent(
       EventType.SIGNATURE,
       {
@@ -601,7 +610,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         chainId,
         address,
         message,
-        ...(signatureHash && { signatureHash }),
+        ...(safeSignatureHash && { signatureHash: safeSignatureHash }),
       },
       properties,
       context,
@@ -2238,17 +2247,22 @@ export class FormoAnalytics implements IFormoAnalytics {
         (params[0] as string).slice(2),
         "hex"
       ).toString("utf8");
+      const signatureHash = redactSignatureHash(response as string | undefined);
       return {
         ...basePayload,
         message,
-        ...(response ? { signatureHash: response as string } : {}),
+        ...(signatureHash ? { signatureHash } : {}),
       };
     }
 
+    // eth_signTypedData*: params[1] is the full EIP-712 struct (the
+    // signed terms). Never ship it — emit only safe metadata. And
+    // `response` is the raw signature — redact to a correlation token.
+    const signatureHash = redactSignatureHash(response as string | undefined);
     return {
       ...basePayload,
-      message: params[1] as string,
-      ...(response ? { signatureHash: response as string } : {}),
+      message: redactTypedDataMessage(params[1]),
+      ...(signatureHash ? { signatureHash } : {}),
     };
   }
 

@@ -10,6 +10,10 @@ import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import {
+  redactSignatureHash,
+  redactTypedDataMessage,
+} from "../utils/signatureRedaction";
+import {
   WagmiConfig,
   WagmiState,
   QueryClient,
@@ -558,7 +562,9 @@ export class WagmiEventHandler {
         status = SignatureStatus.REQUESTED;
       } else if (state.status === "success") {
         status = SignatureStatus.CONFIRMED;
-        signatureHash = state.data as string;
+        // state.data is the *raw signature* — a replayable bearer
+        // credential. Never ship it; emit a one-way correlation token.
+        signatureHash = redactSignatureHash(state.data as string);
       } else if (state.status === "error") {
         status = SignatureStatus.REJECTED;
       } else {
@@ -570,8 +576,10 @@ export class WagmiEventHandler {
       if (mutationType === "signMessage") {
         message = variables.message || "";
       } else {
-        // For signTypedData, stringify the typed data
-        message = JSON.stringify(variables.message || variables.types || {});
+        // signTypedData: the full EIP-712 struct (variables.message /
+        // variables.types) is the signed terms — never serialize it.
+        // Emit only non-sensitive metadata (primaryType + domain).
+        message = redactTypedDataMessage(variables);
       }
 
       logger.info("WagmiEventHandler: Tracking signature event", {
