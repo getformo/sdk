@@ -58,52 +58,6 @@ function isValidBase58String(str: string): boolean {
 }
 
 /**
- * Index lookup for Base58 decoding.
- */
-const BASE58_INDEX: Record<string, number> = (() => {
-  const map: Record<string, number> = {};
-  for (let i = 0; i < BASE58_ALPHABET.length; i++) {
-    map[BASE58_ALPHABET[i]] = i;
-  }
-  return map;
-})();
-
-/**
- * Number of bytes in a Solana (Ed25519) public key.
- */
-const SOLANA_PUBLIC_KEY_BYTES = 32;
-
-/**
- * Decode a Base58 string and return the byte length of the result, or -1
- * if the string is not valid Base58. Used to enforce that an address
- * decodes to exactly 32 bytes — character-set + length checks alone
- * accept many 32–44 char Base58 strings that are not valid public keys.
- */
-function base58DecodedByteLength(str: string): number {
-  if (str.length === 0) return -1;
-  const bytes: number[] = [];
-  for (let i = 0; i < str.length; i++) {
-    let carry = BASE58_INDEX[str[i]];
-    if (carry === undefined) return -1;
-    for (let j = 0; j < bytes.length; j++) {
-      carry += bytes[j] * 58;
-      bytes[j] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
-  }
-  // Each leading '1' is a leading zero byte.
-  let leadingZeros = 0;
-  for (let k = 0; k < str.length && str[k] === "1"; k++) {
-    leadingZeros++;
-  }
-  return bytes.length + leadingZeros;
-}
-
-/**
  * Check if a string is a valid Solana address format
  *
  * This performs format validation only (length and character set).
@@ -128,14 +82,7 @@ export function isSolanaAddress(value: unknown): value is string {
   }
 
   // Check character set (Base58)
-  if (!isValidBase58String(trimmed)) {
-    return false;
-  }
-
-  // Enforce that the value decodes to exactly a 32-byte public key.
-  // Length + charset alone accept many Base58 strings that are not
-  // valid Solana addresses (this predicate is the SDK's identity gate).
-  return base58DecodedByteLength(trimmed) === SOLANA_PUBLIC_KEY_BYTES;
+  return isValidBase58String(trimmed);
 }
 
 /**

@@ -8,11 +8,7 @@ import {
 } from "../validators";
 import { isNullish } from "../validators/object";
 import { BLOCKED_ADDRESSES } from "../constants";
-import {
-  isSolanaAddress,
-  getValidSolanaAddress,
-  isBlockedSolanaAddress,
-} from "../solana/address";
+import { isSolanaAddress, getValidSolanaAddress } from "../solana/address";
 import { SOLANA_CHAIN_IDS } from "../solana/types";
 
 /**
@@ -61,21 +57,12 @@ export const getValidAddress = (address: Address | null | undefined): string | n
 export const isBlockedAddress = (address: Address | null | undefined): boolean => {
   if (!address || typeof address !== 'string') return false;
 
-  const trimmed = address.trim();
-  const normalized = trimmed.toLowerCase();
+  const normalized = address.trim().toLowerCase();
+  if (!normalized || !normalized.startsWith('0x') || normalized.length !== 42) return false;
 
-  // EVM: 0x-prefixed 42-char address → check the EVM blocklist.
-  if (normalized.startsWith('0x') && normalized.length === 42) {
-    return BLOCKED_ADDRESSES.some(blockedAddr =>
-      blockedAddr.toLowerCase() === normalized
-    );
-  }
-
-  // Non-EVM shape → treat as a potential Solana address and apply the
-  // Solana blocklist (system/program addresses). EventManager calls this
-  // generically before enqueue, so a Solana system address must be
-  // blocked here, not only on the SolanaStoreHandler path.
-  return isBlockedSolanaAddress(trimmed);
+  return BLOCKED_ADDRESSES.some(blockedAddr =>
+    blockedAddr.toLowerCase() === normalized
+  );
 };
 
 export const toChecksumAddress = (address: Address): string => {

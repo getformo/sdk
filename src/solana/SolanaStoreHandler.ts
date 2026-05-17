@@ -22,7 +22,7 @@ import {
   SolanaWalletStatus,
 } from "./storeTypes";
 import { SOLANA_CHAIN_IDS, SolanaCluster, UnsubscribeFn } from "./types";
-import { isBlockedSolanaAddress, getValidSolanaAddress } from "./address";
+import { isBlockedSolanaAddress } from "./address";
 
 /**
  * Clean up old entries from a Set to prevent memory leaks.
@@ -70,22 +70,8 @@ export class SolanaStoreHandler {
    * Per-transaction sender address captured at STARTED time.
    * Ensures terminal events (confirmed/failed) are attributed correctly
    * even if the wallet disconnects before the transaction settles.
-   *
-   * Entries are normally deleted on the terminal (confirmed/failed)
-   * status, but a transaction that never reaches a terminal state (stuck
-   * pending, returned to idle, or removed from the store) would leak.
-   * `createdAt` enables TTL/size-bounded pruning so a long-lived or
-   * noisy/malicious store cannot grow this map unbounded.
    */
-  private transactionSenders = new Map<
-    string,
-    { address: string; chainId: number; createdAt: number }
-  >();
-
-  /** Drop sender records older than this even if never terminal. */
-  private static readonly TX_SENDER_TTL_MS = 30 * 60 * 1000; // 30 min
-  /** Hard cap on retained in-flight sender records. */
-  private static readonly MAX_TX_SENDERS = 1000;
+  private transactionSenders = new Map<string, { address: string; chainId: number }>();
 
   /**
    * Whether the cluster was explicitly set (via options or setCluster).
@@ -183,75 +169,13 @@ export class SolanaStoreHandler {
     logger.info("SolanaStoreHandler: Wallet subscription set up");
   }
 
-  /**
-   * Normalize and validate an address coming from the external store.
-   *
-   * The framework-kit store is an attacker-influenceable trust boundary:
-   * accept a value only if it is a valid 32-byte Solana public key and is
-   * not a blocked system/program address. Returns the normalized address
-   * or null — callers must reject null rather than fall back to the raw
-   * value.
-   */
-  private validatedStoreAddress(
-    raw: string | null | undefined
-  ): string | null {
-    const valid = getValidSolanaAddress(raw);
-    if (!valid || isBlockedSolanaAddress(valid)) {
-      return null;
-    }
-    return valid;
-  }
-
-  /**
-   * Record a transaction sender and opportunistically prune stale/excess
-   * entries so the map cannot grow unbounded for non-terminal transactions.
-   */
-  private setTransactionSender(
-    key: string,
-    address: string,
-    chainId: number
-  ): void {
-    this.transactionSenders.set(key, {
-      address,
-      chainId,
-      createdAt: Date.now(),
-    });
-    this.pruneTransactionSenders();
-  }
-
-  private pruneTransactionSenders(): void {
-    const now = Date.now();
-    // Collect-then-delete: mutating a Map during forEach is unsafe.
-    const expired: string[] = [];
-    this.transactionSenders.forEach((v, k) => {
-      if (now - v.createdAt > SolanaStoreHandler.TX_SENDER_TTL_MS) {
-        expired.push(k);
-      }
-    });
-    expired.forEach((k) => this.transactionSenders.delete(k));
-
-    // forEach visits entries in insertion order, so the first N keys are
-    // the oldest — evict them if still over the hard cap.
-    const excess =
-      this.transactionSenders.size - SolanaStoreHandler.MAX_TX_SENDERS;
-    if (excess > 0) {
-      const toDelete: string[] = [];
-      this.transactionSenders.forEach((_v, k) => {
-        if (toDelete.length < excess) toDelete.push(k);
-      });
-      toDelete.forEach((k) => this.transactionSenders.delete(k));
-    }
-  }
-
   private checkInitialWalletState(): void {
     const state = this.store.getState();
     const wallet = state.wallet;
 
     if (wallet.status === "connected") {
-      const address = this.validatedStoreAddress(
-        wallet.session.account.address
-      );
-      if (address) {
+      const address = wallet.session.account.address;
+      if (address && !isBlockedSolanaAddress(address)) {
         this.lastWalletStatus = "connected";
         this.lastAddress = address;
         this.lastChainId = this.chainId;
@@ -314,10 +238,8 @@ export class SolanaStoreHandler {
   }
 
   private handleConnect(wallet: Extract<SolanaWalletStatus, { status: "connected" }>): void {
-    const address = this.validatedStoreAddress(
-      wallet.session.account.address
-    );
-    if (!address) {
+    const address = wallet.session.account.address;
+    if (!address || isBlockedSolanaAddress(address)) {
       return;
     }
 
@@ -500,7 +422,7 @@ export class SolanaStoreHandler {
 
           // Capture sender for this transaction so terminal events are attributed
           // correctly even if the wallet disconnects before the tx settles.
-          this.setTransactionSender(key, address, chainId);
+          this.transactionSenders.set(key, { address, chainId });
 
           this.formo.transaction({
             status: TransactionStatus.STARTED,
@@ -519,7 +441,7 @@ export class SolanaStoreHandler {
         if (signature) {
           // Ensure sender is captured (in case we missed "sending")
           if (!this.transactionSenders.has(key)) {
-            this.setTransactionSender(key, address, chainId);
+            this.transactionSenders.set(key, { address, chainId });
           }
           const sender = this.transactionSenders.get(key)!;
           this.formo.transaction({

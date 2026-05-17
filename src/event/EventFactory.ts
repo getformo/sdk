@@ -20,7 +20,6 @@ import {
 } from "../types";
 import { toSnakeCase } from "../utils";
 import { validateAddress } from "../utils/address";
-import { isUnsafeRegex } from "../utils/safeRegex";
 import { getCurrentTimeFormatted } from "../utils/timestamp";
 import { isUndefined } from "../validators";
 import { logger } from "../logger";
@@ -39,10 +38,6 @@ import { detectBrowser } from "../browser/browsers";
 
 const ISO_3166_ALPHA_2_REGEX = /^[A-Z]{2}$/;
 
-// ReDoS guards for the integrator-supplied referral path regex.
-const MAX_REFERRAL_PATTERN_LENGTH = 200;
-const MAX_REFERRAL_PATH_LENGTH = 1024;
-
 class EventFactory implements IEventFactory {
   private options?: Options;
   private compiledPathPattern?: RegExp;
@@ -51,24 +46,12 @@ class EventFactory implements IEventFactory {
     this.options = options;
     // Compile regex pattern once for better performance
     if (options?.referral?.pathPattern) {
-      const pattern = options.referral.pathPattern;
-      // Bound the pattern length. A catastrophic-backtracking regex paired
-      // with an attacker-controlled URL path can block the browser thread
-      // on every event/page hit (ReDoS). Length-capping the pattern is a
-      // cheap defense-in-depth; pathname length is capped at match time.
-      if (
-        pattern.length > MAX_REFERRAL_PATTERN_LENGTH ||
-        isUnsafeRegex(pattern)
-      ) {
-        // Rejected (too long, or a shape that can degrade matching).
-        // Keep the log generic — don't surface the policy internals.
-        logger.warn("Invalid referral path pattern; skipped.");
-      } else {
-        try {
-          this.compiledPathPattern = new RegExp(pattern);
-        } catch {
-          logger.warn("Invalid referral path pattern; skipped.");
-        }
+      try {
+        this.compiledPathPattern = new RegExp(options.referral.pathPattern);
+      } catch (error) {
+        logger.warn(
+          `Invalid referral path pattern: ${options.referral.pathPattern}. Error: ${error}`
+        );
       }
     }
   }
@@ -176,10 +159,7 @@ class EventFactory implements IEventFactory {
 
     // Check URL path pattern if configured
     if (this.compiledPathPattern) {
-      // Cap the input the regex runs against. The path is attacker-
-      // controlled; bounding its length bounds worst-case backtracking
-      // so a crafted URL cannot freeze the browser thread.
-      const pathname = urlObj.pathname.slice(0, MAX_REFERRAL_PATH_LENGTH);
+      const pathname = urlObj.pathname;
       const match = pathname.match(this.compiledPathPattern);
       if (match && match[1]) {
         const referralCode = match[1].trim();
