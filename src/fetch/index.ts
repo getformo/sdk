@@ -6,28 +6,16 @@ type RetryOptions = {
   retries?: number;
   retryDelay?: (attempt: number) => number;
   retryOn?: (attempt: number, error: FetchRetryError | null, response: Response | null) => boolean;
-  // Abort hook re-evaluated before every attempt (including after a
-  // retry backoff sleep). Returning false stops the request without a
-  // further network call — used to honor consent withdrawal that
-  // happens while a flush is mid-retry.
-  shouldProceed?: () => boolean;
 };
 
 async function fetchWithRetry(
   input: RequestInfo | URL,
   init?: RequestInit & RetryOptions
 ): Promise<Response> {
-  const { retries = 0, retryDelay, retryOn, shouldProceed, ...fetchInit } =
-    init || {};
+  const { retries = 0, retryDelay, retryOn, ...fetchInit } = init || {};
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     const isLastAttempt = attempt === retries;
-
-    // Re-checked every iteration, so a retry scheduled before consent
-    // withdrawal does not fire its next attempt afterwards.
-    if (shouldProceed && !shouldProceed()) {
-      throw new Error("fetch aborted: send no longer permitted");
-    }
 
     try {
       // Resolve fetch at call time (not module load) so it can be stubbed in tests

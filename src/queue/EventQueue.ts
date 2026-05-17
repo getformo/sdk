@@ -363,8 +363,6 @@ export class EventQueue implements IEventQueue {
           retries: this.retryCount,
           retryDelay: (attempt) => Math.pow(2, attempt) * 1_000,
           retryOn: (_, error, response) => this.isErrorRetryable(error, response),
-          // Stop mid-retry if consent is withdrawn during the backoff.
-          ...(this.canSend ? { shouldProceed: this.canSend } : {}),
         });
         if (!response.ok) {
           const error: any = new Error(response.statusText || `HTTP ${response.status}`);
