@@ -91,6 +91,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     EIP1193Provider,
     Record<string, (...args: unknown[]) => void>
   > = new Map();
+  // Original `request` fn captured before we wrap a provider, so
+  // untrackProvider/cleanup can restore it. Without this a torn-down SDK
+  // instance keeps intercepting wallet RPCs and emitting analytics.
+  private _originalProviderRequest: WeakMap<
+    EIP1193Provider,
+    EIP1193Provider["request"]
+  > = new WeakMap();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   /**
@@ -213,6 +220,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         maxQueueSize: options.maxQueueSize,
         flushInterval: options.flushInterval,
         errorHandler: options.errorHandler,
+        // Hard consent gate at the queue boundary: nothing buffered is
+        // ever sent once the user has opted out, even via a timer or
+        // pagehide flush scheduled before opt-out.
+        canSend: () => !this.hasOptedOutTracking(),
       }),
       options
     );
@@ -314,6 +325,18 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public reset(): void {
     this.currentUserId = undefined;
+
+    // Clear in-memory wallet identity too. Without this, a logout/reset
+    // (also triggered by optOutTracking) still leaks the previous wallet
+    // address on subsequent track()/page() events for the rest of the
+    // page lifetime, because they fall back to currentAddress. Keep the
+    // EVM provider reference so tracking can resume on the next connect.
+    this.currentAddress = undefined;
+    this.currentChainId = undefined;
+    const evmProvider = this._chainState.evm.provider;
+    this._chainState = { evm: { provider: evmProvider }, solana: {} };
+    this._activeNamespace = undefined;
+
     cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
@@ -328,6 +351,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public cleanup(): void {
     logger.debug("FormoAnalytics: Cleaning up resources");
+
+    // Drop buffered events so a torn-down instance can't flush later.
+    this.eventManager.clear();
 
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
@@ -679,6 +705,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
+      // identify() writes the user-id cookie and marks wallet
+      // identification before trackEvent's consent check — gate the
+      // whole method so an opted-out user gets no identity persistence.
+      if (this.hasOptedOutTracking()) {
+        logger.info("identify() skipped: user has opted out of tracking");
+        return;
+      }
       if (!params) {
         // If no params provided, auto-identify
         logger.info(
@@ -838,6 +871,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    // detect() marks wallet detection (a cookie write) before
+    // trackEvent's consent check — gate it on opt-out.
+    if (this.hasOptedOutTracking()) {
+      logger.info("detect() skipped: user has opted out of tracking");
+      return;
+    }
     if (this.session.isWalletDetected(rdns))
       return logger.warn(
         `Detect: Wallet ${providerName} already detected in this session`
@@ -893,6 +932,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
+    // Drop anything already buffered so a pending timer/pagehide flush
+    // cannot ship events after consent withdrawal.
+    this.eventManager.clear();
     this.reset();
 
     logger.info("Successfully opted out of tracking");
@@ -1521,6 +1563,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         "Provider already wrapped with our SDK; skipping request wrapping."
       );
       return;
+    }
+
+    // Capture the original (unbound) request fn once so it can be
+    // restored on untrack/cleanup. Don't overwrite an existing record —
+    // if a stale wrapper is being replaced we still want the *true*
+    // original, not another wrapper.
+    if (!this._originalProviderRequest.has(provider)) {
+      this._originalProviderRequest.set(provider, provider.request);
     }
 
     const request = provider.request.bind(provider);
@@ -2300,10 +2350,32 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListenersMap.delete(provider);
   }
 
-  // Explicitly untrack a provider: remove listeners, clear wrapper flag and tracking
+  // Restore a provider's original `request`, undoing our wrapper so an
+  // untracked/destroyed instance stops intercepting wallet RPCs.
+  private restoreProviderRequest(provider: EIP1193Provider): void {
+    const original = this._originalProviderRequest.get(provider);
+    if (!original) return;
+    try {
+      const current = provider.request as WrappedRequestFunction;
+      // Only restore if `request` is still *our* wrapper. If the app (or
+      // another SDK) replaced it since, leave their function in place.
+      if (this.isProviderAlreadyWrapped(provider, current)) {
+        provider.request = original;
+      }
+      delete (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL];
+    } catch (e) {
+      logger.warn("Failed to restore provider.request", e);
+    } finally {
+      this._originalProviderRequest.delete(provider);
+    }
+  }
+
+  // Explicitly untrack a provider: remove listeners, restore the original
+  // request, clear wrapper flag and tracking
   private untrackProvider(provider: EIP1193Provider): void {
     try {
       this.removeProviderListeners(provider);
+      this.restoreProviderRequest(provider);
       this._trackedProviders.delete(provider);
 
       if (this._provider === provider) {
@@ -2479,6 +2551,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private persistActiveWallet(): void {
     try {
+      // Never write an identity cookie for an opted-out user; ensure any
+      // prior snapshot is removed instead.
+      if (this.hasOptedOutTracking()) {
+        cookie().remove(ACTIVE_WALLET_KEY);
+        return;
+      }
       if (this.currentAddress) {
         const value = JSON.stringify({
           address: this.currentAddress,

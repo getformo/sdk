@@ -38,6 +38,10 @@ import { detectBrowser } from "../browser/browsers";
 
 const ISO_3166_ALPHA_2_REGEX = /^[A-Z]{2}$/;
 
+// ReDoS guards for the integrator-supplied referral path regex.
+const MAX_REFERRAL_PATTERN_LENGTH = 200;
+const MAX_REFERRAL_PATH_LENGTH = 1024;
+
 class EventFactory implements IEventFactory {
   private options?: Options;
   private compiledPathPattern?: RegExp;
@@ -46,12 +50,23 @@ class EventFactory implements IEventFactory {
     this.options = options;
     // Compile regex pattern once for better performance
     if (options?.referral?.pathPattern) {
-      try {
-        this.compiledPathPattern = new RegExp(options.referral.pathPattern);
-      } catch (error) {
+      const pattern = options.referral.pathPattern;
+      // Bound the pattern length. A catastrophic-backtracking regex paired
+      // with an attacker-controlled URL path can block the browser thread
+      // on every event/page hit (ReDoS). Length-capping the pattern is a
+      // cheap defense-in-depth; pathname length is capped at match time.
+      if (pattern.length > MAX_REFERRAL_PATTERN_LENGTH) {
         logger.warn(
-          `Invalid referral path pattern: ${options.referral.pathPattern}. Error: ${error}`
+          `Referral path pattern exceeds ${MAX_REFERRAL_PATTERN_LENGTH} chars; ignoring it to avoid ReDoS risk.`
         );
+      } else {
+        try {
+          this.compiledPathPattern = new RegExp(pattern);
+        } catch (error) {
+          logger.warn(
+            `Invalid referral path pattern: ${pattern}. Error: ${error}`
+          );
+        }
       }
     }
   }
@@ -159,7 +174,10 @@ class EventFactory implements IEventFactory {
 
     // Check URL path pattern if configured
     if (this.compiledPathPattern) {
-      const pathname = urlObj.pathname;
+      // Cap the input the regex runs against. The path is attacker-
+      // controlled; bounding its length bounds worst-case backtracking
+      // so a crafted URL cannot freeze the browser thread.
+      const pathname = urlObj.pathname.slice(0, MAX_REFERRAL_PATH_LENGTH);
       const match = pathname.match(this.compiledPathPattern);
       if (match && match[1]) {
         const referralCode = match[1].trim();

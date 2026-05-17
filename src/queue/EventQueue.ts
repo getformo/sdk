@@ -37,6 +37,10 @@ type Options = {
   retryCount?: number;
   errorHandler?: any;
   maxQueueSize?: number;
+  // Consent predicate, re-checked at enqueue and immediately before any
+  // network send. Returning false drops queued data — a timer or
+  // pagehide flush scheduled before opt-out must not leak events after.
+  canSend?: () => boolean;
 };
 
 const DEFAULT_RETRY = 3;
@@ -73,6 +77,7 @@ export class EventQueue implements IEventQueue {
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
   private payloadHashes: Set<string> = new Set();
+  private canSend?: () => boolean;
 
   constructor(writeKey: string, options: Options) {
     options = options || {};
@@ -80,6 +85,7 @@ export class EventQueue implements IEventQueue {
     this.queue = [];
     this.writeKey = writeKey;
     this.apiHost = options.apiHost;
+    this.canSend = options.canSend;
     this.retryCount = clampNumber(
       options.retryCount || DEFAULT_RETRY,
       MAX_RETRY,
@@ -119,8 +125,27 @@ export class EventQueue implements IEventQueue {
     return hash(eventString);
   }
 
+  /**
+   * Drop all queued data and cancel the flush timer. Called on consent
+   * withdrawal / SDK teardown so nothing buffered can be sent later.
+   */
+  clear(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.queue = [];
+    this.payloadHashes.clear();
+  }
+
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
+
+    // Refuse to buffer anything once consent is withdrawn.
+    if (this.canSend && !this.canSend()) {
+      this.clear();
+      return;
+    }
 
     const message_id = await this.generateMessageId(event);
     // check if the message already exists
@@ -169,6 +194,14 @@ export class EventQueue implements IEventQueue {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
+    }
+
+    // Final consent gate: a timer/pagehide flush may have been scheduled
+    // before opt-out. Drop everything rather than send post-withdrawal.
+    if (this.canSend && !this.canSend()) {
+      this.clear();
+      callback();
+      return Promise.resolve();
     }
 
     if (!this.queue.length) {
