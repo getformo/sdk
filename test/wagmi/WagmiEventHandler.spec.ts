@@ -304,7 +304,7 @@ describe("WagmiEventHandler", () => {
       const arg = mockFormo.signature.firstCall.args[0];
       expect(arg.status).to.equal("confirmed");
       expect(arg.message).to.equal("Hello World");
-      // C1: the produced signature must never be captured at all.
+      // The produced signature must never be captured.
       expect(arg).to.not.have.property("signatureHash");
       expect(JSON.stringify(arg)).to.not.contain(rawSig);
     });
@@ -417,7 +417,7 @@ describe("WagmiEventHandler", () => {
 
       expect(mockFormo.signature.calledOnce).to.be.true;
       const arg = mockFormo.signature.firstCall.args[0];
-      // C1: the produced signature must never be captured.
+      // The produced signature must never be captured.
       expect(arg).to.not.have.property("signatureHash");
       expect(JSON.stringify(arg)).to.not.contain(rawSig);
     });

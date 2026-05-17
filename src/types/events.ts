@@ -83,8 +83,6 @@ export interface SignatureAPIEvent {
   status: SignatureStatus;
   chainId: ChainID;
   address: Address;
-  // The signed message (plaintext for signMessage, JSON EIP-712 struct
-  // for signTypedData). The produced signature is never captured (C1).
   message: string;
 }
 export interface ConnectAPIEvent {

@@ -598,9 +598,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    // C1: the produced signature is never accepted or forwarded. The
-    // `message` carries only a plaintext signMessage body (opt-in) or
-    // signTypedData primaryType+domain metadata — never the signature.
     await this.trackEvent(
       EventType.SIGNATURE,
       {
@@ -2223,8 +2220,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private buildSignatureEventPayload(
     method: string,
     params: unknown[],
-    // C1: the RPC response IS the raw signature — intentionally never
-    // read or captured. Kept for call-site arity / clarity.
+    // Intentionally not read. Kept for positional call-site arity.
     _response?: unknown,
     chainId?: number
   ) {
@@ -2246,9 +2242,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       address: validAddress,
     };
 
-    // C1: `_response` is the raw signature (a replayable bearer
-    // credential) — never captured, in any branch. The signed message
-    // itself is still captured as before.
     if (method === "personal_sign") {
       const message = Buffer.from(
         (params[0] as string).slice(2),

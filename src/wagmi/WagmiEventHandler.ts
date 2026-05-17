@@ -551,9 +551,6 @@ export class WagmiEventHandler {
 
     try {
       // Map Wagmi mutation status to Formo signature status.
-      // C1: the produced signature (`state.data`) is a replayable
-      // permit/Permit2/SIWE bearer credential and is never captured.
-      // The signed message itself is still captured as before.
       let status: SignatureStatus;
 
       if (state.status === "pending") {
