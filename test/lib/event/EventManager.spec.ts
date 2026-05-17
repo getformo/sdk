@@ -356,4 +356,11 @@ describe("EventManager", () => {
       }
     });
   });
+
+  describe("clear", () => {
+    it("delegates to the event queue's clear()", () => {
+      eventManager.clear();
+      expect((mockEventQueue.clear as sinon.SinonSpy).calledOnce).to.be.true;
+    });
+  });
 });

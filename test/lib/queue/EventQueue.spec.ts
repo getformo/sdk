@@ -661,4 +661,67 @@ describe("EventQueue", () => {
       expect(errorHandler.firstCall.args[0]).to.be.an.instanceOf(TypeError);
     });
   });
+
+  describe("consent gate (canSend) and clear()", () => {
+    let fetchStub: sinon.SinonStub;
+
+    beforeEach(() => {
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.resolves(makeResponse(200, "OK"));
+    });
+
+    it("does not send when consent is revoked before flush", async () => {
+      let allowed = true;
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      allowed = false; // consent withdrawn while buffered
+      await eventQueue.flush();
+
+      expect(fetchStub.called, "no network send after opt-out").to.be.false;
+    });
+
+    it("enqueue is a no-op once canSend() is false", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 1,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => false,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+
+      expect(fetchStub.called).to.be.false;
+    });
+
+    it("clear() drops buffered events; queue is reusable afterwards", async () => {
+      useUniqueCryptoHashes();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.enqueue(createMockEvent());
+      eventQueue.clear();
+      await eventQueue.flush();
+      expect(fetchStub.called, "cleared events are not sent").to.be.false;
+
+      // Queue still works after clear (byteSize/state re-anchored).
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(fetchStub.calledOnce, "post-clear enqueue still flushes").to.be
+        .true;
+    });
+  });
 });
