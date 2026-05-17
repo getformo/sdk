@@ -34,6 +34,18 @@ const MAX_BOUNDED_REPETITION = 1000;
  *  - oversized bounded repetitions
  */
 export function isPotentiallyCatastrophicRegex(source: string): boolean {
+  try {
+    return analyzeRegexSource(source);
+  } catch {
+    // The analyzer must never throw into the caller: EventFactory runs
+    // this on integrator config during init, *before* (and outside) the
+    // `new RegExp(...)` try/catch. Any unexpected internal failure ⇒
+    // treat the pattern as unsafe ("when in doubt, reject").
+    return true;
+  }
+}
+
+function analyzeRegexSource(source: string): boolean {
   // Per-group state: does the group's body contain an unbounded-
   // quantified atom/subgroup, and/or a top-level `|` alternation?
   type Frame = { hasUnboundedInside: boolean; hasAlternation: boolean };
@@ -97,6 +109,13 @@ export function isPotentiallyCatastrophicRegex(source: string): boolean {
     }
 
     if (ch === ")") {
+      // Unmatched ')' (e.g. ")a+", "a)b+"): don't underflow the frame
+      // stack — popping the root would leave `stack` empty and later
+      // `stack[stack.length-1].x = …` would throw. The pattern is
+      // malformed; leave analysis state intact and let `new RegExp(...)`
+      // reject it downstream.
+      if (stack.length <= 1) continue;
+
       const group = stack.pop() ?? newFrame();
       const parent = stack[stack.length - 1] ?? newFrame();
 
