@@ -9,7 +9,10 @@ import mergeDeepRight from "../../src/ramda/mergeDeepRight";
 const malicious = (k: string) =>
   JSON.parse(`{"${k}": {"polluted": true}}`);
 
-describe("prototype pollution guards", () => {
+// Note: the prototype-pollution guard is retained only in toSnakeCase
+// (the deep-merge guard in mergeWithKey was reverted to keep the
+// vendored ramda subset identical to base).
+describe("prototype pollution guard (toSnakeCase)", () => {
   afterEach(() => {
     // Fail loudly if any case leaked onto the global prototype.
     delete (Object.prototype as any).polluted;
@@ -19,13 +22,6 @@ describe("prototype pollution guards", () => {
     it(`toSnakeCase drops own '${key}' key without polluting`, () => {
       const out = toSnakeCase(malicious(key));
       expect(({} as any).polluted).to.equal(undefined);
-      expect(Object.prototype.hasOwnProperty.call(out, key)).to.equal(false);
-    });
-
-    it(`mergeDeepRight ignores own '${key}' key without polluting`, () => {
-      const out = mergeDeepRight({ safe: 1 }, malicious(key));
-      expect(({} as any).polluted).to.equal(undefined);
-      expect((out as any).safe).to.equal(1);
       expect(Object.prototype.hasOwnProperty.call(out, key)).to.equal(false);
     });
   }
