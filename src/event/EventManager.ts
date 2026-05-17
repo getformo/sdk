@@ -52,7 +52,7 @@ class EventManager implements IEventManager {
 
   /** Drop any buffered events (consent withdrawal / teardown). */
   clear(): void {
-    this.eventQueue.clear?.();
+    this.eventQueue.clear();
   }
 }
 
