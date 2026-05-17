@@ -33,7 +33,7 @@ const MAX_BOUNDED_REPETITION = 1000;
  *    quantified alternation group is rejected; use `[ab]+` not `(a|b)+`)
  *  - oversized bounded repetitions
  */
-export function isPotentiallyCatastrophicRegex(source: string): boolean {
+export function isUnsafeRegex(source: string): boolean {
   try {
     return analyzeRegexSource(source);
   } catch {

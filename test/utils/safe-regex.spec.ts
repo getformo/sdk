@@ -1,8 +1,8 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import { isPotentiallyCatastrophicRegex } from "../../src/utils/safeRegex";
+import { isUnsafeRegex } from "../../src/utils/safeRegex";
 
-describe("isPotentiallyCatastrophicRegex", () => {
+describe("isUnsafeRegex", () => {
   it("rejects star-height ≥ 2 / nested-quantifier patterns", () => {
     for (const evil of [
       "(a+)+$",
@@ -14,7 +14,7 @@ describe("isPotentiallyCatastrophicRegex", () => {
       "(\\d+)*$",
       "([a-z]+)*",
     ]) {
-      expect(isPotentiallyCatastrophicRegex(evil), evil).to.equal(true);
+      expect(isUnsafeRegex(evil), evil).to.equal(true);
     }
   });
 
@@ -27,13 +27,13 @@ describe("isPotentiallyCatastrophicRegex", () => {
       "(foo|foo)*",
       "^/(x|x)+$",
     ]) {
-      expect(isPotentiallyCatastrophicRegex(evil), evil).to.equal(true);
+      expect(isUnsafeRegex(evil), evil).to.equal(true);
     }
   });
 
   it("rejects oversized bounded repetitions", () => {
-    expect(isPotentiallyCatastrophicRegex("a{2000,}")).to.equal(true);
-    expect(isPotentiallyCatastrophicRegex("x{1,5000}")).to.equal(true);
+    expect(isUnsafeRegex("a{2000,}")).to.equal(true);
+    expect(isUnsafeRegex("x{1,5000}")).to.equal(true);
   });
 
   it("allows linear / safe referral patterns", () => {
@@ -48,13 +48,13 @@ describe("isPotentiallyCatastrophicRegex", () => {
       "/r/(.+)", // single quantifier, no nesting
       "/(r|ref)/[^/]+", // alternation NOT under an unbounded quantifier → safe
     ]) {
-      expect(isPotentiallyCatastrophicRegex(safe), safe).to.equal(false);
+      expect(isUnsafeRegex(safe), safe).to.equal(false);
     }
   });
 
   it("handles escapes and char classes without false positives", () => {
-    expect(isPotentiallyCatastrophicRegex("\\(a\\+\\)\\+")).to.equal(false); // escaped, literal
-    expect(isPotentiallyCatastrophicRegex("[(+)]+")).to.equal(false); // class then one quantifier
-    expect(isPotentiallyCatastrophicRegex("[a|b]+")).to.equal(false); // | inside class, not alternation
+    expect(isUnsafeRegex("\\(a\\+\\)\\+")).to.equal(false); // escaped, literal
+    expect(isUnsafeRegex("[(+)]+")).to.equal(false); // class then one quantifier
+    expect(isUnsafeRegex("[a|b]+")).to.equal(false); // | inside class, not alternation
   });
 });

@@ -20,7 +20,7 @@ import {
 } from "../types";
 import { toSnakeCase } from "../utils";
 import { validateAddress } from "../utils/address";
-import { isPotentiallyCatastrophicRegex } from "../utils/safeRegex";
+import { isUnsafeRegex } from "../utils/safeRegex";
 import { getCurrentTimeFormatted } from "../utils/timestamp";
 import { isUndefined } from "../validators";
 import { logger } from "../logger";
@@ -58,7 +58,7 @@ class EventFactory implements IEventFactory {
       // cheap defense-in-depth; pathname length is capped at match time.
       if (
         pattern.length > MAX_REFERRAL_PATTERN_LENGTH ||
-        isPotentiallyCatastrophicRegex(pattern)
+        isUnsafeRegex(pattern)
       ) {
         // Rejected (too long, or a shape that can degrade matching).
         // Keep the log generic — don't surface the policy internals.
