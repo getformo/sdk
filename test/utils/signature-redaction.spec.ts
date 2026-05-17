@@ -1,47 +1,8 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import {
-  looksLikeRawSignature,
-  redactSignatureHash,
-  redactTypedDataMessage,
-} from "../../src/utils/signatureRedaction";
-
-// A realistic 65-byte ECDSA signature (130 hex chars).
-const RAW_SIG = "0x" + "ab".repeat(65);
-const COMPACT_SIG = "0x" + "cd".repeat(64); // EIP-2098, 128 hex
-const HEX_130 = /0x[0-9a-fA-F]{128,}/;
+import { redactTypedDataMessage } from "../../src/utils/signatureRedaction";
 
 describe("signatureRedaction", () => {
-  describe("looksLikeRawSignature", () => {
-    it("detects raw ECDSA / compact / long contract signatures", () => {
-      expect(looksLikeRawSignature(RAW_SIG)).to.equal(true);
-      expect(looksLikeRawSignature(COMPACT_SIG)).to.equal(true);
-      expect(looksLikeRawSignature("0x" + "ff".repeat(200))).to.equal(true);
-    });
-    it("does not flag short tokens, hashes, or non-strings", () => {
-      expect(looksLikeRawSignature("0xsignature123")).to.equal(false);
-      expect(looksLikeRawSignature("a3f9c1b2")).to.equal(false); // secureHash output
-      expect(looksLikeRawSignature(undefined)).to.equal(false);
-      expect(looksLikeRawSignature(12345 as any)).to.equal(false);
-    });
-  });
-
-  describe("redactSignatureHash", () => {
-    it("never returns the raw signature", () => {
-      const out = redactSignatureHash(RAW_SIG);
-      expect(out).to.not.equal(RAW_SIG);
-      expect(out).to.match(/^[0-9a-f]+$/);
-      expect(RAW_SIG).to.not.contain(out!); // token is not a substring of the sig
-    });
-    it("is deterministic (stable correlation token)", () => {
-      expect(redactSignatureHash(RAW_SIG)).to.equal(redactSignatureHash(RAW_SIG));
-    });
-    it("passes through already-safe values and undefined unchanged", () => {
-      expect(redactSignatureHash("0xshort")).to.equal("0xshort");
-      expect(redactSignatureHash(undefined)).to.equal(undefined);
-    });
-  });
-
   describe("redactTypedDataMessage", () => {
     // A Permit2 / permit-style typed data — the dangerous payload.
     const typedData = {
@@ -85,10 +46,10 @@ describe("signatureRedaction", () => {
     });
   });
 
-  it("end-to-end: a redacted signature event carries no replayable data", () => {
+  it("end-to-end: a minimized signature event carries no replayable data", () => {
+    // C1: the produced signature is never captured; only safe metadata.
     const emitted = {
       status: "confirmed",
-      signatureHash: redactSignatureHash(RAW_SIG),
       message: redactTypedDataMessage({
         domain: { name: "Seaport", chainId: 1 },
         primaryType: "OrderComponents",
@@ -96,7 +57,7 @@ describe("signatureRedaction", () => {
       }),
     };
     const serialized = JSON.stringify(emitted);
-    expect(serialized).to.not.match(HEX_130);
+    expect(serialized).to.not.have.string("signatureHash");
     expect(serialized).to.not.contain("offerer");
     expect(serialized).to.not.contain("consideration");
   });

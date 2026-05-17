@@ -53,10 +53,7 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
-import {
-  redactSignatureHash,
-  redactTypedDataMessage,
-} from "./utils/signatureRedaction";
+import { redactTypedDataMessage } from "./utils/signatureRedaction";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
@@ -580,7 +577,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {ChainID} params.chainId
    * @param {Address} params.address
    * @param {string} params.message
-   * @param {string} params.signatureHash - only provided if status is confirmed
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
@@ -592,23 +588,19 @@ export class FormoAnalytics implements IFormoAnalytics {
       chainId,
       address,
       message,
-      signatureHash,
     }: {
       status: SignatureStatus;
       chainId?: ChainID;
       address: Address;
       message: string;
-      signatureHash?: string;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    // Defense-in-depth backstop: producers already redact, but never let
-    // a raw-signature-shaped value leave this boundary. Idempotent —
-    // an already-redacted short token passes through unchanged.
-    const safeSignatureHash = redactSignatureHash(signatureHash);
-
+    // C1: the produced signature is never accepted or forwarded. The
+    // `message` carries only a plaintext signMessage body (opt-in) or
+    // signTypedData primaryType+domain metadata — never the signature.
     await this.trackEvent(
       EventType.SIGNATURE,
       {
@@ -616,7 +608,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         chainId,
         address,
         message,
-        ...(safeSignatureHash && { signatureHash: safeSignatureHash }),
       },
       properties,
       context,
@@ -1946,8 +1937,25 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {boolean} True if the event type should be autocaptured
    */
   public isAutocaptureEnabled(
-    eventType: "connect" | "disconnect" | "signature" | "transaction" | "chain"
+    eventType:
+      | "connect"
+      | "disconnect"
+      | "signature"
+      | "signatureMessage"
+      | "transaction"
+      | "chain"
   ): boolean {
+    // `signatureMessage` is opt-in (default false): the plaintext signed
+    // message is captured only when explicitly enabled via a granular
+    // autocapture object. It is never implied by `autocapture: true`.
+    if (eventType === "signatureMessage") {
+      return (
+        this.options.autocapture !== null &&
+        typeof this.options.autocapture === "object" &&
+        this.options.autocapture.signatureMessage === true
+      );
+    }
+
     // If no configuration provided, default to enabled
     if (this.options.autocapture === undefined) {
       return true;
@@ -2227,7 +2235,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   private buildSignatureEventPayload(
     method: string,
     params: unknown[],
-    response?: unknown,
+    // C1: the RPC response IS the raw signature — intentionally never
+    // read or captured. Kept for call-site arity / clarity.
+    _response?: unknown,
     chainId?: number
   ) {
     const rawAddress =
@@ -2248,27 +2258,25 @@ export class FormoAnalytics implements IFormoAnalytics {
       address: validAddress,
     };
 
+    // C1: `response` is the raw signature (a replayable bearer
+    // credential) — never captured, in any branch.
     if (method === "personal_sign") {
-      const message = Buffer.from(
-        (params[0] as string).slice(2),
-        "hex"
-      ).toString("utf8");
-      const signatureHash = redactSignatureHash(response as string | undefined);
+      // The plaintext signed body can carry SIWE/auth challenges, magic
+      // links, or tokens — captured only when explicitly opted in.
+      const message = this.isAutocaptureEnabled("signatureMessage")
+        ? Buffer.from((params[0] as string).slice(2), "hex").toString("utf8")
+        : "";
       return {
         ...basePayload,
         message,
-        ...(signatureHash ? { signatureHash } : {}),
       };
     }
 
     // eth_signTypedData*: params[1] is the full EIP-712 struct (the
-    // signed terms). Never ship it — emit only safe metadata. And
-    // `response` is the raw signature — redact to a correlation token.
-    const signatureHash = redactSignatureHash(response as string | undefined);
+    // signed terms). Never ship it — emit only safe metadata.
     return {
       ...basePayload,
       message: redactTypedDataMessage(params[1]),
-      ...(signatureHash ? { signatureHash } : {}),
     };
   }
 

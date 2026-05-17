@@ -304,9 +304,71 @@ describe("WagmiEventHandler", () => {
       const arg = mockFormo.signature.firstCall.args[0];
       expect(arg.status).to.equal("confirmed");
       expect(arg.message).to.equal("Hello World");
-      // Raw signature must NOT be passed through.
-      expect(arg.signatureHash).to.not.equal(rawSig);
-      expect(arg.signatureHash).to.match(/^[0-9a-f]+$/); // redacted token
+      // C1: the produced signature must never be captured at all.
+      expect(arg).to.not.have.property("signatureHash");
+      expect(JSON.stringify(arg)).to.not.contain(rawSig);
+    });
+
+    it("omits the signMessage plaintext by default (signatureMessage opt-in off)", async () => {
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+      (mockFormo.isAutocaptureEnabled as sinon.SinonStub)
+        .withArgs("signatureMessage")
+        .returns(false);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      if (statusListener) await statusListener("connected", "disconnected");
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const rawSig = "0x" + "ab".repeat(65);
+      mutationListener?.({
+        type: "updated",
+        mutation: {
+          mutationId: 11,
+          options: { mutationKey: ["signMessage"] },
+          state: {
+            status: "success",
+            data: rawSig,
+            variables: { message: "Sign in: nonce=abc token=secret-jwt" },
+          },
+        },
+      } as MutationCacheEvent);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const arg = mockFormo.signature.firstCall.args[0];
+      expect(arg.message).to.equal("");
+      expect(JSON.stringify(arg)).to.not.contain("secret-jwt");
+      expect(arg).to.not.have.property("signatureHash");
+    });
+
+    it("includes the signMessage plaintext only when signatureMessage opt-in is enabled", async () => {
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+      (mockFormo.isAutocaptureEnabled as sinon.SinonStub)
+        .withArgs("signatureMessage")
+        .returns(true);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      if (statusListener) await statusListener("connected", "disconnected");
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      mutationListener?.({
+        type: "updated",
+        mutation: {
+          mutationId: 12,
+          options: { mutationKey: ["signMessage"] },
+          state: {
+            status: "success",
+            data: "0x" + "ab".repeat(65),
+            variables: { message: "I accept the Terms v3" },
+          },
+        },
+      } as MutationCacheEvent);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(mockFormo.signature.firstCall.args[0].message).to.equal(
+        "I accept the Terms v3"
+      );
     });
 
     it("should track signMessage mutation on pending", async () => {
@@ -386,6 +448,7 @@ describe("WagmiEventHandler", () => {
       }
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      const rawSig = "0x" + "ab".repeat(65);
       const mutationEvent: MutationCacheEvent = {
         type: "updated",
         mutation: {
@@ -393,8 +456,18 @@ describe("WagmiEventHandler", () => {
           options: { mutationKey: ["signTypedData"] },
           state: {
             status: "success",
-            data: "0xtypedsig",
-            variables: { types: { Person: [{ name: "name", type: "string" }] } },
+            data: rawSig,
+            variables: {
+              domain: { name: "USD Coin", chainId: 1, verifyingContract: "0xA0b8" },
+              primaryType: "Permit",
+              types: { Permit: [{ name: "owner", type: "address" }] },
+              message: {
+                owner: "0xVictim",
+                spender: "0xATTACKER",
+                value: "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+                deadline: 9999999999,
+              },
+            },
           },
         },
       };
@@ -402,8 +475,21 @@ describe("WagmiEventHandler", () => {
       if (mutationListener) {
         mutationListener(mutationEvent);
       }
+      await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(mockFormo.signature.calledOnce).to.be.true;
+      const arg = mockFormo.signature.firstCall.args[0];
+      // C1: no raw signature, ever.
+      expect(arg).to.not.have.property("signatureHash");
+      expect(JSON.stringify(arg)).to.not.contain(rawSig);
+      // Only non-sensitive primaryType + domain metadata.
+      expect(arg.message).to.contain("Permit");
+      expect(arg.message).to.contain("USD Coin");
+      // The signed terms must never leak.
+      expect(arg.message).to.not.contain("0xATTACKER");
+      expect(arg.message).to.not.contain("115792089237316195423570985008687907853269984665640564039457584007913129639935");
+      expect(arg.message).to.not.contain("deadline");
+      expect(arg.message).to.not.contain("verifyingContract");
     });
   });
 

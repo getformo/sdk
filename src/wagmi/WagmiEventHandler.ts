@@ -9,10 +9,7 @@
 import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
-import {
-  redactSignatureHash,
-  redactTypedDataMessage,
-} from "../utils/signatureRedaction";
+import { redactTypedDataMessage } from "../utils/signatureRedaction";
 import {
   WagmiConfig,
   WagmiState,
@@ -554,27 +551,30 @@ export class WagmiEventHandler {
     }
 
     try {
-      // Map Wagmi mutation status to Formo signature status
+      // Map Wagmi mutation status to Formo signature status.
+      // C1: the produced signature (`state.data`) is a replayable
+      // permit/Permit2/SIWE bearer credential and is never captured —
+      // not even as a hash. Status alone conveys the outcome.
       let status: SignatureStatus;
-      let signatureHash: string | undefined;
 
       if (state.status === "pending") {
         status = SignatureStatus.REQUESTED;
       } else if (state.status === "success") {
         status = SignatureStatus.CONFIRMED;
-        // state.data is the *raw signature* — a replayable bearer
-        // credential. Never ship it; emit a one-way correlation token.
-        signatureHash = redactSignatureHash(state.data as string);
       } else if (state.status === "error") {
         status = SignatureStatus.REJECTED;
       } else {
         return; // Ignore idle state
       }
 
-      // Extract message from variables
       let message: string;
       if (mutationType === "signMessage") {
-        message = variables.message || "";
+        // The plaintext signed body can carry SIWE/auth challenges,
+        // magic links, or tokens — captured only when explicitly opted
+        // in via the `signatureMessage` autocapture option.
+        message = this.formo.isAutocaptureEnabled("signatureMessage")
+          ? variables.message || ""
+          : "";
       } else {
         // signTypedData: the full EIP-712 struct (variables.message /
         // variables.types) is the signed terms — never serialize it.
@@ -595,7 +595,6 @@ export class WagmiEventHandler {
           chainId,
           address,
           message,
-          ...(signatureHash && { signatureHash }),
         }
       );
     } catch (error) {

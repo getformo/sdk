@@ -69,7 +69,6 @@ export interface IFormoAnalytics {
       chainId?: ChainID;
       address: Address;
       message: string;
-      signatureHash?: string;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -150,6 +149,16 @@ export interface AutocaptureOptions {
    * @default true
    */
   signature?: boolean;
+
+  /**
+   * Capture the plaintext message body of autocaptured `signMessage`
+   * signatures. Off by default for privacy: a signed message can carry
+   * SIWE/auth challenges, magic links, or tokens. The produced signature
+   * is never captured, and `signTypedData` is never recorded beyond
+   * `primaryType` + domain metadata, regardless of this setting.
+   * @default false
+   */
+  signatureMessage?: boolean;
 
   /**
    * Track wallet transaction events (eth_sendTransaction)
