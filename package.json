@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.29.1",
+  "version": "1.30.0",
   "packageManager": "pnpm@11.1.1",
   "repository": {
     "type": "git",
