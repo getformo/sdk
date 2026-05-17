@@ -1,5 +1,3 @@
-import { isUnsafeObjectKey } from "./safeKey";
-
 const toSnake = (str: string) =>
   str
     .replace(/([a-z])([A-Z])/g, "$1_$2")
@@ -15,13 +13,6 @@ export function toSnakeCase(obj: any, omitKeys: string[] = []) {
       return Object.keys(data).reduce((acc: any, key) => {
         // If the key is in omitKeys, keep it as it is
         const resultKey = omitKeys.includes(key) ? key : toSnake(key);
-        // Drop prototype-polluting keys: assigning `__proto__`/
-        // `constructor`/`prototype` onto the plain accumulator would
-        // mutate its prototype. Event properties/context are public
-        // SDK inputs and may carry these as own keys via JSON.parse.
-        if (isUnsafeObjectKey(key) || isUnsafeObjectKey(resultKey)) {
-          return acc;
-        }
         acc[resultKey] = omitKeys.includes(key)
           ? data[key]
           : convert(data[key]);
