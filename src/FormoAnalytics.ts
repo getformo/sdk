@@ -53,6 +53,7 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
+import { secureHash } from "./utils/hash";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
@@ -2611,6 +2612,19 @@ export class FormoAnalytics implements IFormoAnalytics {
    * reconnection during which track()/page() events would otherwise ship
    * with an empty address.
    */
+  /**
+   * Integrity tag binding the snapshot to this SDK instance's writeKey.
+   * The ACTIVE_WALLET_KEY cookie is apex-scoped by default
+   * (crossSubdomainCookies), so any sibling subdomain can write it.
+   * Without a MAC a low-trust subdomain could forge a wallet identity
+   * that loadActiveWallet() would seed as the fallback address on early
+   * track()/page() events. A writer cannot recompute this without the
+   * writeKey, so a forged or tampered snapshot is rejected on load.
+   */
+  private activeWalletMac(address: string, chainId?: ChainID): string {
+    return secureHash(`${this.writeKey}:${address}:${chainId ?? ""}`);
+  }
+
   private persistActiveWallet(): void {
     try {
       // Never write an identity cookie for an opted-out user; ensure any
@@ -2623,6 +2637,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const value = JSON.stringify({
           address: this.currentAddress,
           ...(this.currentChainId !== undefined && { chainId: this.currentChainId }),
+          mac: this.activeWalletMac(this.currentAddress, this.currentChainId),
         });
         const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
         cookie().set(ACTIVE_WALLET_KEY, value, {
@@ -2647,8 +2662,25 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { address?: string; chainId?: ChainID };
+      const parsed = JSON.parse(raw) as {
+        address?: string;
+        chainId?: ChainID;
+        mac?: string;
+      };
       if (!parsed?.address) return;
+
+      // Reject any snapshot whose integrity tag doesn't recompute under
+      // this writeKey — i.e. forged by a sibling subdomain, tampered, or
+      // a legacy (pre-MAC) cookie. Drop it rather than trust it.
+      const expectedMac = this.activeWalletMac(parsed.address, parsed.chainId);
+      if (!parsed.mac || parsed.mac !== expectedMac) {
+        logger.warn(
+          "Discarding active-wallet snapshot: missing/invalid integrity tag"
+        );
+        cookie().remove(ACTIVE_WALLET_KEY);
+        return;
+      }
+
       const namespace = isSolanaChainId(parsed.chainId) ? "solana" : "evm";
       const validated = validateAddress(parsed.address, parsed.chainId);
       if (!validated) {

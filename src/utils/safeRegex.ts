@@ -23,17 +23,25 @@
 const MAX_BOUNDED_REPETITION = 1000;
 
 /**
- * Returns true if the regex source is potentially catastrophic
- * (star height ≥ 2, or an oversized bounded repetition) and must not
- * be compiled/run against untrusted input.
+ * Returns true if the regex source is potentially catastrophic and must
+ * not be compiled/run against untrusted input. Detects:
+ *  - star height ≥ 2 — nested unbounded quantifiers, `(a+)+`
+ *  - an unbounded-quantified group containing a top-level alternation —
+ *    the NFA-ambiguity / overlapping-disjunction class, `(a|a)+`,
+ *    `(a|ab)+`, `([a-z]|\w)+`, `(.*|.*)+` (a structural classifier can't
+ *    prove branch disjointness, so — conservative by design — any
+ *    quantified alternation group is rejected; use `[ab]+` not `(a|b)+`)
+ *  - oversized bounded repetitions
  */
 export function isPotentiallyCatastrophicRegex(source: string): boolean {
-  // Per-group state: does this group's body contain an unbounded-
-  // quantified atom/subgroup? `starred` records, after `)`, whether the
-  // just-closed group was itself unbounded-quantified.
-  const stack: { hasUnboundedInside: boolean }[] = [
-    { hasUnboundedInside: false },
-  ];
+  // Per-group state: does the group's body contain an unbounded-
+  // quantified atom/subgroup, and/or a top-level `|` alternation?
+  type Frame = { hasUnboundedInside: boolean; hasAlternation: boolean };
+  const newFrame = (): Frame => ({
+    hasUnboundedInside: false,
+    hasAlternation: false,
+  });
+  const stack: Frame[] = [newFrame()];
 
   const isUnboundedQuantifierAt = (i: number): boolean => {
     const c = source[i];
@@ -78,13 +86,19 @@ export function isPotentiallyCatastrophicRegex(source: string): boolean {
     }
 
     if (ch === "(") {
-      stack.push({ hasUnboundedInside: false });
+      stack.push(newFrame());
+      continue;
+    }
+
+    if (ch === "|") {
+      // Top-level alternation within the current group.
+      stack[stack.length - 1].hasAlternation = true;
       continue;
     }
 
     if (ch === ")") {
-      const group = stack.pop() ?? { hasUnboundedInside: false };
-      const parent = stack[stack.length - 1] ?? { hasUnboundedInside: false };
+      const group = stack.pop() ?? newFrame();
+      const parent = stack[stack.length - 1] ?? newFrame();
 
       // Look past a quantifier's own modifiers won't matter here; just
       // check the char immediately after ')'.
@@ -94,6 +108,9 @@ export function isPotentiallyCatastrophicRegex(source: string): boolean {
         // Star height ≥ 2: an unbounded-quantified group whose body
         // already contains an unbounded quantifier.
         if (group.hasUnboundedInside) return true;
+        // Unbounded-quantified group containing a top-level alternation:
+        // the overlapping/ambiguous-disjunction exponential class.
+        if (group.hasAlternation) return true;
         // This group is itself an unbounded-quantified atom → its
         // parent now "contains an unbounded quantifier".
         parent.hasUnboundedInside = true;
