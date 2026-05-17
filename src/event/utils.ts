@@ -1,7 +1,10 @@
 import { AnonymousID } from "../types";
 import { generateNativeUUID } from "../utils";
 import { cookie } from "../storage";
-import { getIdentityCookieDomain } from "../storage/cookiePolicy";
+import {
+  getIdentityCookieDomain,
+  getIdentityCookieSecurity,
+} from "../storage/cookiePolicy";
 
 const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): AnonymousID => {
   const storedAnonymousId = cookie().get(key);
@@ -19,6 +22,10 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
   cookie().set(key, anonymousId, {
     expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toUTCString(), // 1 year
     path: "/",
+    // Consistent with the other identity cookies: SameSite=Lax +
+    // Secure (HTTPS only). Orthogonal to `domain` cross-subdomain
+    // sharing and to JS document.cookie read/write.
+    ...getIdentityCookieSecurity(),
     ...(domain ? { domain } : {}),
   });
   return anonymousId;
