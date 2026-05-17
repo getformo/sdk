@@ -95,13 +95,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     EIP1193Provider,
     Record<string, (...args: unknown[]) => void>
   > = new Map();
-  // Original `request` fn captured before we wrap a provider, so
-  // untrackProvider/cleanup can restore it. Without this a torn-down SDK
-  // instance keeps intercepting wallet RPCs and emitting analytics.
-  private _originalProviderRequest: WeakMap<
-    EIP1193Provider,
-    EIP1193Provider["request"]
-  > = new WeakMap();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   /**
@@ -1571,14 +1564,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    // Capture the original (unbound) request fn once so it can be
-    // restored on untrack/cleanup. Don't overwrite an existing record —
-    // if a stale wrapper is being replaced we still want the *true*
-    // original, not another wrapper.
-    if (!this._originalProviderRequest.has(provider)) {
-      this._originalProviderRequest.set(provider, provider.request);
-    }
-
     const request = provider.request.bind(provider);
 
     const wrappedRequest: WrappedRequestFunction = async <T>({
@@ -2361,32 +2346,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListenersMap.delete(provider);
   }
 
-  // Restore a provider's original `request`, undoing our wrapper so an
-  // untracked/destroyed instance stops intercepting wallet RPCs.
-  private restoreProviderRequest(provider: EIP1193Provider): void {
-    const original = this._originalProviderRequest.get(provider);
-    if (!original) return;
-    try {
-      const current = provider.request as WrappedRequestFunction;
-      // Only restore if `request` is still *our* wrapper. If the app (or
-      // another SDK) replaced it since, leave their function in place.
-      if (this.isProviderAlreadyWrapped(provider, current)) {
-        provider.request = original;
-      }
-      delete (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL];
-    } catch (e) {
-      logger.warn("Failed to restore provider.request", e);
-    } finally {
-      this._originalProviderRequest.delete(provider);
-    }
-  }
-
-  // Explicitly untrack a provider: remove listeners, restore the original
-  // request, clear wrapper flag and tracking
+  // Explicitly untrack a provider: remove listeners, clear wrapper flag
+  // and tracking
   private untrackProvider(provider: EIP1193Provider): void {
     try {
       this.removeProviderListeners(provider);
-      this.restoreProviderRequest(provider);
       this._trackedProviders.delete(provider);
 
       if (this._provider === provider) {
