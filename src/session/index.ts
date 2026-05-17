@@ -6,6 +6,7 @@
  */
 
 import { cookie } from "../storage";
+import { getIdentityCookieSecurity } from "../storage/cookiePolicy";
 import { logger } from "../logger";
 
 /**
@@ -100,6 +101,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
         path: "/",
+        ...getIdentityCookieSecurity(),
       });
     }
   }
@@ -149,6 +151,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),
         path: "/",
+        ...getIdentityCookieSecurity(),
       });
       
       logger.debug("Session: Marked wallet as identified", {

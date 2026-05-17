@@ -4,13 +4,17 @@ import {
   EventType,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_USER_ID_KEY,
+  SESSION_TRAFFIC_SOURCE_KEY,
   ACTIVE_WALLET_KEY,
   ACTIVE_WALLET_TTL_MS,
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
-import { cookie, initStorageManager } from "./storage";
-import { getIdentityCookieDomain } from "./storage/cookiePolicy";
+import { cookie, session, initStorageManager } from "./storage";
+import {
+  getIdentityCookieDomain,
+  getIdentityCookieSecurity,
+} from "./storage/cookiePolicy";
 import { EventManager, IEventManager } from "./event";
 import { EventQueue } from "./queue";
 import { logger, Logger } from "./logger";
@@ -213,6 +217,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         maxQueueSize: options.maxQueueSize,
         flushInterval: options.flushInterval,
         errorHandler: options.errorHandler,
+        // Hard consent gate at the queue boundary: nothing buffered is
+        // ever sent once the user has opted out, even via a timer or
+        // pagehide flush scheduled before opt-out.
+        canSend: () => !this.hasOptedOutTracking(),
       }),
       options
     );
@@ -314,11 +322,28 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public reset(): void {
     this.currentUserId = undefined;
+
+    // Clear in-memory wallet identity too. Without this, a logout/reset
+    // (also triggered by optOutTracking) still leaks the previous wallet
+    // address on subsequent track()/page() events for the rest of the
+    // page lifetime, because they fall back to currentAddress. Keep the
+    // EVM provider reference so tracking can resume on the next connect.
+    this.currentAddress = undefined;
+    this.currentChainId = undefined;
+    const evmProvider = this._chainState.evm.provider;
+    this._chainState = { evm: { provider: evmProvider }, solana: {} };
+    this._activeNamespace = undefined;
+
     cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(ACTIVE_WALLET_KEY);
+
+    // Stored traffic-source attribution (referrer/UTM) is tracking data;
+    // clear it too so reset()/optOutTracking() don't leave it to be
+    // re-attached to the next session's events.
+    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
   }
 
   /**
@@ -328,6 +353,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public cleanup(): void {
     logger.debug("FormoAnalytics: Cleaning up resources");
+
+    // Drop buffered events so a torn-down instance can't flush later.
+    this.eventManager.clear();
 
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
@@ -541,7 +569,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {ChainID} params.chainId
    * @param {Address} params.address
    * @param {string} params.message
-   * @param {string} params.signatureHash - only provided if status is confirmed
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
@@ -553,13 +580,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       chainId,
       address,
       message,
-      signatureHash,
     }: {
       status: SignatureStatus;
       chainId?: ChainID;
       address: Address;
       message: string;
-      signatureHash?: string;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -572,7 +597,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         chainId,
         address,
         message,
-        ...(signatureHash && { signatureHash }),
       },
       properties,
       context,
@@ -679,6 +703,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
+      // identify() writes the user-id cookie and marks wallet
+      // identification before trackEvent's consent check — gate the
+      // whole method so an opted-out user gets no identity persistence.
+      if (this.hasOptedOutTracking()) {
+        logger.info("identify() skipped: user has opted out of tracking");
+        return;
+      }
       if (!params) {
         // If no params provided, auto-identify
         logger.info(
@@ -771,6 +802,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
         cookie().set(SESSION_USER_ID_KEY, userId, {
           path: "/",
+          ...getIdentityCookieSecurity(),
           ...(domain ? { domain } : {}),
         });
       }
@@ -838,6 +870,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    // detect() marks wallet detection (a cookie write) before
+    // trackEvent's consent check — gate it on opt-out.
+    if (this.hasOptedOutTracking()) {
+      logger.info("detect() skipped: user has opted out of tracking");
+      return;
+    }
     if (this.session.isWalletDetected(rdns))
       return logger.warn(
         `Detect: Wallet ${providerName} already detected in this session`
@@ -893,6 +931,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
+    // Drop anything already buffered so a pending timer/pagehide flush
+    // cannot ship events after consent withdrawal.
+    this.eventManager.clear();
     this.reset();
 
     logger.info("Successfully opted out of tracking");
@@ -1877,7 +1918,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {boolean} True if the event type should be autocaptured
    */
   public isAutocaptureEnabled(
-    eventType: "connect" | "disconnect" | "signature" | "transaction" | "chain"
+    eventType:
+      | "connect"
+      | "disconnect"
+      | "signature"
+      | "transaction"
+      | "chain"
   ): boolean {
     // If no configuration provided, default to enabled
     if (this.options.autocapture === undefined) {
@@ -2158,7 +2204,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   private buildSignatureEventPayload(
     method: string,
     params: unknown[],
-    response?: unknown,
+    // Intentionally not read. Kept for positional call-site arity.
+    _response?: unknown,
     chainId?: number
   ) {
     const rawAddress =
@@ -2187,14 +2234,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       return {
         ...basePayload,
         message,
-        ...(response ? { signatureHash: response as string } : {}),
       };
     }
 
+    // eth_signTypedData*: params[1] is the full EIP-712 struct.
     return {
       ...basePayload,
       message: params[1] as string,
-      ...(response ? { signatureHash: response as string } : {}),
     };
   }
 
@@ -2300,7 +2346,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     this._providerListenersMap.delete(provider);
   }
 
-  // Explicitly untrack a provider: remove listeners, clear wrapper flag and tracking
+  // Explicitly untrack a provider: remove listeners, clear wrapper flag
+  // and tracking
   private untrackProvider(provider: EIP1193Provider): void {
     try {
       this.removeProviderListeners(provider);
@@ -2441,6 +2488,50 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Sync validated wallet/chain state into the SDK's central state
+   * WITHOUT emitting an event.
+   *
+   * Integrations (e.g. the wagmi handler) must call this on every
+   * connect / chain-change / disconnect — even when the corresponding
+   * autocapture event is disabled. Otherwise `currentChainId` stays
+   * stale/undefined and `shouldTrack()`'s `tracking.excludeChains`
+   * check (which keys off `currentChainId`, not the event payload) can
+   * be bypassed, letting wallet activity on an excluded chain still be
+   * collected.
+   *
+   * - valid `address` present → record per-chain + derived state
+   * - `address` absent → clear chain state (disconnect)
+   */
+  public syncWalletState(params: {
+    chainId?: ChainID;
+    address?: Address;
+  }): void {
+    const { chainId, address } = params;
+
+    if (!address) {
+      if (chainId !== undefined && chainId !== null) {
+        this.clearChainState(chainId);
+      } else {
+        this.clearChainState("evm");
+        this.clearChainState("solana");
+      }
+      return;
+    }
+
+    if (chainId === null || chainId === undefined) return;
+
+    const validAddress = validateAddress(address, chainId);
+    if (!validAddress) {
+      logger.warn(
+        `syncWalletState: invalid address ("${address}") for chain ${chainId}`
+      );
+      return;
+    }
+
+    this.setChainState(chainId, { address: validAddress });
+  }
+
+  /**
    * Synchronize currentAddress/currentChainId from the active namespace.
    * Last-connected-chain-wins: _activeNamespace takes precedence.
    */
@@ -2479,6 +2570,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private persistActiveWallet(): void {
     try {
+      // Never write an identity cookie for an opted-out user; ensure any
+      // prior snapshot is removed instead.
+      if (this.hasOptedOutTracking()) {
+        cookie().remove(ACTIVE_WALLET_KEY);
+        return;
+      }
       if (this.currentAddress) {
         const value = JSON.stringify({
           address: this.currentAddress,
@@ -2488,6 +2585,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         cookie().set(ACTIVE_WALLET_KEY, value, {
           path: "/",
           expires: new Date(Date.now() + ACTIVE_WALLET_TTL_MS).toUTCString(),
+          ...getIdentityCookieSecurity(),
           ...(domain ? { domain } : {}),
         });
       } else {
@@ -2504,10 +2602,17 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private loadActiveWallet(): void {
     try {
+      // Never restore wallet identity into memory for an opted-out user
+      // (mirrors persistActiveWallet's guard); drop any stale snapshot.
+      if (this.hasOptedOutTracking()) {
+        cookie().remove(ACTIVE_WALLET_KEY);
+        return;
+      }
       const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
       if (!raw) return;
       const parsed = JSON.parse(raw) as { address?: string; chainId?: ChainID };
       if (!parsed?.address) return;
+
       const namespace = isSolanaChainId(parsed.chainId) ? "solana" : "evm";
       const validated = validateAddress(parsed.address, parsed.chainId);
       if (!validated) {

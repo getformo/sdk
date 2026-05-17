@@ -69,7 +69,6 @@ export interface IFormoAnalytics {
       chainId?: ChainID;
       address: Address;
       message: string;
-      signatureHash?: string;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,

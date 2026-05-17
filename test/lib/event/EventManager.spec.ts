@@ -98,6 +98,7 @@ describe("EventManager", () => {
     mockEventQueue = {
       enqueue: enqueueSpy,
       flush: sinon.stub().resolves(),
+      clear: sinon.spy(),
     };
 
     eventManager = new EventManager(mockEventQueue);
@@ -353,6 +354,13 @@ describe("EventManager", () => {
         await eventManager.addEvent(apiEvent, address);
         expect(enqueueSpy.called).to.be.false;
       }
+    });
+  });
+
+  describe("clear", () => {
+    it("delegates to the event queue's clear()", () => {
+      eventManager.clear();
+      expect((mockEventQueue.clear as sinon.SinonSpy).calledOnce).to.be.true;
     });
   });
 });

@@ -49,6 +49,11 @@ class EventManager implements IEventManager {
       callback?.(err, _, data);
     });
   }
+
+  /** Drop any buffered events (consent withdrawal / teardown). */
+  clear(): void {
+    this.eventQueue.clear();
+  }
 }
 
 export { EventManager };

@@ -17,6 +17,10 @@ const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...
 type QueueItem = {
   message: IFormoEventPayload;
   callback: (...args: any) => any;
+  // Serialized size of this item, computed once at enqueue so the queue
+  // byte total can be tracked incrementally (avoids an O(n) re-serialize
+  // of the whole queue on every enqueue → O(n^2) overall).
+  byteSize: number;
 };
 
 type IFormoEventFlushPayload = IFormoEventPayload & {
@@ -37,6 +41,10 @@ type Options = {
   retryCount?: number;
   errorHandler?: any;
   maxQueueSize?: number;
+  // Consent predicate, re-checked at enqueue and immediately before any
+  // network send. Returning false drops queued data — a timer or
+  // pagehide flush scheduled before opt-out must not leak events after.
+  canSend?: () => boolean;
 };
 
 const DEFAULT_RETRY = 3;
@@ -69,10 +77,12 @@ export class EventQueue implements IEventQueue {
   private flushIntervalMs: number;
   private flushed: boolean;
   private maxQueueSize: number; // min 200 bytes, max 500kB
+  private queueByteSize = 0; // running total of queued items' byteSize
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
   private payloadHashes: Set<string> = new Set();
+  private canSend?: () => boolean;
 
   constructor(writeKey: string, options: Options) {
     options = options || {};
@@ -80,6 +90,7 @@ export class EventQueue implements IEventQueue {
     this.queue = [];
     this.writeKey = writeKey;
     this.apiHost = options.apiHost;
+    this.canSend = options.canSend;
     this.retryCount = clampNumber(
       options.retryCount || DEFAULT_RETRY,
       MAX_RETRY,
@@ -119,8 +130,28 @@ export class EventQueue implements IEventQueue {
     return hash(eventString);
   }
 
+  /**
+   * Drop all queued data and cancel the flush timer. Called on consent
+   * withdrawal / SDK teardown so nothing buffered can be sent later.
+   */
+  clear(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.queue = [];
+    this.queueByteSize = 0;
+    this.payloadHashes.clear();
+  }
+
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
+
+    // Refuse to buffer anything once consent is withdrawn.
+    if (this.canSend && !this.canSend()) {
+      this.clear();
+      return;
+    }
 
     const message_id = await this.generateMessageId(event);
     // check if the message already exists
@@ -133,10 +164,18 @@ export class EventQueue implements IEventQueue {
       return;
     }
 
-    this.queue.push({
+    const queueItem: QueueItem = {
       message: { ...event, message_id },
       callback,
-    });
+      byteSize: 0,
+    };
+    // Measure once here (message only — JSON.stringify drops the
+    // callback function anyway), then track the total incrementally.
+    queueItem.byteSize = JSON.stringify({
+      message: queueItem.message,
+    }).length;
+    this.queue.push(queueItem);
+    this.queueByteSize += queueItem.byteSize;
 
     logger.log(
       `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
@@ -149,9 +188,7 @@ export class EventQueue implements IEventQueue {
     }
 
     const hasReachedFlushAt = this.queue.length >= this.flushAt;
-    const hasReachedQueueSize =
-      this.queue.reduce((acc, item) => acc + JSON.stringify(item).length, 0) >=
-      this.maxQueueSize;
+    const hasReachedQueueSize = this.queueByteSize >= this.maxQueueSize;
 
     if (hasReachedFlushAt || hasReachedQueueSize) {
       this.flush();
@@ -169,6 +206,14 @@ export class EventQueue implements IEventQueue {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
+    }
+
+    // Final consent gate: a timer/pagehide flush may have been scheduled
+    // before opt-out. Drop everything rather than send post-withdrawal.
+    if (this.canSend && !this.canSend()) {
+      this.clear();
+      callback();
+      return Promise.resolve();
     }
 
     if (!this.queue.length) {
@@ -189,10 +234,15 @@ export class EventQueue implements IEventQueue {
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
     // Only remove hashes for flushed items so duplicate detection remains
-    // active for events still in the queue.
+    // active for events still in the queue. Also decrement the running
+    // byte total by exactly what left the queue.
     for (const item of items) {
       this.payloadHashes.delete(item.message.message_id);
+      this.queueByteSize -= item.byteSize;
     }
+    // Re-anchor to the exact invariant when the queue empties, so any
+    // accumulated drift can never wedge the size gate.
+    if (this.queue.length === 0) this.queueByteSize = 0;
 
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
@@ -298,6 +348,11 @@ export class EventQueue implements IEventQueue {
     let firstError: Error | undefined;
 
     for (const batch of batches) {
+      // Consent can be withdrawn while a flush is already in flight:
+      // batches were spliced before opt-out, and split batches / retry
+      // backoff span seconds. Re-check before every send and abandon
+      // the remaining batches if consent was revoked mid-flush.
+      if (this.canSend && !this.canSend()) break;
       try {
         const body = JSON.stringify(batch.data);
         const response = await fetch(`${this.apiHost}`, {

@@ -74,6 +74,9 @@ test/**/*.js
 # Claude Code local tooling (settings + worktrees)
 .claude/
 
+# deepsec scanning workspace (local tooling + scan output)
+.deepsec/
+
 # Ignore test build folder in the example site
 example/cra-script-tag/public/sdk
 # Environment configuration

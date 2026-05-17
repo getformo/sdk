@@ -84,7 +84,6 @@ export interface SignatureAPIEvent {
   chainId: ChainID;
   address: Address;
   message: string;
-  signatureHash?: string;
 }
 export interface ConnectAPIEvent {
   type: "connect";
