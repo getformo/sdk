@@ -64,6 +64,7 @@ describe("WagmiEventHandler", () => {
       signature: sandbox.stub().resolves(),
       transaction: sandbox.stub().resolves(),
       isAutocaptureEnabled: sandbox.stub().returns(true),
+      syncWalletState: sandbox.stub(),
     } as any;
 
     // Create mock Wagmi config with subscribe
@@ -1673,6 +1674,25 @@ describe("WagmiEventHandler", () => {
   });
 
   describe("transaction confirmation tracking", () => {
+    // Receipt-derived events now require a previously *observed* broadcast
+    // (the hash must be in pendingTransactions) — otherwise a forged
+    // waitForTransactionReceipt entry in the host-owned QueryClient could
+    // fabricate confirmations. This helper simulates that broadcast, then
+    // clears history so the test can assert the receipt event alone.
+    const broadcastTx = (hash: string, mutationId = Math.floor(Math.random() * 1e6)) => {
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId,
+            options: { mutationKey: ["writeContract"] },
+            state: { status: "success", data: hash, variables: {} },
+          },
+        } as any);
+      }
+      mockFormo.transaction.resetHistory();
+    };
+
     it("should track CONFIRMED status when waitForTransactionReceipt query succeeds", async () => {
       const connectedState = createConnectedState();
       (mockWagmiConfig as any).setState(connectedState);
@@ -1684,6 +1704,8 @@ describe("WagmiEventHandler", () => {
         await statusListener("connected", "disconnected");
       }
       await new Promise(resolve => setTimeout(resolve, 10));
+
+      broadcastTx("0xtxhash123");
 
       const queryEvent: QueryCacheEvent = {
         type: "updated",
@@ -1725,6 +1747,8 @@ describe("WagmiEventHandler", () => {
       }
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      broadcastTx("0xrevertedhash");
+
       const queryEvent: QueryCacheEvent = {
         type: "updated",
         query: {
@@ -1762,6 +1786,8 @@ describe("WagmiEventHandler", () => {
         await statusListener("connected", "disconnected");
       }
       await new Promise(resolve => setTimeout(resolve, 10));
+
+      broadcastTx("0xhash_no_chainid");
 
       const queryEvent: QueryCacheEvent = {
         type: "updated",
@@ -1889,6 +1915,8 @@ describe("WagmiEventHandler", () => {
         await statusListener("connected", "disconnected");
       }
       await new Promise(resolve => setTimeout(resolve, 10));
+
+      broadcastTx("0xduphash");
 
       const queryEvent: QueryCacheEvent = {
         type: "updated",
@@ -2115,7 +2143,7 @@ describe("WagmiEventHandler", () => {
       expect(confirmedCall.value).to.equal("1000000000000000000");
     });
 
-    it("should handle CONFIRMED without prior BROADCASTED (no preserved details)", async () => {
+    it("should NOT emit a receipt event for a hash with no observed BROADCAST (anti-forgery)", async () => {
       const connectedState = createConnectedState();
       (mockWagmiConfig as any).setState(connectedState);
 
@@ -2126,7 +2154,10 @@ describe("WagmiEventHandler", () => {
       }
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      // Emit CONFIRMED without prior BROADCASTED (e.g., page reload)
+      // A waitForTransactionReceipt entry for a hash this handler never
+      // observed being broadcast — e.g. injected into the host-owned
+      // QueryClient by app code or a dependency. Must be ignored, not
+      // turned into a fabricated confirmed transaction.
       const queryEvent: QueryCacheEvent = {
         type: "updated",
         query: {
@@ -2144,17 +2175,41 @@ describe("WagmiEventHandler", () => {
         queryListener(queryEvent);
       }
 
-      // Should still emit CONFIRMED but without additional details
-      expect(mockFormo.transaction.calledOnce).to.be.true;
-      const confirmedCall = mockFormo.transaction.firstCall.args[0];
-      expect(confirmedCall.status).to.equal("confirmed");
-      expect(confirmedCall.transactionHash).to.equal("0xunknown_tx");
-      expect(confirmedCall.chainId).to.equal(1);
+      expect(mockFormo.transaction.called).to.be.false;
+    });
 
-      // No preserved details
-      expect(confirmedCall.to).to.be.undefined;
-      expect(confirmedCall.data).to.be.undefined;
-      expect(confirmedCall.function_name).to.be.undefined;
+    it("should ignore a receipt whose data has no explicit success/reverted status", async () => {
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      broadcastTx("0xnostatus");
+
+      const queryEvent: QueryCacheEvent = {
+        type: "updated",
+        query: {
+          queryKey: ["waitForTransactionReceipt", { hash: "0xnostatus", chainId: 1 }],
+          queryHash: "waitForTransactionReceipt-0xnostatus",
+          state: {
+            status: "success",
+            data: {}, // receipt present but no on-chain status
+            fetchStatus: "idle",
+          },
+        },
+      };
+
+      if (queryListener) {
+        queryListener(queryEvent);
+      }
+
+      // Missing status must NOT be treated as a confirmation.
+      expect(mockFormo.transaction.called).to.be.false;
     });
   });
 });

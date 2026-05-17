@@ -10,7 +10,10 @@ import {
   TEventType,
 } from "./constants";
 import { cookie, initStorageManager } from "./storage";
-import { getIdentityCookieDomain } from "./storage/cookiePolicy";
+import {
+  getIdentityCookieDomain,
+  getIdentityCookieSecurity,
+} from "./storage/cookiePolicy";
 import { EventManager, IEventManager } from "./event";
 import { EventQueue } from "./queue";
 import { logger, Logger } from "./logger";
@@ -804,6 +807,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
         cookie().set(SESSION_USER_ID_KEY, userId, {
           path: "/",
+          ...getIdentityCookieSecurity(),
           ...(domain ? { domain } : {}),
         });
       }
@@ -2513,6 +2517,50 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Sync validated wallet/chain state into the SDK's central state
+   * WITHOUT emitting an event.
+   *
+   * Integrations (e.g. the wagmi handler) must call this on every
+   * connect / chain-change / disconnect — even when the corresponding
+   * autocapture event is disabled. Otherwise `currentChainId` stays
+   * stale/undefined and `shouldTrack()`'s `tracking.excludeChains`
+   * check (which keys off `currentChainId`, not the event payload) can
+   * be bypassed, letting wallet activity on an excluded chain still be
+   * collected.
+   *
+   * - valid `address` present → record per-chain + derived state
+   * - `address` absent → clear chain state (disconnect)
+   */
+  public syncWalletState(params: {
+    chainId?: ChainID;
+    address?: Address;
+  }): void {
+    const { chainId, address } = params;
+
+    if (!address) {
+      if (chainId !== undefined && chainId !== null) {
+        this.clearChainState(chainId);
+      } else {
+        this.clearChainState("evm");
+        this.clearChainState("solana");
+      }
+      return;
+    }
+
+    if (chainId === null || chainId === undefined) return;
+
+    const validAddress = validateAddress(address, chainId);
+    if (!validAddress) {
+      logger.warn(
+        `syncWalletState: invalid address ("${address}") for chain ${chainId}`
+      );
+      return;
+    }
+
+    this.setChainState(chainId, { address: validAddress });
+  }
+
+  /**
    * Synchronize currentAddress/currentChainId from the active namespace.
    * Last-connected-chain-wins: _activeNamespace takes precedence.
    */
@@ -2566,6 +2614,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         cookie().set(ACTIVE_WALLET_KEY, value, {
           path: "/",
           expires: new Date(Date.now() + ACTIVE_WALLET_TTL_MS).toUTCString(),
+          ...getIdentityCookieSecurity(),
           ...(domain ? { domain } : {}),
         });
       } else {

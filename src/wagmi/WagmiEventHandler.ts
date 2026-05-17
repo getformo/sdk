@@ -179,6 +179,11 @@ export class WagmiEventHandler {
 
       // Handle disconnect
       if (status === "disconnected" && prevStatus === "connected") {
+        // Clear central chain state regardless of autocapture so a later
+        // event can't carry a stale excluded/!excluded chainId.
+        this.formo.syncWalletState({
+          chainId: this.trackingState.lastChainId,
+        });
         if (this.formo.isAutocaptureEnabled("disconnect")) {
           await this.formo.disconnect({
             chainId: this.trackingState.lastChainId,
@@ -194,6 +199,10 @@ export class WagmiEventHandler {
         if (address && chainId !== undefined) {
           this.trackingState.lastAddress = address;
           this.trackingState.lastChainId = chainId;
+
+          // Sync central state unconditionally so tracking.excludeChains
+          // is enforced even when connect autocapture is disabled.
+          this.formo.syncWalletState({ chainId, address });
 
           if (this.formo.isAutocaptureEnabled("connect")) {
             const connectorName = this.getConnectorName(state);
@@ -245,6 +254,10 @@ export class WagmiEventHandler {
     });
 
     this.trackingState.lastChainId = chainId;
+
+    // Sync central state unconditionally so a chain switch to an
+    // excluded chain is honored even when chain autocapture is disabled.
+    this.formo.syncWalletState({ chainId, address });
 
     if (this.formo.isAutocaptureEnabled("chain")) {
       try {
@@ -382,15 +395,25 @@ export class WagmiEventHandler {
       return;
     }
 
-    // Retrieve stored transaction details from BROADCASTED event
-    // Normalize hash to lowercase for consistent lookup
+    // Retrieve stored transaction details from the BROADCASTED event.
+    // Normalize hash to lowercase for consistent lookup.
     const normalizedHash = transactionHash.toLowerCase();
     const pendingTx = this.pendingTransactions.get(normalizedHash);
 
-    // Use the original sender address from BROADCASTED event if available,
-    // otherwise fall back to current connected address.
-    // This handles wallet switches between broadcast and confirmation.
-    const address = pendingTx?.address || this.trackingState.lastAddress;
+    // Only emit receipt-derived events for a hash we actually observed
+    // being broadcast through this handler. The QueryClient is supplied
+    // by the host app and its cache can be written by app code or other
+    // deps, so without this gate a forged waitForTransactionReceipt
+    // entry could fabricate a confirmed/reverted transaction for an
+    // arbitrary hash. No pendingTx → not our broadcast → ignore.
+    if (!pendingTx) {
+      logger.debug(
+        "WagmiEventHandler: Receipt for unobserved tx hash; ignoring",
+        { transactionHash }
+      );
+      return;
+    }
+    const address = pendingTx.address;
 
     if (!address) {
       logger.warn("WagmiEventHandler: Transaction receipt query but no address available");
@@ -405,9 +428,17 @@ export class WagmiEventHandler {
         gasUsed?: bigint;
       } | undefined;
 
-      // Determine transaction status from receipt
-      // receipt.status is 'success' or 'reverted' in viem
-      const txStatus = receipt?.status === "reverted"
+      // Only act on an explicit on-chain outcome. A missing/unknown
+      // status must NOT be treated as a confirmation.
+      if (receipt?.status !== "success" && receipt?.status !== "reverted") {
+        logger.debug(
+          "WagmiEventHandler: Receipt without explicit success/reverted status; ignoring",
+          { transactionHash, status: receipt?.status }
+        );
+        return;
+      }
+
+      const txStatus = receipt.status === "reverted"
         ? TransactionStatus.REVERTED
         : TransactionStatus.CONFIRMED;
 
