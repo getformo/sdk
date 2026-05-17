@@ -348,6 +348,11 @@ export class EventQueue implements IEventQueue {
     let firstError: Error | undefined;
 
     for (const batch of batches) {
+      // Consent can be withdrawn while a flush is already in flight:
+      // batches were spliced before opt-out, and split batches / retry
+      // backoff span seconds. Re-check before every send and abandon
+      // the remaining batches if consent was revoked mid-flush.
+      if (this.canSend && !this.canSend()) break;
       try {
         const body = JSON.stringify(batch.data);
         const response = await fetch(`${this.apiHost}`, {

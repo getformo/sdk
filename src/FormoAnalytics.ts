@@ -2638,6 +2638,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private loadActiveWallet(): void {
     try {
+      // Never restore wallet identity into memory for an opted-out user
+      // (mirrors persistActiveWallet's guard); drop any stale snapshot.
+      if (this.hasOptedOutTracking()) {
+        cookie().remove(ACTIVE_WALLET_KEY);
+        return;
+      }
       const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
       if (!raw) return;
       const parsed = JSON.parse(raw) as { address?: string; chainId?: ChainID };
