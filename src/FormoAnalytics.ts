@@ -53,7 +53,6 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
-import { redactTypedDataMessage } from "./utils/signatureRedaction";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
@@ -1941,21 +1940,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       | "connect"
       | "disconnect"
       | "signature"
-      | "signatureMessage"
       | "transaction"
       | "chain"
   ): boolean {
-    // `signatureMessage` is opt-in (default false): the plaintext signed
-    // message is captured only when explicitly enabled via a granular
-    // autocapture object. It is never implied by `autocapture: true`.
-    if (eventType === "signatureMessage") {
-      return (
-        this.options.autocapture !== null &&
-        typeof this.options.autocapture === "object" &&
-        this.options.autocapture.signatureMessage === true
-      );
-    }
-
     // If no configuration provided, default to enabled
     if (this.options.autocapture === undefined) {
       return true;
@@ -2258,25 +2245,24 @@ export class FormoAnalytics implements IFormoAnalytics {
       address: validAddress,
     };
 
-    // C1: `response` is the raw signature (a replayable bearer
-    // credential) — never captured, in any branch.
+    // C1: `_response` is the raw signature (a replayable bearer
+    // credential) — never captured, in any branch. The signed message
+    // itself is still captured as before.
     if (method === "personal_sign") {
-      // The plaintext signed body can carry SIWE/auth challenges, magic
-      // links, or tokens — captured only when explicitly opted in.
-      const message = this.isAutocaptureEnabled("signatureMessage")
-        ? Buffer.from((params[0] as string).slice(2), "hex").toString("utf8")
-        : "";
+      const message = Buffer.from(
+        (params[0] as string).slice(2),
+        "hex"
+      ).toString("utf8");
       return {
         ...basePayload,
         message,
       };
     }
 
-    // eth_signTypedData*: params[1] is the full EIP-712 struct (the
-    // signed terms). Never ship it — emit only safe metadata.
+    // eth_signTypedData*: params[1] is the full EIP-712 struct.
     return {
       ...basePayload,
-      message: redactTypedDataMessage(params[1]),
+      message: params[1] as string,
     };
   }
 

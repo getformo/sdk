@@ -83,9 +83,8 @@ export interface SignatureAPIEvent {
   status: SignatureStatus;
   chainId: ChainID;
   address: Address;
-  // Non-sensitive only: a plaintext signMessage body (when opted in via
-  // `autocapture.signatureMessage`) or signTypedData primaryType+domain
-  // metadata. The produced signature is never captured (C1).
+  // The signed message (plaintext for signMessage, JSON EIP-712 struct
+  // for signTypedData). The produced signature is never captured (C1).
   message: string;
 }
 export interface ConnectAPIEvent {

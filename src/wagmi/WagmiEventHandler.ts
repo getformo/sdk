@@ -9,7 +9,6 @@
 import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
-import { redactTypedDataMessage } from "../utils/signatureRedaction";
 import {
   WagmiConfig,
   WagmiState,
@@ -553,8 +552,8 @@ export class WagmiEventHandler {
     try {
       // Map Wagmi mutation status to Formo signature status.
       // C1: the produced signature (`state.data`) is a replayable
-      // permit/Permit2/SIWE bearer credential and is never captured —
-      // not even as a hash. Status alone conveys the outcome.
+      // permit/Permit2/SIWE bearer credential and is never captured.
+      // The signed message itself is still captured as before.
       let status: SignatureStatus;
 
       if (state.status === "pending") {
@@ -569,17 +568,9 @@ export class WagmiEventHandler {
 
       let message: string;
       if (mutationType === "signMessage") {
-        // The plaintext signed body can carry SIWE/auth challenges,
-        // magic links, or tokens — captured only when explicitly opted
-        // in via the `signatureMessage` autocapture option.
-        message = this.formo.isAutocaptureEnabled("signatureMessage")
-          ? variables.message || ""
-          : "";
+        message = variables.message || "";
       } else {
-        // signTypedData: the full EIP-712 struct (variables.message /
-        // variables.types) is the signed terms — never serialize it.
-        // Emit only non-sensitive metadata (primaryType + domain).
-        message = redactTypedDataMessage(variables);
+        message = JSON.stringify(variables.message || variables.types || {});
       }
 
       logger.info("WagmiEventHandler: Tracking signature event", {
