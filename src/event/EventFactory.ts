@@ -20,6 +20,7 @@ import {
 } from "../types";
 import { toSnakeCase } from "../utils";
 import { validateAddress } from "../utils/address";
+import { isPotentiallyCatastrophicRegex } from "../utils/safeRegex";
 import { getCurrentTimeFormatted } from "../utils/timestamp";
 import { isUndefined } from "../validators";
 import { logger } from "../logger";
@@ -58,6 +59,14 @@ class EventFactory implements IEventFactory {
       if (pattern.length > MAX_REFERRAL_PATTERN_LENGTH) {
         logger.warn(
           `Referral path pattern exceeds ${MAX_REFERRAL_PATTERN_LENGTH} chars; ignoring it to avoid ReDoS risk.`
+        );
+      } else if (isPotentiallyCatastrophicRegex(pattern)) {
+        // A length cap can't stop exponential backtracking — `(a+)+`
+        // is tiny. Reject star-height≥2 / oversized-repetition patterns
+        // outright; the integrator should use a linear one, e.g.
+        // `/r/([^/]+)`.
+        logger.warn(
+          `Referral path pattern "${pattern}" can cause catastrophic backtracking (ReDoS); ignoring it. Use a linear pattern such as "/r/([^/]+)".`
         );
       } else {
         try {

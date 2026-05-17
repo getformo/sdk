@@ -4,12 +4,13 @@ import {
   EventType,
   LOCAL_ANONYMOUS_ID_KEY,
   SESSION_USER_ID_KEY,
+  SESSION_TRAFFIC_SOURCE_KEY,
   ACTIVE_WALLET_KEY,
   ACTIVE_WALLET_TTL_MS,
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
-import { cookie, initStorageManager } from "./storage";
+import { cookie, session, initStorageManager } from "./storage";
 import {
   getIdentityCookieDomain,
   getIdentityCookieSecurity,
@@ -349,6 +350,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(ACTIVE_WALLET_KEY);
+
+    // Stored traffic-source attribution (referrer/UTM) is tracking data;
+    // clear it too so reset()/optOutTracking() don't leave it to be
+    // re-attached to the next session's events.
+    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
   }
 
   /**

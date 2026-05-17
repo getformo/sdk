@@ -349,6 +349,38 @@ describe("EventQueue", () => {
       expect(itemCallback.firstCall.args[0]).to.be.undefined;
     });
 
+    // B4 regression: a failed flush must invoke each per-event callback
+    // exactly once (with the error) and NEVER again — failed items are
+    // not requeued, so there is no "error then success" double-fire.
+    it("invokes a per-event callback exactly once across a failed flush + later success", async () => {
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const cbA = sinon.spy();
+      await eventQueue.enqueue(createMockEvent({ message_id: "a" } as any), cbA);
+      await eventQueue.flush();
+
+      expect(cbA.calledOnce, "cbA fired once on failure").to.be.true;
+      expect(cbA.firstCall.args[0]).to.be.an.instanceOf(Error);
+
+      // A subsequent successful flush of a *different* event must not
+      // resurrect or re-invoke the failed event's callback.
+      fetchStub.resolves(makeResponse(200, "OK"));
+      const cbB = sinon.spy();
+      await eventQueue.enqueue(createMockEvent({ message_id: "b" } as any), cbB);
+      await eventQueue.flush();
+
+      expect(cbB.calledOnce, "cbB fired once on success").to.be.true;
+      expect(cbB.firstCall.args[0]).to.be.undefined;
+      // The crux: cbA was never called a second time (no error→success).
+      expect(cbA.callCount, "cbA total invocations").to.equal(1);
+    });
+
     it("should not call errorHandler on success", async () => {
       fetchStub.resolves(makeResponse(200, "OK"));
 

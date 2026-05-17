@@ -17,6 +17,10 @@ const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...
 type QueueItem = {
   message: IFormoEventPayload;
   callback: (...args: any) => any;
+  // Serialized size of this item, computed once at enqueue so the queue
+  // byte total can be tracked incrementally (avoids an O(n) re-serialize
+  // of the whole queue on every enqueue → O(n^2) overall).
+  byteSize: number;
 };
 
 type IFormoEventFlushPayload = IFormoEventPayload & {
@@ -73,6 +77,7 @@ export class EventQueue implements IEventQueue {
   private flushIntervalMs: number;
   private flushed: boolean;
   private maxQueueSize: number; // min 200 bytes, max 500kB
+  private queueByteSize = 0; // running total of queued items' byteSize
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
@@ -135,6 +140,7 @@ export class EventQueue implements IEventQueue {
       this.timer = null;
     }
     this.queue = [];
+    this.queueByteSize = 0;
     this.payloadHashes.clear();
   }
 
@@ -158,10 +164,18 @@ export class EventQueue implements IEventQueue {
       return;
     }
 
-    this.queue.push({
+    const queueItem: QueueItem = {
       message: { ...event, message_id },
       callback,
-    });
+      byteSize: 0,
+    };
+    // Measure once here (message only — JSON.stringify drops the
+    // callback function anyway), then track the total incrementally.
+    queueItem.byteSize = JSON.stringify({
+      message: queueItem.message,
+    }).length;
+    this.queue.push(queueItem);
+    this.queueByteSize += queueItem.byteSize;
 
     logger.log(
       `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
@@ -174,9 +188,7 @@ export class EventQueue implements IEventQueue {
     }
 
     const hasReachedFlushAt = this.queue.length >= this.flushAt;
-    const hasReachedQueueSize =
-      this.queue.reduce((acc, item) => acc + JSON.stringify(item).length, 0) >=
-      this.maxQueueSize;
+    const hasReachedQueueSize = this.queueByteSize >= this.maxQueueSize;
 
     if (hasReachedFlushAt || hasReachedQueueSize) {
       this.flush();
@@ -222,10 +234,15 @@ export class EventQueue implements IEventQueue {
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
     // Only remove hashes for flushed items so duplicate detection remains
-    // active for events still in the queue.
+    // active for events still in the queue. Also decrement the running
+    // byte total by exactly what left the queue.
     for (const item of items) {
       this.payloadHashes.delete(item.message.message_id);
+      this.queueByteSize -= item.byteSize;
     }
+    // Re-anchor to the exact invariant when the queue empties, so any
+    // accumulated drift can never wedge the size gate.
+    if (this.queue.length === 0) this.queueByteSize = 0;
 
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
