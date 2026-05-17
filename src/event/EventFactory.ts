@@ -56,25 +56,18 @@ class EventFactory implements IEventFactory {
       // with an attacker-controlled URL path can block the browser thread
       // on every event/page hit (ReDoS). Length-capping the pattern is a
       // cheap defense-in-depth; pathname length is capped at match time.
-      if (pattern.length > MAX_REFERRAL_PATTERN_LENGTH) {
-        logger.warn(
-          `Referral path pattern exceeds ${MAX_REFERRAL_PATTERN_LENGTH} chars; ignoring it to avoid ReDoS risk.`
-        );
-      } else if (isPotentiallyCatastrophicRegex(pattern)) {
-        // A length cap can't stop exponential backtracking — `(a+)+`
-        // is tiny. Reject star-height≥2 / oversized-repetition patterns
-        // outright; the integrator should use a linear one, e.g.
-        // `/r/([^/]+)`.
-        logger.warn(
-          `Referral path pattern "${pattern}" can cause catastrophic backtracking (ReDoS); ignoring it. Use a linear pattern such as "/r/([^/]+)".`
-        );
+      if (
+        pattern.length > MAX_REFERRAL_PATTERN_LENGTH ||
+        isPotentiallyCatastrophicRegex(pattern)
+      ) {
+        // Rejected (too long, or a shape that can degrade matching).
+        // Keep the log generic — don't surface the policy internals.
+        logger.warn("Invalid referral path pattern; skipped.");
       } else {
         try {
           this.compiledPathPattern = new RegExp(pattern);
-        } catch (error) {
-          logger.warn(
-            `Invalid referral path pattern: ${pattern}. Error: ${error}`
-          );
+        } catch {
+          logger.warn("Invalid referral path pattern; skipped.");
         }
       }
     }
