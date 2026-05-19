@@ -362,7 +362,17 @@ export class EventQueue implements IEventQueue {
           keepalive: batch.keepalive,
           retries: this.retryCount,
           retryDelay: (attempt) => Math.pow(2, attempt) * 1_000,
-          retryOn: (_, error, response) => this.isErrorRetryable(error, response),
+          retryOn: (_, error, response) => {
+            // Consent can be withdrawn mid-flush while this fetch is
+            // already in its retry/backoff chain (exponential backoff
+            // spans up to tens of seconds). retryOn is consulted before
+            // every retry's delay + next attempt, so returning false
+            // here aborts all remaining retries immediately — no event
+            // is re-sent after opt-out. A post-opt-out send is a
+            // GDPR/CCPA violation, not just stale data.
+            if (this.canSend && !this.canSend()) return false;
+            return this.isErrorRetryable(error, response);
+          },
         });
         if (!response.ok) {
           const error: any = new Error(response.statusText || `HTTP ${response.status}`);

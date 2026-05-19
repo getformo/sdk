@@ -39,6 +39,14 @@ async function fetchWithRetry(
         if (retryDelay) {
           await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
         }
+        // Re-check after the backoff delay. retryOn is a caller-supplied
+        // gate that can change its mind during the wait (e.g. tracking
+        // consent withdrawn mid-backoff). Without this re-check, an
+        // opt-out during the multi-second delay would still let the next
+        // attempt fire — a post-opt-out send.
+        if (retryOn?.(attempt, responseError, response) === false) {
+          return response;
+        }
         continue;
       }
 
@@ -53,6 +61,11 @@ async function fetchWithRetry(
       if (retryOn?.(attempt, error as FetchRetryError, null)) {
         if (retryDelay) {
           await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
+        }
+        // Re-check after the backoff delay (see the response path above):
+        // the caller's gate may have flipped during the wait.
+        if (retryOn?.(attempt, error as FetchRetryError, null) === false) {
+          throw error;
         }
         continue;
       }

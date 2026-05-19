@@ -221,5 +221,33 @@ describe("fetchWithRetry", () => {
 
       clock.restore();
     });
+
+    it("should NOT retry when retryOn flips to false during the backoff delay (consent withdrawn mid-backoff)", async () => {
+      // GDPR/CCPA: if tracking consent is withdrawn while a fetch is
+      // already sleeping in its retry backoff, the next attempt must not
+      // fire. retryOn here mirrors EventQueue's `canSend()` gate.
+      const clock = sinon.useFakeTimers();
+      const networkError = new TypeError("Failed to fetch");
+      fetchStub.rejects(networkError);
+
+      let consentGranted = true;
+      const resultPromise = fetchWithRetry("https://api.example.com", {
+        retries: 3,
+        retryOn: () => consentGranted,
+        retryDelay: () => 1_000,
+      }).catch((e) => e);
+
+      // First attempt failed; retryOn(true) scheduled a 1s backoff.
+      // Consent is withdrawn WHILE that backoff timer is still sleeping:
+      consentGranted = false;
+      await clock.tickAsync(1_000);
+
+      const result = await resultPromise;
+      expect(result).to.equal(networkError);
+      // Only the initial attempt — no post-opt-out retry was sent.
+      expect(fetchStub.calledOnce).to.be.true;
+
+      clock.restore();
+    });
   });
 });

@@ -5,13 +5,31 @@ on:
     tags:
       - 'v*'
 
+# Least privilege by default. Only the `publish` job escalates, and it
+# runs no project or third-party dependency code (see job comments).
 permissions:
-  id-token: write  # Required for OIDC trusted publishing
-  contents: write  # Required for creating GitHub releases
+  contents: read
 
 jobs:
-  publish:
+  # ---------------------------------------------------------------------------
+  # build — UNPRIVILEGED
+  #
+  # Runs everything that executes untrusted third-party code: dependency
+  # install (lifecycle scripts), build tooling, and tests. It has NO
+  # `id-token: write` and NO `contents: write`, and checks out with
+  # `persist-credentials: false`, so a compromised dependency / build / test
+  # script running here has no npm-publish OIDC token, no writable GITHUB_TOKEN,
+  # and no persisted git credential to exfiltrate. The release gates (semver
+  # tag validation, main-branch check, version match, tests) run here and the
+  # privileged `publish` job only runs via `needs: build`, so they still gate
+  # every release.
+  # ---------------------------------------------------------------------------
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     # Bind workflow-context values to env up front. Steps reference these
     # as shell variables ($TAG, $REPO, $COMMIT_SHA) instead of `${{ }}`
     # template interpolation, so attacker-controlled tag names cannot be
@@ -38,6 +56,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0  # Fetch all history for changelog generation
+          persist-credentials: false  # No git credential left on disk for build/test code
 
       - name: Verify tag is on main branch
         run: |
@@ -60,9 +79,6 @@ jobs:
           node-version: "22.14.0"
           cache: 'pnpm'
           # No registry-url - using OIDC trusted publishing instead
-
-      - name: Update npm for trusted publishing
-        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -96,6 +112,17 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Pack publishable tarball
+        # Produce the exact artifact that will be published. `npm pack` packs
+        # the `files` allowlist from package.json; this project defines no
+        # prepare/prepack/prepublishOnly scripts, so no extra code runs here,
+        # and `npm publish <tarball>` later runs no lifecycle scripts at all.
+        run: |
+          TARBALL=$(npm pack --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8'))[0].filename")
+          echo "Packed: $TARBALL"
+          mkdir -p release-artifact
+          mv "$TARBALL" release-artifact/package.tgz
 
       - name: Generate release notes
         id: release_notes
@@ -166,13 +193,13 @@ jobs:
           done <<< "$COMMITS"
 
           # Create release notes
-          cat > release_notes.md <<EOF
+          cat > release-artifact/release_notes.md <<EOF
           $VERSION ($RELEASE_DATE)
           EOF
 
           # Add Features section if exists
           if [ -n "$FEATURES" ]; then
-            cat >> release_notes.md <<EOF
+            cat >> release-artifact/release_notes.md <<EOF
 
           ## Features
 
@@ -182,7 +209,7 @@ jobs:
 
           # Add Fixes section if exists
           if [ -n "$FIXES" ]; then
-            cat >> release_notes.md <<EOF
+            cat >> release-artifact/release_notes.md <<EOF
 
           ## Bug Fixes
 
@@ -192,7 +219,7 @@ jobs:
 
           # Add Other changes if exists
           if [ -n "$OTHER" ]; then
-            cat >> release_notes.md <<EOF
+            cat >> release-artifact/release_notes.md <<EOF
 
           ## Changes
 
@@ -201,7 +228,7 @@ jobs:
           fi
 
           # Add npm package link
-          cat >> release_notes.md <<EOF
+          cat >> release-artifact/release_notes.md <<EOF
 
           ## Install
 
@@ -222,15 +249,91 @@ jobs:
           \`\`\`
           EOF
 
+      - name: Upload release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-package
+          path: release-artifact/
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # publish — PRIVILEGED, MINIMAL
+  #
+  # Holds `id-token: write` (npm trusted publishing / provenance) and
+  # `contents: write` (GitHub release). It runs NO `pnpm install`, build,
+  # or tests, so no third-party dependency lifecycle script and no project
+  # build/test code ever executes with these credentials. Its only
+  # checkout is a minimal `persist-credentials: false` checkout of the
+  # immutable tag, used solely to obtain the first-party SRI script (no
+  # untrusted code runs from it). It only: installs npm itself (the
+  # publish tool), verifies + publishes the prebuilt tarball (tarball
+  # publish runs no lifecycle scripts), creates the release, and runs the
+  # first-party SRI script from the tag checkout.
+  # ---------------------------------------------------------------------------
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write  # Required for OIDC trusted publishing + provenance
+      contents: write  # Required for creating GitHub releases
+    env:
+      # Sourced from the validated tag in the trusted build job and bound to
+      # env (not inline `${{ }}`) so it cannot be injected into run bodies.
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Checkout repository at the validated tag
+        # Provides the first-party post-publish SRI script from the
+        # immutable tag, NOT the build artifact. Code that ran in the
+        # unprivileged build job (dependency lifecycle / build / test)
+        # therefore cannot tamper with what executes in this privileged
+        # job. `persist-credentials: false` leaves no git push token on
+        # disk; no dependency install / build / test runs here.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+          path: release-package
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.14.0"
+          # No registry-url - using OIDC trusted publishing instead
+
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Verify tarball identity matches the validated tag
+        # The tarball was packed by the UNPRIVILEGED build job, after
+        # untrusted install/build/test code ran. Before publishing it with
+        # the OIDC token, assert it is exactly @formo/analytics@$VERSION
+        # (the version was already gated against the tag in `build`), so a
+        # mutated package.json cannot redirect the trusted publish.
+        run: |
+          PKG_JSON=$(tar -xzOf ./release-package/package.tgz package/package.json)
+          NAME=$(printf '%s' "$PKG_JSON" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).name")
+          VER=$(printf '%s' "$PKG_JSON" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          if [ "$NAME" != "@formo/analytics" ] || [ "$VER" != "$VERSION" ]; then
+            echo "❌ Tarball identity mismatch: got '$NAME@$VER', expected '@formo/analytics@$VERSION'"
+            exit 1
+          fi
+          echo "✅ Tarball verified: $NAME@$VER"
+
       - name: Publish to npm
-        run: npm publish --provenance
-        # Explicitly use --provenance flag for clarity
-        # OIDC trusted publishing (id-token: write) enables automatic provenance generation
+        # Publishing the prebuilt tarball runs no prepare/prepack/prepublish
+        # lifecycle scripts. OIDC trusted publishing (id-token: write) enables
+        # automatic provenance generation.
+        run: npm publish ./release-package/package.tgz --provenance --access public
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
-          body_path: release_notes.md
+          body_path: release-package/release_notes.md
           draft: false
           prerelease: false
         env:
@@ -238,7 +341,6 @@ jobs:
 
       - name: Generate and Add SRI to GitHub Release
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           GH_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Published version: $VERSION"
@@ -251,4 +353,5 @@ jobs:
             bash scripts/generate-sri.sh "$VERSION"
           else
             echo "⚠️ SRI script not found at scripts/generate-sri.sh"
+            exit 1
           fi
