@@ -6,7 +6,6 @@ import {
   TransactionStatus,
 } from "./events";
 import { EIP1193Provider } from "./provider";
-import { ReactNode } from "react";
 import { SolanaOptions } from "../solana/types";
 
 export type Nullable<T> = T | null;
@@ -284,9 +283,3 @@ export interface Options {
   ready?: (formo: IFormoAnalytics) => void;
 }
 
-export interface FormoAnalyticsProviderProps {
-  writeKey: string;
-  options?: Options;
-  disabled?: boolean;
-  children: ReactNode;
-}
