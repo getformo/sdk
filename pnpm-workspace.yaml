@@ -8,6 +8,6 @@ overrides:
 audit: true
 autoInstallPeers: false
 blockExoticSubdeps: true
-minimumReleaseAge: 4320
+minimumReleaseAge: 10080
 allowBuilds:
   esbuild: true
