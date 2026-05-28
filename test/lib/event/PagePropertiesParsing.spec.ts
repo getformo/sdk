@@ -776,6 +776,33 @@ describe("Page Event Property Parsing", () => {
       const freshContext = await getPageContext();
       expect(freshContext.referrer).to.equal("");
     });
+
+    it("should not capture internal navigation as referrer after a direct landing", async () => {
+      // Direct landing: no referrer, nothing stored.
+      setMockLocation("https://formo.so/");
+      const landingContext = await getPageContext();
+      expect(landingContext.referrer).to.equal("");
+
+      // Internal nav: browser sets document.referrer to the previous same-host
+      // page. This must NOT be treated as the session's entry referrer.
+      setMockLocation("https://formo.so/dashboard", "https://formo.so/");
+      const secondContext = await getPageContext();
+      expect(secondContext.referrer).to.equal("");
+
+      // A subsequent internal hop must also stay empty — i.e. the previous
+      // same-host URL did not sneak into sessionStorage on the prior event.
+      setMockLocation("https://formo.so/pricing", "https://formo.so/dashboard");
+      const thirdContext = await getPageContext();
+      expect(thirdContext.referrer).to.equal("");
+    });
+
+    it("should treat a different host as external even when paths look similar", async () => {
+      // Sanity: cross-host nav is still captured (we filter on hostname, not
+      // arbitrary URL substrings).
+      setMockLocation("https://formo.so/", "https://app.formo.so/");
+      const context = await getPageContext();
+      expect(context.referrer).to.equal("https://app.formo.so/");
+    });
   });
 });
 
