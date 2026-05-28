@@ -189,8 +189,12 @@ class EventFactory implements IEventFactory {
 
     const finalTrafficSources: ITrafficSource = {
       ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
+      // Referrer is sticky (first-touch wins): document.referrer is populated
+      // by the browser on every internal navigation with the previous page,
+      // which would overwrite the session's entry referrer. Prefer the stored
+      // value so attribution reflects the session's true source.
       referrer:
-        contextTrafficSources.referrer || storedTrafficSources?.referrer || "",
+        storedTrafficSources?.referrer || contextTrafficSources.referrer || "",
       utm_campaign:
         contextTrafficSources.utm_campaign ||
         storedTrafficSources?.utm_campaign ||

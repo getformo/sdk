@@ -124,15 +124,17 @@ describe("Page Event Property Parsing", () => {
   /**
    * Helper function to set mock location by creating a new JSDOM with the desired URL
    */
-  function setMockLocation(url: string) {
+  function setMockLocation(url: string, referrer?: string) {
     // Close previous JSDOM
     if (jsdom) {
       jsdom.window.close();
     }
-    
+
     // Create new JSDOM with the desired URL
-    jsdom = new JSDOM("<!DOCTYPE html><html><head><title>Test Page</title></head><body></body></html>", { url });
-    
+    const options: ConstructorParameters<typeof JSDOM>[1] = { url };
+    if (referrer !== undefined) options.referrer = referrer;
+    jsdom = new JSDOM("<!DOCTYPE html><html><head><title>Test Page</title></head><body></body></html>", options);
+
     // Update globals
     (global as any).window = jsdom.window;
     (global as any).document = jsdom.window.document;
@@ -707,6 +709,72 @@ describe("Page Event Property Parsing", () => {
       const context = await getPageContext();
 
       expect(context.random_clid).to.be.undefined;
+    });
+  });
+
+  describe("Referrer (sticky across session)", () => {
+    // Clear stored traffic-source state between tests so each scenario starts
+    // from a clean session.
+    beforeEach(() => {
+      try {
+        session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+      } catch {}
+    });
+
+    it("should capture document.referrer into context on the landing pageview", async () => {
+      setMockLocation("https://formo.so/", "https://google.com/");
+
+      const context = await getPageContext();
+
+      expect(context.referrer).to.equal("https://google.com/");
+    });
+
+    it("should persist the entry referrer across internal navigation", async () => {
+      // Landing: external referrer is captured and stored.
+      setMockLocation("https://formo.so/", "https://google.com/");
+      const landingContext = await getPageContext();
+      expect(landingContext.referrer).to.equal("https://google.com/");
+
+      // Internal navigation: browser sets document.referrer to the previous
+      // same-domain page. The sticky stored value must win so attribution
+      // continues to reflect the session's true source.
+      setMockLocation("https://formo.so/dashboard", "https://formo.so/");
+      const secondContext = await getPageContext();
+      expect(secondContext.referrer).to.equal("https://google.com/");
+    });
+
+    it("should not overwrite a stored referrer when a different external referrer appears mid-session", async () => {
+      setMockLocation("https://formo.so/", "https://google.com/");
+      await getPageContext();
+
+      // User clicks an outbound link and comes back via a different referrer.
+      // First-touch attribution wins.
+      setMockLocation("https://formo.so/landing", "https://facebook.com/");
+      const secondContext = await getPageContext();
+      expect(secondContext.referrer).to.equal("https://google.com/");
+    });
+
+    it("should fall back to document.referrer when no stored referrer exists", async () => {
+      // Fresh session with no stored value yet: context wins via the OR fallback.
+      setMockLocation("https://formo.so/landing", "https://twitter.com/");
+
+      const context = await getPageContext();
+
+      expect(context.referrer).to.equal("https://twitter.com/");
+    });
+
+    it("should not leak referrer into a fresh session", async () => {
+      // Landing pageview writes referrer to sessionStorage.
+      setMockLocation("https://formo.so/", "https://google.com/");
+      await getPageContext();
+
+      // Simulate a brand new session (new tab): sessionStorage is empty.
+      session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+
+      // Direct landing with no referrer in the new session.
+      setMockLocation("https://formo.so/dashboard");
+      const freshContext = await getPageContext();
+      expect(freshContext.referrer).to.equal("");
     });
   });
 });
