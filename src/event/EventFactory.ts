@@ -170,13 +170,30 @@ class EventFactory implements IEventFactory {
     return "";
   };
 
+  /**
+   * Returns the document referrer with same-host referrers filtered out.
+   * Internal navigation populates `document.referrer` with the previous page
+   * on the same site, which is not an attribution signal — treating it as
+   * "external" would otherwise let an internal URL become the session's
+   * first-touch referrer after a direct landing.
+   */
+  private getExternalReferrer = (): string => {
+    const ref = document.referrer;
+    if (!ref) return "";
+    try {
+      const currentHost = globalThis.location?.hostname;
+      if (currentHost && new URL(ref).hostname === currentHost) return "";
+    } catch {}
+    return ref;
+  };
+
   private getTrafficSources = (url: string): ITrafficSource => {
     const urlObj = new URL(url);
     const contextTrafficSources: ITrafficSource = {
       ...this.extractUTMParameters(url),
       ...this.extractClickIdParameters(urlObj),
       ref: this.extractReferralParameter(urlObj),
-      referrer: document.referrer,
+      referrer: this.getExternalReferrer(),
     };
     const storedTrafficSources =
       (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {};
@@ -189,8 +206,12 @@ class EventFactory implements IEventFactory {
 
     const finalTrafficSources: ITrafficSource = {
       ref: contextTrafficSources.ref || storedTrafficSources?.ref || "",
+      // Referrer is sticky (first-touch wins). Same-host referrers are already
+      // stripped by getExternalReferrer; the stored-first OR keeps the entry
+      // referrer pinned even if a later pageview reports a different external
+      // referrer (e.g. cross-domain return from an outbound click).
       referrer:
-        contextTrafficSources.referrer || storedTrafficSources?.referrer || "",
+        storedTrafficSources?.referrer || contextTrafficSources.referrer || "",
       utm_campaign:
         contextTrafficSources.utm_campaign ||
         storedTrafficSources?.utm_campaign ||
