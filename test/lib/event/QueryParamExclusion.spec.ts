@@ -1,91 +1,276 @@
+import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
-import "global-jsdom/register";
+import { JSDOM } from "jsdom";
 import { EventFactory } from "../../../src/event/EventFactory";
+import { initStorageManager, session } from "../../../src/storage";
+import { SESSION_TRAFFIC_SOURCE_KEY } from "../../../src/constants";
 
 /**
  * Tests for sensitive query-parameter exclusion in page properties.
  *
- * The built-in denylist (privy_oauth_code, privy_oauth_state) is always
- * stripped regardless of configuration; consumers can add more keys via
- * tracking.excludeQueryParams. Only the query string is redacted — the URL
- * hash/fragment is intentionally left untouched.
+ * Two layers:
+ * - A built-in always-on denylist (privy_oauth_code, privy_oauth_state) that is
+ *   stripped regardless of configuration and cannot be disabled.
+ * - An opt-in `tracking.excludeQueryParams`, accepting either an array of key
+ *   names (case-insensitive) or a predicate `(key, value) => boolean`.
+ *
+ * Only the query string is redacted — the URL hash/fragment is intentionally
+ * left untouched. Excluded params must not appear in `url`, `query`, or the
+ * per-parameter page-property explosion.
  */
 describe("EventFactory query parameter exclusion", () => {
-  const setLocation = (url: string) => {
-    const u = new URL(url);
-    Object.defineProperty(window, "location", {
+  let jsdom: JSDOM;
+
+  beforeEach(() => {
+    jsdom = new JSDOM(
+      "<!DOCTYPE html><html><head><title>Test Page</title></head><body></body></html>",
+      { url: "https://formo.so/" }
+    );
+
+    Object.defineProperty(global, "window", {
+      value: jsdom.window, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "document", {
+      value: jsdom.window.document, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "location", {
+      value: jsdom.window.location, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "globalThis", {
+      value: jsdom.window, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "navigator", {
+      value: jsdom.window.navigator, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "screen", {
+      value: jsdom.window.screen, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "devicePixelRatio", {
+      value: 1, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "innerWidth", {
+      value: 1920, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "innerHeight", {
+      value: 1080, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "Intl", {
       value: {
-        href: u.href,
-        pathname: u.pathname,
-        search: u.search,
-        hash: u.hash,
-        host: u.host,
-        hostname: u.hostname,
-        origin: u.origin,
-        protocol: u.protocol,
+        DateTimeFormat: () => ({
+          resolvedOptions: () => ({ timeZone: "America/New_York" }),
+        }),
       },
-      writable: true,
-      configurable: true,
+      writable: true, configurable: true,
     });
-  };
-
-  it("always strips the built-in Privy OAuth params with no config", async () => {
-    setLocation(
-      "https://example.com/callback?privy_oauth_code=SECRET_CODE&privy_oauth_state=CSRF_TOKEN&foo=bar"
-    );
-    const factory = new EventFactory();
-    const event = await factory.generatePageEvent("cat", "name");
-
-    // Removed from url, query string, and the per-parameter explosion.
-    expect(event.properties?.url).to.not.contain("SECRET_CODE");
-    expect(event.properties?.url).to.not.contain("CSRF_TOKEN");
-    expect(event.properties?.query).to.not.contain("privy_oauth_code");
-    expect(event.properties?.query).to.not.contain("privy_oauth_state");
-    expect(event.properties?.privy_oauth_code).to.be.undefined;
-    expect(event.properties?.privy_oauth_state).to.be.undefined;
-
-    // Benign params are retained.
-    expect(event.properties?.foo).to.equal("bar");
-    expect(event.properties?.query).to.equal("foo=bar");
-  });
-
-  it("matches the built-in params case-insensitively", async () => {
-    setLocation(
-      "https://example.com/callback?PRIVY_OAUTH_CODE=SECRET_CODE&keep=1"
-    );
-    const factory = new EventFactory();
-    const event = await factory.generatePageEvent("cat", "name");
-
-    expect(event.properties?.url).to.not.contain("SECRET_CODE");
-    expect(event.properties?.keep).to.equal("1");
-  });
-
-  it("strips additional params from tracking.excludeQueryParams on top of defaults", async () => {
-    setLocation(
-      "https://example.com/page?token=ABC&privy_oauth_code=SECRET_CODE&page=2"
-    );
-    const factory = new EventFactory({
-      tracking: { excludeQueryParams: ["token"] },
+    Object.defineProperty(global, "localStorage", {
+      value: jsdom.window.localStorage, writable: true, configurable: true,
     });
-    const event = await factory.generatePageEvent("cat", "name");
+    Object.defineProperty(global, "sessionStorage", {
+      value: jsdom.window.sessionStorage, writable: true, configurable: true,
+    });
+    Object.defineProperty(global, "crypto", {
+      value: { randomUUID: () => "12345678-1234-1234-1234-123456789abc" },
+      writable: true, configurable: true,
+    });
 
-    expect(event.properties?.url).to.not.contain("ABC");
-    expect(event.properties?.url).to.not.contain("SECRET_CODE");
-    expect(event.properties?.token).to.be.undefined;
-    expect(event.properties?.privy_oauth_code).to.be.undefined;
-    expect(event.properties?.page).to.equal("2");
+    initStorageManager("test-write-key");
+
+    // Clear sticky traffic-source state so each test starts clean.
+    try {
+      session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+    } catch {}
   });
 
-  it("leaves the URL hash/fragment untouched", async () => {
-    setLocation(
-      "https://example.com/callback?privy_oauth_code=SECRET_CODE#privy_oauth_state=HASH_KEPT"
-    );
-    const factory = new EventFactory();
-    const event = await factory.generatePageEvent("cat", "name");
+  afterEach(() => {
+    delete (global as any).window;
+    delete (global as any).document;
+    delete (global as any).location;
+    delete (global as any).globalThis;
+    delete (global as any).navigator;
+    delete (global as any).screen;
+    delete (global as any).devicePixelRatio;
+    delete (global as any).innerWidth;
+    delete (global as any).innerHeight;
+    delete (global as any).Intl;
+    delete (global as any).localStorage;
+    delete (global as any).sessionStorage;
+    delete (global as any).crypto;
+    if (jsdom) jsdom.window.close();
+  });
 
-    expect(event.properties?.url).to.not.contain("SECRET_CODE");
-    expect(event.properties?.url).to.contain("#privy_oauth_state=HASH_KEPT");
-    expect(event.properties?.hash).to.equal("#privy_oauth_state=HASH_KEPT");
-    expect(event.properties?.query).to.equal("");
+  function setMockLocation(url: string) {
+    if (jsdom) jsdom.window.close();
+    jsdom = new JSDOM(
+      "<!DOCTYPE html><html><head><title>Test Page</title></head><body></body></html>",
+      { url }
+    );
+    (global as any).window = jsdom.window;
+    (global as any).document = jsdom.window.document;
+    (global as any).location = jsdom.window.location;
+    (global as any).globalThis = jsdom.window;
+  }
+
+  async function getProps(
+    factory: EventFactory,
+    properties: Record<string, any> = {}
+  ): Promise<Record<string, any>> {
+    const event = await factory.generatePageEvent(
+      properties.category,
+      properties.name,
+      properties
+    );
+    return (event.properties as Record<string, any>) || {};
+  }
+
+  describe("built-in always-on denylist", () => {
+    it("always strips Privy OAuth params with no configuration", async () => {
+      setMockLocation(
+        "https://formo.so/callback?privy_oauth_code=SECRET_CODE&privy_oauth_state=CSRF_TOKEN&foo=bar"
+      );
+      const props = await getProps(new EventFactory());
+
+      expect(props.url).to.not.contain("SECRET_CODE");
+      expect(props.url).to.not.contain("CSRF_TOKEN");
+      expect(props.query).to.equal("foo=bar");
+      expect(props.privy_oauth_code).to.be.undefined;
+      expect(props.privy_oauth_state).to.be.undefined;
+      expect(props.foo).to.equal("bar");
+    });
+
+    it("matches built-in params case-insensitively", async () => {
+      setMockLocation("https://formo.so/callback?PRIVY_OAUTH_CODE=SECRET_CODE&keep=1");
+      const props = await getProps(new EventFactory());
+
+      expect(props.url).to.not.contain("SECRET_CODE");
+      expect(props.keep).to.equal("1");
+    });
+
+    it("leaves the URL hash/fragment untouched", async () => {
+      setMockLocation(
+        "https://formo.so/callback?privy_oauth_code=SECRET_CODE#privy_oauth_state=HASH_KEPT"
+      );
+      const props = await getProps(new EventFactory());
+
+      expect(props.url).to.not.contain("SECRET_CODE");
+      expect(props.url).to.contain("#privy_oauth_state=HASH_KEPT");
+      expect(props.hash).to.equal("#privy_oauth_state=HASH_KEPT");
+      expect(props.query).to.equal("");
+    });
+  });
+
+  describe("excludeQueryParams as an array", () => {
+    it("strips configured keys on top of the built-in defaults", async () => {
+      setMockLocation(
+        "https://formo.so/page?token=ABC&privy_oauth_code=SECRET_CODE&page=2"
+      );
+      const props = await getProps(
+        new EventFactory({ tracking: { excludeQueryParams: ["token"] } })
+      );
+
+      expect(props.url).to.not.contain("ABC");
+      expect(props.url).to.not.contain("SECRET_CODE");
+      expect(props.token).to.be.undefined;
+      expect(props.privy_oauth_code).to.be.undefined;
+      expect(props.page).to.equal("2");
+    });
+
+    it("matches configured keys case-insensitively", async () => {
+      setMockLocation("https://formo.so/page?Token=ABC&keep=1");
+      const props = await getProps(
+        new EventFactory({ tracking: { excludeQueryParams: ["token"] } })
+      );
+
+      expect(props.url).to.not.contain("ABC");
+      expect(props.keep).to.equal("1");
+    });
+  });
+
+  describe("excludeQueryParams as a predicate", () => {
+    it("drops parameters by key prefix", async () => {
+      setMockLocation(
+        "https://formo.so/page?secret_token=A&secret_id=B&page=2"
+      );
+      const props = await getProps(
+        new EventFactory({
+          tracking: {
+            excludeQueryParams: (key: string) => key.startsWith("secret_"),
+          },
+        })
+      );
+
+      expect(props.url).to.not.contain("secret_token");
+      expect(props.url).to.not.contain("secret_id");
+      expect(props.secret_token).to.be.undefined;
+      expect(props.secret_id).to.be.undefined;
+      expect(props.page).to.equal("2");
+    });
+
+    it("drops parameters by value, regardless of key name", async () => {
+      setMockLocation("https://formo.so/page?data=eyJhbGciOiJ9&q=hello");
+      const props = await getProps(
+        new EventFactory({
+          tracking: {
+            excludeQueryParams: (key: string, value: string) =>
+              value.startsWith("eyJ"),
+          },
+        })
+      );
+
+      expect(props.url).to.not.contain("eyJhbGciOiJ9");
+      expect(props.data).to.be.undefined;
+      expect(props.q).to.equal("hello");
+    });
+
+    it("passes the key and value to the predicate", async () => {
+      setMockLocation("https://formo.so/page?foo=bar&n=1");
+      const seen: Array<[string, string]> = [];
+      await getProps(
+        new EventFactory({
+          tracking: {
+            excludeQueryParams: (key: string, value: string) => {
+              seen.push([key, value]);
+              return false;
+            },
+          },
+        })
+      );
+
+      expect(seen).to.deep.include(["foo", "bar"]);
+      expect(seen).to.deep.include(["n", "1"]);
+    });
+
+    it("cannot re-enable a built-in default even if the predicate returns false", async () => {
+      setMockLocation("https://formo.so/callback?privy_oauth_code=SECRET_CODE&keep=1");
+      const props = await getProps(
+        new EventFactory({
+          tracking: { excludeQueryParams: () => false },
+        })
+      );
+
+      expect(props.url).to.not.contain("SECRET_CODE");
+      expect(props.privy_oauth_code).to.be.undefined;
+      expect(props.keep).to.equal("1");
+    });
+
+    it("fails open and keeps tracking working when the predicate throws", async () => {
+      setMockLocation(
+        "https://formo.so/callback?privy_oauth_state=CSRF_TOKEN&user=alice"
+      );
+      const props = await getProps(
+        new EventFactory({
+          tracking: {
+            excludeQueryParams: () => {
+              throw new Error("boom");
+            },
+          },
+        })
+      );
+
+      // Built-in default is still stripped; the param the (broken) predicate
+      // would have judged is kept rather than dropping it or throwing.
+      expect(props.url).to.not.contain("CSRF_TOKEN");
+      expect(props.privy_oauth_state).to.be.undefined;
+      expect(props.user).to.equal("alice");
+    });
   });
 });
