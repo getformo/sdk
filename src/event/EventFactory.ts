@@ -41,9 +41,18 @@ const ISO_3166_ALPHA_2_REGEX = /^[A-Z]{2}$/;
 class EventFactory implements IEventFactory {
   private options?: Options;
   private compiledPathPattern?: RegExp;
+  // Lower-cased query-param keys that must never be forwarded to or stored by
+  // Formo. Opt-in via `options.tracking.excludeQueryParams`; empty by default.
+  private excludedQueryParams: Set<string>;
 
   constructor(options?: Options) {
     this.options = options;
+    const tracking = options?.tracking;
+    this.excludedQueryParams = new Set(
+      (typeof tracking === "object" ? tracking.excludeQueryParams ?? [] : []).map(
+        (key) => key.toLowerCase()
+      )
+    );
     // Compile regex pattern once for better performance
     if (options?.referral?.pathPattern) {
       try {
@@ -109,6 +118,39 @@ class EventFactory implements IEventFactory {
 
   private getLibraryVersion(): string {
     return version;
+  }
+
+  private isExcludedQueryParam(key: string): boolean {
+    return this.excludedQueryParams.has(key.toLowerCase());
+  }
+
+  /**
+   * Strip excluded (sensitive) query parameters from a URL in place. Only the
+   * query string is touched; the path and hash/fragment are left as-is.
+   */
+  private redactQueryParams(url: URL): void {
+    if (this.excludedQueryParams.size === 0) return;
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (this.isExcludedQueryParam(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Return the given absolute URL with excluded query parameters removed. The
+   * input is returned unchanged when there is nothing to strip or it cannot be
+   * parsed (e.g. an empty referrer).
+   */
+  private redactUrl(href: string): string {
+    if (!href || this.excludedQueryParams.size === 0) return href;
+    try {
+      const url = new URL(href);
+      this.redactQueryParams(url);
+      return url.href;
+    } catch {
+      return href;
+    }
   }
 
   private extractUTMParameters = (url: string): UTMParameters => {
@@ -184,7 +226,7 @@ class EventFactory implements IEventFactory {
       const currentHost = globalThis.location?.hostname;
       if (currentHost && new URL(ref).hostname === currentHost) return "";
     } catch {}
-    return ref;
+    return this.redactUrl(ref);
   };
 
   private getTrafficSources = (url: string): ITrafficSource => {
@@ -300,7 +342,7 @@ class EventFactory implements IEventFactory {
       location,
       ...this.getTrafficSources(globalThis.location.href),
       page_title: document.title,
-      page_url: globalThis.location.href,
+      page_url: this.redactUrl(globalThis.location.href),
       library_name: "Formo Web SDK",
       library_version,
       browser: browserName,
@@ -326,8 +368,17 @@ class EventFactory implements IEventFactory {
     // Create a copy to avoid mutating the original properties object
     const pageProps = { ...properties };
 
+    // Parse the current URL once and strip any excluded (sensitive) query
+    // params up front, so nothing sensitive is forwarded via url, query, or the
+    // per-param explosion below. The hash/fragment is intentionally untouched.
+    let urlObj: URL | null = null;
+    try {
+      urlObj = new URL(globalThis.location.href);
+      this.redactQueryParams(urlObj);
+    } catch {}
+
     if (isUndefined(pageProps.url)) {
-      pageProps.url = new URL(globalThis.location.href).href;
+      pageProps.url = urlObj ? urlObj.href : globalThis.location.href;
     }
 
     if (isUndefined(pageProps.path)) {
@@ -340,19 +391,23 @@ class EventFactory implements IEventFactory {
 
     // Add query string without the '?' prefix
     if (isUndefined(pageProps.query)) {
-      pageProps.query = globalThis.location.search.slice(1);
+      pageProps.query = urlObj
+        ? urlObj.search.slice(1)
+        : globalThis.location.search.slice(1);
     }
 
     // Parse query parameters and add as individual properties (don't overwrite existing)
-    // Skip fields that are already captured in context or are semantic event properties
+    // Skip fields that are already captured in context or are semantic event properties.
+    // Excluded params were already removed from urlObj above.
     try {
-      const urlObj = new URL(globalThis.location.href);
-      urlObj.searchParams.forEach((value, key) => {
-        // Only add if the property doesn't already exist and is not excluded
-        if (isUndefined(pageProps[key]) && !PAGE_PROPERTIES_EXCLUDED_FIELDS.has(key)) {
-          pageProps[key] = value;
-        }
-      });
+      if (urlObj) {
+        urlObj.searchParams.forEach((value, key) => {
+          // Only add if the property doesn't already exist and is not excluded
+          if (isUndefined(pageProps[key]) && !PAGE_PROPERTIES_EXCLUDED_FIELDS.has(key)) {
+            pageProps[key] = value;
+          }
+        });
+      }
     } catch (error) {
       logger.error("Error parsing query parameters for page properties:", error);
     }
