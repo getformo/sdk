@@ -21,8 +21,9 @@ const CLICK_ID_PARAMS = [
  * Query parameters that are ALWAYS stripped from forwarded and stored URLs,
  * regardless of consumer configuration, because they carry high-sensitivity
  * secrets that must never reach Formo:
- * - privy_oauth_code:  Privy OAuth authorization code
- * - privy_oauth_state: Privy OAuth CSRF state token
+ * - privy_oauth_code:     Privy OAuth authorization code
+ * - privy_oauth_state:    Privy OAuth CSRF state token
+ * - privy_oauth_provider: Privy OAuth provider identifier
  *
  * Consumers can extend the denylist via `tracking.excludeQueryParams` but
  * cannot remove these built-ins. Matched case-insensitively.
@@ -30,6 +31,7 @@ const CLICK_ID_PARAMS = [
 const DEFAULT_EXCLUDED_QUERY_PARAMS = [
   "privy_oauth_code",
   "privy_oauth_state",
+  "privy_oauth_provider",
 ] as const;
 
 /**

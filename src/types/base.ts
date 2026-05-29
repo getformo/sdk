@@ -126,8 +126,9 @@ export interface TrackingOptions {
   excludeChains?: ChainID[];
   /**
    * Additional query parameters to strip from forwarded and stored URLs, on top
-   * of a built-in always-on denylist (currently `privy_oauth_code` and
-   * `privy_oauth_state`) that cannot be disabled. Excluded params are stripped
+   * of a built-in always-on denylist (currently `privy_oauth_code`,
+   * `privy_oauth_state`, and `privy_oauth_provider`) that cannot be disabled.
+   * Excluded params are stripped
    * from the captured page URL, query string, per-parameter page properties,
    * and referrer before any event is sent. The URL hash/fragment is
    * intentionally left untouched.

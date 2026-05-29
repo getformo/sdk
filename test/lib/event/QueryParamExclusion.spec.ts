@@ -125,15 +125,17 @@ describe("EventFactory query parameter exclusion", () => {
   describe("built-in always-on denylist", () => {
     it("always strips Privy OAuth params with no configuration", async () => {
       setMockLocation(
-        "https://formo.so/callback?privy_oauth_code=SECRET_CODE&privy_oauth_state=CSRF_TOKEN&foo=bar"
+        "https://formo.so/callback?privy_oauth_code=SECRET_CODE&privy_oauth_state=CSRF_TOKEN&privy_oauth_provider=google&foo=bar"
       );
       const props = await getProps(new EventFactory());
 
       expect(props.url).to.not.contain("SECRET_CODE");
       expect(props.url).to.not.contain("CSRF_TOKEN");
+      expect(props.url).to.not.contain("privy_oauth_provider");
       expect(props.query).to.equal("foo=bar");
       expect(props.privy_oauth_code).to.be.undefined;
       expect(props.privy_oauth_state).to.be.undefined;
+      expect(props.privy_oauth_provider).to.be.undefined;
       expect(props.foo).to.equal("bar");
     });
 
@@ -210,7 +212,7 @@ describe("EventFactory query parameter exclusion", () => {
       const props = await getProps(
         new EventFactory({
           tracking: {
-            excludeQueryParams: (key: string, value: string) =>
+            excludeQueryParams: (_key: string, value: string) =>
               value.startsWith("eyJ"),
           },
         })
