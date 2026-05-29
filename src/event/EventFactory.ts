@@ -29,6 +29,7 @@ import { version } from "../version";
 import {
   CHANNEL,
   CLICK_ID_PARAMS,
+  DEFAULT_EXCLUDED_QUERY_PARAMS,
   PAGE_PROPERTIES_EXCLUDED_FIELDS,
   VERSION,
 } from "./constants";
@@ -42,15 +43,19 @@ class EventFactory implements IEventFactory {
   private options?: Options;
   private compiledPathPattern?: RegExp;
   // Lower-cased query-param keys that must never be forwarded to or stored by
-  // Formo. Opt-in via `options.tracking.excludeQueryParams`; empty by default.
+  // Formo: a built-in always-on denylist (DEFAULT_EXCLUDED_QUERY_PARAMS) merged
+  // with any opt-in keys from `options.tracking.excludeQueryParams`. The
+  // built-ins are always present and cannot be removed by configuration.
   private excludedQueryParams: Set<string>;
 
   constructor(options?: Options) {
     this.options = options;
     const tracking = options?.tracking;
+    const configuredExcludes =
+      typeof tracking === "object" ? tracking.excludeQueryParams ?? [] : [];
     this.excludedQueryParams = new Set(
-      (typeof tracking === "object" ? tracking.excludeQueryParams ?? [] : []).map(
-        (key) => key.toLowerCase()
+      [...DEFAULT_EXCLUDED_QUERY_PARAMS, ...configuredExcludes].map((key) =>
+        key.toLowerCase()
       )
     );
     // Compile regex pattern once for better performance
@@ -129,7 +134,6 @@ class EventFactory implements IEventFactory {
    * query string is touched; the path and hash/fragment are left as-is.
    */
   private redactQueryParams(url: URL): void {
-    if (this.excludedQueryParams.size === 0) return;
     for (const key of Array.from(url.searchParams.keys())) {
       if (this.isExcludedQueryParam(key)) {
         url.searchParams.delete(key);
@@ -139,11 +143,11 @@ class EventFactory implements IEventFactory {
 
   /**
    * Return the given absolute URL with excluded query parameters removed. The
-   * input is returned unchanged when there is nothing to strip or it cannot be
-   * parsed (e.g. an empty referrer).
+   * input is returned unchanged when it is empty or cannot be parsed (e.g. an
+   * empty referrer).
    */
   private redactUrl(href: string): string {
-    if (!href || this.excludedQueryParams.size === 0) return href;
+    if (!href) return href;
     try {
       const url = new URL(href);
       this.redactQueryParams(url);

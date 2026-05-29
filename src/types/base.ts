@@ -125,14 +125,15 @@ export interface TrackingOptions {
   excludePaths?: string[];
   excludeChains?: ChainID[];
   /**
-   * Query parameter keys that must never be forwarded to or stored by Formo.
-   * Matched case-insensitively and stripped from the captured page URL, query
-   * string, per-parameter page properties, and referrer before any event is
-   * sent. The URL hash/fragment is intentionally left untouched.
+   * Additional query parameter keys to strip from forwarded and stored URLs,
+   * on top of a built-in always-on denylist (currently `privy_oauth_code` and
+   * `privy_oauth_state`) that cannot be disabled. Matched case-insensitively
+   * and stripped from the captured page URL, query string, per-parameter page
+   * properties, and referrer before any event is sent. The URL hash/fragment
+   * is intentionally left untouched.
    *
-   * Opt-in and empty by default (nothing is dropped unless listed), mirroring
-   * Mixpanel's `property_blacklist` and PostHog's `property_denylist` — scoped
-   * here to URL query parameters.
+   * Mirrors Mixpanel's `property_blacklist` and PostHog's `property_denylist`,
+   * scoped here to URL query parameters.
    *
    * @example ["token", "access_token", "email", "signature"]
    */
