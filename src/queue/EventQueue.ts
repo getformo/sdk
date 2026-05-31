@@ -427,27 +427,35 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
-   * Drop expired ids and cap the map size. forEach instead of for-of so this
-   * compiles cleanly under target es5 without downlevelIteration. Bounded by
-   * MAX_DEDUP_ENTRIES so a misbehaving caller can't blow up memory.
+   * Drop expired ids and cap the map size. Map iteration is insertion-order,
+   * so once we hit a non-expired entry every later entry is also fresher —
+   * stop scanning then. Uses Map.prototype.entries/keys directly with
+   * .next() so this compiles cleanly under target es5 without needing
+   * downlevelIteration. Bounded by MAX_DEDUP_ENTRIES as a safety net.
    */
   private pruneSeenMessageIds(): void {
     const now = Date.now();
-    const expired: string[] = [];
-    this.seenMessageIds.forEach((ts, id) => {
-      if (now - ts > DEDUP_TTL_MS) expired.push(id);
-    });
-    expired.forEach((id) => this.seenMessageIds.delete(id));
+    const iter = this.seenMessageIds.entries();
+    let next = iter.next();
+    while (!next.done) {
+      const id = next.value[0];
+      const ts = next.value[1];
+      if (now - ts > DEDUP_TTL_MS) {
+        this.seenMessageIds.delete(id);
+        next = iter.next();
+      } else {
+        break;
+      }
+    }
 
-    // Bounded safety net for a misbehaving caller — evict oldest first
-    // (insertion order). Only iterates if we're actually over the cap.
     if (this.seenMessageIds.size > MAX_DEDUP_ENTRIES) {
       const dropCount = this.seenMessageIds.size - MAX_DEDUP_ENTRIES;
-      const dropKeys: string[] = [];
-      this.seenMessageIds.forEach((_ts, id) => {
-        if (dropKeys.length < dropCount) dropKeys.push(id);
-      });
-      dropKeys.forEach((id) => this.seenMessageIds.delete(id));
+      const keyIter = this.seenMessageIds.keys();
+      for (let i = 0; i < dropCount; i++) {
+        const k = keyIter.next();
+        if (k.done) break;
+        this.seenMessageIds.delete(k.value);
+      }
     }
   }
 
