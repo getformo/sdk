@@ -11,8 +11,8 @@ import { SESSION_TRAFFIC_SOURCE_KEY } from "../../../src/constants";
  * Two layers:
  * - A built-in always-on denylist (privy_oauth_code, privy_oauth_state) that is
  *   stripped regardless of configuration and cannot be disabled.
- * - An opt-in `tracking.excludeQueryParams`, accepting either an array of key
- *   names (case-insensitive) or a predicate `(key, value) => boolean`.
+ * - An opt-in `tracking.excludeQueryParams` array of key names
+ *   (case-insensitive).
  *
  * Only the query string is redacted — the URL hash/fragment is intentionally
  * left untouched. Excluded params must not appear in `url`, `query`, or the
@@ -184,95 +184,6 @@ describe("EventFactory query parameter exclusion", () => {
 
       expect(props.url).to.not.contain("ABC");
       expect(props.keep).to.equal("1");
-    });
-  });
-
-  describe("excludeQueryParams as a predicate", () => {
-    it("drops parameters by key prefix", async () => {
-      setMockLocation(
-        "https://formo.so/page?secret_token=A&secret_id=B&page=2"
-      );
-      const props = await getProps(
-        new EventFactory({
-          tracking: {
-            excludeQueryParams: (key: string) => key.startsWith("secret_"),
-          },
-        })
-      );
-
-      expect(props.url).to.not.contain("secret_token");
-      expect(props.url).to.not.contain("secret_id");
-      expect(props.secret_token).to.be.undefined;
-      expect(props.secret_id).to.be.undefined;
-      expect(props.page).to.equal("2");
-    });
-
-    it("drops parameters by value, regardless of key name", async () => {
-      setMockLocation("https://formo.so/page?data=eyJhbGciOiJ9&q=hello");
-      const props = await getProps(
-        new EventFactory({
-          tracking: {
-            excludeQueryParams: (_key: string, value: string) =>
-              value.startsWith("eyJ"),
-          },
-        })
-      );
-
-      expect(props.url).to.not.contain("eyJhbGciOiJ9");
-      expect(props.data).to.be.undefined;
-      expect(props.q).to.equal("hello");
-    });
-
-    it("passes the key and value to the predicate", async () => {
-      setMockLocation("https://formo.so/page?foo=bar&n=1");
-      const seen: Array<[string, string]> = [];
-      await getProps(
-        new EventFactory({
-          tracking: {
-            excludeQueryParams: (key: string, value: string) => {
-              seen.push([key, value]);
-              return false;
-            },
-          },
-        })
-      );
-
-      expect(seen).to.deep.include(["foo", "bar"]);
-      expect(seen).to.deep.include(["n", "1"]);
-    });
-
-    it("cannot re-enable a built-in default even if the predicate returns false", async () => {
-      setMockLocation("https://formo.so/callback?privy_oauth_code=SECRET_CODE&keep=1");
-      const props = await getProps(
-        new EventFactory({
-          tracking: { excludeQueryParams: () => false },
-        })
-      );
-
-      expect(props.url).to.not.contain("SECRET_CODE");
-      expect(props.privy_oauth_code).to.be.undefined;
-      expect(props.keep).to.equal("1");
-    });
-
-    it("fails open and keeps tracking working when the predicate throws", async () => {
-      setMockLocation(
-        "https://formo.so/callback?privy_oauth_state=CSRF_TOKEN&user=alice"
-      );
-      const props = await getProps(
-        new EventFactory({
-          tracking: {
-            excludeQueryParams: () => {
-              throw new Error("boom");
-            },
-          },
-        })
-      );
-
-      // Built-in default is still stripped; the param the (broken) predicate
-      // would have judged is kept rather than dropping it or throwing.
-      expect(props.url).to.not.contain("CSRF_TOKEN");
-      expect(props.privy_oauth_state).to.be.undefined;
-      expect(props.user).to.equal("alice");
     });
   });
 });

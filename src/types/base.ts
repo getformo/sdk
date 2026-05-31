@@ -125,29 +125,19 @@ export interface TrackingOptions {
   excludePaths?: string[];
   excludeChains?: ChainID[];
   /**
-   * Additional query parameters to strip from forwarded and stored URLs, on top
-   * of a built-in always-on denylist (currently `privy_oauth_code`,
+   * Additional query parameter names to strip from forwarded and stored URLs,
+   * on top of a built-in always-on denylist (currently `privy_oauth_code`,
    * `privy_oauth_state`, and `privy_oauth_provider`) that cannot be disabled.
-   * Excluded params are stripped
-   * from the captured page URL, query string, per-parameter page properties,
-   * and referrer before any event is sent. The URL hash/fragment is
-   * intentionally left untouched.
-   *
-   * Accepts either:
-   * - `string[]` — exact key names, matched case-insensitively; or
-   * - a predicate `(key, value) => boolean` returning `true` to drop a
-   *   parameter, for arbitrary logic such as prefix/regex matching on the key
-   *   or matching on the value. The predicate runs in addition to (and cannot
-   *   override) the built-in denylist; if it throws, the error is logged and
-   *   the parameter is kept (the built-ins are still stripped).
+   * Matched case-insensitively. Excluded params are stripped from the captured
+   * page URL, query string, per-parameter page properties, and referrer before
+   * any event is sent. The URL hash/fragment is intentionally left untouched.
    *
    * Mirrors Mixpanel's `property_blacklist` and PostHog's `property_denylist`,
    * scoped here to URL query parameters.
    *
    * @example ["token", "access_token", "email", "signature"]
-   * @example (key, value) => key.startsWith("secret_") || value.length > 256
    */
-  excludeQueryParams?: string[] | ((key: string, value: string) => boolean);
+  excludeQueryParams?: string[];
 }
 
 /**

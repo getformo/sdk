@@ -47,25 +47,16 @@ class EventFactory implements IEventFactory {
   // with any opt-in keys from `options.tracking.excludeQueryParams`. The
   // built-ins are always present and cannot be removed by configuration.
   private excludedQueryParams: Set<string>;
-  // Optional consumer-supplied predicate for arbitrary query-param exclusion
-  // logic (e.g. prefix/regex on the key, or matching on the value). Applied in
-  // addition to — and after — the key-based denylist above, so it can only add
-  // exclusions, never re-enable a built-in default.
-  private excludeQueryParamFn?: (key: string, value: string) => boolean;
 
   constructor(options?: Options) {
     this.options = options;
     const tracking = options?.tracking;
     const configuredExcludes =
-      typeof tracking === "object" ? tracking.excludeQueryParams : undefined;
-    if (typeof configuredExcludes === "function") {
-      this.excludeQueryParamFn = configuredExcludes;
-    }
+      typeof tracking === "object" ? tracking.excludeQueryParams ?? [] : [];
     this.excludedQueryParams = new Set(
-      [
-        ...DEFAULT_EXCLUDED_QUERY_PARAMS,
-        ...(Array.isArray(configuredExcludes) ? configuredExcludes : []),
-      ].map((key) => key.toLowerCase())
+      [...DEFAULT_EXCLUDED_QUERY_PARAMS, ...configuredExcludes].map((key) =>
+        key.toLowerCase()
+      )
     );
     // Compile regex pattern once for better performance
     if (options?.referral?.pathPattern) {
@@ -134,22 +125,8 @@ class EventFactory implements IEventFactory {
     return version;
   }
 
-  private isExcludedQueryParam(key: string, value: string): boolean {
-    if (this.excludedQueryParams.has(key.toLowerCase())) {
-      return true;
-    }
-    if (this.excludeQueryParamFn) {
-      try {
-        return this.excludeQueryParamFn(key, value) === true;
-      } catch (error) {
-        // A consumer predicate must never break tracking. Log and fail open
-        // (do not exclude on error); the always-on built-in denylist above
-        // still guarantees the critical secrets are stripped.
-        logger.error("Error in tracking.excludeQueryParams predicate:", error);
-        return false;
-      }
-    }
-    return false;
+  private isExcludedQueryParam(key: string): boolean {
+    return this.excludedQueryParams.has(key.toLowerCase());
   }
 
   /**
@@ -160,8 +137,8 @@ class EventFactory implements IEventFactory {
     // Collect first, then delete: mutating searchParams while iterating is
     // unsafe, and deleting a key removes all of its values at once.
     const keysToDelete = new Set<string>();
-    url.searchParams.forEach((value, key) => {
-      if (this.isExcludedQueryParam(key, value)) {
+    url.searchParams.forEach((_value, key) => {
+      if (this.isExcludedQueryParam(key)) {
         keysToDelete.add(key);
       }
     });
