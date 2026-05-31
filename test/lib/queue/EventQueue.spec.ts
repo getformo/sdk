@@ -919,6 +919,64 @@ describe("EventQueue", () => {
       expect(unacked.size, "unacked marker cleared").to.equal(0);
     });
 
+    it("clears dedup state for batches skipped due to mid-flush consent revoke", async () => {
+      // Two large events so the flush splits into separate batches.
+      // After the first batch finishes, canSend flips false; sendBatches
+      // breaks before sending batch 2. Without cleanup, batch 2's items
+      // would stay in unackedIds forever (pruneSeenMessageIds protects
+      // them), and a re-opt-in would silently dedup-drop the same events.
+      let allowed = true;
+      let batchesSent = 0;
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.callsFake(() => {
+        batchesSent++;
+        if (batchesSent === 1) allowed = false;
+        return Promise.resolve(makeResponse(200, "OK"));
+      });
+
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+
+      await enqueueLargeEvents(eventQueue);
+      await eventQueue.flush();
+
+      // At least one batch sent, then consent revoked partway through.
+      expect(fetchStub.callCount, "consent broke the loop early").to.be.lessThan(
+        2 + 5 // arbitrary upper bound, just confirming a break occurred
+      );
+
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+      const unacked = (eventQueue as unknown as {
+        unackedIds: Set<string>;
+      }).unackedIds;
+
+      // No unacked markers should leak — every spliced item either
+      // succeeded (cleared on success) or was skipped (cleared on the
+      // consent break path).
+      expect(unacked.size, "unacked markers cleared on consent break").to.equal(
+        0
+      );
+      // Only the successfully delivered items should remain in
+      // seenMessageIds; skipped items are not "delivered duplicates."
+      // 8 events enqueued total — at least one batch was skipped, so
+      // some ids must have been cleared from seenMessageIds.
+      expect(
+        seen.size,
+        "skipped batches' ids cleared from seenMessageIds"
+      ).to.be.lessThan(8);
+      expect(seen.size, "delivered batch ids retained").to.be.greaterThan(0);
+    });
+
     it("allows the same event to be re-sent once the dedup TTL elapses", async () => {
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",

@@ -379,12 +379,25 @@ export class EventQueue implements IEventQueue {
   private async sendBatches(batches: Batch[], allData: IFormoEventFlushPayload[]): Promise<Error | undefined> {
     let firstError: Error | undefined;
 
-    for (const batch of batches) {
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
       // Consent can be withdrawn while a flush is already in flight:
       // batches were spliced before opt-out, and split batches / retry
       // backoff span seconds. Re-check before every send and abandon
-      // the remaining batches if consent was revoked mid-flush.
-      if (this.canSend && !this.canSend()) break;
+      // the remaining batches if consent was revoked mid-flush. Clear
+      // the dedup state for all skipped items — otherwise the unacked
+      // markers leak forever (pruneSeenMessageIds protects unacked
+      // entries) and a re-opt-in would silently dedup-drop the same
+      // events. Items that were never sent are not "delivered duplicates."
+      if (this.canSend && !this.canSend()) {
+        for (let j = i; j < batches.length; j++) {
+          batches[j].items.forEach((item) => {
+            this.unackedIds.delete(item.message.message_id);
+            this.seenMessageIds.delete(item.message.message_id);
+          });
+        }
+        break;
+      }
       try {
         const body = JSON.stringify(batch.data);
         const response = await fetch(`${this.apiHost}`, {
