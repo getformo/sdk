@@ -724,4 +724,121 @@ describe("EventQueue", () => {
         .true;
     });
   });
+
+  // Reproduces the "same message_id, varying sent_at" pattern. The hash is
+  // computed from event payload + UTC-minute-rounded timestamp, so two
+  // identical events within the same minute share a message_id. A re-enqueue
+  // of the same event after a successful flush used to slip through because
+  // dedup state was scoped to the in-queue window only.
+  describe("cross-flush dedup (re-send guard)", () => {
+    let fetchStub: sinon.SinonStub;
+
+    beforeEach(() => {
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.resolves(makeResponse(200, "OK"));
+    });
+
+    it("rejects a re-enqueue of the same event after a successful flush", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(fetchStub.callCount, "first flush sent once").to.equal(1);
+
+      // Same event (same payload → same message_id) emitted again well
+      // inside the dedup TTL — must NOT be queued or sent.
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(
+        fetchStub.callCount,
+        "re-enqueue after flush is dedup'd, no second send"
+      ).to.equal(1);
+    });
+
+    it("rejects a re-enqueue of the same event after a failed flush", async () => {
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(fetchStub.callCount, "first flush attempted").to.equal(1);
+
+      // The first event was dropped on attempt (current semantics); the
+      // re-enqueue is still dedup'd by message_id, so no second send.
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(fetchStub.callCount, "re-enqueue still dedup'd").to.equal(1);
+    });
+
+    it("allows the same event to be re-sent once the dedup TTL elapses", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(fetchStub.callCount, "first flush sent once").to.equal(1);
+
+      // Advance past the dedup TTL (5 min) so the id is pruned. The same
+      // event is then a legitimately new emission and goes through.
+      clock.tick(6 * 60 * 1000);
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(fetchStub.callCount, "post-TTL re-enqueue sends again").to.equal(
+        2
+      );
+    });
+
+    it("does not POST an empty array when a concurrent flush already drained the queue", async () => {
+      useUniqueCryptoHashes();
+
+      // Hold the first flush in-flight so a second concurrent flush
+      // awaits it, then resumes after the queue is empty.
+      let resolveFirst: (r: Response) => void = () => {};
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        })
+      );
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+
+      const first = eventQueue.flush();
+      const second = eventQueue.flush();
+
+      resolveFirst(makeResponse(200, "OK"));
+      await Promise.all([first, second]);
+
+      // Only one real POST — no empty `[]` body from the second flush
+      // resuming after the queue was drained.
+      expect(fetchStub.callCount).to.equal(1);
+    });
+  });
 });

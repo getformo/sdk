@@ -68,6 +68,18 @@ const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 1 MINUTE
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
+// message_id is computed from the event payload + original_timestamp rounded
+// to the minute (toDateHourMinute), so two identical events emitted within
+// the same UTC minute hash to the same id. Within this window a re-enqueue
+// of the same event must be rejected even if the previous one was already
+// flushed — otherwise the server sees the same message_id with a fresh
+// sent_at on every subsequent flush. The TTL is wider than the rounding
+// granularity plus reasonable clock slop so the rejection is reliable, and
+// the entry count is capped to keep memory bounded if a misbehaving caller
+// floods unique ids.
+const DEDUP_TTL_MS = 5 * 60 * 1_000; // 5 minutes
+const MAX_DEDUP_ENTRIES = 1_000;
+
 export class EventQueue implements IEventQueue {
   private writeKey: string;
   private apiHost: string;
@@ -81,7 +93,10 @@ export class EventQueue implements IEventQueue {
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
-  private payloadHashes: Set<string> = new Set();
+  // Insertion-ordered id → first-seen timestamp. Survives across flushes so
+  // a re-enqueue of the same event within DEDUP_TTL_MS is rejected even
+  // after the previous instance was already sent. Pruned lazily on enqueue.
+  private seenMessageIds: Map<string, number> = new Map();
   private canSend?: () => boolean;
 
   constructor(writeKey: string, options: Options) {
@@ -141,7 +156,7 @@ export class EventQueue implements IEventQueue {
     }
     this.queue = [];
     this.queueByteSize = 0;
-    this.payloadHashes.clear();
+    this.seenMessageIds.clear();
   }
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
@@ -233,11 +248,19 @@ export class EventQueue implements IEventQueue {
 
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
-    // Only remove hashes for flushed items so duplicate detection remains
-    // active for events still in the queue. Also decrement the running
-    // byte total by exactly what left the queue.
+    // A concurrent flush awaiting pendingFlush may resume here after the
+    // earlier flush already drained the queue, leaving us with nothing to
+    // send. Bail out instead of POSTing an empty array.
+    if (items.length === 0) {
+      callback();
+      return Promise.resolve();
+    }
+
+    // Decrement the running byte total by exactly what left the queue.
+    // Keep entries in seenMessageIds so a re-enqueue of the same event
+    // within the dedup TTL is still rejected after the flush — that's the
+    // re-send vector the symptom (same message_id, varying sent_at) maps to.
     for (const item of items) {
-      this.payloadHashes.delete(item.message.message_id);
       this.queueByteSize -= item.byteSize;
     }
     // Re-anchor to the exact invariant when the queue empties, so any
@@ -397,11 +420,35 @@ export class EventQueue implements IEventQueue {
   }
 
   private isDuplicate(eventId: string) {
-    // check if exists a message with identical payload within 1 minute
-    if (this.payloadHashes.has(eventId)) return true;
-
-    this.payloadHashes.add(eventId);
+    this.pruneSeenMessageIds();
+    if (this.seenMessageIds.has(eventId)) return true;
+    this.seenMessageIds.set(eventId, Date.now());
     return false;
+  }
+
+  /**
+   * Drop expired ids and cap the map size. forEach instead of for-of so this
+   * compiles cleanly under target es5 without downlevelIteration. Bounded by
+   * MAX_DEDUP_ENTRIES so a misbehaving caller can't blow up memory.
+   */
+  private pruneSeenMessageIds(): void {
+    const now = Date.now();
+    const expired: string[] = [];
+    this.seenMessageIds.forEach((ts, id) => {
+      if (now - ts > DEDUP_TTL_MS) expired.push(id);
+    });
+    expired.forEach((id) => this.seenMessageIds.delete(id));
+
+    // Bounded safety net for a misbehaving caller — evict oldest first
+    // (insertion order). Only iterates if we're actually over the cap.
+    if (this.seenMessageIds.size > MAX_DEDUP_ENTRIES) {
+      const dropCount = this.seenMessageIds.size - MAX_DEDUP_ENTRIES;
+      const dropKeys: string[] = [];
+      this.seenMessageIds.forEach((_ts, id) => {
+        if (dropKeys.length < dropCount) dropKeys.push(id);
+      });
+      dropKeys.forEach((id) => this.seenMessageIds.delete(id));
+    }
   }
 
   private onPageLeave = (callback: (isAccessible: boolean) => void) => {
