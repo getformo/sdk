@@ -97,6 +97,13 @@ export class EventQueue implements IEventQueue {
   // a re-enqueue of the same event within DEDUP_TTL_MS is rejected even
   // after the previous instance was already sent. Pruned lazily on enqueue.
   private seenMessageIds: Map<string, number> = new Map();
+  // Ids of events whose ack hasn't returned — either still buffered in
+  // this.queue or in flight via sendBatches. These must be protected from
+  // TTL/cap eviction in seenMessageIds; otherwise a duplicate enqueue that
+  // slips past dedup while the original is still in transit can cause both
+  // copies to reach the server. Removed on send success; on send failure,
+  // the seenMessageIds entry is removed too so the caller can retry.
+  private unackedIds: Set<string> = new Set();
   private canSend?: () => boolean;
 
   constructor(writeKey: string, options: Options) {
@@ -157,6 +164,7 @@ export class EventQueue implements IEventQueue {
     this.queue = [];
     this.queueByteSize = 0;
     this.seenMessageIds.clear();
+    this.unackedIds.clear();
   }
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
@@ -191,6 +199,7 @@ export class EventQueue implements IEventQueue {
     }).length;
     this.queue.push(queueItem);
     this.queueByteSize += queueItem.byteSize;
+    this.unackedIds.add(message_id);
 
     logger.log(
       `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
@@ -392,10 +401,23 @@ export class EventQueue implements IEventQueue {
           error.response = response;
           throw error;
         }
-        batch.items.forEach(({ message, callback: cb }) => safeCall(cb, undefined, message, allData));
+        // Delivered. Drop the unacked marker but keep the seenMessageIds
+        // entry so a re-enqueue within DEDUP_TTL_MS is still rejected.
+        batch.items.forEach((item) => {
+          this.unackedIds.delete(item.message.message_id);
+          safeCall(item.callback, undefined, item.message, allData);
+        });
       } catch (err: any) {
         firstError = firstError || err;
-        batch.items.forEach(({ message, callback: cb }) => safeCall(cb, err, message, allData));
+        // Delivery failed (retries exhausted). Drop both the unacked
+        // marker and the seenMessageIds entry so the per-item error
+        // callback can re-enqueue without being silently dedup'd —
+        // otherwise a transient network blip becomes guaranteed loss.
+        batch.items.forEach((item) => {
+          this.unackedIds.delete(item.message.message_id);
+          this.seenMessageIds.delete(item.message.message_id);
+          safeCall(item.callback, err, item.message, allData);
+        });
       }
     }
 
@@ -432,6 +454,11 @@ export class EventQueue implements IEventQueue {
    * stop scanning then. Uses Map.prototype.entries/keys directly with
    * .next() so this compiles cleanly under target es5 without needing
    * downlevelIteration. Bounded by MAX_DEDUP_ENTRIES as a safety net.
+   *
+   * Ids in unackedIds (still queued or in flight) are skipped by both the
+   * TTL pass and the cap pass — evicting them would re-open the dedup
+   * window against a duplicate enqueue while the original is still in
+   * transit, which is exactly the regression we're guarding against.
    */
   private pruneSeenMessageIds(): void {
     const now = Date.now();
@@ -441,7 +468,9 @@ export class EventQueue implements IEventQueue {
       const id = next.value[0];
       const ts = next.value[1];
       if (now - ts > DEDUP_TTL_MS) {
-        this.seenMessageIds.delete(id);
+        if (!this.unackedIds.has(id)) {
+          this.seenMessageIds.delete(id);
+        }
         next = iter.next();
       } else {
         break;
@@ -451,10 +480,13 @@ export class EventQueue implements IEventQueue {
     if (this.seenMessageIds.size > MAX_DEDUP_ENTRIES) {
       const dropCount = this.seenMessageIds.size - MAX_DEDUP_ENTRIES;
       const keyIter = this.seenMessageIds.keys();
-      for (let i = 0; i < dropCount; i++) {
+      let dropped = 0;
+      while (dropped < dropCount) {
         const k = keyIter.next();
         if (k.done) break;
+        if (this.unackedIds.has(k.value)) continue;
         this.seenMessageIds.delete(k.value);
+        dropped++;
       }
     }
   }

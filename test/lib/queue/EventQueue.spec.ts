@@ -760,7 +760,7 @@ describe("EventQueue", () => {
       ).to.equal(1);
     });
 
-    it("rejects a re-enqueue of the same event after a failed flush", async () => {
+    it("allows a re-enqueue of the same event after a failed flush", async () => {
       fetchStub.restore();
       fetchStub = sinon.stub(fetchModule, "default");
       fetchStub.rejects(new TypeError("Failed to fetch"));
@@ -776,11 +776,147 @@ describe("EventQueue", () => {
       await eventQueue.flush();
       expect(fetchStub.callCount, "first flush attempted").to.equal(1);
 
-      // The first event was dropped on attempt (current semantics); the
-      // re-enqueue is still dedup'd by message_id, so no second send.
+      // On failure the dedup entry is dropped so the caller can re-enqueue
+      // from the per-item error callback. Otherwise a transient network
+      // error would silently swallow the retry for the full dedup TTL.
       await eventQueue.enqueue(createMockEvent());
       await eventQueue.flush();
-      expect(fetchStub.callCount, "re-enqueue still dedup'd").to.equal(1);
+      expect(
+        fetchStub.callCount,
+        "re-enqueue after failure is allowed"
+      ).to.equal(2);
+    });
+
+    it("dedup still applies to an in-flight duplicate even if the eventual send fails", async () => {
+      let resolveFirst: (r: Response) => void = () => {};
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((_resolve, reject) => {
+          resolveFirst = (() => reject(new TypeError("Failed to fetch"))) as never;
+        })
+      );
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      const first = eventQueue.flush();
+
+      // While the first send is in flight, a duplicate enqueue must still
+      // be rejected — otherwise the same event could appear twice in a
+      // later flush even when the first one ultimately fails.
+      await eventQueue.enqueue(createMockEvent());
+
+      resolveFirst(makeResponse(200, "OK"));
+      await first;
+
+      // The in-flight duplicate was dedup'd, so only the original was sent.
+      expect(fetchStub.callCount).to.equal(1);
+    });
+
+    it("protects in-queue / in-flight ids from cap eviction in seenMessageIds", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      // Enqueue one event; its id is now in both seenMessageIds and unackedIds.
+      await eventQueue.enqueue(createMockEvent());
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+      const unacked = (eventQueue as unknown as {
+        unackedIds: Set<string>;
+      }).unackedIds;
+      expect(unacked.size, "queued id marked unacked").to.equal(1);
+      const queuedId = Array.from(unacked)[0];
+
+      // Flood seenMessageIds past MAX_DEDUP_ENTRIES (1000) with synthetic
+      // ids inserted BEFORE the queued id's insertion position is touched
+      // by eviction — they're inserted after, so the queued id is the
+      // oldest entry and would be the first evicted without protection.
+      // To make the queued id appear first in insertion order, re-set it.
+      const queuedTs = seen.get(queuedId)!;
+      seen.delete(queuedId);
+      seen.set(queuedId, queuedTs);
+      for (let i = 0; i < 1100; i++) {
+        seen.set(`synth-${i}`, Date.now());
+      }
+      expect(seen.size).to.be.greaterThan(1000);
+      expect(seen.has(queuedId), "queued id is the oldest entry").to.be.true;
+
+      // Trigger pruneSeenMessageIds via a fresh enqueue.
+      useUniqueCryptoHashes();
+      await eventQueue.enqueue(
+        createMockEvent({ properties: { unique: "trigger-prune" } })
+      );
+
+      // Cap eviction ran (size dropped close to the cap) and the queued
+      // id survives because it's protected by unackedIds. Size is `cap +
+      // 1` because the triggering enqueue adds its own id after the prune.
+      expect(seen.size, "size capped (≈ MAX_DEDUP_ENTRIES)").to.be.at.most(
+        1001
+      );
+      expect(seen.size, "actually pruned").to.be.lessThan(1101);
+      expect(
+        seen.has(queuedId),
+        "queued id NOT evicted (protected by unackedIds)"
+      ).to.be.true;
+    });
+
+    it("removes the unacked marker on send success but keeps it in seenMessageIds", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+      const unacked = (eventQueue as unknown as {
+        unackedIds: Set<string>;
+      }).unackedIds;
+      expect(seen.size, "id retained for cross-flush dedup").to.equal(1);
+      expect(unacked.size, "unacked marker cleared after success").to.equal(0);
+    });
+
+    it("removes both unacked and seenMessageIds entries on send failure", async () => {
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.rejects(new TypeError("Failed to fetch"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+      const unacked = (eventQueue as unknown as {
+        unackedIds: Set<string>;
+      }).unackedIds;
+      expect(seen.size, "id cleared on failure so caller can retry").to.equal(
+        0
+      );
+      expect(unacked.size, "unacked marker cleared").to.equal(0);
     });
 
     it("allows the same event to be re-sent once the dedup TTL elapses", async () => {
