@@ -98,11 +98,11 @@ describe("EventFactory query parameter exclusion", () => {
     if (jsdom) jsdom.window.close();
   });
 
-  function setMockLocation(url: string) {
+  function setMockLocation(url: string, referrer?: string) {
     if (jsdom) jsdom.window.close();
     jsdom = new JSDOM(
       "<!DOCTYPE html><html><head><title>Test Page</title></head><body></body></html>",
-      { url }
+      referrer ? { url, referrer } : { url }
     );
     (global as any).window = jsdom.window;
     (global as any).document = jsdom.window.document;
@@ -110,15 +110,22 @@ describe("EventFactory query parameter exclusion", () => {
     (global as any).globalThis = jsdom.window;
   }
 
+  async function getEvent(
+    factory: EventFactory,
+    properties: Record<string, any> = {}
+  ): Promise<Record<string, any>> {
+    return (await factory.generatePageEvent(
+      properties.category,
+      properties.name,
+      properties
+    )) as unknown as Record<string, any>;
+  }
+
   async function getProps(
     factory: EventFactory,
     properties: Record<string, any> = {}
   ): Promise<Record<string, any>> {
-    const event = await factory.generatePageEvent(
-      properties.category,
-      properties.name,
-      properties
-    );
+    const event = await getEvent(factory, properties);
     return (event.properties as Record<string, any>) || {};
   }
 
@@ -184,6 +191,82 @@ describe("EventFactory query parameter exclusion", () => {
 
       expect(props.url).to.not.contain("ABC");
       expect(props.keep).to.equal("1");
+    });
+  });
+
+  // Excluded params must not leak through the event *context* either — not via
+  // page_url, not via the referrer, and not via the traffic-source extraction
+  // (utm_*, click ids, ref), which parses the URL separately from page props.
+  describe("event context redaction", () => {
+    it("strips excluded params from context.page_url", async () => {
+      setMockLocation(
+        "https://formo.so/page?token=ABC&privy_oauth_code=SECRET&keep=1"
+      );
+      const event = await getEvent(
+        new EventFactory({ tracking: { excludeQueryParams: ["token"] } })
+      );
+
+      expect(event.context.page_url).to.not.contain("ABC");
+      expect(event.context.page_url).to.not.contain("SECRET");
+      expect(event.context.page_url).to.contain("keep=1");
+    });
+
+    it("does not leak an excluded param that is also a traffic-source key", async () => {
+      setMockLocation(
+        "https://formo.so/page?utm_source=secretcampaign&gclid=SECRETCLICK&ref=SECRETREF&utm_medium=email"
+      );
+      const event = await getEvent(
+        new EventFactory({
+          tracking: { excludeQueryParams: ["utm_source", "gclid", "ref"] },
+        })
+      );
+
+      // Excluded traffic-source keys are emptied in context...
+      expect(event.context.utm_source).to.equal("");
+      expect(event.context.gclid).to.equal("");
+      expect(event.context.ref).to.equal("");
+      // ...while non-excluded traffic-source keys still capture normally.
+      expect(event.context.utm_medium).to.equal("email");
+    });
+
+    it("strips excluded params from the external referrer", async () => {
+      setMockLocation(
+        "https://formo.so/page?keep=1",
+        "https://referrer.example/landing?token=SECRETTOKEN&campaign=spring"
+      );
+      const event = await getEvent(
+        new EventFactory({ tracking: { excludeQueryParams: ["token"] } })
+      );
+
+      expect(event.context.referrer).to.not.contain("SECRETTOKEN");
+      expect(event.context.referrer).to.contain("campaign=spring");
+    });
+
+    it("strips the always-on privy defaults from the external referrer", async () => {
+      setMockLocation(
+        "https://formo.so/page?keep=1",
+        "https://referrer.example/oauth?privy_oauth_code=SECRETCODE&ok=1"
+      );
+      const event = await getEvent(new EventFactory());
+
+      expect(event.context.referrer).to.not.contain("SECRETCODE");
+      expect(event.context.referrer).to.contain("ok=1");
+    });
+
+    it("drops a sticky traffic-source value stored under an earlier, looser config", async () => {
+      // First pageview: no exclusion, so gclid is captured and persisted to the
+      // sticky SESSION_TRAFFIC_SOURCE_KEY store.
+      setMockLocation("https://formo.so/page?gclid=OLDCLICK");
+      const first = await getEvent(new EventFactory());
+      expect(first.context.gclid).to.equal("OLDCLICK");
+
+      // Later pageview on a clean URL, now excluding gclid. The stored value
+      // must not resurface in context from session storage.
+      setMockLocation("https://formo.so/page?keep=1");
+      const second = await getEvent(
+        new EventFactory({ tracking: { excludeQueryParams: ["gclid"] } })
+      );
+      expect(second.context.gclid).to.equal("");
     });
   });
 });

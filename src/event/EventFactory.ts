@@ -237,6 +237,28 @@ class EventFactory implements IEventFactory {
     return this.redactUrl(ref);
   };
 
+  /**
+   * Apply the current query-param denylist to a previously-persisted traffic
+   * source object. Traffic-source keys (utm_*, click ids, ref) are themselves
+   * query-parameter names, so an excluded key's stored value is dropped; the
+   * referrer is a URL and is re-redacted. Guards against a stored value
+   * outliving the config (or SDK version) under which it was first captured.
+   */
+  private redactStoredTrafficSources(stored: ITrafficSource): ITrafficSource {
+    const result = {} as ITrafficSource;
+    for (const key of Object.keys(stored) as (keyof ITrafficSource)[]) {
+      const value = stored[key];
+      if (key === "referrer") {
+        result[key] = this.redactUrl((value as string) || "");
+      } else if (this.isExcludedQueryParam(key)) {
+        result[key] = "";
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
   private getTrafficSources = (url: string): ITrafficSource => {
     const urlObj = new URL(url);
     const contextTrafficSources: ITrafficSource = {
@@ -245,8 +267,13 @@ class EventFactory implements IEventFactory {
       ref: this.extractReferralParameter(urlObj),
       referrer: this.getExternalReferrer(),
     };
-    const storedTrafficSources =
-      (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {};
+    // Sticky traffic sources may have been persisted by an older SDK version or
+    // a looser config, before the current excludeQueryParams was in effect.
+    // Honor the current denylist on the way out so excluded values can never
+    // resurface from session storage (or get re-persisted below).
+    const storedTrafficSources = this.redactStoredTrafficSources(
+      (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {}
+    );
 
     const mergedClickIds = {} as ClickIdParameters;
     for (const p of CLICK_ID_PARAMS) {
@@ -342,15 +369,20 @@ class EventFactory implements IEventFactory {
     const location = this.getLocation();
     const library_version = this.getLibraryVersion();
 
+    // Redact once and reuse: traffic-source extraction (utm_*, click ids, ref)
+    // must operate on the already-stripped URL too, otherwise an excluded param
+    // that happens to be a traffic-source key would still leak via context.
+    const redactedHref = this.redactUrl(globalThis.location.href);
+
     // contextual properties
     const defaultContext = {
       user_agent: globalThis.navigator.userAgent,
       locale: language,
       timezone,
       location,
-      ...this.getTrafficSources(globalThis.location.href),
+      ...this.getTrafficSources(redactedHref),
       page_title: document.title,
-      page_url: this.redactUrl(globalThis.location.href),
+      page_url: redactedHref,
       library_name: "Formo Web SDK",
       library_version,
       browser: browserName,
