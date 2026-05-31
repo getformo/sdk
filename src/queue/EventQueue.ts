@@ -414,10 +414,23 @@ export class EventQueue implements IEventQueue {
           error.response = response;
           throw error;
         }
-        // Delivered. Drop the unacked marker but keep the seenMessageIds
-        // entry so a re-enqueue within DEDUP_TTL_MS is still rejected.
+        // Delivered. Drop the unacked marker and refresh the dedup entry's
+        // timestamp to ack time. While queued/in-flight the entry is kept
+        // alive by unackedIds, but it still carries the original enqueue
+        // time; if delivery was delayed past DEDUP_TTL_MS (long
+        // flushInterval, throttled background-tab timers, slow flush), the
+        // next enqueue of the same id would prune it as expired and re-send
+        // a duplicate. Anchoring the TTL to delivery time preserves the
+        // cross-flush dedup guarantee. delete+set re-inserts at the tail so
+        // seenMessageIds stays ordered by timestamp for the early-break
+        // prune; the delete() return guards against a concurrent clear().
+        const ackTime = Date.now();
         batch.items.forEach((item) => {
-          this.unackedIds.delete(item.message.message_id);
+          const id = item.message.message_id;
+          this.unackedIds.delete(id);
+          if (this.seenMessageIds.delete(id)) {
+            this.seenMessageIds.set(id, ackTime);
+          }
           safeCall(item.callback, undefined, item.message, allData);
         });
       } catch (err: any) {

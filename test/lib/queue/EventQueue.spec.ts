@@ -1000,6 +1000,55 @@ describe("EventQueue", () => {
       );
     });
 
+    it("refreshes the dedup TTL on delivery so a delayed flush doesn't re-open duplicates", async () => {
+      // message_id is a real sha256 of the payload + minute-rounded
+      // original_timestamp, so to recur the same id across a >TTL real-time
+      // gap both events must carry an identical original_timestamp (e.g. a
+      // caller that supplies/replays a fixed timestamp). Pin it here.
+      const fixedTs = "2020-06-15T12:00:00.000Z";
+
+      // Hold the send in flight, advance the clock past the dedup TTL while
+      // the batch is still unacked (protected by unackedIds), then deliver.
+      // On delivery the timestamp must be refreshed to ack time — otherwise
+      // it stays at the original enqueue time and the next enqueue of the
+      // same id would prune it as expired and re-send a duplicate.
+      let resolveFetch: (r: Response) => void = () => {};
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+      );
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent({ original_timestamp: fixedTs }));
+      const flushP = eventQueue.flush(); // batch now in flight, still unacked
+
+      // Delivery is delayed past the dedup TTL.
+      clock.tick(6 * 60 * 1000);
+      resolveFetch(makeResponse(200, "OK")); // ack happens at T = 6 min
+      await flushP;
+
+      // Same event (same message_id via the pinned timestamp) re-enqueued
+      // right after the late delivery. Because the TTL was refreshed to ack
+      // time, this is still inside the window and must be dedup'd.
+      await eventQueue.enqueue(createMockEvent({ original_timestamp: fixedTs }));
+      await eventQueue.flush();
+
+      expect(
+        fetchStub.callCount,
+        "delayed delivery refreshed TTL; duplicate suppressed"
+      ).to.equal(1);
+    });
+
     it("does not POST an empty array when a concurrent flush already drained the queue", async () => {
       useUniqueCryptoHashes();
 
