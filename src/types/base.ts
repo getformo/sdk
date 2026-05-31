@@ -124,6 +124,20 @@ export interface TrackingOptions {
   excludeHosts?: string[];
   excludePaths?: string[];
   excludeChains?: ChainID[];
+  /**
+   * Additional query parameter names to strip from forwarded and stored URLs,
+   * on top of a built-in always-on denylist (currently `privy_oauth_code`,
+   * `privy_oauth_state`, and `privy_oauth_provider`) that cannot be disabled.
+   * Matched case-insensitively. Excluded params are stripped from the captured
+   * page URL, query string, per-parameter page properties, and referrer before
+   * any event is sent. The URL hash/fragment is intentionally left untouched.
+   *
+   * Mirrors Mixpanel's `property_blacklist` and PostHog's `property_denylist`,
+   * scoped here to URL query parameters.
+   *
+   * @example ["token", "access_token", "email", "signature"]
+   */
+  excludeQueryParams?: string[];
 }
 
 /**
