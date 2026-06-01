@@ -155,16 +155,36 @@ export class EventQueue implements IEventQueue {
   /**
    * Drop all queued data and cancel the flush timer. Called on consent
    * withdrawal / SDK teardown so nothing buffered can be sent later.
+   *
+   * Dedup state is NOT wiped wholesale. Events that are still in flight
+   * (spliced into a request that may yet succeed) keep their seenMessageIds
+   * entry: if such a request lands, a re-enqueue of the same event within
+   * the TTL must still be rejected, otherwise we re-send the same message_id
+   * with a fresh sent_at — the exact regression this map guards against. The
+   * in-flight sendBatches loop still resolves those entries normally (keep
+   * seen on success; delete seen on failure so the caller can retry).
+   *
+   * We forget ids that never left the queue entirely, so genuinely un-sent
+   * events can be re-emitted after a re-opt-in. And we drop ALL unackedIds:
+   * the in-flight entries are deliberately demoted to plain seen entries so
+   * they age out under the normal TTL/cap. Keeping them unacked would pin
+   * them forever if the request never settles (pruneSeenMessageIds refuses
+   * to evict unacked ids), leaking memory and indefinitely suppressing a
+   * legitimately-new re-emission.
    */
   clear(): void {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    for (const item of this.queue) {
+      this.seenMessageIds.delete(item.message.message_id);
+    }
+    // In-flight ids stay in seenMessageIds (deduped until the TTL prunes
+    // them); only the unacked protection is released so they cannot leak.
+    this.unackedIds.clear();
     this.queue = [];
     this.queueByteSize = 0;
-    this.seenMessageIds.clear();
-    this.unackedIds.clear();
   }
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
@@ -252,6 +272,16 @@ export class EventQueue implements IEventQueue {
       // before the keepalive fetch for the remaining items is dispatched.
       if (!drainAll) {
         await this.pendingFlush;
+        // Consent can be withdrawn while we were awaiting the in-flight
+        // flush (split batches / retry backoff span seconds). Re-gate
+        // before draining: sendBatches would drop these as skipped anyway,
+        // but re-checking here avoids the wasted splice and keeps the
+        // post-withdrawal "send nothing" semantics explicit.
+        if (this.canSend && !this.canSend()) {
+          this.clear();
+          callback();
+          return Promise.resolve();
+        }
       }
     }
 

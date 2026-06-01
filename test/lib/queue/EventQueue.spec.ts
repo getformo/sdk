@@ -72,6 +72,39 @@ describe("EventQueue", () => {
     });
   }
 
+  /**
+   * Override crypto.subtle.digest with a deterministic, content-sensitive
+   * hash so generateMessageId actually reflects the event payload + rounded
+   * timestamp (the default mock returns a fixed buffer for every input).
+   */
+  function useContentHashes() {
+    Object.defineProperty(global, "crypto", {
+      value: {
+        subtle: {
+          digest: async (_algorithm: string, data: ArrayBuffer) => {
+            const bytes = new Uint8Array(data);
+            // FNV-1a over the bytes, then expand the 32-bit hash into 32
+            // bytes via an LCG so distinct inputs map to distinct buffers.
+            let h = 0x811c9dc5 >>> 0;
+            for (let i = 0; i < bytes.length; i++) {
+              h = Math.imul(h ^ bytes[i], 0x01000193) >>> 0;
+            }
+            const out = new Uint8Array(32);
+            let s = h >>> 0;
+            for (let i = 0; i < 32; i++) {
+              s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+              out[i] = s & 0xff;
+            }
+            return out.buffer;
+          },
+        },
+        randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+
   /** Enqueue multiple large (~10KB each) events to exceed the 64KB keepalive limit. */
   async function enqueueLargeEvents(queue: EventQueue, count = 8, cb?: sinon.SinonSpy) {
     const largeProps: Record<string, string> = {};
@@ -1082,6 +1115,282 @@ describe("EventQueue", () => {
       // Only one real POST — no empty `[]` body from the second flush
       // resuming after the queue was drained.
       expect(fetchStub.callCount).to.equal(1);
+    });
+
+    it("clear() keeps dedup state for in-flight events so a delivered event is not re-sent", async () => {
+      // Regression: clear() used to wipe seenMessageIds/unackedIds wholesale,
+      // including ids already spliced into an in-flight request. If that
+      // request then succeeds, the event reached the server — but the wiped
+      // dedup entry let a same-minute re-enqueue through, re-sending the same
+      // message_id with a fresh sent_at (the exact symptom this guards).
+      let resolveFirst: (r: Response) => void = () => {};
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        })
+      );
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      const first = eventQueue.flush(); // event spliced, fetch in flight
+
+      // Consent withdrawal / teardown clears the queue while the request is
+      // still in flight.
+      eventQueue.clear();
+
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+      const unacked = (eventQueue as unknown as {
+        unackedIds: Set<string>;
+      }).unackedIds;
+      // In-flight id is kept in seenMessageIds (so it stays deduped) but the
+      // unacked marker is released so it can't be pinned forever if the
+      // request never settles.
+      expect(seen.size, "in-flight id retained for dedup").to.equal(1);
+      expect(
+        unacked.size,
+        "unacked released on clear() so prune can reclaim it"
+      ).to.equal(0);
+
+      // The in-flight request lands successfully — the event is on the server.
+      resolveFirst(makeResponse(200, "OK"));
+      await first;
+
+      // Re-enqueue the same event within the dedup TTL: it must be rejected,
+      // because the delivered event's id is still tracked.
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+
+      expect(
+        fetchStub.callCount,
+        "delivered in-flight event not re-sent after clear()"
+      ).to.equal(1);
+
+      // After the TTL elapses the preserved id is prunable (not pinned by
+      // unacked), so the same event becomes a legitimately-new emission.
+      clock.tick(6 * 60 * 1000);
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      expect(
+        fetchStub.callCount,
+        "post-TTL re-emission allowed (no permanent suppression)"
+      ).to.equal(2);
+    });
+
+    it("clear() still forgets purely-queued (never-sent) events so they can be re-emitted", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      // Buffer an event but never flush it, then clear before anything sends.
+      await eventQueue.enqueue(createMockEvent());
+      eventQueue.clear();
+
+      // The same event is now a legitimately new emission (it never reached
+      // the server) and must go through on the next flush.
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+
+      expect(
+        fetchStub.callCount,
+        "queued-then-cleared event is re-emittable"
+      ).to.equal(1);
+    });
+
+    it("re-checks consent after awaiting an in-flight flush and sends nothing if revoked", async () => {
+      // A second flush passes the initial consent gate, then awaits the
+      // in-flight flush. If consent is withdrawn during that await, the
+      // resumed flush must not splice-and-send the buffered items.
+      useUniqueCryptoHashes();
+      let allowed = true;
+      let resolveFirst: (r: Response) => void = () => {};
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        })
+      );
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      const first = eventQueue.flush(); // first batch in flight
+
+      // Buffer another event, then start a second flush that awaits the
+      // in-flight one.
+      await eventQueue.enqueue(createMockEvent());
+      const second = eventQueue.flush();
+
+      // Consent revoked while the second flush is parked on `await
+      // pendingFlush`.
+      allowed = false;
+      resolveFirst(makeResponse(200, "OK"));
+      await Promise.all([first, second]);
+
+      // Only the first (pre-revoke) batch was sent; the second flush re-gated
+      // after the await and sent nothing.
+      expect(
+        fetchStub.callCount,
+        "post-revoke flush sends nothing"
+      ).to.equal(1);
+    });
+
+    it("TTL prune does not evict an expired id that is still in flight", async () => {
+      // An id stays unacked while its request is in flight. Even once it is
+      // older than the TTL, pruneSeenMessageIds must skip it — evicting it
+      // would re-open the dedup window against a duplicate enqueue while the
+      // original may still land. (Covers the TTL pass's unacked-skip branch;
+      // the cap pass's skip is covered separately.)
+      let resolveFirst: (r: Response) => void = () => {};
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        })
+      );
+      fetchStub.resolves(makeResponse(200, "OK"));
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      const first = eventQueue.flush(); // spliced, request in flight => unacked
+
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+      const unacked = (eventQueue as unknown as {
+        unackedIds: Set<string>;
+      }).unackedIds;
+      const inflightId = Array.from(unacked)[0];
+      expect(seen.has(inflightId), "in-flight id tracked").to.be.true;
+
+      // Age the in-flight id well past the TTL, then trigger a prune via a
+      // fresh (unique) enqueue.
+      clock.tick(6 * 60 * 1000);
+      await eventQueue.enqueue(
+        createMockEvent({ properties: { trigger: "prune" } })
+      );
+
+      expect(
+        seen.has(inflightId),
+        "expired in-flight id NOT evicted (protected by unacked)"
+      ).to.be.true;
+      expect(unacked.has(inflightId), "still unacked").to.be.true;
+
+      resolveFirst(makeResponse(200, "OK"));
+      await first;
+    });
+
+    it("TTL prune drops leading expired ids but stops at the first still-fresh id", async () => {
+      useUniqueCryptoHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+
+      // Event A at T0 (flushed -> acked, lives only in seenMessageIds).
+      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.flush();
+      const idA = Array.from(seen.keys())[0];
+
+      // Event B three minutes later (inserted after A => later in iteration).
+      clock.tick(3 * 60 * 1000);
+      await eventQueue.enqueue(createMockEvent({ properties: { b: 1 } }));
+      await eventQueue.flush();
+      const idB = Array.from(seen.keys()).find((k) => k !== idA)!;
+
+      // Three more minutes: A is 6 min old (expired), B is 3 min old (fresh).
+      // A fresh enqueue triggers the prune.
+      clock.tick(3 * 60 * 1000);
+      await eventQueue.enqueue(createMockEvent({ properties: { c: 1 } }));
+
+      expect(seen.has(idA), "leading expired id pruned").to.be.false;
+      expect(
+        seen.has(idB),
+        "fresh id retained (insertion-order scan stops here)"
+      ).to.be.true;
+    });
+
+    it("generateMessageId is stable within a UTC minute and varies across minute or payload", async () => {
+      useContentHashes();
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+      const gen = (e: IFormoEvent) =>
+        (eventQueue as unknown as {
+          generateMessageId: (e: IFormoEvent) => Promise<string>;
+        }).generateMessageId(e);
+
+      const base = createMockEvent({
+        original_timestamp: "2026-01-01T00:00:30.000Z",
+        properties: { a: 1 },
+      });
+      const sameMinute = createMockEvent({
+        original_timestamp: "2026-01-01T00:00:59.999Z",
+        properties: { a: 1 },
+      });
+      const nextMinute = createMockEvent({
+        original_timestamp: "2026-01-01T00:01:00.000Z",
+        properties: { a: 1 },
+      });
+      const diffPayload = createMockEvent({
+        original_timestamp: "2026-01-01T00:00:30.000Z",
+        properties: { a: 2 },
+      });
+
+      const [id1, id2, id3, id4] = await Promise.all([
+        gen(base),
+        gen(sameMinute),
+        gen(nextMinute),
+        gen(diffPayload),
+      ]);
+
+      expect(id1, "same payload + same UTC minute => identical id").to.equal(
+        id2
+      );
+      expect(id1, "crossing the minute boundary => different id").to.not.equal(
+        id3
+      );
+      expect(id1, "different payload => different id").to.not.equal(id4);
     });
   });
 });
