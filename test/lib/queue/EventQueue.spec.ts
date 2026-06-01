@@ -1153,18 +1153,26 @@ describe("EventQueue", () => {
       const unacked = (eventQueue as unknown as {
         unackedIds: Set<string>;
       }).unackedIds;
-      // In-flight id is kept in seenMessageIds (so it stays deduped) but the
-      // unacked marker is released so it can't be pinned forever if the
-      // request never settles.
+      // In-flight ids are left FULLY intact by clear(): kept in seenMessageIds
+      // (so a re-send/re-enqueue is rejected) AND still in unackedIds (so the
+      // entry survives TTL/cap eviction until the request settles, and no
+      // competing re-enqueue can form a second generation of the id). The
+      // outstanding handler is the sole owner and releases it on settle.
       expect(seen.size, "in-flight id retained for dedup").to.equal(1);
       expect(
         unacked.size,
-        "unacked released on clear() so prune can reclaim it"
-      ).to.equal(0);
+        "in-flight id still protected until its request settles"
+      ).to.equal(1);
 
       // The in-flight request lands successfully — the event is on the server.
+      // The success path drops the unacked marker and re-anchors the dedup
+      // entry's timestamp to ack time.
       resolveFirst(makeResponse(200, "OK"));
       await first;
+      expect(
+        unacked.size,
+        "unacked released once the request settles"
+      ).to.equal(0);
 
       // Re-enqueue the same event within the dedup TTL: it must be rejected,
       // because the delivered event's id is still tracked.
@@ -1176,8 +1184,8 @@ describe("EventQueue", () => {
         "delivered in-flight event not re-sent after clear()"
       ).to.equal(1);
 
-      // After the TTL elapses the preserved id is prunable (not pinned by
-      // unacked), so the same event becomes a legitimately-new emission.
+      // After the TTL elapses (measured from ack time) the entry is prunable,
+      // so the same event becomes a legitimately-new emission.
       clock.tick(6 * 60 * 1000);
       await eventQueue.enqueue(createMockEvent());
       await eventQueue.flush();
@@ -1185,6 +1193,55 @@ describe("EventQueue", () => {
         fetchStub.callCount,
         "post-TTL re-emission allowed (no permanent suppression)"
       ).to.equal(2);
+    });
+
+    it("clear() leaves an in-flight id protected so a later re-enqueue cannot form a second generation", async () => {
+      // Regression guard for the generational race: after clear(), an in-flight
+      // id must stay in BOTH seenMessageIds and unackedIds. If it were demoted
+      // (kept in seen, dropped from unacked) it could be evicted, letting a
+      // re-enqueue of the same message_id create a second generation that the
+      // ORIGINAL request's success/failure handler would later clobber.
+      let resolveFirst: (r: Response) => void = () => {};
+      fetchStub.restore();
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        })
+      );
+      fetchStub.resolves(makeResponse(200, "OK"));
+
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      const first = eventQueue.flush(); // in flight
+      eventQueue.clear();
+
+      // A re-enqueue of the SAME event while the original is still in flight is
+      // rejected — no second generation forms.
+      await eventQueue.enqueue(createMockEvent());
+      const seen = (eventQueue as unknown as {
+        seenMessageIds: Map<string, number>;
+      }).seenMessageIds;
+      expect(
+        (eventQueue as unknown as { queue: unknown[] }).queue.length,
+        "re-enqueue of in-flight id rejected (no second generation)"
+      ).to.equal(0);
+      expect(seen.size, "still a single tracked id").to.equal(1);
+
+      // Now let the ORIGINAL request finish. Its handler operates on the only
+      // generation; no later enqueue was clobbered.
+      resolveFirst(makeResponse(200, "OK"));
+      await first;
+      expect(
+        fetchStub.callCount,
+        "exactly one delivery; no duplicate from a clobbered generation"
+      ).to.equal(1);
     });
 
     it("clear() still forgets purely-queued (never-sent) events so they can be re-emitted", async () => {

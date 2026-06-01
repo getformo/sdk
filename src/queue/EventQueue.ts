@@ -156,33 +156,40 @@ export class EventQueue implements IEventQueue {
    * Drop all queued data and cancel the flush timer. Called on consent
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    *
-   * Dedup state is NOT wiped wholesale. Events that are still in flight
-   * (spliced into a request that may yet succeed) keep their seenMessageIds
-   * entry: if such a request lands, a re-enqueue of the same event within
-   * the TTL must still be rejected, otherwise we re-send the same message_id
-   * with a fresh sent_at — the exact regression this map guards against. The
-   * in-flight sendBatches loop still resolves those entries normally (keep
-   * seen on success; delete seen on failure so the caller can retry).
+   * Dedup state is NOT wiped wholesale. We forget only ids that never left
+   * the queue (still buffered, never sent) so genuinely un-sent events can be
+   * re-emitted after a re-opt-in. Ids that are already in flight — spliced
+   * into a request that may yet succeed — are left FULLY intact: both their
+   * seenMessageIds entry and their unackedIds protection.
    *
-   * We forget ids that never left the queue entirely, so genuinely un-sent
-   * events can be re-emitted after a re-opt-in. And we drop ALL unackedIds:
-   * the in-flight entries are deliberately demoted to plain seen entries so
-   * they age out under the normal TTL/cap. Keeping them unacked would pin
-   * them forever if the request never settles (pruneSeenMessageIds refuses
-   * to evict unacked ids), leaking memory and indefinitely suppressing a
-   * legitimately-new re-emission.
+   * Leaving the in-flight ids untouched makes the outstanding sendBatches
+   * handlers the sole owner of that state, which is what keeps clear() race-
+   * free:
+   *   - The seenMessageIds entry preserves cross-flush dedup if the request
+   *     lands (re-send of the same message_id with a fresh sent_at is the
+   *     regression this map guards against).
+   *   - Because the id stays in seenMessageIds, a competing re-enqueue of the
+   *     same message_id is still rejected, so no second "generation" of the
+   *     id can form for a stale success/failure handler to later clobber.
+   *   - Because unackedIds still shields it from TTL/cap eviction, the entry
+   *     survives until the request settles, so a slow delivery can still be
+   *     anchored to ack time on success.
+   * The handlers drop unackedIds on settle (success and failure both), so the
+   * protection is released as soon as the request resolves — an id is only
+   * "pinned" for as long as its request is genuinely outstanding.
    */
   clear(): void {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    // Queued ids are never simultaneously in flight (dedup rejects a
+    // re-enqueue while the original id is still tracked), so this forgets
+    // exactly the never-sent set and leaves in-flight ids alone.
     for (const item of this.queue) {
       this.seenMessageIds.delete(item.message.message_id);
+      this.unackedIds.delete(item.message.message_id);
     }
-    // In-flight ids stay in seenMessageIds (deduped until the TTL prunes
-    // them); only the unacked protection is released so they cannot leak.
-    this.unackedIds.clear();
     this.queue = [];
     this.queueByteSize = 0;
   }
