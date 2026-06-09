@@ -2632,9 +2632,14 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private persistActiveWallet(): void {
     try {
-      // Never write an identity cookie for an opted-out user; ensure any
-      // prior snapshot is removed instead.
-      if (this.hasOptedOutTracking()) {
+      // Never write an identity cookie for a suppressed visitor (opt-out or
+      // excluded timezone); ensure any prior snapshot is removed instead.
+      // Guards the autocapture / syncWalletState paths, which update
+      // in-memory chain state directly without going through the gated public
+      // connect()/identify()/detect() entry points. In-memory
+      // currentAddress/currentChainId are intentionally left intact for
+      // disconnect correctness; only the persisted cookie is suppressed.
+      if (this.isTrackingSuppressed()) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
@@ -2664,9 +2669,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private loadActiveWallet(): void {
     try {
-      // Never restore wallet identity into memory for an opted-out user
-      // (mirrors persistActiveWallet's guard); drop any stale snapshot.
-      if (this.hasOptedOutTracking()) {
+      // Never restore wallet identity into memory for a suppressed visitor
+      // (opt-out or excluded timezone); mirrors persistActiveWallet's guard.
+      // Drop any stale snapshot.
+      if (this.isTrackingSuppressed()) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }

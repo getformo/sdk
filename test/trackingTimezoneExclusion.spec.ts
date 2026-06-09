@@ -3,7 +3,8 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
-import { initStorageManager } from "../src/storage";
+import { initStorageManager, cookie } from "../src/storage";
+import { ACTIVE_WALLET_KEY } from "../src/constants";
 import type { TrackingOptions } from "../src/types";
 
 /**
@@ -164,5 +165,29 @@ describe("Tracking timezone exclusion", () => {
     const session = (formo as any).session;
     expect(session.isWalletIdentified(ADDRESS, "io.metamask")).to.equal(false);
     expect(session.isWalletDetected("io.metamask")).to.equal(false);
+  });
+
+  it("does not persist an active-wallet cookie via the autocapture/sync path", async () => {
+    const ADDRESS = "0x82827Bc8342a16b681AfbA6B979E3D1aE5F28a0e";
+    stubTimezone("Europe/London");
+    const formo = await makeAnalytics({ excludeTimezones: ["Europe/London"] });
+
+    // syncWalletState() is the entry point used by the EIP-1193 and Wagmi
+    // autocapture handlers; it updates chain state directly, bypassing the
+    // gated public connect(). The persistence guard must still suppress the
+    // active-wallet cookie for a suppressed visitor.
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+  });
+
+  it("persists an active-wallet cookie for a non-excluded visitor (control)", async () => {
+    const ADDRESS = "0x82827Bc8342a16b681AfbA6B979E3D1aE5F28a0e";
+    stubTimezone("America/New_York");
+    const formo = await makeAnalytics({ excludeTimezones: ["Europe/London"] });
+
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.ok;
   });
 });
