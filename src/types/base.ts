@@ -125,6 +125,20 @@ export interface TrackingOptions {
   excludePaths?: string[];
   excludeChains?: ChainID[];
   /**
+   * IANA timezone names to opt out of tracking entirely. When the visitor's
+   * resolved timezone (via `Intl.DateTimeFormat().resolvedOptions().timeZone`)
+   * matches one of these, no events are enqueued or sent — including `identify`
+   * and `connect`. Matched case-insensitively against the full timezone string.
+   *
+   * Note: this is client-side, timezone-derived geolocation. It is best-effort
+   * and can be bypassed (a VPN does not change the browser timezone, and users
+   * can change their OS timezone). For authoritative jurisdiction blocking, use
+   * server-side IP geolocation at your ingest endpoint instead.
+   *
+   * @example ["Europe/London", "America/New_York"]
+   */
+  excludeTimezones?: string[];
+  /**
    * Additional query parameter names to strip from forwarded and stored URLs,
    * on top of a built-in always-on denylist (currently `privy_oauth_code`,
    * `privy_oauth_state`, and `privy_oauth_provider`) that cannot be disabled.
