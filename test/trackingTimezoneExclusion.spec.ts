@@ -16,6 +16,7 @@ import type { TrackingOptions } from "../src/types";
 describe("Tracking timezone exclusion", () => {
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
+  const originalIntl = global.Intl;
 
   function stubTimezone(timeZone: string) {
     Object.defineProperty(global, "Intl", {
@@ -93,7 +94,7 @@ describe("Tracking timezone exclusion", () => {
     delete (global as any).localStorage;
     delete (global as any).sessionStorage;
     delete (global as any).crypto;
-    delete (global as any).Intl;
+    global.Intl = originalIntl;
     if (jsdom) jsdom.window.close();
   });
 

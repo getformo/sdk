@@ -1899,9 +1899,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       return false;
     }
     const timezone = getTimezone();
-    return (
-      !!timezone &&
-      excludeTimezones.some((tz) => tz.toLowerCase() === timezone.toLowerCase())
+    if (!timezone) {
+      return false;
+    }
+    const lowerTimezone = timezone.toLowerCase();
+    return excludeTimezones.some(
+      (tz) => typeof tz === "string" && tz.toLowerCase() === lowerTimezone
     );
   }
 

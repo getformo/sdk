@@ -6,7 +6,7 @@ import { logger } from "../logger";
  */
 const getTimezone = (): string => {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
   } catch (error) {
     logger.error("Error resolving timezone:", error);
     return "";
