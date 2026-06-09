@@ -312,4 +312,41 @@ describe("Tracking timezone exclusion", () => {
     expect(formo.currentAddress).to.be.oneOf([undefined, null]);
     expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
   });
+
+  it("does not learn identity via backfillActiveWallet while on an excluded path", async () => {
+    // backfillActiveWallet() is the shared sink for the autocapture
+    // signature/transaction paths; a signature/transaction observed on an
+    // excluded route must not populate currentAddress.
+    navigateTo("https://example.com/admin");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+
+    (formo as any).backfillActiveWallet(ADDRESS, 1);
+
+    expect(formo.currentAddress).to.be.oneOf([undefined, null]);
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+  });
+
+  it("backfills identity via backfillActiveWallet on an allowed path (control)", async () => {
+    navigateTo("https://example.com/");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+
+    (formo as any).backfillActiveWallet(ADDRESS, 1);
+
+    expect(formo.currentAddress).to.equal(ADDRESS);
+  });
+
+  it("drops a stale EVM wallet on switch via the suppressed autocapture helper", async () => {
+    // Helper shared by the EIP-1193 onAccountsChanged / onConnected listeners.
+    const ADDRESS_B = "0x1095bBe769fDab716A823d0f7149CAD713d20A13";
+    navigateTo("https://example.com/");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+    expect(formo.currentAddress).to.equal(ADDRESS);
+
+    navigateTo("https://example.com/admin");
+    (formo as any).clearStaleEvmWalletOnSwitchWhileSuppressed(ADDRESS_B);
+
+    expect(formo.currentAddress).to.be.oneOf([undefined, null]);
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+  });
 });

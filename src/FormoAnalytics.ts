@@ -1304,15 +1304,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // NOT suppression — it still updates state so currentChainId can gate
     // events.)
     if (this.isTrackingSuppressed()) {
-      // Suppressed visitor / excluded environment: never LEARN this wallet, so
-      // it can't be backfilled into a later allowed-page event. But if it is a
-      // switch away from a wallet already learned for EVM, drop the stale one
-      // (clearing the active-wallet cookie) rather than leaving it behind.
-      const evmAddress = this._chainState.evm.address;
-      const incoming = validateAndChecksumAddress(address);
-      if (evmAddress && incoming && incoming !== evmAddress) {
-        this.clearChainState('evm');
-      }
+      this.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
     } else {
       this.setChainState('evm', { address, chainId: nextChainId });
     }
@@ -1493,13 +1485,18 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Check if this provider is the currently active one
         const isActiveProvider = this._provider === provider;
 
-        // CRITICAL: Always update state from active provider regardless of tracking config
-        // This ensures disconnect events will have valid address/chainId values
+        // Update state from active provider so disconnect events keep valid
+        // address/chainId values — except while suppressed, where we must not
+        // LEARN identity (only drop a stale EVM wallet on a switch).
         if (isActiveProvider) {
-          this.setChainState('evm', {
-            chainId,
-            address: validateAndChecksumAddress(address) || undefined,
-          });
+          if (this.isTrackingSuppressed()) {
+            this.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
+          } else {
+            this.setChainState('evm', {
+              chainId,
+              address: validateAndChecksumAddress(address) || undefined,
+            });
+          }
         }
 
         // Conditionally emit connect event based on tracking configuration
@@ -2411,8 +2408,29 @@ export class FormoAnalytics implements IFormoAnalytics {
    * value in the normal way; existing connections are never clobbered.
    */
   private backfillActiveWallet(address: Address, chainId?: ChainID): void {
+    // Never learn identity while suppressed (opt-out / timezone / excluded host
+    // or path). A signature/transaction observed on an excluded route must not
+    // populate currentAddress for later allowed-page events. backfill only ever
+    // *adds* an address (it no-ops when one is already known), so there is no
+    // stale state to clear here.
+    if (this.isTrackingSuppressed()) return;
     if (this._evmAddress) return;
     this.setChainState('evm', { address, chainId });
+  }
+
+  /**
+   * Apply an EVM autocapture connect/switch while tracking is suppressed
+   * (opt-out / timezone / excluded host or path): never LEARN the wallet, but
+   * if it is a switch away from an already-learned EVM wallet, drop the stale
+   * one (which also clears the active-wallet cookie) so it can't attach to a
+   * later allowed-page event.
+   */
+  private clearStaleEvmWalletOnSwitchWhileSuppressed(address: string): void {
+    const evmAddress = this._chainState.evm.address;
+    const incoming = validateAndChecksumAddress(address);
+    if (evmAddress && incoming && incoming !== evmAddress) {
+      this.clearChainState('evm');
+    }
   }
 
   /**
