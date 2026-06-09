@@ -434,6 +434,16 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
+    // connect() persists wallet/chain state (active-wallet cookie,
+    // currentAddress/currentChainId) before trackEvent's consent check —
+    // gate the whole method so a suppressed visitor (opt-out or excluded
+    // timezone) leaves no session state. The autocapture provider-event path
+    // intentionally still persists state to keep disconnect payloads valid.
+    if (this.isTrackingSuppressed()) {
+      logger.info("connect() skipped: tracking is suppressed for this visitor");
+      return;
+    }
+
     this.setChainState(chainId, { address: validAddress });
 
     await this.trackEvent(
@@ -706,9 +716,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // identify() writes the user-id cookie and marks wallet
       // identification before trackEvent's consent check — gate the
-      // whole method so an opted-out user gets no identity persistence.
-      if (this.hasOptedOutTracking()) {
-        logger.info("identify() skipped: user has opted out of tracking");
+      // whole method so a suppressed visitor (opt-out or excluded timezone)
+      // gets no identity persistence.
+      if (this.isTrackingSuppressed()) {
+        logger.info("identify() skipped: tracking is suppressed for this visitor");
         return;
       }
       if (!params) {
@@ -872,9 +883,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     // detect() marks wallet detection (a cookie write) before
-    // trackEvent's consent check — gate it on opt-out.
-    if (this.hasOptedOutTracking()) {
-      logger.info("detect() skipped: user has opted out of tracking");
+    // trackEvent's consent check — gate it for suppressed visitors
+    // (opt-out or excluded timezone).
+    if (this.isTrackingSuppressed()) {
+      logger.info("detect() skipped: tracking is suppressed for this visitor");
       return;
     }
     if (this.session.isWalletDetected(rdns))
@@ -1854,6 +1866,46 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
+   * Visitor-level tracking suppression.
+   *
+   * Returns true when the SDK must not persist any identity/session/chain
+   * state or send any events for this visitor — i.e. an explicit opt-out or a
+   * jurisdiction/timezone exclusion. Public entry points that write state
+   * before reaching the `shouldTrack()` event gate (identify/connect/detect)
+   * check this first so suppressed visitors leave no cookies or session state.
+   * @returns {boolean} True if all tracking and persistence must be suppressed
+   */
+  private isTrackingSuppressed(): boolean {
+    return this.hasOptedOutTracking() || this.isTimezoneExcluded();
+  }
+
+  /**
+   * Whether the visitor's browser-resolved timezone matches a configured
+   * `tracking.excludeTimezones` entry (case-insensitive). Client-side and
+   * best-effort — see TrackingOptions.excludeTimezones.
+   * @returns {boolean} True if the current timezone is excluded
+   */
+  private isTimezoneExcluded(): boolean {
+    const tracking = this.options.tracking;
+    if (
+      tracking === null ||
+      typeof tracking !== "object" ||
+      Array.isArray(tracking)
+    ) {
+      return false;
+    }
+    const { excludeTimezones = [] } = tracking as TrackingOptions;
+    if (excludeTimezones.length === 0) {
+      return false;
+    }
+    const timezone = getTimezone();
+    return (
+      !!timezone &&
+      excludeTimezones.some((tz) => tz.toLowerCase() === timezone.toLowerCase())
+    );
+  }
+
+  /**
    * Determines if tracking should be enabled based on configuration and consent
    * @returns {boolean} True if tracking should be enabled
    */
@@ -1878,21 +1930,12 @@ export class FormoAnalytics implements IFormoAnalytics {
         excludeHosts = [],
         excludePaths = [],
         excludeChains = [],
-        excludeTimezones = [],
       } = this.options.tracking as TrackingOptions;
 
       // Check timezone exclusions - opt out visitors in matching timezones
       // entirely (no identify/connect/track events). Client-side, best-effort.
-      if (excludeTimezones.length > 0) {
-        const timezone = getTimezone();
-        if (
-          timezone &&
-          excludeTimezones.some(
-            (tz) => tz.toLowerCase() === timezone.toLowerCase()
-          )
-        ) {
-          return false;
-        }
+      if (this.isTimezoneExcluded()) {
+        return false;
       }
 
       // Check hostname exclusions - use exact matching

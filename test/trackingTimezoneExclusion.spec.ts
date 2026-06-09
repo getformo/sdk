@@ -146,4 +146,22 @@ describe("Tracking timezone exclusion", () => {
 
     expect(addEvent.called).to.equal(false);
   });
+
+  it("does not persist wallet/identity state for an excluded visitor", async () => {
+    const ADDRESS = "0x82827Bc8342a16b681AfbA6B979E3D1aE5F28a0e";
+    stubTimezone("Europe/London");
+    const formo = await makeAnalytics({ excludeTimezones: ["Europe/London"] });
+
+    await formo.identify({ address: ADDRESS, rdns: "io.metamask" });
+    await formo.connect({ chainId: 1, address: ADDRESS });
+    await formo.detect({ providerName: "MetaMask", rdns: "io.metamask" });
+
+    // connect() must not have run setChainState()
+    expect(formo.currentAddress).to.not.equal(ADDRESS);
+    expect(formo.currentChainId).to.be.oneOf([undefined, null]);
+    // identify()/detect() must not have written session markers
+    const session = (formo as any).session;
+    expect(session.isWalletIdentified(ADDRESS, "io.metamask")).to.equal(false);
+    expect(session.isWalletDetected("io.metamask")).to.equal(false);
+  });
 });
