@@ -190,4 +190,53 @@ describe("Tracking timezone exclusion", () => {
 
     expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.ok;
   });
+
+  // --- Host / path (current-page) suppression ---------------------------------
+
+  const ADDRESS = "0x82827Bc8342a16b681AfbA6B979E3D1aE5F28a0e";
+
+  function navigateTo(url: string) {
+    jsdom.reconfigure({ url });
+  }
+
+  it("does not track or persist while on an excluded host", async () => {
+    navigateTo("https://staging.example.com/");
+    const formo = await makeAnalytics({ excludeHosts: ["staging.example.com"] });
+
+    expect((formo as any).shouldTrack()).to.equal(false);
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+  });
+
+  it("does not track or persist while on an excluded path", async () => {
+    navigateTo("https://example.com/admin");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+
+    expect((formo as any).shouldTrack()).to.equal(false);
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+  });
+
+  it("does not delete an existing cookie when navigating onto an excluded path", async () => {
+    // Connect on an allowed path → cookie written.
+    navigateTo("https://example.com/");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.ok;
+
+    // Navigate onto the excluded path → cookie must survive (no new write,
+    // but no destructive delete either).
+    navigateTo("https://example.com/admin");
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.ok;
+  });
+
+  it("resumes tracking after navigating from an excluded path to an allowed one", async () => {
+    navigateTo("https://example.com/admin");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+    expect((formo as any).shouldTrack()).to.equal(false);
+
+    navigateTo("https://example.com/dashboard");
+    expect((formo as any).shouldTrack()).to.equal(true);
+  });
 });
