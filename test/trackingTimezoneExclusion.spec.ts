@@ -239,4 +239,40 @@ describe("Tracking timezone exclusion", () => {
     navigateTo("https://example.com/dashboard");
     expect((formo as any).shouldTrack()).to.equal(true);
   });
+
+  it("clears stale identity when a disconnect is observed on an excluded path", async () => {
+    // Learn wallet A on an allowed path.
+    navigateTo("https://example.com/");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+    expect(formo.currentAddress).to.equal(ADDRESS);
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.ok;
+
+    // Disconnect observed while on the excluded path must clear the stale
+    // wallet (memory + cookie), not leave it for later allowed events.
+    navigateTo("https://example.com/admin");
+    formo.syncWalletState({ chainId: 1 });
+    expect(formo.currentAddress).to.be.oneOf([undefined, null]);
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+
+    // Back on an allowed path the stale address must not reappear.
+    navigateTo("https://example.com/dashboard");
+    expect((formo as any).shouldTrack()).to.equal(true);
+    expect(formo.currentAddress).to.be.oneOf([undefined, null]);
+  });
+
+  it("clears stale identity when a wallet switch is observed on an excluded path", async () => {
+    const ADDRESS_B = "0x1095bBe769fDab716A823d0f7149CAD713d20A13";
+    navigateTo("https://example.com/");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+    expect(formo.currentAddress).to.equal(ADDRESS);
+
+    // A switch to a different wallet on the excluded path must drop the stale
+    // wallet without learning the new one.
+    navigateTo("https://example.com/admin");
+    formo.syncWalletState({ chainId: 1, address: ADDRESS_B });
+    expect(formo.currentAddress).to.be.oneOf([undefined, null]);
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+  });
 });

@@ -1300,12 +1300,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     const wasDisconnected = !this._evmAddress;
 
     // Update state regardless of whether connect *event* tracking is enabled,
-    // so disconnect events keep valid address/chainId values. The one
-    // exception is a suppressed visitor / excluded environment (opt-out /
-    // timezone / host / path): don't learn state there, so it can't be
-    // backfilled into a later allowed-page event. (excludeChains is NOT
-    // suppression — it still updates state so currentChainId can gate events.)
-    if (!this.isTrackingSuppressed()) {
+    // so disconnect events keep valid address/chainId values. (excludeChains is
+    // NOT suppression — it still updates state so currentChainId can gate
+    // events.)
+    if (this.isTrackingSuppressed()) {
+      // Suppressed visitor / excluded environment: never LEARN this wallet, so
+      // it can't be backfilled into a later allowed-page event. But if it is a
+      // switch away from a wallet already learned for EVM, drop the stale one
+      // (clearing the active-wallet cookie) rather than leaving it behind.
+      const evmAddress = this._chainState.evm.address;
+      const incoming = validateAndChecksumAddress(address);
+      if (evmAddress && incoming && incoming !== evmAddress) {
+        this.clearChainState('evm');
+      }
+    } else {
       this.setChainState('evm', { address, chainId: nextChainId });
     }
 
@@ -2628,16 +2636,41 @@ export class FormoAnalytics implements IFormoAnalytics {
     chainId?: ChainID;
     address?: Address;
   }): void {
-    // Don't learn or persist wallet state for a suppressed visitor or an
-    // excluded environment (opt-out / timezone / host / path). This prevents
-    // state observed only while excluded from being backfilled into a later
-    // allowed-page event. State legitimately learned on an allowed page is
-    // left untouched (we return without clearing).
+    const { chainId, address } = params;
+
     if (this.isTrackingSuppressed()) {
+      // While suppressed (opt-out / timezone / excluded host or path) we must
+      // never LEARN a new wallet — but we must still CLEAR stale identity.
+      // Otherwise a disconnect or wallet switch observed on a suppressed route
+      // would leave the previously-learned address in memory and in the
+      // active-wallet cookie, attaching it to later allowed-page events.
+      if (!address) {
+        // Disconnect: drop the affected namespace(s).
+        if (chainId !== undefined && chainId !== null) {
+          this.clearChainState(chainId);
+        } else {
+          this.clearChainState("evm");
+          this.clearChainState("solana");
+        }
+        return;
+      }
+      // Address present: a switch away from the wallet already learned in this
+      // namespace invalidates it. Drop the stale one without learning the new
+      // address; a fresh connect (nothing learned yet) or a re-confirmation of
+      // the same address is a no-op.
+      if (chainId === null || chainId === undefined) return;
+      const namespace = this.getNamespace(chainId);
+      const namespaceAddress = this._chainState[namespace].address;
+      const validIncoming = validateAddress(address, chainId);
+      if (
+        namespaceAddress &&
+        validIncoming &&
+        validIncoming !== namespaceAddress
+      ) {
+        this.clearChainState(chainId);
+      }
       return;
     }
-
-    const { chainId, address } = params;
 
     if (!address) {
       if (chainId !== undefined && chainId !== null) {
@@ -2707,13 +2740,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
-      // Current-page exclusion (host/path): do not write a snapshot while on an
-      // excluded route, but leave any existing cookie intact. A cookie written
-      // on an allowed page must survive a transient visit to an excluded one.
-      if (this.isHostExcluded() || this.isPathExcluded()) {
-        return;
-      }
       if (this.currentAddress) {
+        // Current-page exclusion (host/path): do not write a new snapshot while
+        // on an excluded route, but leave any existing cookie intact. A cookie
+        // written on an allowed page must survive a transient visit to an
+        // excluded one (passive navigation does not call this method).
+        if (this.isHostExcluded() || this.isPathExcluded()) {
+          return;
+        }
         const value = JSON.stringify({
           address: this.currentAddress,
           ...(this.currentChainId !== undefined && { chainId: this.currentChainId }),
@@ -2726,6 +2760,9 @@ export class FormoAnalytics implements IFormoAnalytics {
           ...(domain ? { domain } : {}),
         });
       } else {
+        // No active wallet → clear the snapshot. This runs even on an excluded
+        // route, so a disconnect/switch observed while suppressed actively
+        // removes stale identity instead of leaving it for later allowed events.
         cookie().remove(ACTIVE_WALLET_KEY);
       }
     } catch (err) {
