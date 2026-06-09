@@ -65,7 +65,7 @@
     "eslint": "^10.2.1",
     "global-jsdom": "^8.8.0",
     "jsdom": "^21.1.2",
-    "mocha": "^11.7.5",
+    "mocha": "^11.7.6",
     "nodemon": "^3.1.14",
     "prettier": "^3.8.3",
     "react": "^19.2.6",
