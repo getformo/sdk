@@ -18,7 +18,7 @@ import {
   TransactionStatus,
   UTMParameters,
 } from "../types";
-import { toSnakeCase } from "../utils";
+import { toSnakeCase, getTimezone } from "../utils";
 import { validateAddress } from "../utils/address";
 import { getCurrentTimeFormatted } from "../utils/timestamp";
 import { isUndefined } from "../validators";
@@ -84,12 +84,7 @@ class EventFactory implements IEventFactory {
     return validateAddress(address, chainId) || null;
   }
   private getTimezone(): string {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone;
-    } catch (error) {
-      logger.error("Error resolving timezone:", error);
-      return "";
-    }
+    return getTimezone();
   }
 
   private getLocation(): string {

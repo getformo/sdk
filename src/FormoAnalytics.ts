@@ -53,6 +53,7 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
+import { getTimezone } from "./utils/timezone";
 import { isLocalhost } from "./validators";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
@@ -1877,7 +1878,22 @@ export class FormoAnalytics implements IFormoAnalytics {
         excludeHosts = [],
         excludePaths = [],
         excludeChains = [],
+        excludeTimezones = [],
       } = this.options.tracking as TrackingOptions;
+
+      // Check timezone exclusions - opt out visitors in matching timezones
+      // entirely (no identify/connect/track events). Client-side, best-effort.
+      if (excludeTimezones.length > 0) {
+        const timezone = getTimezone();
+        if (
+          timezone &&
+          excludeTimezones.some(
+            (tz) => tz.toLowerCase() === timezone.toLowerCase()
+          )
+        ) {
+          return false;
+        }
+      }
 
       // Check hostname exclusions - use exact matching
       if (excludeHosts.length > 0 && typeof window !== "undefined") {
