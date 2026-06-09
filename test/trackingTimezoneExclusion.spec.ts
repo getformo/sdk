@@ -275,4 +275,41 @@ describe("Tracking timezone exclusion", () => {
     expect(formo.currentAddress).to.be.oneOf([undefined, null]);
     expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
   });
+
+  it("does not write session markers via identify/detect on an excluded path", async () => {
+    navigateTo("https://example.com/admin");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+
+    await formo.identify({ address: ADDRESS, rdns: "io.metamask" });
+    await formo.detect({ providerName: "MetaMask", rdns: "io.metamask" });
+
+    const session = (formo as any).session;
+    expect(session.isWalletIdentified(ADDRESS, "io.metamask")).to.equal(false);
+    expect(session.isWalletDetected("io.metamask")).to.equal(false);
+  });
+
+  it("does not restore the active-wallet snapshot at init on an excluded path, but keeps the cookie", async () => {
+    // Seed a snapshot as if written on a previous allowed-page visit.
+    cookie().set(ACTIVE_WALLET_KEY, JSON.stringify({ address: ADDRESS, chainId: 1 }), {
+      path: "/",
+    });
+    navigateTo("https://example.com/admin");
+    const formo = await makeAnalytics({ excludePaths: ["/admin"] });
+
+    // Not restored into memory while on the excluded route...
+    expect(formo.currentAddress).to.be.oneOf([undefined, null]);
+    // ...but the cookie is preserved for a later allowed-page load.
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.be.ok;
+  });
+
+  it("purges the active-wallet snapshot at init for an excluded-timezone visitor", async () => {
+    stubTimezone("Europe/London");
+    cookie().set(ACTIVE_WALLET_KEY, JSON.stringify({ address: ADDRESS, chainId: 1 }), {
+      path: "/",
+    });
+    const formo = await makeAnalytics({ excludeTimezones: ["Europe/London"] });
+
+    expect(formo.currentAddress).to.be.oneOf([undefined, null]);
+    expect(cookie().get(ACTIVE_WALLET_KEY)).to.not.be.ok;
+  });
 });
