@@ -304,13 +304,14 @@ describe("Page Event Property Parsing", () => {
     });
 
     it("should exclude referral parameters", async () => {
-      setMockLocation("https://formo.so/blog?ref=abc123&referral=partner&refcode=xyz");
+      setMockLocation("https://formo.so/blog?ref=abc123&referral=partner&refcode=xyz&af=aff1");
 
       const props = await getPageProperties();
 
       expect(props.ref).to.be.undefined;
       expect(props.referral).to.be.undefined;
       expect(props.refcode).to.be.undefined;
+      expect(props.af).to.be.undefined;
     });
 
     it("should exclude referrer parameter", async () => {
@@ -802,6 +803,54 @@ describe("Page Event Property Parsing", () => {
       setMockLocation("https://formo.so/", "https://app.formo.so/");
       const context = await getPageContext();
       expect(context.referrer).to.equal("https://app.formo.so/");
+    });
+  });
+
+  describe("Referral code parameter (default query params)", () => {
+    // `ref` is sticky across the session, so clear the stored traffic source
+    // before each test to assert per-URL extraction cleanly.
+    beforeEach(() => {
+      try {
+        session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+      } catch {}
+    });
+
+    const cases: Array<[string, string]> = [
+      ["ref", "abc123"],
+      ["referral", "partner"],
+      ["refcode", "xyz789"],
+      ["af", "aff42"],
+      ["referrer", "ambassador"],
+    ];
+
+    cases.forEach(([param, code]) => {
+      it(`should capture ?${param}=CODE into context.ref`, async () => {
+        setMockLocation(`https://formo.so/?${param}=${code}`);
+
+        const context = await getPageContext();
+
+        expect(context.ref).to.equal(code);
+      });
+    });
+
+    it("should keep the ?referrer referral code separate from document.referrer", async () => {
+      // ?referrer is a referral code (context.ref); document.referrer is the
+      // external entry URL (context.referrer). They must not be conflated.
+      setMockLocation("https://formo.so/?referrer=ambassador", "https://google.com/");
+
+      const context = await getPageContext();
+
+      expect(context.ref).to.equal("ambassador");
+      expect(context.referrer).to.equal("https://google.com/");
+    });
+
+    it("should resolve referral params in default order (earlier param wins)", async () => {
+      setMockLocation("https://formo.so/?af=aff42&referrer=ambassador&ref=abc123");
+
+      const context = await getPageContext();
+
+      // `ref` precedes `af` and `referrer` in the default list.
+      expect(context.ref).to.equal("abc123");
     });
   });
 });

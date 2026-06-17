@@ -196,8 +196,8 @@ export interface AutocaptureOptions {
 export interface ReferralOptions {
   /**
    * Custom query parameter names to check for referral codes
-   * @default ["ref", "referral", "refcode"]
-   * @example ["via", "referrer", "source"] - will check ?via=CODE, ?referrer=CODE, ?source=CODE
+   * @default ["ref", "referral", "refcode", "af", "referrer"]
+   * @example ["via", "partner", "source"] - will check ?via=CODE, ?partner=CODE, ?source=CODE
    */
   queryParams?: string[];
 

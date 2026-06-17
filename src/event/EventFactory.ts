@@ -30,6 +30,7 @@ import {
   CHANNEL,
   CLICK_ID_PARAMS,
   DEFAULT_EXCLUDED_QUERY_PARAMS,
+  DEFAULT_REFERRAL_PARAMS,
   PAGE_PROPERTIES_EXCLUDED_FIELDS,
   VERSION,
 } from "./constants";
@@ -191,10 +192,9 @@ class EventFactory implements IEventFactory {
     // - If no referral config exists → use defaults
     // - If referral config exists but queryParams is undefined → use defaults
     // - If referral config exists with queryParams → use those
-    const defaultParams = ["ref", "referral", "refcode"];
     const referralParams = !this.options?.referral
-      ? defaultParams  // No referral config at all → use defaults
-      : (this.options.referral.queryParams ?? defaultParams);  // Has config → use queryParams or defaults
+      ? DEFAULT_REFERRAL_PARAMS  // No referral config at all → use defaults
+      : (this.options.referral.queryParams ?? DEFAULT_REFERRAL_PARAMS);  // Has config → use queryParams or defaults
 
     // Check query parameters (if any configured)
     for (const param of referralParams) {

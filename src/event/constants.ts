@@ -35,6 +35,22 @@ const DEFAULT_EXCLUDED_QUERY_PARAMS = [
 ] as const;
 
 /**
+ * Default query parameter names checked (in order) for a referral code on the
+ * landing-page URL. The first parameter present supplies the `ref` traffic
+ * source. Consumers can override this list via `referral.queryParams`.
+ *
+ * Keep in sync with the ReferralOptions.queryParams @default in
+ * src/types/base.ts.
+ */
+const DEFAULT_REFERRAL_PARAMS = [
+  'ref',
+  'referral',
+  'refcode',
+  'af',
+  'referrer',
+] as const;
+
+/**
  * Fields that should be excluded from page event properties parsing
  * These are either:
  * - Already captured in event context (UTM params, referral params, click IDs)
@@ -47,10 +63,7 @@ const PAGE_PROPERTIES_EXCLUDED_FIELDS = new Set<string>([
   'utm_campaign',
   'utm_term',
   'utm_content',
-  'ref',
-  'referral',
-  'refcode',
-  'referrer',
+  ...DEFAULT_REFERRAL_PARAMS,
   ...CLICK_ID_PARAMS,
   // Semantic event properties (should not be overridden by URL params)
   'category',
@@ -66,5 +79,6 @@ export {
   VERSION,
   CLICK_ID_PARAMS,
   DEFAULT_EXCLUDED_QUERY_PARAMS,
+  DEFAULT_REFERRAL_PARAMS,
   PAGE_PROPERTIES_EXCLUDED_FIELDS,
 };
