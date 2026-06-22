@@ -62,7 +62,7 @@
     "@typescript-eslint/parser": "^8.60.1",
     "c8": "^11.0.0",
     "chai": "^4.5.0",
-    "eslint": "^10.2.1",
+    "eslint": "^10.5.0",
     "global-jsdom": "^8.8.0",
     "jsdom": "^21.1.2",
     "mocha": "^11.7.6",
