@@ -1,6 +1,46 @@
 export const EVENTS_API_ORIGIN = "https://events.formo.so";
 export const EVENTS_API_HOST = `${EVENTS_API_ORIGIN}/v0/raw_events`;
 
+// Tinybird-style datasource names. Profile properties and labels are ingested
+// through the same Events API (same origin + Bearer auth) as raw_events, but to
+// their own datasource paths so they land in the user_profiles / user_labels
+// stores instead of the raw event log.
+export const RAW_EVENTS_DATASOURCE = "raw_events";
+export const USER_PROFILES_DATASOURCE = "user_profiles";
+export const USER_LABELS_DATASOURCE = "user_labels";
+
+export const USER_PROFILES_API_HOST = `${EVENTS_API_ORIGIN}/v0/${USER_PROFILES_DATASOURCE}`;
+export const USER_LABELS_API_HOST = `${EVENTS_API_ORIGIN}/v0/${USER_LABELS_DATASOURCE}`;
+
+/**
+ * Resolve the ingest URL for a profiles/labels datasource from the configured
+ * events `apiHost`.
+ *
+ * - An explicit per-datasource `override` always wins.
+ * - The default events host (`.../v0/raw_events`) maps to the sibling
+ *   `.../v0/<datasource>` path.
+ * - A custom host that still ends in `/raw_events` (e.g. a proxy that mirrors
+ *   the Tinybird path layout) has its trailing segment swapped.
+ * - Any other custom proxy host (e.g. `/api/analytics`) has no derivable
+ *   sibling — return `null` so the caller can disable that write and warn,
+ *   unless the consumer provides an explicit override.
+ */
+export function resolveDatasourceHost(
+  eventsApiHost: string,
+  override: string | undefined,
+  datasource: string
+): string | null {
+  if (override) return override;
+  if (eventsApiHost === EVENTS_API_HOST) {
+    return `${EVENTS_API_ORIGIN}/v0/${datasource}`;
+  }
+  const suffix = `/${RAW_EVENTS_DATASOURCE}`;
+  if (eventsApiHost.endsWith(suffix)) {
+    return eventsApiHost.slice(0, -RAW_EVENTS_DATASOURCE.length) + datasource;
+  }
+  return null;
+}
+
 export const EVENTS_API_REQUEST_HEADER = (writeKey: string) => ({
   "Content-Type": "application/json",
   Authorization: `Bearer ${writeKey}`,

@@ -11,6 +11,8 @@ import {
   IFormoEvent,
   IFormoEventContext,
   IFormoEventProperties,
+  IFormoLabelRow,
+  IFormoProfileRow,
   ITrafficSource,
   Nullable,
   Options,
@@ -682,6 +684,51 @@ class EventFactory implements IEventFactory {
     };
 
     return this.getEnrichedEvent(trackEvent, context);
+  }
+
+  /**
+   * Build a user_profiles upsert row. Reuses the common identity envelope and
+   * auto-context; the key-value traits ride under `properties` (snake-cased the
+   * same way identify-event properties are).
+   */
+  async createProfile(
+    properties: IFormoEventProperties,
+    address?: Nullable<Address>,
+    userId?: Nullable<string>,
+    context?: IFormoEventContext
+  ): Promise<IFormoProfileRow> {
+    const profileRow: Partial<IFormoEvent> = {
+      properties: { ...properties },
+      address: address ?? null,
+      user_id: userId ?? null,
+      type: "profile",
+    };
+    return this.getEnrichedEvent(profileRow, context);
+  }
+
+  /**
+   * Build a user_labels upsert row. Same envelope as a profile, but the
+   * key-value labels live under `labels` rather than `properties`.
+   */
+  async createLabels(
+    labels: IFormoEventProperties,
+    address?: Nullable<Address>,
+    userId?: Nullable<string>,
+    context?: IFormoEventContext
+  ): Promise<IFormoLabelRow> {
+    const enriched = await this.getEnrichedEvent(
+      {
+        properties: { ...labels },
+        address: address ?? null,
+        user_id: userId ?? null,
+        type: "label",
+      },
+      context
+    );
+    // Re-key the payload to `labels` so the user_labels datasource maps it
+    // semantically. `properties` is dropped from the row.
+    const { properties, ...rest } = enriched;
+    return { ...rest, labels: properties };
   }
 
   // Returns an event with type, context, properties, and common properties

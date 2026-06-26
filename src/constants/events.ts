@@ -8,6 +8,11 @@ export enum EventType {
   SIGNATURE = "signature",
   TRANSACTION = "transaction",
   TRACK = "track",
+  // Profile/label upserts. These ride the same Events API but are routed to the
+  // user_profiles / user_labels datasources; the `type` is informational (the
+  // destination datasource is determined by the ingest URL).
+  PROFILE = "profile",
+  LABEL = "label",
 }
 
 export enum EventChannel {

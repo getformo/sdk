@@ -9,6 +9,9 @@ import {
   ACTIVE_WALLET_TTL_MS,
   CONSENT_OPT_OUT_KEY,
   TEventType,
+  USER_PROFILES_DATASOURCE,
+  USER_LABELS_DATASOURCE,
+  resolveDatasourceHost,
 } from "./constants";
 import { cookie, session, initStorageManager } from "./storage";
 import {
@@ -210,19 +213,61 @@ export class FormoAnalytics implements IFormoAnalytics {
       enabledLevels: options.logger?.levels || [],
     });
 
+    const eventsApiHost = options.apiHost || EVENTS_API_HOST;
+    // Shared queue options. Each datasource (events / profiles / labels) gets its
+    // own EventQueue but the same retry/flush/consent config so they all honor
+    // the same opt-out gate.
+    const baseQueueOptions = {
+      flushAt: options.flushAt,
+      retryCount: options.retryCount,
+      maxQueueSize: options.maxQueueSize,
+      flushInterval: options.flushInterval,
+      errorHandler: options.errorHandler,
+      // Hard consent gate at the queue boundary: nothing buffered is
+      // ever sent once the user has opted out, even via a timer or
+      // pagehide flush scheduled before opt-out.
+      canSend: () => !this.hasOptedOutTracking(),
+    };
+    const profilesApiHost = resolveDatasourceHost(
+      eventsApiHost,
+      options.profilesApiHost,
+      USER_PROFILES_DATASOURCE
+    );
+    const labelsApiHost = resolveDatasourceHost(
+      eventsApiHost,
+      options.labelsApiHost,
+      USER_LABELS_DATASOURCE
+    );
+    if (!profilesApiHost) {
+      logger.warn(
+        "Profile writes disabled: could not derive the user_profiles host from the custom apiHost. Set options.profilesApiHost to enable identify() profile upserts."
+      );
+    }
+    if (!labelsApiHost) {
+      logger.warn(
+        "Label writes disabled: could not derive the user_labels host from the custom apiHost. Set options.labelsApiHost to enable identify() label upserts."
+      );
+    }
+
     this.eventManager = new EventManager(
-      new EventQueue(this.config.writeKey, {
-        apiHost: options.apiHost || EVENTS_API_HOST,
-        flushAt: options.flushAt,
-        retryCount: options.retryCount,
-        maxQueueSize: options.maxQueueSize,
-        flushInterval: options.flushInterval,
-        errorHandler: options.errorHandler,
-        // Hard consent gate at the queue boundary: nothing buffered is
-        // ever sent once the user has opted out, even via a timer or
-        // pagehide flush scheduled before opt-out.
-        canSend: () => !this.hasOptedOutTracking(),
-      }),
+      {
+        events: new EventQueue(this.config.writeKey, {
+          ...baseQueueOptions,
+          apiHost: eventsApiHost,
+        }),
+        profiles: profilesApiHost
+          ? new EventQueue(this.config.writeKey, {
+              ...baseQueueOptions,
+              apiHost: profilesApiHost,
+            })
+          : null,
+        labels: labelsApiHost
+          ? new EventQueue(this.config.writeKey, {
+              ...baseQueueOptions,
+              apiHost: labelsApiHost,
+            })
+          : null,
+      },
       options
     );
 
@@ -674,13 +719,21 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Emits an identify event with current wallet address and provider info.
+   * Emits an identify event and upserts the user's profile + labels.
+   *
+   * - `properties` is upserted to the **user_profiles** datasource (and also
+   *   included on the identify event in raw_events for backward compatibility).
+   * - `params.labels` (key-value) is upserted to the **user_labels** datasource.
+   *
+   * Both upserts run on every identify() call, independently of the per-session
+   * identify-event dedup, so changed traits/labels always reach the stores.
    *
    * @param {string} params.address - Wallet address
    * @param {string} params.userId - External user ID
    * @param {string} params.rdns - Provider reverse domain name
    * @param {string} params.providerName - Provider display name
-   * @param {IFormoEventProperties} properties - Additional properties to include with the identify event
+   * @param {IFormoEventProperties} params.labels - Key-value labels for user_labels (e.g. { tier: 'gold' })
+   * @param {IFormoEventProperties} properties - Profile properties for user_profiles + the identify event
    * @param {IFormoEventContext} context
    * @param {(...args: unknown[]) => void} callback
    * @returns {Promise<void>}
@@ -690,7 +743,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * // Basic identify
    * formo.identify({ address: '0x...', userId: 'user123' });
    *
-   * // With Privy user
+   * // With profile properties and labels
+   * formo.identify(
+   *   { address: '0x...', userId: 'user123', labels: { tier: 'gold', kyc: true } },
+   *   { email: 'a@b.com', plan: 'pro' }
+   * );
+   *
+   * // With Privy user (properties become user_profiles traits)
    * import { parsePrivyProperties } from '@formo/analytics';
    * const { user } = usePrivy();
    * if (user) {
@@ -707,6 +766,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       providerName?: string;
       userId?: string;
       rdns?: string;
+      labels?: IFormoEventProperties;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -790,7 +850,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      const { address, providerName, userId, rdns } = params;
+      const { address, providerName, userId, rdns, labels } = params;
 
       // Runtime validation: address is required
       if (!address) {
@@ -816,6 +876,31 @@ export class FormoAnalytics implements IFormoAnalytics {
           ...getIdentityCookieSecurity(),
           ...(domain ? { domain } : {}),
         });
+      }
+
+      // Upsert profile properties (user_profiles) and labels (user_labels) on
+      // every identify() call, BEFORE the per-session identify-event dedup
+      // below, so changed traits/labels always reach the stores. The queue's own
+      // payload-hash dedup still suppresses exact-duplicate spam. Gated by
+      // shouldTrack() to honor opt-out / tracking:false / environment / chain
+      // exclusions, matching the identify event's gate.
+      if (this.shouldTrack()) {
+        if (properties && Object.keys(properties).length > 0) {
+          await this.eventManager.addProfile(
+            properties,
+            validAddress,
+            userId,
+            context
+          );
+        }
+        if (labels && Object.keys(labels).length > 0) {
+          await this.eventManager.addLabels(
+            labels,
+            validAddress,
+            userId,
+            context
+          );
+        }
       }
 
       // Check for duplicate identify events in this session

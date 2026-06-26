@@ -11,7 +11,11 @@ describe("EventManager", () => {
   let jsdom: JSDOM;
   let eventManager: EventManager;
   let mockEventQueue: IEventQueue;
+  let mockProfileQueue: IEventQueue;
+  let mockLabelQueue: IEventQueue;
   let enqueueSpy: sinon.SinonSpy;
+  let profileEnqueueSpy: sinon.SinonSpy;
+  let labelEnqueueSpy: sinon.SinonSpy;
 
   beforeEach(() => {
     jsdom = new JSDOM("<!DOCTYPE html><html><head><title>Test</title></head><body></body></html>", {
@@ -93,15 +97,31 @@ describe("EventManager", () => {
     // Initialize StorageManager
     initStorageManager("test-write-key");
 
-    // Create mock event queue
+    // Create mock datasource queues
     enqueueSpy = sinon.spy();
     mockEventQueue = {
       enqueue: enqueueSpy,
       flush: sinon.stub().resolves(),
       clear: sinon.spy(),
     };
+    profileEnqueueSpy = sinon.spy();
+    mockProfileQueue = {
+      enqueue: profileEnqueueSpy,
+      flush: sinon.stub().resolves(),
+      clear: sinon.spy(),
+    };
+    labelEnqueueSpy = sinon.spy();
+    mockLabelQueue = {
+      enqueue: labelEnqueueSpy,
+      flush: sinon.stub().resolves(),
+      clear: sinon.spy(),
+    };
 
-    eventManager = new EventManager(mockEventQueue);
+    eventManager = new EventManager({
+      events: mockEventQueue,
+      profiles: mockProfileQueue,
+      labels: mockLabelQueue,
+    });
   });
 
   afterEach(() => {
@@ -357,10 +377,87 @@ describe("EventManager", () => {
     });
   });
 
+  describe("addProfile", () => {
+    const address = "0x1234567890123456789012345678901234567890";
+
+    it("enqueues a profile row to the profiles queue with properties", async () => {
+      await eventManager.addProfile(
+        { email: "a@b.com", plan: "pro" },
+        address,
+        "user-123"
+      );
+
+      expect(profileEnqueueSpy.calledOnce).to.be.true;
+      expect(enqueueSpy.called).to.be.false;
+      const [row] = profileEnqueueSpy.firstCall.args;
+      expect(row.type).to.equal("profile");
+      expect(row.properties.email).to.equal("a@b.com");
+      expect(row.properties.plan).to.equal("pro");
+      expect(row.user_id).to.equal("user-123");
+      expect(row.address).to.not.be.null;
+    });
+
+    it("does not enqueue when the profiles queue is unavailable", async () => {
+      const manager = new EventManager({
+        events: mockEventQueue,
+        profiles: null,
+        labels: mockLabelQueue,
+      });
+      await manager.addProfile({ email: "a@b.com" }, address);
+      expect(profileEnqueueSpy.called).to.be.false;
+    });
+
+    it("blocks profiles from blocked addresses", async () => {
+      const zeroAddress = "0x0000000000000000000000000000000000000000";
+      await eventManager.addProfile({ email: "a@b.com" }, zeroAddress);
+      expect(profileEnqueueSpy.called).to.be.false;
+    });
+  });
+
+  describe("addLabels", () => {
+    const address = "0x1234567890123456789012345678901234567890";
+
+    it("enqueues a label row to the labels queue under `labels`", async () => {
+      await eventManager.addLabels(
+        { tier: "gold", kyc: true },
+        address,
+        "user-123"
+      );
+
+      expect(labelEnqueueSpy.calledOnce).to.be.true;
+      expect(enqueueSpy.called).to.be.false;
+      const [row] = labelEnqueueSpy.firstCall.args;
+      expect(row.type).to.equal("label");
+      // labels live under `labels`, not `properties`
+      expect(row.labels.tier).to.equal("gold");
+      expect(row.labels.kyc).to.equal(true);
+      expect(row.properties).to.be.undefined;
+      expect(row.user_id).to.equal("user-123");
+    });
+
+    it("does not enqueue when the labels queue is unavailable", async () => {
+      const manager = new EventManager({
+        events: mockEventQueue,
+        profiles: mockProfileQueue,
+        labels: null,
+      });
+      await manager.addLabels({ tier: "gold" }, address);
+      expect(labelEnqueueSpy.called).to.be.false;
+    });
+
+    it("blocks labels from blocked addresses", async () => {
+      const deadAddress = "0x000000000000000000000000000000000000dEaD";
+      await eventManager.addLabels({ tier: "gold" }, deadAddress);
+      expect(labelEnqueueSpy.called).to.be.false;
+    });
+  });
+
   describe("clear", () => {
-    it("delegates to the event queue's clear()", () => {
+    it("delegates to every datasource queue's clear()", () => {
       eventManager.clear();
       expect((mockEventQueue.clear as sinon.SinonSpy).calledOnce).to.be.true;
+      expect((mockProfileQueue.clear as sinon.SinonSpy).calledOnce).to.be.true;
+      expect((mockLabelQueue.clear as sinon.SinonSpy).calledOnce).to.be.true;
     });
   });
 });

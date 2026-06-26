@@ -39,7 +39,33 @@ export interface IFormoEvent extends ICommonProperties {
   properties: Nullable<IFormoEventProperties>;
 }
 
+/**
+ * A user_profiles upsert row. Shares the common identity envelope with events;
+ * `properties` holds the key-value profile traits (email, twitter, plan, ...).
+ */
+export type IFormoProfileRow = IFormoEvent;
+
+/**
+ * A user_labels upsert row. Shares the common identity envelope but carries the
+ * key-value labels (e.g. `{ tier: "gold", kyc: true }`) under `labels`.
+ */
+export interface IFormoLabelRow extends ICommonProperties {
+  context: Nullable<IFormoEventContext>;
+  labels: Nullable<IFormoEventProperties>;
+}
+
+/**
+ * Anything the EventQueue can ingest: an analytics event, a profile upsert, or a
+ * label upsert. They differ only in their payload key (`properties` vs `labels`)
+ * and their destination datasource URL.
+ */
+export type IFormoIngestRow = IFormoEvent | IFormoLabelRow;
+
 export type IFormoEventPayload = IFormoEvent & {
+  message_id: string;
+};
+
+export type IFormoIngestPayload = IFormoIngestRow & {
   message_id: string;
 };
 

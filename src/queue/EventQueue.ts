@@ -1,5 +1,5 @@
 import { isNetworkError } from "../validators";
-import { IFormoEvent, IFormoEventPayload } from "../types";
+import { IFormoIngestPayload, IFormoIngestRow } from "../types";
 import {
   clampNumber,
   getActionDescriptor,
@@ -15,7 +15,7 @@ const noop = () => {};
 const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...args); } catch { /* swallow */ } };
 
 type QueueItem = {
-  message: IFormoEventPayload;
+  message: IFormoIngestPayload;
   callback: (...args: any) => any;
   // Serialized size of this item, computed once at enqueue so the queue
   // byte total can be tracked incrementally (avoids an O(n) re-serialize
@@ -23,7 +23,7 @@ type QueueItem = {
   byteSize: number;
 };
 
-type IFormoEventFlushPayload = IFormoEventPayload & {
+type IFormoEventFlushPayload = IFormoIngestPayload & {
   sent_at: string;
 };
 
@@ -123,7 +123,7 @@ export class EventQueue implements IEventQueue {
     });
   }
 
-  private async generateMessageId(event: IFormoEvent): Promise<string> {
+  private async generateMessageId(event: IFormoIngestRow): Promise<string> {
     const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
@@ -144,7 +144,7 @@ export class EventQueue implements IEventQueue {
     this.payloadHashes.clear();
   }
 
-  async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
+  async enqueue(event: IFormoIngestRow, callback?: (...args: any) => void) {
     callback = callback || noop;
 
     // Refuse to buffer anything once consent is withdrawn.
@@ -178,7 +178,10 @@ export class EventQueue implements IEventQueue {
     this.queueByteSize += queueItem.byteSize;
 
     logger.log(
-      `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
+      `Event enqueued: ${getActionDescriptor(
+        event.type,
+        "properties" in event ? event.properties : event.labels
+      )}`
     );
 
     if (!this.flushed) {

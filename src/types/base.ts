@@ -95,7 +95,18 @@ export interface IFormoAnalytics {
       providerName?: string;
       userId?: string;
       rdns?: string;
+      /**
+       * Key-value labels to upsert to the user_labels datasource for this user
+       * (e.g. `{ tier: "gold", kyc: true }`). Written on every identify() call,
+       * independent of the per-session identify-event dedup.
+       */
+      labels?: IFormoEventProperties;
     },
+    /**
+     * Profile properties (traits) to upsert to the user_profiles datasource
+     * (e.g. `{ email, twitter, plan }`). Also included on the identify event in
+     * raw_events for backward compatibility.
+     */
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
@@ -288,6 +299,17 @@ export interface Options {
    * See https://docs.formo.so/sdks/web#proxy for setup instructions
    */
   apiHost?: string;
+  /**
+   * Custom ingest host for the user_profiles datasource. Only needed when
+   * `apiHost` points at a proxy whose path does not end in `/raw_events` (so the
+   * sibling datasource URL cannot be derived). Defaults to the events.formo.so
+   * user_profiles endpoint, or the derived sibling of a custom `apiHost`.
+   */
+  profilesApiHost?: string;
+  /**
+   * Custom ingest host for the user_labels datasource. See `profilesApiHost`.
+   */
+  labelsApiHost?: string;
   flushAt?: number;
   flushInterval?: number;
   retryCount?: number;

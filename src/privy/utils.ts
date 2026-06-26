@@ -25,6 +25,9 @@ import {
  * if (user) {
  *   const { properties, wallets } = parsePrivyProperties(user);
  *
+ *   // `properties` is upserted to the user_profiles datasource by identify().
+ *   // Pass `labels` for the user_labels datasource (key-value), e.g.
+ *   // { labels: { has_email: !!properties.email } }.
  *   for (const wallet of wallets) {
  *     formo.identify({ address: wallet.address, userId: user.id }, properties);
  *   }
