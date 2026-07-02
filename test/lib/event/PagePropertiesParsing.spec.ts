@@ -223,6 +223,32 @@ describe("Page Event Property Parsing", () => {
       expect(props.hash).to.equal("");
       expect(props.query).to.equal("");
     });
+
+    it("should strip trailing slashes from non-root page URL and path", async () => {
+      setMockLocation("https://formo.so/limit/bnb/?foo=bar#intro");
+
+      const props = await getPageProperties();
+      const context = await getPageContext();
+
+      expect(props.url).to.equal("https://formo.so/limit/bnb?foo=bar#intro");
+      expect(props.path).to.equal("/limit/bnb");
+      expect(props.hash).to.equal("#intro");
+      expect(props.query).to.equal("foo=bar");
+      expect(context.page_url).to.equal(
+        "https://formo.so/limit/bnb?foo=bar#intro"
+      );
+    });
+
+    it("should preserve the root slash when normalizing page URL and path", async () => {
+      setMockLocation("https://formo.so/?foo=bar#intro");
+
+      const props = await getPageProperties();
+      const context = await getPageContext();
+
+      expect(props.url).to.equal("https://formo.so/?foo=bar#intro");
+      expect(props.path).to.equal("/");
+      expect(context.page_url).to.equal("https://formo.so/?foo=bar#intro");
+    });
   });
 
   describe("Query parameter parsing", () => {
@@ -854,4 +880,3 @@ describe("Page Event Property Parsing", () => {
     });
   });
 });
-

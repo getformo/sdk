@@ -126,6 +126,17 @@ class EventFactory implements IEventFactory {
   }
 
   /**
+   * Normalize URL paths for analytics aggregation by stripping trailing slashes
+   * from non-root paths. Query strings and hash fragments are preserved by
+   * mutating only the URL pathname.
+   */
+  private normalizeUrlPath(url: URL): void {
+    if (url.pathname !== "/") {
+      url.pathname = url.pathname.replace(/\/+$/, "");
+    }
+  }
+
+  /**
    * Strip excluded (sensitive) query parameters from a URL in place. Only the
    * query string is touched; the path and hash/fragment are left as-is.
    */
@@ -142,15 +153,16 @@ class EventFactory implements IEventFactory {
   }
 
   /**
-   * Return the given absolute URL with excluded query parameters removed. The
-   * input is returned unchanged when it is empty or cannot be parsed (e.g. an
-   * empty referrer).
+   * Return the given absolute URL with excluded query parameters removed and
+   * trailing slashes stripped from non-root paths. The input is returned
+   * unchanged when it is empty or cannot be parsed (e.g. an empty referrer).
    */
   private redactUrl(href: string): string {
     if (!href) return href;
     try {
       const url = new URL(href);
       this.redactQueryParams(url);
+      this.normalizeUrlPath(url);
       return url.href;
     } catch {
       return href;
@@ -410,6 +422,7 @@ class EventFactory implements IEventFactory {
     try {
       urlObj = new URL(globalThis.location.href);
       this.redactQueryParams(urlObj);
+      this.normalizeUrlPath(urlObj);
     } catch {}
 
     if (isUndefined(pageProps.url)) {
@@ -417,7 +430,7 @@ class EventFactory implements IEventFactory {
     }
 
     if (isUndefined(pageProps.path)) {
-      pageProps.path = globalThis.location.pathname;
+      pageProps.path = urlObj ? urlObj.pathname : globalThis.location.pathname;
     }
 
     if (isUndefined(pageProps.hash)) {
