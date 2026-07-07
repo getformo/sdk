@@ -5,13 +5,14 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  id-token: write  # Required for OIDC trusted publishing
-  contents: write  # Required for creating GitHub releases
+permissions: {}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for creating GitHub releases
+      id-token: write  # Required for OIDC trusted publishing
     # Bind workflow-context values to env up front. Steps reference these
     # as shell variables ($TAG, $REPO, $COMMIT_SHA) instead of `${{ }}`
     # template interpolation, so attacker-controlled tag names cannot be
