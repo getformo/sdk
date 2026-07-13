@@ -3,12 +3,27 @@
  */
 
 import {
+  PrivyLinkedAccount,
   PrivyProfileProperties,
   PrivyUser,
   PrivyWalletInfo,
 } from "./types";
 import { IFormoAnalytics } from "../types/base";
 import { IFormoEventProperties } from "../types/events";
+import { logger } from "../logger";
+
+/**
+ * Whether a Privy linked account is a usable wallet — an EVM/Solana wallet or
+ * smart wallet with an address. Shared by {@link parsePrivyProperties} and the
+ * React binding so the "which accounts are wallets" rule can't drift between
+ * them.
+ */
+export function isPrivyWalletAccount(account: PrivyLinkedAccount): boolean {
+  return (
+    (account.type === "wallet" || account.type === "smart_wallet") &&
+    !!account.address
+  );
+}
 
 /**
  * Extract profile properties and wallet addresses from a Privy user object.
@@ -214,7 +229,7 @@ export function parsePrivyProperties(user: PrivyUser): {
 
   // Extract wallet addresses
   const wallets: PrivyWalletInfo[] = accounts
-    .filter((a) => (a.type === "wallet" || a.type === "smart_wallet") && a.address)
+    .filter(isPrivyWalletAccount)
     .map((a) => ({
       address: a.address!,
       walletClient: (a.walletClientType || a.walletClient) ?? undefined,
@@ -237,13 +252,18 @@ export interface IdentifyPrivyUserOptions {
    *
    * A Privy user's `linkedAccounts` lists every wallet they have ever linked,
    * not which one is currently connected, so the SDK cannot tell them apart on
-   * its own. When you provide `activeAddress`, that wallet is identified last
-   * and becomes the address later events are attributed to, while the other
-   * linked wallets are recorded for identity clustering without taking over
-   * attribution.
+   * its own. When resolved, that wallet is identified last and becomes the
+   * address later events are attributed to, while the other linked wallets are
+   * recorded for identity clustering without taking over attribution.
    *
-   * When omitted, the SDK falls back to identifying embedded (Privy) wallets
-   * first and attributing to the last external wallet — a best-effort guess.
+   * Resolution order:
+   * 1. this `activeAddress`, if it matches a linked wallet;
+   * 2. else the SDK's existing `currentAddress` (e.g. from a prior wagmi
+   *    connect), if it matches a linked wallet;
+   * 3. else a best-effort guess: embedded (Privy) wallets first, attributing to
+   *    the last external wallet.
+   *
+   * So if you already track wallet connects, you can usually omit this.
    */
   activeAddress?: string;
 
@@ -251,6 +271,11 @@ export interface IdentifyPrivyUserOptions {
    * Extra properties merged into every identify call, on top of the profile
    * properties parsed from the Privy user (email, socials, DID, …) and the
    * per-wallet metadata (`wallet_client`, `chain_type`, `is_embedded`).
+   *
+   * Note: because identify events are deduped per `(wallet, user)` within a
+   * session, these properties are effectively captured on the *first* identify
+   * for each wallet and are not refreshed by later calls in the same session.
+   * Treat them as identity metadata set at identify time, not a live profile.
    */
   properties?: IFormoEventProperties;
 }
@@ -267,11 +292,15 @@ export interface IdentifyPrivyUserOptions {
  *
  * Attribution: only the active/connected wallet (see
  * {@link IdentifyPrivyUserOptions.activeAddress}) is promoted to the SDK's
- * current address; the rest are identified with `setCurrentAddress: false` so
- * they do not hijack which wallet subsequent events are attributed to.
+ * active identity; the rest are identified with `setActive: false` so they do
+ * not hijack which wallet subsequent events are attributed to.
  *
  * All linked wallet addresses used here come from `user.linkedAccounts`, which
  * is fully available on the frontend from Privy's `usePrivy()` hook.
+ *
+ * Note: `identify()` is keyed on a wallet address, so a Privy user with no
+ * linked wallet is a no-op (nothing is emitted). Attaching a user identity that
+ * has no wallet is out of scope for this address-keyed helper.
  *
  * @param analytics - The Formo analytics instance (e.g. from `useFormo()`)
  * @param user - The Privy user object from `usePrivy()`
@@ -284,6 +313,8 @@ export interface IdentifyPrivyUserOptions {
  * const { user } = usePrivy();
  * const { wallets } = useWallets();
  * if (user) {
+ *   // activeAddress is optional — omit it if the SDK already tracks the
+ *   // connected wallet via a wagmi/EIP-1193 connect.
  *   await identifyPrivyUser(formo, user, {
  *     activeAddress: wallets[0]?.address,
  *   });
@@ -300,24 +331,35 @@ export async function identifyPrivyUser(
   const { properties, wallets } = parsePrivyProperties(user);
 
   // identify() is keyed on a wallet address, so with no linked wallets there is
-  // nothing to attach the Privy identity to.
-  if (wallets.length === 0) return;
+  // nothing to attach the Privy identity to. Log it so a walletless user (or a
+  // pre-wallet account-creation flow) doesn't silently disappear.
+  if (wallets.length === 0) {
+    logger.info(
+      "identifyPrivyUser: user has no linked wallets; nothing to identify",
+      user.id
+    );
+    return;
+  }
 
   const baseProperties: IFormoEventProperties = {
     ...properties,
     ...options.properties,
   };
 
-  // Resolve the active/connected wallet (case-insensitive). Only honor it if it
-  // actually matches one of the linked wallets.
-  const activeAddress = options.activeAddress?.toLowerCase();
+  // Resolve the active/connected wallet (case-insensitive). Fall back to the
+  // SDK's existing currentAddress (e.g. from a prior wagmi connect) so callers
+  // that already track connects don't have to pass activeAddress. Only honored
+  // if it actually matches one of the linked wallets.
+  const activeAddress = (
+    options.activeAddress ?? analytics.currentAddress
+  )?.toLowerCase();
   const hasActive =
     !!activeAddress &&
     wallets.some((w) => w.address.toLowerCase() === activeAddress);
 
   // Order embedded (Privy) wallets first and external wallets last. When we
   // know the active wallet, move it to the very end. identify() is called in
-  // order, so the last wallet flagged with setCurrentAddress wins attribution.
+  // order, so the last wallet flagged with setActive wins attribution.
   const embedded = wallets.filter((w) => w.isEmbedded);
   const external = wallets.filter((w) => !w.isEmbedded);
   let ordered: PrivyWalletInfo[] = [...embedded, ...external];
@@ -354,7 +396,7 @@ export async function identifyPrivyUser(
       {
         address: wallet.address,
         userId: user.id,
-        setCurrentAddress: isAttributionWallet,
+        setActive: isAttributionWallet,
       },
       walletProperties
     );

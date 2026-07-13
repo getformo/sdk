@@ -68,7 +68,7 @@ import { identifyPrivyUser } from "@formo/analytics";
 const { user } = usePrivy();
 if (user) {
   await identifyPrivyUser(formo, user, {
-    activeAddress: connectedWallet?.address, // optional but recommended
+    activeAddress: connectedWallet?.address, // optional; see "attribution" below
   });
 }
 ```
@@ -92,7 +92,7 @@ For each linked wallet, `identifyPrivyUser` calls:
 
 ```ts
 formo.identify(
-  { address, userId: user.id, setCurrentAddress },
+  { address, userId: user.id, setActive },
   {
     ...profileProperties, // email, socials, privyDid, privyCreatedAt, …
     wallet_client,        // e.g. "metamask", "privy", "rainbow"
@@ -113,6 +113,13 @@ one, and an Ethereum wallet apart from a Solana one, in your analytics.
 `wallet_client` and `chain_type` are omitted when Privy doesn't provide them;
 `is_embedded` is always present.
 
+> **`options.properties` are captured at first identify.** Identify events are
+> deduped per `(wallet, user)` per session (see [below](#when-identity-re-emits)),
+> so extra properties you pass are recorded on the first identify for each wallet
+> and are **not** refreshed by later calls in the same session. Treat them as
+> identity metadata set at identify time, not a live user profile. To update a
+> live trait (plan, org, …), send it on your own events instead.
+
 ## Event attribution and the active wallet
 
 A Privy user's `linkedAccounts` lists **every** wallet they've ever linked — not
@@ -123,16 +130,21 @@ be identified last.
 
 `identifyPrivyUser` handles this for you:
 
-- **When you pass `activeAddress`** (recommended — from `useWallets()` or your
-  wagmi account), that wallet is identified **last** and is the **only** one
-  promoted to the current address. Every other wallet is identified with
-  `setCurrentAddress: false`, so it's recorded for clustering without hijacking
-  attribution.
-- **When you don't**, the SDK falls back to a best-effort order: embedded
-  (Privy) wallets first, external wallets last, and attribution goes to the last
+- **When you pass `activeAddress`** (from `useWallets()` or your wagmi account),
+  that wallet is identified **last** and is the **only** one promoted to the
+  active identity. Every other wallet is identified with `setActive: false`, so
+  it's recorded for clustering without hijacking attribution — and `setActive:
+  false` guards both the active address *and* the active user ID, so a non-active
+  wallet can never leave the SDK pairing your connected wallet with the wrong
+  user.
+- **When you omit it**, the SDK first falls back to its own `currentAddress` (set
+  by a prior wagmi/EIP-1193 connect) — so if you already track connects, you
+  usually don't need to pass anything. Failing that, it uses a best-effort order:
+  embedded (Privy) wallets first, external wallets last, attributing to the last
   external wallet.
 
-Prefer passing `activeAddress` whenever you can derive it.
+Pass `activeAddress` when you have it and the SDK isn't already tracking the
+connected wallet; otherwise the default is usually right.
 
 ## When identity re-emits
 
@@ -145,8 +157,10 @@ Formo deduplicates identify events per session. The dedup key now includes the
   once the Privy DID is attached after login.
 - Switching Privy users on the same wallet re-emits under the new DID.
 
-Combined with the React hook, this means login, `linkWallet`, and `unlinkWallet`
-each produce exactly the identify events you'd expect and nothing more.
+Combined with the React hook, login and `linkWallet` produce exactly the
+identify events you'd expect and nothing more. `unlinkWallet` re-runs the hook
+for the remaining wallets but emits no event of its own — see
+[Limitations](#limitations--roadmap).
 
 ## Advanced: `parsePrivyProperties`
 
@@ -172,6 +186,26 @@ for (const wallet of wallets) {
 Reach for this only if you need behavior `identifyPrivyUser` doesn't cover —
 otherwise prefer the one-liner, which also handles per-wallet metadata and
 active-wallet attribution.
+
+## Limitations & roadmap
+
+The helper is deliberately scoped to **wallet-keyed identity clustering**. Two
+related product concerns are out of scope for it today:
+
+- **Walletless users.** `identify()` is keyed on a wallet address, so a Privy
+  user with no linked wallet is a no-op (logged, not emitted). Pre-wallet
+  account-creation flows and purely social logins therefore won't appear as
+  users until they have a wallet. Surfacing account identity independent of a
+  wallet needs a userId-keyed identify on the ingest side — a separate,
+  backend-coordinated change.
+- **Unlink is additive.** The helper emits positive wallet↔user link events
+  only. When a wallet is unlinked in Privy the React hook re-runs for the
+  smaller set, but there is no SDK-level "unlink" event, so from the backend's
+  perspective links only accumulate. Modeling removal needs an explicit unlink
+  event and server-side handling.
+
+Both are natural next steps for a users/clustering product surface, not part of
+the identify one-liner.
 
 ## The Privy user object
 

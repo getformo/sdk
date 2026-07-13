@@ -64,6 +64,19 @@ export interface IFormoAnalyticsSession {
  */
 const MAX_SESSION_ENTRIES = 20;
 
+/**
+ * Cap for identified wallet-address entries. Higher than {@link
+ * MAX_SESSION_ENTRIES} because a single user can identify many wallets in one
+ * session — a Privy user with N linked wallets consumes up to 2N entries when
+ * each is seen anonymously and then again with a DID (plus per-provider RDNS
+ * variants). The cap is deliberately bounded, not unlimited: entries are stored
+ * comma-joined in a cookie, and a worst-case key (`address:rdns:did`, ~110
+ * bytes) times this cap stays under the ~4KB per-cookie browser limit. When the
+ * cap is exceeded the oldest entries are evicted FIFO; the only consequence is
+ * that an evicted (wallet, user) pair may re-emit one identify later in the day.
+ */
+const MAX_IDENTIFIED_ENTRIES = 30;
+
 export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
    * Generate a unique key for wallet identification tracking
@@ -171,8 +184,8 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
 
     if (!alreadyExists) {
       identifiedWallets.push(identifiedKey);
-      if (identifiedWallets.length > MAX_SESSION_ENTRIES) {
-        identifiedWallets.splice(0, identifiedWallets.length - MAX_SESSION_ENTRIES);
+      if (identifiedWallets.length > MAX_IDENTIFIED_ENTRIES) {
+        identifiedWallets.splice(0, identifiedWallets.length - MAX_IDENTIFIED_ENTRIES);
       }
       const newValue = identifiedWallets.join(",");
       cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {

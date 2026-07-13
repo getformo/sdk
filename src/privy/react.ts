@@ -8,7 +8,11 @@
 import { useEffect } from "react";
 import { useFormo } from "../FormoAnalyticsProvider";
 import { logger } from "../logger";
-import { identifyPrivyUser, IdentifyPrivyUserOptions } from "./utils";
+import {
+  identifyPrivyUser,
+  isPrivyWalletAccount,
+  IdentifyPrivyUserOptions,
+} from "./utils";
 import { PrivyUser } from "./types";
 
 export interface UseIdentifyPrivyUserOptions extends IdentifyPrivyUserOptions {
@@ -32,6 +36,14 @@ export interface UseIdentifyPrivyUserOptions extends IdentifyPrivyUserOptions {
  * The effect is keyed on a stable signature of the DID + sorted linked-wallet
  * addresses + active address, not on the `user` object reference (which Privy
  * re-creates on every render), so it fires only on meaningful changes.
+ * `options.properties` is intentionally NOT part of the key: identify events
+ * are deduped per `(wallet, user)` per session, so property-only changes would
+ * not re-emit anyway — treat properties as identity metadata set at first
+ * identify (see {@link IdentifyPrivyUserOptions.properties}).
+ *
+ * Scope: this emits positive identify (wallet↔user link) events only. Unlinking
+ * a wallet re-runs the effect for the smaller set, but there is no SDK-level
+ * "unlink" event, so links are additive from the backend's perspective.
  *
  * @example
  * ```tsx
@@ -60,10 +72,7 @@ export function useIdentifyPrivyUser(
   // effect re-runs when a wallet is linked or unlinked, but not on every render.
   const walletSignature = user
     ? (user.linkedAccounts || [])
-        .filter(
-          (a) =>
-            (a.type === "wallet" || a.type === "smart_wallet") && !!a.address
-        )
+        .filter(isPrivyWalletAccount)
         .map((a) => (a.address as string).toLowerCase())
         .sort()
         .join(",")

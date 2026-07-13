@@ -11,7 +11,7 @@ interface RecordedIdentify {
   params: {
     address: string;
     userId?: string;
-    setCurrentAddress?: boolean;
+    setActive?: boolean;
     rdns?: string;
     providerName?: string;
   };
@@ -432,7 +432,7 @@ describe("Privy Utilities", () => {
       // ...and is the only one that sets the current address.
       for (const call of calls) {
         const isActive = call.params.address === EXTERNAL;
-        expect(call.params.setCurrentAddress).to.equal(isActive);
+        expect(call.params.setActive).to.equal(isActive);
       }
     });
 
@@ -450,7 +450,7 @@ describe("Privy Utilities", () => {
         activeAddress: EMBEDDED.toUpperCase(),
       });
 
-      const active = calls.find((c) => c.params.setCurrentAddress === true);
+      const active = calls.find((c) => c.params.setActive === true);
       expect(active?.params.address).to.equal(EMBEDDED);
       expect(calls[calls.length - 1].params.address).to.equal(EMBEDDED);
     });
@@ -469,10 +469,10 @@ describe("Privy Utilities", () => {
 
       // Embedded wallet is identified first...
       expect(calls[0].params.address).to.equal(EMBEDDED);
-      expect(calls[0].params.setCurrentAddress).to.equal(false);
+      expect(calls[0].params.setActive).to.equal(false);
       // ...and the external wallet is identified last and owns attribution.
       expect(calls[1].params.address).to.equal(EXTERNAL);
-      expect(calls[1].params.setCurrentAddress).to.equal(true);
+      expect(calls[1].params.setActive).to.equal(true);
     });
 
     it("merges options.properties into every identify call", async () => {
