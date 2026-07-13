@@ -9,8 +9,9 @@ export * from "./FormoAnalytics";
 export * from "./types";
 export { formofy } from "./initialization";
 
-export { parsePrivyProperties } from "./privy";
+export { parsePrivyProperties, identifyPrivyUser } from "./privy";
 export type {
+  IdentifyPrivyUserOptions,
   PrivyUser,
   PrivyLinkedAccount,
   PrivyAccountType,

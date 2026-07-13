@@ -2,8 +2,39 @@ import { describe, it } from "mocha";
 import { expect } from "chai";
 import {
   parsePrivyProperties,
+  identifyPrivyUser,
   PrivyUser,
 } from "../../src/privy";
+import type { IFormoAnalytics } from "../../src/types";
+
+interface RecordedIdentify {
+  params: {
+    address: string;
+    userId?: string;
+    setCurrentAddress?: boolean;
+    rdns?: string;
+    providerName?: string;
+  };
+  properties?: Record<string, unknown>;
+}
+
+/**
+ * Minimal IFormoAnalytics stub that records identify() calls so we can assert
+ * ordering, attribution flags, and forwarded per-wallet metadata.
+ */
+function makeRecorder(): { analytics: IFormoAnalytics; calls: RecordedIdentify[] } {
+  const calls: RecordedIdentify[] = [];
+  const analytics = {
+    identify: async (params: any, properties: any) => {
+      calls.push({ params, properties });
+    },
+  } as unknown as IFormoAnalytics;
+  return { analytics, calls };
+}
+
+const EMBEDDED = "0x1111111111111111111111111111111111111111";
+const EXTERNAL = "0x2222222222222222222222222222222222222222";
+const EXTERNAL_2 = "0x3333333333333333333333333333333333333333";
 
 describe("Privy Utilities", () => {
   describe("parsePrivyProperties", () => {
@@ -322,6 +353,159 @@ describe("Privy Utilities", () => {
         expect(wallets[0].chainType).to.equal("ethereum");
         expect(wallets[1].chainType).to.equal("solana");
       });
+    });
+  });
+
+  describe("identifyPrivyUser", () => {
+    it("identifies every linked wallet tagged with the Privy DID", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        email: { address: "user@example.com" },
+        linkedAccounts: [
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy", chainType: "ethereum" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user);
+
+      expect(calls).to.have.length(2);
+      for (const call of calls) {
+        expect(call.params.userId).to.equal("did:privy:abc123");
+      }
+    });
+
+    it("forwards per-wallet metadata and shared profile properties", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        email: { address: "user@example.com" },
+        linkedAccounts: [
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy", chainType: "ethereum" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user);
+
+      expect(calls).to.have.length(1);
+      const props = calls[0].properties!;
+      // per-wallet metadata
+      expect(props.wallet_client).to.equal("privy");
+      expect(props.chain_type).to.equal("ethereum");
+      expect(props.is_embedded).to.equal(true);
+      // shared profile properties
+      expect(props.privyDid).to.equal("did:privy:abc123");
+      expect(props.email).to.equal("user@example.com");
+    });
+
+    it("omits wallet_client/chain_type when absent but always sends is_embedded", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        linkedAccounts: [{ type: "wallet", address: EXTERNAL }],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user);
+
+      const props = calls[0].properties!;
+      expect(props).to.not.have.property("wallet_client");
+      expect(props).to.not.have.property("chain_type");
+      expect(props.is_embedded).to.equal(false);
+    });
+
+    it("attributes to the provided active wallet and identifies it last", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        linkedAccounts: [
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+          { type: "wallet", address: EXTERNAL_2, walletClientType: "rainbow" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user, { activeAddress: EXTERNAL });
+
+      // Active wallet is identified last...
+      expect(calls[calls.length - 1].params.address).to.equal(EXTERNAL);
+      // ...and is the only one that sets the current address.
+      for (const call of calls) {
+        const isActive = call.params.address === EXTERNAL;
+        expect(call.params.setCurrentAddress).to.equal(isActive);
+      }
+    });
+
+    it("matches the active wallet case-insensitively", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        linkedAccounts: [
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user, {
+        activeAddress: EMBEDDED.toUpperCase(),
+      });
+
+      const active = calls.find((c) => c.params.setCurrentAddress === true);
+      expect(active?.params.address).to.equal(EMBEDDED);
+      expect(calls[calls.length - 1].params.address).to.equal(EMBEDDED);
+    });
+
+    it("falls back to embedded-first order and attributes to the last external wallet", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        linkedAccounts: [
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user);
+
+      // Embedded wallet is identified first...
+      expect(calls[0].params.address).to.equal(EMBEDDED);
+      expect(calls[0].params.setCurrentAddress).to.equal(false);
+      // ...and the external wallet is identified last and owns attribution.
+      expect(calls[1].params.address).to.equal(EXTERNAL);
+      expect(calls[1].params.setCurrentAddress).to.equal(true);
+    });
+
+    it("merges options.properties into every identify call", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        linkedAccounts: [
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user, {
+        properties: { plan: "pro" },
+      });
+
+      expect(calls).to.have.length(2);
+      for (const call of calls) {
+        expect(call.properties!.plan).to.equal("pro");
+      }
+    });
+
+    it("does nothing when the user has no linked wallets", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        email: { address: "user@example.com" },
+        linkedAccounts: [{ type: "email", address: "user@example.com" }],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user);
+
+      expect(calls).to.have.length(0);
     });
   });
 });

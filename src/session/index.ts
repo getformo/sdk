@@ -37,15 +37,20 @@ export interface IFormoAnalyticsSession {
    * Check if a wallet-address pair has been identified in this session
    * @param address The wallet address
    * @param rdns The reverse domain name (RDNS) of the wallet provider
+   * @param userId Optional external user ID (e.g. a Privy DID). When provided,
+   *   it is folded into the dedup key so attaching a new user ID to an
+   *   already-identified wallet re-emits instead of being silently deduped.
    */
-  isWalletIdentified(address: string, rdns: string): boolean;
-  
+  isWalletIdentified(address: string, rdns: string, userId?: string): boolean;
+
   /**
    * Mark a wallet-address pair as identified in this session
    * @param address The wallet address
    * @param rdns The reverse domain name (RDNS) of the wallet provider
+   * @param userId Optional external user ID (e.g. a Privy DID). See
+   *   {@link isWalletIdentified} for how it affects the dedup key.
    */
-  markWalletIdentified(address: string, rdns: string): void;
+  markWalletIdentified(address: string, rdns: string, userId?: string): void;
 }
 
 /**
@@ -62,15 +67,30 @@ const MAX_SESSION_ENTRIES = 20;
 export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
    * Generate a unique key for wallet identification tracking
-   * Combines address and RDNS to track specific wallet-address combinations
-   * 
+   * Combines address, RDNS, and (optionally) the external user ID to track
+   * specific wallet-address-user combinations.
+   *
+   * Folding the user ID into the key means the same wallet identified first
+   * anonymously and later with a user ID (e.g. after a Privy login attaches a
+   * DID) produces two distinct keys, so the second identify is not deduped.
+   * When `userId` is omitted the key is unchanged (`address` or `address:rdns`),
+   * preserving backward compatibility with keys already stored in browsers.
+   *
    * @param address The wallet address
    * @param rdns The reverse domain name of the wallet provider
+   * @param userId Optional external user ID (e.g. a Privy DID)
    * @returns A unique identification key
    */
-  private generateIdentificationKey(address: string, rdns: string): string {
+  private generateIdentificationKey(
+    address: string,
+    rdns: string,
+    userId?: string
+  ): string {
     // If rdns is missing, use address-only key as fallback for empty identifies
-    return rdns ? `${address}:${rdns}` : address;
+    const parts = [address];
+    if (rdns) parts.push(rdns);
+    if (userId) parts.push(userId);
+    return parts.join(":");
   }
 
   /**
@@ -113,8 +133,12 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    * @param rdns The reverse domain name of the wallet provider
    * @returns true if this wallet-address pair has been identified
    */
-  public isWalletIdentified(address: string, rdns: string): boolean {
-    const identifiedKey = this.generateIdentificationKey(address, rdns);
+  public isWalletIdentified(
+    address: string,
+    rdns: string,
+    userId?: string
+  ): boolean {
+    const identifiedKey = this.generateIdentificationKey(address, rdns, userId);
     const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
     const identifiedWallets = cookieValue?.split(",") || [];
     const isIdentified = identifiedWallets.includes(identifiedKey);
@@ -135,8 +159,12 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    * @param address The wallet address
    * @param rdns The reverse domain name of the wallet provider
    */
-  public markWalletIdentified(address: string, rdns: string): void {
-    const identifiedKey = this.generateIdentificationKey(address, rdns);
+  public markWalletIdentified(
+    address: string,
+    rdns: string,
+    userId?: string
+  ): void {
+    const identifiedKey = this.generateIdentificationKey(address, rdns, userId);
     const identifiedWallets =
       cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
     const alreadyExists = identifiedWallets.includes(identifiedKey);

@@ -95,6 +95,16 @@ export interface IFormoAnalytics {
       providerName?: string;
       userId?: string;
       rdns?: string;
+      /**
+       * Whether this identify should set the SDK's current wallet address —
+       * the address later events are attributed to. Defaults to `true`.
+       *
+       * Set to `false` when identifying a linked-but-not-active wallet (e.g.
+       * one of several wallets behind a single Privy user) so it is recorded
+       * for identity clustering without hijacking event attribution away from
+       * the wallet the user is actually transacting with.
+       */
+      setCurrentAddress?: boolean;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,

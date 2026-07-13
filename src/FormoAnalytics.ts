@@ -690,15 +690,11 @@ export class FormoAnalytics implements IFormoAnalytics {
    * // Basic identify
    * formo.identify({ address: '0x...', userId: 'user123' });
    *
-   * // With Privy user
-   * import { parsePrivyProperties } from '@formo/analytics';
+   * // With a Privy user, prefer the one-liner helper which forwards
+   * // per-wallet metadata and keeps event attribution on the active wallet:
+   * import { identifyPrivyUser } from '@formo/analytics';
    * const { user } = usePrivy();
-   * if (user) {
-   *   const { properties, wallets } = parsePrivyProperties(user);
-   *   for (const wallet of wallets) {
-   *     formo.identify({ address: wallet.address, userId: user.id }, properties);
-   *   }
-   * }
+   * if (user) await identifyPrivyUser(formo, user);
    * ```
    */
   async identify(
@@ -707,6 +703,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       providerName?: string;
       userId?: string;
       rdns?: string;
+      setCurrentAddress?: boolean;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -790,7 +787,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      const { address, providerName, userId, rdns } = params;
+      const { address, providerName, userId, rdns, setCurrentAddress } = params;
 
       // Runtime validation: address is required
       if (!address) {
@@ -801,12 +798,17 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       logger.info("Identify", address, userId, providerName, rdns);
       const validAddress = validateAddress(address);
-      if (validAddress) {
-        this.currentAddress = validAddress;
-        this.persistActiveWallet();
-      } else {
+      if (!validAddress) {
         logger.warn?.("Invalid address provided to identify:", address);
         return;
+      }
+      // Only promote this wallet to the current/active address when the caller
+      // wants it (default). Passing `setCurrentAddress: false` records the
+      // identity for clustering without changing which wallet later events are
+      // attributed to — used when identifying non-active linked wallets.
+      if (setCurrentAddress !== false) {
+        this.currentAddress = validAddress;
+        this.persistActiveWallet();
       }
       if (userId) {
         this.currentUserId = userId;
@@ -818,8 +820,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         });
       }
 
-      // Check for duplicate identify events in this session
-      const isAlreadyIdentified = this.session.isWalletIdentified(validAddress, rdns || "");
+      // Check for duplicate identify events in this session. The userId is
+      // folded into the dedup key so re-identifying an already-seen wallet with
+      // a newly-attached userId (e.g. a Privy DID after login) still emits.
+      const isAlreadyIdentified = this.session.isWalletIdentified(
+        validAddress,
+        rdns || "",
+        userId
+      );
 
       logger.debug("Identify: Checking deduplication", {
         validAddress,
@@ -841,7 +849,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Mark as identified before emitting the event
-      this.session.markWalletIdentified(validAddress, rdns || "");
+      this.session.markWalletIdentified(validAddress, rdns || "", userId);
 
       await this.trackEvent(
         EventType.IDENTIFY,
