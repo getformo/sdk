@@ -150,51 +150,10 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     };
     await identifyPrivyUser(formo, user, { activeAddress: EXTERNAL });
 
-    // The embedded wallet was identified with setActive:false, so the
-    // active external wallet still owns attribution.
+    // The active wallet (EXTERNAL) is identified last, so even though the
+    // embedded wallet is also identified during the call, attribution ends up
+    // on EXTERNAL rather than an arbitrary linked wallet.
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
-  });
-
-  it("defaults attribution to the SDK's connected wallet when activeAddress is omitted", async () => {
-    const formo = await makeAnalytics();
-    captureIdentifies(formo);
-
-    // A prior connect sets currentAddress to the external wallet.
-    await formo.identify({ address: EXTERNAL, rdns: "io.metamask" });
-    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
-
-    const user: PrivyUser = {
-      id: DID,
-      linkedAccounts: [
-        { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
-        { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
-      ],
-    };
-    // No activeAddress passed — the helper should fall back to currentAddress.
-    await identifyPrivyUser(formo, user);
-
-    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
-  });
-
-  it("setActive:false does not repoint the active user id (not just the address)", async () => {
-    const formo = await makeAnalytics();
-    captureIdentifies(formo);
-
-    // Establish an active identity: address EXTERNAL, user "user-A".
-    await formo.identify({ address: EXTERNAL, userId: "user-A" });
-    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
-    expect(formo.currentUserId).to.equal("user-A");
-
-    // A non-active identify for a different wallet AND user must leave the
-    // active (address, userId) pair untouched — no mismatched pairing.
-    await formo.identify({
-      address: EMBEDDED,
-      userId: "user-B",
-      setActive: false,
-    });
-
-    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
-    expect(formo.currentUserId).to.equal("user-A");
   });
 
   it("dedups a repeated call but re-emits when a DID is attached to an anonymous wallet", async () => {

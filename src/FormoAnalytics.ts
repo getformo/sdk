@@ -703,7 +703,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       providerName?: string;
       userId?: string;
       rdns?: string;
-      setActive?: boolean;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
@@ -787,7 +786,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      const { address, providerName, userId, rdns, setActive } = params;
+      const { address, providerName, userId, rdns } = params;
 
       // Runtime validation: address is required
       if (!address) {
@@ -798,31 +797,21 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       logger.info("Identify", address, userId, providerName, rdns);
       const validAddress = validateAddress(address);
-      if (!validAddress) {
+      if (validAddress) {
+        this.currentAddress = validAddress;
+        this.persistActiveWallet();
+      } else {
         logger.warn?.("Invalid address provided to identify:", address);
         return;
       }
-      // Promote this wallet to the SDK's active identity — the (address,
-      // userId) pair later events are attributed to — unless the caller opts
-      // out with `setActive: false`. Both the active address AND the active
-      // user ID are gated together: a non-active identify records the
-      // wallet↔user link (event emission + session dedup below) for clustering
-      // without repointing attribution. This matters when identifying several
-      // linked wallets that share one user (e.g. a Privy DID): only the active
-      // wallet should own attribution, and it must not be left paired with a
-      // different wallet's user ID.
-      if (setActive !== false) {
-        this.currentAddress = validAddress;
-        this.persistActiveWallet();
-        if (userId) {
-          this.currentUserId = userId;
-          const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
-          cookie().set(SESSION_USER_ID_KEY, userId, {
-            path: "/",
-            ...getIdentityCookieSecurity(),
-            ...(domain ? { domain } : {}),
-          });
-        }
+      if (userId) {
+        this.currentUserId = userId;
+        const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
+        cookie().set(SESSION_USER_ID_KEY, userId, {
+          path: "/",
+          ...getIdentityCookieSecurity(),
+          ...(domain ? { domain } : {}),
+        });
       }
 
       // Check for duplicate identify events in this session. The userId is

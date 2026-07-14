@@ -92,7 +92,7 @@ For each linked wallet, `identifyPrivyUser` calls:
 
 ```ts
 formo.identify(
-  { address, userId: user.id, setActive },
+  { address, userId: user.id },
   {
     ...profileProperties, // email, socials, privyDid, privyCreatedAt, …
     wallet_client,        // e.g. "metamask", "privy", "rainbow"
@@ -101,6 +101,9 @@ formo.identify(
   }
 );
 ```
+
+The wallets are identified in a deliberate order — the active wallet last — so
+event attribution lands on it rather than an arbitrary linked wallet (see below).
 
 The shared **profile properties** are parsed from the Privy user's linked
 accounts (see [`parsePrivyProperties`](#advanced-parseprivyproperties)) and
@@ -128,23 +131,21 @@ which one they're using right now. Since `identify()` also updates the SDK's
 over every linked wallet would leave attribution on whichever wallet happened to
 be identified last.
 
-`identifyPrivyUser` handles this for you:
+`identifyPrivyUser` handles this by **ordering** the loop — it identifies the
+active wallet last, so it's the one that ends up as the current address. No
+special `identify()` flag is involved; the core API is unchanged.
 
 - **When you pass `activeAddress`** (from `useWallets()` or your wagmi account),
-  that wallet is identified **last** and is the **only** one promoted to the
-  active identity. Every other wallet is identified with `setActive: false`, so
-  it's recorded for clustering without hijacking attribution — and `setActive:
-  false` guards both the active address *and* the active user ID, so a non-active
-  wallet can never leave the SDK pairing your connected wallet with the wrong
-  user.
-- **When you omit it**, the SDK first falls back to its own `currentAddress` (set
-  by a prior wagmi/EIP-1193 connect) — so if you already track connects, you
-  usually don't need to pass anything. Failing that, it uses a best-effort order:
-  embedded (Privy) wallets first, external wallets last, attributing to the last
-  external wallet.
+  that wallet is moved to the end of the loop and wins attribution. The other
+  linked wallets are still identified (for clustering) but earlier, so they don't
+  end up as the current address.
+- **When you omit it**, the helper uses a best-effort order: embedded (Privy)
+  wallets first, external wallets last, attributing to the last external wallet.
 
-Pass `activeAddress` when you have it and the SDK isn't already tracking the
-connected wallet; otherwise the default is usually right.
+Pass `activeAddress` when you can derive it for precise attribution; otherwise
+the best-effort order is usually right. If you already track the connected wallet
+via a separate `connect()`/wagmi flow, that remains the source of truth for
+attribution once the user transacts.
 
 ## When identity re-emits
 

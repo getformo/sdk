@@ -11,7 +11,6 @@ interface RecordedIdentify {
   params: {
     address: string;
     userId?: string;
-    setActive?: boolean;
     rdns?: string;
     providerName?: string;
   };
@@ -427,13 +426,15 @@ describe("Privy Utilities", () => {
 
       await identifyPrivyUser(analytics, user, { activeAddress: EXTERNAL });
 
-      // Active wallet is identified last...
+      // Active wallet is identified last, so it wins attribution (identify()
+      // sets the current address on each call, last write wins).
       expect(calls[calls.length - 1].params.address).to.equal(EXTERNAL);
-      // ...and is the only one that sets the current address.
-      for (const call of calls) {
-        const isActive = call.params.address === EXTERNAL;
-        expect(call.params.setActive).to.equal(isActive);
-      }
+      // ...and every wallet is still identified for clustering.
+      expect(calls.map((c) => c.params.address)).to.have.members([
+        EMBEDDED,
+        EXTERNAL,
+        EXTERNAL_2,
+      ]);
     });
 
     it("matches the active wallet case-insensitively", async () => {
@@ -450,8 +451,7 @@ describe("Privy Utilities", () => {
         activeAddress: EMBEDDED.toUpperCase(),
       });
 
-      const active = calls.find((c) => c.params.setActive === true);
-      expect(active?.params.address).to.equal(EMBEDDED);
+      // Case-insensitive match still puts the active wallet last.
       expect(calls[calls.length - 1].params.address).to.equal(EMBEDDED);
     });
 
@@ -469,10 +469,8 @@ describe("Privy Utilities", () => {
 
       // Embedded wallet is identified first...
       expect(calls[0].params.address).to.equal(EMBEDDED);
-      expect(calls[0].params.setActive).to.equal(false);
-      // ...and the external wallet is identified last and owns attribution.
+      // ...and the external wallet is identified last, so it owns attribution.
       expect(calls[1].params.address).to.equal(EXTERNAL);
-      expect(calls[1].params.setActive).to.equal(true);
     });
 
     it("merges options.properties into every identify call", async () => {

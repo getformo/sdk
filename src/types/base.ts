@@ -29,12 +29,6 @@ export interface EvmChainState extends ChainState {
 
 export type ValidInputTypes = Uint8Array | bigint | string | number | boolean;
 export interface IFormoAnalytics {
-  /**
-   * The wallet address the SDK currently attributes events to, if any. Set by
-   * `connect()` and by `identify()` (unless `setActive: false`). Read-only from
-   * a consumer's perspective — use `connect()`/`identify()` to change it.
-   */
-  readonly currentAddress?: Address;
   page(
     category?: string,
     name?: string,
@@ -101,18 +95,6 @@ export interface IFormoAnalytics {
       providerName?: string;
       userId?: string;
       rdns?: string;
-      /**
-       * Whether this identify should become the SDK's active identity — the
-       * `(currentAddress, currentUserId)` pair that later events are attributed
-       * to. Defaults to `true`.
-       *
-       * Set to `false` when identifying a linked-but-not-active wallet (e.g.
-       * one of several wallets behind a single Privy user): the wallet↔user
-       * link is still emitted and deduped for identity clustering, but neither
-       * the active address nor the active user ID is changed, so attribution
-       * stays on the wallet the user is actually transacting with.
-       */
-      setActive?: boolean;
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
