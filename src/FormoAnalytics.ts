@@ -693,10 +693,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    * formo.identify({ address: '0x...', userId: 'user123' });
    *
    * // Privy: pass the usePrivy() user with `{ privy: true }` to identify every
-   * // linked wallet under the user's DID in one call.
+   * // linked wallet under the user's DID in one call. Attribution defaults to
+   * // Privy's primary wallet (user.wallet); pass `activeAddress` to override.
    * const { user } = usePrivy();
-   * const { wallets } = useWallets();
-   * if (user) formo.identify(user, { privy: true, activeAddress: wallets[0]?.address });
+   * if (user) formo.identify(user, { privy: true });
    * ```
    */
   async identify(

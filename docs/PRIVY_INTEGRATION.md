@@ -33,24 +33,18 @@ an effect that runs when the user changes, so login, `linkWallet`, and
 
 ```tsx
 import { useEffect } from "react";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { usePrivy } from "@privy-io/react-auth";
 import { useFormo } from "@formo/analytics";
 
 function AnalyticsIdentity() {
   const formo = useFormo();
   const { user, authenticated } = usePrivy();
-  const { wallets } = useWallets();
 
   useEffect(() => {
     if (formo && authenticated && user) {
-      formo.identify(user, {
-        privy: true,
-        // The currently-connected wallet — identified last so event
-        // attribution stays on the wallet the user is transacting with.
-        activeAddress: wallets[0]?.address,
-      });
+      formo.identify(user, { privy: true });
     }
-  }, [formo, authenticated, user, wallets]);
+  }, [formo, authenticated, user]);
 
   return null;
 }
@@ -150,21 +144,23 @@ which one they're using right now. Since `identify()` also updates the SDK's
 over every linked wallet would leave attribution on whichever wallet happened to
 be identified last.
 
-`identifyPrivyUser` handles this by **ordering** the loop — it identifies the
-active wallet last, so it's the one that ends up as the current address. No
-special `identify()` flag is involved; the core API is unchanged.
+The SDK handles this by **ordering** the loop — it identifies the chosen wallet
+last, so it's the one that ends up as the current address. The wallet is chosen,
+in order:
 
-- **When you pass `activeAddress`** (from `useWallets()` or your wagmi account),
-  that wallet is moved to the end of the loop and wins attribution. The other
-  linked wallets are still identified (for clustering) but earlier, so they don't
-  end up as the current address.
-- **When you omit it**, the helper uses a best-effort order: embedded (Privy)
-  wallets first, external wallets last, attributing to the last external wallet.
+1. **`activeAddress`**, if you pass it (an optional override — e.g. the connected
+   wallet from `useWallets()[0]?.address` or your wagmi account, which reflects
+   the live active wallet most precisely);
+2. else **`user.wallet`** — the primary wallet Privy surfaces on the user object,
+   so `identify(user, { privy: true })` needs no argument at all;
+3. else a best-effort order: embedded (Privy) wallets first, attributing to the
+   last external wallet.
 
-Pass `activeAddress` when you can derive it for precise attribution; otherwise
-the best-effort order is usually right. If you already track the connected wallet
-via a separate `connect()`/wagmi flow, that remains the source of truth for
-attribution once the user transacts.
+In practice you can just call `formo.identify(user, { privy: true })` and let it
+default to Privy's primary wallet. Pass `activeAddress` only when you want to pin
+attribution to a specific wallet. If you already track the connected wallet via a
+separate `connect()`/wagmi flow, that remains the source of truth for attribution
+once the user transacts.
 
 ## When identity re-emits
 

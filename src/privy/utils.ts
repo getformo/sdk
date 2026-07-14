@@ -246,20 +246,17 @@ export function parsePrivyProperties(user: PrivyUser): {
  */
 export interface IdentifyPrivyUserOptions {
   /**
-   * Address of the wallet the user is actively transacting with — typically
-   * the connected wallet from Privy's `useWallets()` (`wallets[0]?.address`)
-   * or your wagmi account.
+   * Optional override for the wallet that should own event attribution — the
+   * one identified last, so later events are attributed to it.
    *
-   * A Privy user's `linkedAccounts` lists every wallet they have ever linked,
-   * not which one is currently connected, so the SDK cannot tell them apart on
-   * its own. When provided (and it matches a linked wallet), that wallet is
-   * identified last so it wins event attribution, while the other linked
-   * wallets are still recorded for identity clustering.
+   * You usually don't need this. When omitted, the helper defaults to Privy's
+   * own surfaced wallet (`user.wallet`), then to a best-effort order (embedded
+   * wallets first, attributing to the last external wallet). Pass it only when
+   * you want to pin attribution to a specific wallet — e.g. the currently
+   * connected wallet from `useWallets()[0]?.address` or your wagmi account,
+   * which reflects the live active wallet more precisely than `user.wallet`.
    *
-   * When omitted, the helper falls back to a best-effort order: embedded
-   * (Privy) wallets first, attributing to the last external wallet. Pass this
-   * whenever you can derive it (e.g. `useWallets()[0]?.address`) for precise
-   * attribution.
+   * Ignored if it doesn't match one of the user's linked wallets.
    */
   activeAddress?: string;
 
@@ -343,9 +340,13 @@ export async function identifyPrivyUser(
     ...options.properties,
   };
 
-  // Resolve the active/connected wallet (case-insensitive), if one was given
-  // and it matches a linked wallet.
-  const activeAddress = options.activeAddress?.toLowerCase();
+  // Resolve the wallet that should own event attribution (case-insensitive):
+  // an explicit activeAddress wins, otherwise fall back to Privy's own surfaced
+  // wallet (`user.wallet`) — its designated primary — so callers don't have to
+  // pass anything. Only honored if it matches one of the linked wallets.
+  const activeAddress = (
+    options.activeAddress ?? user.wallet?.address
+  )?.toLowerCase();
   const hasActive =
     !!activeAddress &&
     wallets.some((w) => w.address.toLowerCase() === activeAddress);

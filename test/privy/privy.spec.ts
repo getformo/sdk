@@ -473,6 +473,42 @@ describe("Privy Utilities", () => {
       expect(calls[1].params.address).to.equal(EXTERNAL);
     });
 
+    it("defaults the active wallet to user.wallet when activeAddress is omitted", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        // Privy's surfaced primary wallet is the embedded one.
+        wallet: { address: EMBEDDED },
+        linkedAccounts: [
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user);
+
+      // user.wallet (EMBEDDED) is treated as active → identified last,
+      // overriding the embedded-first heuristic (which would end on EXTERNAL).
+      expect(calls[calls.length - 1].params.address).to.equal(EMBEDDED);
+    });
+
+    it("lets an explicit activeAddress override user.wallet", async () => {
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        wallet: { address: EMBEDDED },
+        linkedAccounts: [
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+          { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+        ],
+      };
+      const { analytics, calls } = makeRecorder();
+
+      await identifyPrivyUser(analytics, user, { activeAddress: EXTERNAL });
+
+      // Explicit override wins over user.wallet.
+      expect(calls[calls.length - 1].params.address).to.equal(EXTERNAL);
+    });
+
     it("merges options.properties into every identify call", async () => {
       const user: PrivyUser = {
         id: "did:privy:abc123",
