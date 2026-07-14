@@ -1,13 +1,12 @@
 /**
  * Privy integration module
  *
- * Provides utilities for enriching wallet profiles with Privy user data.
- * This module exports the property extraction utility, the one-liner
- * `identifyPrivyUser` helper, and related types.
+ * Provides utilities for enriching wallet profiles with Privy user data:
+ * `parsePrivyProperties` (low-level parsing) and `identifyPrivyUser` (identify
+ * every linked wallet under the user's DID). The same behavior is also
+ * available as `formo.identify(user, { privy: true })`.
  *
- * Note: the React binding (`useIdentifyPrivyUser`) is intentionally NOT
- * re-exported here so this module stays free of a React dependency and can be
- * used from the React-free `core` entry. Import the hook from the package root.
+ * This module is React-free so it can be used from the `core` entry.
  */
 
 export { parsePrivyProperties, identifyPrivyUser } from "./utils";

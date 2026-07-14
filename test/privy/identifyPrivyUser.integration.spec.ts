@@ -132,6 +132,51 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
 
+  it("dispatches identify(user, { privy: true }) through the core identify()", async () => {
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    const user: PrivyUser = {
+      id: DID,
+      email: { address: "user@example.com" },
+      linkedAccounts: [
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy", chainType: "ethereum" },
+      ],
+    };
+
+    // The single-call form: no separate helper or hook.
+    await formo.identify(user, { privy: true, activeAddress: EXTERNAL });
+
+    // Both linked wallets identified under the DID, with metadata forwarded.
+    expect(events).to.have.length(2);
+    expect(events.map((e) => e.address.toLowerCase())).to.have.members([
+      EMBEDDED,
+      EXTERNAL,
+    ]);
+    for (const e of events) {
+      expect(e.userId).to.equal(DID);
+      expect(e.properties.email).to.equal("user@example.com");
+      expect(e.properties).to.have.property("is_embedded");
+    }
+    // Active wallet identified last → owns attribution.
+    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
+  });
+
+  it("does not treat a normal identify with a `privy` property as the Privy form", async () => {
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    // A regular identify whose *params* is address-shaped must not dispatch,
+    // even though we pass properties; the flag lives in the options position.
+    await formo.identify({ address: EXTERNAL, userId: "plain" }, { plan: "pro" });
+
+    expect(events).to.have.length(1);
+    expect(events[0].address.toLowerCase()).to.equal(EXTERNAL);
+    expect(events[0].userId).to.equal("plain");
+    expect(events[0].properties.plan).to.equal("pro");
+  });
+
   it("does not let a non-active linked wallet hijack currentAddress after a real connect", async () => {
     const formo = await makeAnalytics();
     captureIdentifies(formo);

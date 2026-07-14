@@ -22,45 +22,60 @@ today, connect three more next week — they all roll up under the same identity
               Formo clusters them into one user
 ```
 
-This is the **one-liner** replacement for hand-rolling an `identify()` loop.
+The whole thing is a single `identify(user, { privy: true })` call — a one-line
+replacement for hand-rolling an `identify()` loop over the linked wallets.
 
 ## Quick start (React)
 
-Drop `useIdentifyPrivyUser` into any component rendered under
-`FormoAnalyticsProvider` and hand it the Privy `user`. It keeps Formo's identity
-in sync automatically — on login, on `linkWallet`, and on `unlinkWallet`.
+Pass the `usePrivy()` user to `identify()` with `{ privy: true }`. Call it from
+an effect that runs when the user changes, so login, `linkWallet`, and
+`unlinkWallet` all keep Formo's identity in sync. No separate helper or hook.
 
 ```tsx
+import { useEffect } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
-import { useIdentifyPrivyUser } from "@formo/analytics";
+import { useFormo } from "@formo/analytics";
 
 function AnalyticsIdentity() {
-  const { user, authenticated, ready } = usePrivy();
+  const formo = useFormo();
+  const { user, authenticated } = usePrivy();
   const { wallets } = useWallets();
 
-  useIdentifyPrivyUser(user, {
-    enabled: ready && authenticated,
-    // The currently-connected wallet — identified last so event attribution
-    // stays on the wallet the user is actually transacting with.
-    activeAddress: wallets[0]?.address,
-  });
+  useEffect(() => {
+    if (formo && authenticated && user) {
+      formo.identify(user, {
+        privy: true,
+        // The currently-connected wallet — identified last so event
+        // attribution stays on the wallet the user is transacting with.
+        activeAddress: wallets[0]?.address,
+      });
+    }
+  }, [formo, authenticated, user, wallets]);
 
   return null;
 }
 ```
 
-That's it. Every wallet linked to the Privy user is identified under the user's
-DID, with per-wallet metadata forwarded, and event attribution pinned to the
-active wallet.
+That single `identify(user, { privy: true })` call identifies **every** wallet
+linked to the Privy user under the user's DID, forwards each wallet's metadata,
+and pins event attribution to the active wallet.
 
-> The hook is keyed on a stable signature of the DID + the set of linked wallet
-> addresses (not on the `user` object reference, which Privy re-creates every
-> render), so it only re-runs when something meaningful changes.
+> The effect above is yours to own — key it on `user` (and `wallets`) so it
+> re-runs on login and link/unlink. The SDK deduplicates the underlying identify
+> events per `(wallet, user)`, so re-running on every render is safe.
+
+## How it works
+
+`identify(user, { privy: true })` is a thin convenience form of `identify()`:
+when it sees the `{ privy: true }` flag it treats the first argument as a Privy
+user and expands `user.linkedAccounts`, calling the normal
+`identify({ address, userId })` once per linked wallet. The Privy-specific logic
+lives in the SDK's Privy module; the core `identify()` just dispatches to it.
 
 ## Framework-agnostic usage
 
-Not using React (or want to call it imperatively)? Use `identifyPrivyUser`
-directly — it works with the `core` entry too.
+Not using React (or prefer an explicit function)? `identifyPrivyUser` is the
+same thing without the flag, and works from the `core` entry too.
 
 ```ts
 import { identifyPrivyUser } from "@formo/analytics";
@@ -72,6 +87,10 @@ if (user) {
   });
 }
 ```
+
+`formo.identify(user, { privy: true, activeAddress, properties })` and
+`identifyPrivyUser(formo, user, { activeAddress, properties })` are equivalent —
+the former is sugar over the latter.
 
 ### Signature
 
@@ -158,9 +177,9 @@ Formo deduplicates identify events per session. The dedup key now includes the
   once the Privy DID is attached after login.
 - Switching Privy users on the same wallet re-emits under the new DID.
 
-Combined with the React hook, login and `linkWallet` produce exactly the
-identify events you'd expect and nothing more. `unlinkWallet` re-runs the hook
-for the remaining wallets but emits no event of its own — see
+Combined with re-running your effect on `user` changes, login and `linkWallet`
+produce exactly the identify events you'd expect and nothing more. `unlinkWallet`
+re-runs the effect for the remaining wallets but emits no event of its own — see
 [Limitations](#limitations--roadmap).
 
 ## Advanced: `parsePrivyProperties`
@@ -199,11 +218,11 @@ related product concerns are out of scope for it today:
   users until they have a wallet. Surfacing account identity independent of a
   wallet needs a userId-keyed identify on the ingest side — a separate,
   backend-coordinated change.
-- **Unlink is additive.** The helper emits positive wallet↔user link events
-  only. When a wallet is unlinked in Privy the React hook re-runs for the
-  smaller set, but there is no SDK-level "unlink" event, so from the backend's
-  perspective links only accumulate. Modeling removal needs an explicit unlink
-  event and server-side handling.
+- **Unlink is additive.** `identify(user, { privy: true })` emits positive
+  wallet↔user link events only. When a wallet is unlinked in Privy your effect
+  re-runs for the smaller set, but there is no SDK-level "unlink" event, so from
+  the backend's perspective links only accumulate. Modeling removal needs an
+  explicit unlink event and server-side handling.
 
 Both are natural next steps for a users/clustering product surface, not part of
 the identify one-liner.
@@ -242,9 +261,9 @@ No. Because every wallet is identified with the same `userId`, Formo merges them
 server-side. There's no separate alias step.
 
 **What about wallets the user links later?**
-The React hook re-runs whenever the linked-wallet set changes, so newly linked
-wallets are identified automatically. With the imperative helper, just call
-`identifyPrivyUser` again after a `linkWallet` succeeds.
+Because you call `identify(user, { privy: true })` from an effect keyed on
+`user`, it re-runs whenever the linked-wallet set changes, so newly linked
+wallets are identified automatically.
 
 **Does this work for Solana wallets?**
 Yes. Solana wallets appear in `linkedAccounts` with `chainType: "solana"` and

@@ -59,6 +59,8 @@ import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
+import { identifyPrivyUser } from "./privy";
+import type { PrivyUser } from "./privy";
 
 /**
  * Constants for provider switching reasons
@@ -690,13 +692,21 @@ export class FormoAnalytics implements IFormoAnalytics {
    * // Basic identify
    * formo.identify({ address: '0x...', userId: 'user123' });
    *
-   * // With a Privy user, prefer the one-liner helper which forwards
-   * // per-wallet metadata and keeps event attribution on the active wallet:
-   * import { identifyPrivyUser } from '@formo/analytics';
+   * // Privy: pass the usePrivy() user with `{ privy: true }` to identify every
+   * // linked wallet under the user's DID in one call.
    * const { user } = usePrivy();
-   * if (user) await identifyPrivyUser(formo, user);
+   * const { wallets } = useWallets();
+   * if (user) formo.identify(user, { privy: true, activeAddress: wallets[0]?.address });
    * ```
    */
+  async identify(
+    user: PrivyUser,
+    options: {
+      privy: true;
+      activeAddress?: string;
+      properties?: IFormoEventProperties;
+    }
+  ): Promise<void>;
   async identify(
     params?: {
       address: Address;
@@ -707,8 +717,47 @@ export class FormoAnalytics implements IFormoAnalytics {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  async identify(
+    paramsOrUser?:
+      | {
+          address: Address;
+          providerName?: string;
+          userId?: string;
+          rdns?: string;
+        }
+      | PrivyUser,
+    propertiesOrOptions?:
+      | IFormoEventProperties
+      | { privy: true; activeAddress?: string; properties?: IFormoEventProperties },
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
+      // Privy convenience form: identify(user, { privy: true, activeAddress? }).
+      // Delegate to the Privy adapter, which expands the user's linked wallets
+      // into one identify per wallet under the shared DID. Kept as a thin
+      // dispatch so the Privy-specific logic stays in the privy module.
+      if (
+        propertiesOrOptions &&
+        (propertiesOrOptions as { privy?: unknown }).privy === true
+      ) {
+        const opts = propertiesOrOptions as {
+          activeAddress?: string;
+          properties?: IFormoEventProperties;
+        };
+        await identifyPrivyUser(this, paramsOrUser as PrivyUser, {
+          activeAddress: opts.activeAddress,
+          properties: opts.properties,
+        });
+        return;
+      }
+
+      const params = paramsOrUser as
+        | { address: Address; providerName?: string; userId?: string; rdns?: string }
+        | undefined;
+      const properties = propertiesOrOptions as IFormoEventProperties | undefined;
+
       // identify() writes the user-id cookie and marks wallet
       // identification before trackEvent's consent check — gate the whole
       // method so a suppressed visitor or excluded environment (opt-out /
