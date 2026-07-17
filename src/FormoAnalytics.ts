@@ -758,30 +758,35 @@ export class FormoAnalytics implements IFormoAnalytics {
           activeAddress?: string;
           properties?: IFormoEventProperties;
         };
-        // Snapshot the address the SDK currently attributes events to. Each
-        // per-wallet identify below rewrites currentAddress, so we restore this
-        // afterwards if the sync didn't land on a linked wallet.
-        const prevAddress = this.currentAddress;
-        const attributed = await identifyPrivyUser(this, maybeUser as PrivyUser, {
-          // Prefer an explicit override, else the wallet the SDK already treats
-          // as active (e.g. from a wagmi/EIP-1193 connect) so this multi-wallet
-          // identify doesn't overwrite attribution with Privy's primary wallet.
-          activeAddress: opts.activeAddress ?? prevAddress,
+        // identifyPrivyUser records every linked wallet for clustering WITHOUT
+        // touching active state (internal setActive:false), and promotes only
+        // the resolved active wallet. Prefer an explicit override, else the
+        // wallet the SDK already treats as active (e.g. from a wagmi/EIP-1193
+        // connect). Passing that address means a connected wallet that isn't
+        // linked in Privy simply doesn't match, so the sync leaves attribution
+        // untouched instead of overwriting it — no snapshot/restore needed.
+        const active = await identifyPrivyUser(this, maybeUser as PrivyUser, {
+          activeAddress: opts.activeAddress ?? this.currentAddress,
           properties: opts.properties,
         });
-        // When no linked wallet matched the active address (e.g. the connected
-        // wallet isn't linked in Privy), the loop left currentAddress on an
-        // arbitrary linked wallet — restore the pre-sync address so attribution
-        // stays on the wallet the user is actually using.
-        if (!attributed && prevAddress && this.currentAddress !== prevAddress) {
-          this.currentAddress = prevAddress;
-          this.persistActiveWallet();
-        }
+        // Reconcile the chain id with the newly-active wallet's chain namespace
+        // so a Solana address isn't left paired with a stale EVM chain id.
+        if (active) this.syncPrivyActiveChain(active.chainType);
         return;
       }
 
       const params = paramsOrUser as
-        | { address: Address; providerName?: string; userId?: string; rdns?: string }
+        | {
+            address: Address;
+            providerName?: string;
+            userId?: string;
+            rdns?: string;
+            // Internal only (not on the public IFormoAnalytics.identify overloads):
+            // when false, record the wallet↔user link for clustering/dedup but do
+            // NOT change the SDK's active identity. Used by identifyPrivyUser so
+            // clustering identifies for non-active wallets don't hijack attribution.
+            setActive?: boolean;
+          }
         | undefined;
       const properties = propertiesOrOptions as IFormoEventProperties | undefined;
 
@@ -862,7 +867,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      const { address, providerName, userId, rdns } = params;
+      const { address, providerName, userId, rdns, setActive } = params;
 
       // Runtime validation: address is required
       if (!address) {
@@ -873,21 +878,28 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       logger.info("Identify", address, userId, providerName, rdns);
       const validAddress = validateAddress(address);
-      if (validAddress) {
-        this.currentAddress = validAddress;
-        this.persistActiveWallet();
-      } else {
+      if (!validAddress) {
         logger.warn?.("Invalid address provided to identify:", address);
         return;
       }
-      if (userId) {
-        this.currentUserId = userId;
-        const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
-        cookie().set(SESSION_USER_ID_KEY, userId, {
-          path: "/",
-          ...getIdentityCookieSecurity(),
-          ...(domain ? { domain } : {}),
-        });
+      // Promote this wallet to the SDK's active identity — the (currentAddress,
+      // currentUserId) pair later events are attributed to — unless the caller
+      // opts out with setActive:false. A non-active identify still emits its
+      // event and marks dedup below (for clustering), it just doesn't repoint
+      // attribution. Gating address and userId together prevents leaving the
+      // active address paired with a different wallet's user id.
+      if (setActive !== false) {
+        this.currentAddress = validAddress;
+        this.persistActiveWallet();
+        if (userId) {
+          this.currentUserId = userId;
+          const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
+          cookie().set(SESSION_USER_ID_KEY, userId, {
+            path: "/",
+            ...getIdentityCookieSecurity(),
+            ...(domain ? { domain } : {}),
+          });
+        }
       }
 
       // Check for duplicate identify events in this session. The userId is
@@ -935,6 +947,29 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
     } catch (e) {
       logger.log("identify error", e);
+    }
+  }
+
+  /**
+   * Reconcile currentChainId with a newly-activated Privy wallet's chain
+   * namespace. identify() sets currentAddress but never touches the chain id
+   * (that comes from connect()/chain()/wagmi), so activating e.g. a Solana
+   * wallet while an EVM chain id is current would leave the address paired with
+   * a mismatched chain in events, excludeChains, and the active-wallet cookie.
+   *
+   * We can't infer the wallet's specific chain id from Privy's chainType, so on
+   * a namespace mismatch we clear the chain id rather than assert a wrong one; a
+   * real wallet connect will set the correct chain. Same-namespace activations
+   * (and unknown chainTypes) leave the chain id untouched.
+   */
+  private syncPrivyActiveChain(chainType?: string): void {
+    if (this.currentChainId === undefined || this.currentChainId === null) return;
+    if (!chainType) return;
+    const walletIsSolana = chainType.toLowerCase() === "solana";
+    const currentIsSolana = isSolanaChainId(this.currentChainId);
+    if (walletIsSolana !== currentIsSolana) {
+      this.currentChainId = undefined;
+      this.persistActiveWallet();
     }
   }
 

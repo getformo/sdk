@@ -11,10 +11,16 @@ interface RecordedIdentify {
   params: {
     address: string;
     userId?: string;
+    setActive?: boolean;
     rdns?: string;
     providerName?: string;
   };
   properties?: Record<string, unknown>;
+}
+
+/** The address of the wallet promoted to active (setActive:true), if any. */
+function activeAddressOf(calls: RecordedIdentify[]): string | undefined {
+  return calls.find((c) => c.params.setActive === true)?.params.address;
 }
 
 /**
@@ -413,7 +419,7 @@ describe("Privy Utilities", () => {
       expect(props.is_embedded).to.equal(false);
     });
 
-    it("attributes to the provided active wallet and identifies it last", async () => {
+    it("promotes the provided active wallet (setActive) and records the rest for clustering", async () => {
       const user: PrivyUser = {
         id: "did:privy:abc123",
         linkedAccounts: [
@@ -426,18 +432,20 @@ describe("Privy Utilities", () => {
 
       await identifyPrivyUser(analytics, user, { activeAddress: EXTERNAL });
 
-      // Active wallet is identified last, so it wins attribution (identify()
-      // sets the current address on each call, last write wins).
-      expect(calls[calls.length - 1].params.address).to.equal(EXTERNAL);
-      // ...and every wallet is still identified for clustering.
+      // Every wallet is identified for clustering...
       expect(calls.map((c) => c.params.address)).to.have.members([
         EMBEDDED,
         EXTERNAL,
         EXTERNAL_2,
       ]);
+      // ...but only the active wallet is promoted to attribution.
+      expect(activeAddressOf(calls)).to.equal(EXTERNAL);
+      for (const c of calls) {
+        expect(c.params.setActive).to.equal(c.params.address === EXTERNAL);
+      }
     });
 
-    it("matches the active wallet case-insensitively", async () => {
+    it("matches the active wallet case-insensitively (EVM)", async () => {
       const user: PrivyUser = {
         id: "did:privy:abc123",
         linkedAccounts: [
@@ -451,11 +459,10 @@ describe("Privy Utilities", () => {
         activeAddress: EMBEDDED.toUpperCase(),
       });
 
-      // Case-insensitive match still puts the active wallet last.
-      expect(calls[calls.length - 1].params.address).to.equal(EMBEDDED);
+      expect(activeAddressOf(calls)).to.equal(EMBEDDED);
     });
 
-    it("falls back to embedded-first order and attributes to the last external wallet", async () => {
+    it("falls back to the last external wallet when no active address or user.wallet", async () => {
       const user: PrivyUser = {
         id: "did:privy:abc123",
         linkedAccounts: [
@@ -467,10 +474,8 @@ describe("Privy Utilities", () => {
 
       await identifyPrivyUser(analytics, user);
 
-      // Embedded wallet is identified first...
-      expect(calls[0].params.address).to.equal(EMBEDDED);
-      // ...and the external wallet is identified last, so it owns attribution.
-      expect(calls[1].params.address).to.equal(EXTERNAL);
+      // Heuristic: embedded wallets deprioritized, so the external wallet is active.
+      expect(activeAddressOf(calls)).to.equal(EXTERNAL);
     });
 
     it("defaults the active wallet to user.wallet when activeAddress is omitted", async () => {
@@ -487,9 +492,8 @@ describe("Privy Utilities", () => {
 
       await identifyPrivyUser(analytics, user);
 
-      // user.wallet (EMBEDDED) is treated as active → identified last,
-      // overriding the embedded-first heuristic (which would end on EXTERNAL).
-      expect(calls[calls.length - 1].params.address).to.equal(EMBEDDED);
+      // user.wallet (EMBEDDED) is promoted, overriding the external-wallet heuristic.
+      expect(activeAddressOf(calls)).to.equal(EMBEDDED);
     });
 
     it("lets an explicit activeAddress override user.wallet", async () => {
@@ -505,8 +509,7 @@ describe("Privy Utilities", () => {
 
       await identifyPrivyUser(analytics, user, { activeAddress: EXTERNAL });
 
-      // Explicit override wins over user.wallet.
-      expect(calls[calls.length - 1].params.address).to.equal(EXTERNAL);
+      expect(activeAddressOf(calls)).to.equal(EXTERNAL);
     });
 
     it("compares Solana active addresses case-sensitively (no false match)", async () => {
@@ -516,25 +519,25 @@ describe("Privy Utilities", () => {
       const user: PrivyUser = {
         id: "did:privy:abc123",
         linkedAccounts: [
-          // embedded Solana wallet (would be identified first by the heuristic)
           { type: "wallet", address: SOL, walletClientType: "privy", chainType: "solana" },
-          // external EVM wallet (heuristic attributes here, last)
           { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
         ],
       };
 
-      // Wrong-case Solana address must NOT match → attribution falls back to the
-      // heuristic (external EXTERNAL last), not the mis-cased SOL wallet.
+      // Wrong-case Solana address is explicitly provided but doesn't match, so
+      // no wallet is promoted (an explicit address is matched strictly, never
+      // guessed) — while both wallets are still recorded for clustering.
       const miss = makeRecorder();
       await identifyPrivyUser(miss.analytics, user, {
         activeAddress: SOL.toLowerCase(),
       });
-      expect(miss.calls[miss.calls.length - 1].params.address).to.equal(EXTERNAL);
+      expect(activeAddressOf(miss.calls)).to.equal(undefined);
+      expect(miss.calls).to.have.length(2);
 
-      // Exact-case Solana address IS accepted → moved last.
+      // Exact-case Solana address IS accepted → promoted.
       const hit = makeRecorder();
       await identifyPrivyUser(hit.analytics, user, { activeAddress: SOL });
-      expect(hit.calls[hit.calls.length - 1].params.address).to.equal(SOL);
+      expect(activeAddressOf(hit.calls)).to.equal(SOL);
     });
 
     it("merges options.properties into every identify call", async () => {

@@ -159,7 +159,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
       expect(e.properties.email).to.equal("user@example.com");
       expect(e.properties).to.have.property("is_embedded");
     }
-    // Active wallet identified last → owns attribution.
+    // Only the active wallet (setActive) owns attribution.
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
 
@@ -237,6 +237,37 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     // ...but attribution is preserved on the connected (unlinked) wallet, not
     // overwritten by an arbitrary linked wallet.
     expect(formo.currentAddress?.toLowerCase()).to.equal(UNLINKED);
+    // ...and the unlinked wallet is NOT falsely tagged with the Privy DID
+    // (currentUserId must not have been repointed by the clustering identifies).
+    expect(formo.currentUserId).to.not.equal(DID);
+  });
+
+  it("clears a stale EVM chain id when the active Privy wallet is Solana", async () => {
+    const formo = await makeAnalytics();
+    captureIdentifies(formo);
+
+    // A valid Base58 Solana address (canonical wrapped-SOL mint).
+    const SOL = "So11111111111111111111111111111111111111112";
+
+    // Establish an EVM chain first.
+    await formo.connect({ chainId: 1, address: EXTERNAL });
+    expect(formo.currentChainId).to.equal(1);
+
+    const user: PrivyUser = {
+      id: DID,
+      linkedAccounts: [
+        { type: "wallet", address: SOL, walletClientType: "phantom", chainType: "solana" },
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
+      ],
+    };
+
+    // Make the Solana wallet the active one.
+    await formo.identify(user, { privy: true, activeAddress: SOL });
+
+    expect(formo.currentAddress).to.equal(SOL);
+    // The stale EVM chain id (1) must be cleared so the Solana address isn't
+    // paired with an EVM chain in events / the active-wallet cookie.
+    expect(formo.currentChainId).to.be.oneOf([undefined, null]);
   });
 
   it("does not let a non-active linked wallet hijack currentAddress after a real connect", async () => {

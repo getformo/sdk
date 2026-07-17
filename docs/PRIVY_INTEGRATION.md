@@ -62,9 +62,17 @@ and pins event attribution to the active wallet.
 
 `identify(user, { privy: true })` is a thin convenience form of `identify()`:
 when it sees the `{ privy: true }` flag it treats the first argument as a Privy
-user and expands `user.linkedAccounts`, calling the normal
-`identify({ address, userId })` once per linked wallet. The Privy-specific logic
-lives in the SDK's Privy module; the core `identify()` just dispatches to it.
+user and expands `user.linkedAccounts`, emitting one identify per linked wallet
+under the shared DID. The Privy-specific logic lives in the SDK's Privy module;
+the core `identify()` just dispatches to it.
+
+Only the **active** wallet updates the SDK's current address/user (what later
+events are attributed to). The other linked wallets are recorded purely for
+clustering and never repoint attribution — so a wallet you've already connected
+(even one that isn't linked in Privy) is left alone. When the active wallet is on
+a different chain namespace than the current chain id (e.g. a Solana wallet while
+an EVM chain was current), the mismatched chain id is cleared so events aren't
+paired with the wrong chain.
 
 ## Framework-agnostic usage
 
@@ -139,28 +147,27 @@ one, and an Ethereum wallet apart from a Solana one, in your analytics.
 ## Event attribution and the active wallet
 
 A Privy user's `linkedAccounts` lists **every** wallet they've ever linked — not
-which one they're using right now. Since `identify()` also updates the SDK's
-"current address" (the wallet later events are attributed to), naively looping
-over every linked wallet would leave attribution on whichever wallet happened to
-be identified last.
-
-The SDK handles this by **ordering** the loop — it identifies the chosen wallet
-last, so it's the one that ends up as the current address. The wallet is chosen,
-in order:
+which one they're using right now. `identify()` also updates the SDK's "current
+address" (the wallet later events are attributed to), so the sync has to pick
+exactly **one** active wallet; the rest are recorded for clustering without
+touching attribution. The active wallet is chosen, in order:
 
 1. **`activeAddress`**, if you pass it (an optional override — e.g. the connected
    wallet from `useWallets()[0]?.address` or your wagmi account, which reflects
-   the live active wallet most precisely);
+   the live active wallet most precisely). It's matched **strictly**: if the
+   address you pass isn't one of the linked wallets, the sync promotes *no*
+   wallet and leaves your current address untouched.
 2. else **`user.wallet`** — the primary wallet Privy surfaces on the user object,
    so `identify(user, { privy: true })` needs no argument at all;
-3. else a best-effort order: embedded (Privy) wallets first, attributing to the
-   last external wallet.
+3. else a best-effort guess: embedded (Privy) wallets deprioritized, so the last
+   external wallet.
 
-In practice you can just call `formo.identify(user, { privy: true })` and let it
-default to Privy's primary wallet. Pass `activeAddress` only when you want to pin
-attribution to a specific wallet. If you already track the connected wallet via a
-separate `connect()`/wagmi flow, that remains the source of truth for attribution
-once the user transacts.
+Because only the active wallet repoints attribution (via an internal flag, not a
+public `identify()` option), a wallet you've already connected is never
+clobbered by the clustering identifies. In practice you can just call
+`formo.identify(user, { privy: true })`: if the SDK already tracks a connected
+wallet it's kept; otherwise it falls to Privy's primary. Pass `activeAddress`
+only to pin attribution to a specific wallet.
 
 ## When identity re-emits
 
