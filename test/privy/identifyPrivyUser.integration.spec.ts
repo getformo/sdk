@@ -208,6 +208,37 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
 
+  it("preserves a connected wallet that is not linked in Privy", async () => {
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    // Connect a wallet that is NOT among the user's Privy linked wallets
+    // (e.g. a wagmi wallet connected before being linked in Privy).
+    const UNLINKED = "0x4444444444444444444444444444444444444444";
+    await formo.identify({ address: UNLINKED, rdns: "io.metamask" });
+    expect(formo.currentAddress?.toLowerCase()).to.equal(UNLINKED);
+
+    const user: PrivyUser = {
+      id: DID,
+      wallet: { address: EMBEDDED },
+      linkedAccounts: [
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+      ],
+    };
+
+    await formo.identify(user, { privy: true });
+
+    // The linked wallets are still identified for clustering...
+    const linkedIdentifies = events.filter((e) =>
+      [EMBEDDED, EXTERNAL].includes(e.address.toLowerCase())
+    );
+    expect(linkedIdentifies).to.have.length(2);
+    // ...but attribution is preserved on the connected (unlinked) wallet, not
+    // overwritten by an arbitrary linked wallet.
+    expect(formo.currentAddress?.toLowerCase()).to.equal(UNLINKED);
+  });
+
   it("does not let a non-active linked wallet hijack currentAddress after a real connect", async () => {
     const formo = await makeAnalytics();
     captureIdentifies(formo);

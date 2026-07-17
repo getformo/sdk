@@ -304,6 +304,13 @@ export interface IdentifyPrivyUserOptions {
  * first, purely for clustering. This is done by ordering alone — no special
  * `identify()` flag — so the core API is unchanged.
  *
+ * Returns the address of the linked wallet that was made active (i.e. the one
+ * that now owns event attribution), or `undefined` when no linked wallet
+ * matched the requested active address (or the user had no wallets). Callers
+ * that track their own current wallet can use this to detect the fallback case
+ * and preserve their prior address — `formo.identify(user, { privy: true })`
+ * does exactly that.
+ *
  * All linked wallet addresses used here come from `user.linkedAccounts`, which
  * is fully available on the frontend from Privy's `usePrivy()` hook.
  *
@@ -334,8 +341,8 @@ export async function identifyPrivyUser(
   analytics: IFormoAnalytics,
   user: PrivyUser,
   options: IdentifyPrivyUserOptions = {}
-): Promise<void> {
-  if (!analytics || !user) return;
+): Promise<string | undefined> {
+  if (!analytics || !user) return undefined;
 
   const { properties, wallets } = parsePrivyProperties(user);
 
@@ -347,7 +354,7 @@ export async function identifyPrivyUser(
       "identifyPrivyUser: user has no linked wallets; nothing to identify",
       user.id
     );
-    return;
+    return undefined;
   }
 
   const baseProperties: IFormoEventProperties = {
@@ -395,4 +402,8 @@ export async function identifyPrivyUser(
       walletProperties
     );
   }
+
+  // The wallet now owning attribution (identified last), or undefined if we fell
+  // back to the heuristic because no linked wallet matched the active address.
+  return activeWallet?.address;
 }

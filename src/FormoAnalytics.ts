@@ -758,13 +758,25 @@ export class FormoAnalytics implements IFormoAnalytics {
           activeAddress?: string;
           properties?: IFormoEventProperties;
         };
-        await identifyPrivyUser(this, maybeUser as PrivyUser, {
+        // Snapshot the address the SDK currently attributes events to. Each
+        // per-wallet identify below rewrites currentAddress, so we restore this
+        // afterwards if the sync didn't land on a linked wallet.
+        const prevAddress = this.currentAddress;
+        const attributed = await identifyPrivyUser(this, maybeUser as PrivyUser, {
           // Prefer an explicit override, else the wallet the SDK already treats
           // as active (e.g. from a wagmi/EIP-1193 connect) so this multi-wallet
           // identify doesn't overwrite attribution with Privy's primary wallet.
-          activeAddress: opts.activeAddress ?? this.currentAddress,
+          activeAddress: opts.activeAddress ?? prevAddress,
           properties: opts.properties,
         });
+        // When no linked wallet matched the active address (e.g. the connected
+        // wallet isn't linked in Privy), the loop left currentAddress on an
+        // arbitrary linked wallet — restore the pre-sync address so attribution
+        // stays on the wallet the user is actually using.
+        if (!attributed && prevAddress && this.currentAddress !== prevAddress) {
+          this.currentAddress = prevAddress;
+          this.persistActiveWallet();
+        }
         return;
       }
 
