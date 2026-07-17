@@ -262,16 +262,19 @@ export function parsePrivyProperties(user: PrivyUser): {
 export interface IdentifyPrivyUserOptions {
   /**
    * Optional override for the wallet that should own event attribution — the
-   * one identified last, so later events are attributed to it.
+   * one promoted to the SDK's current address/user, while every other linked
+   * wallet is recorded only for clustering.
    *
    * You usually don't need this. When omitted, the helper defaults to Privy's
-   * own surfaced wallet (`user.wallet`), then to a best-effort order (embedded
-   * wallets first, attributing to the last external wallet). Pass it only when
-   * you want to pin attribution to a specific wallet — e.g. the currently
-   * connected wallet from `useWallets()[0]?.address` or your wagmi account,
-   * which reflects the live active wallet more precisely than `user.wallet`.
+   * own surfaced wallet (`user.wallet`), then to a best-effort guess (embedded
+   * wallets deprioritized, so the last external wallet). Pass it only when you
+   * want to pin attribution to a specific wallet — e.g. the currently connected
+   * wallet from `useWallets()[0]?.address` or your wagmi account, which reflects
+   * the live active wallet more precisely than `user.wallet`.
    *
-   * Ignored if it doesn't match one of the user's linked wallets.
+   * Matched strictly: if it doesn't correspond to one of the user's linked
+   * wallets, no wallet is promoted and the SDK's current wallet is left as-is
+   * (so a connected wallet that isn't linked in Privy is preserved).
    */
   activeAddress?: string;
 
