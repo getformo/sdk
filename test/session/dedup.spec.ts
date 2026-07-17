@@ -74,6 +74,19 @@ describe("Session identify dedup with userId", () => {
     expect(session.isWalletIdentified(ADDRESS, "", otherDid)).to.equal(false);
   });
 
+  it("handles userIds containing a comma (the cookie delimiter) without breaking dedup", () => {
+    const session = new FormoAnalyticsSession();
+    // An external userId that contains the comma used to join cookie entries.
+    const commaUser = "external,user,42";
+
+    expect(session.isWalletIdentified(ADDRESS, "", commaUser)).to.equal(false);
+    session.markWalletIdentified(ADDRESS, "", commaUser);
+    // Encoded before storage, so the raw comma can't corrupt the key: the same
+    // (wallet, user) is now recognized as already identified rather than
+    // re-emitting on every call.
+    expect(session.isWalletIdentified(ADDRESS, "", commaUser)).to.equal(true);
+  });
+
   it("stays backward compatible: omitting userId matches legacy keys", () => {
     const session = new FormoAnalyticsSession();
 

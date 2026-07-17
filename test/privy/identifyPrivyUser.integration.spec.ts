@@ -163,18 +163,49 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
 
-  it("does not treat a normal identify with a `privy` property as the Privy form", async () => {
+  it("does not treat a normal identify carrying a `privy` property as the Privy form", async () => {
     const formo = await makeAnalytics();
     const events = captureIdentifies(formo);
 
-    // A regular identify whose *params* is address-shaped must not dispatch,
-    // even though we pass properties; the flag lives in the options position.
-    await formo.identify({ address: EXTERNAL, userId: "plain" }, { plan: "pro" });
+    // A regular identify whose params is address-shaped must not dispatch to the
+    // Privy form even if a property happens to be named `privy: true` — the
+    // wallet/user must still be recorded, not silently dropped.
+    await formo.identify(
+      { address: EXTERNAL, userId: "plain" },
+      { privy: true, plan: "pro" }
+    );
 
     expect(events).to.have.length(1);
     expect(events[0].address.toLowerCase()).to.equal(EXTERNAL);
     expect(events[0].userId).to.equal("plain");
+    expect(events[0].properties.privy).to.equal(true);
     expect(events[0].properties.plan).to.equal("pro");
+  });
+
+  it("prefers the already-connected wallet over user.wallet for attribution", async () => {
+    const formo = await makeAnalytics();
+    captureIdentifies(formo);
+
+    // A real connect sets currentAddress to the external wallet.
+    await formo.identify({ address: EXTERNAL, rdns: "io.metamask" });
+    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
+
+    // user.wallet is the embedded wallet — Privy's primary, different from the
+    // wallet the user actually connected.
+    const user: PrivyUser = {
+      id: DID,
+      wallet: { address: EMBEDDED },
+      linkedAccounts: [
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+      ],
+    };
+
+    // No activeAddress passed: the flag form must keep attribution on the
+    // connected wallet, not overwrite it with user.wallet.
+    await formo.identify(user, { privy: true });
+
+    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
 
   it("does not let a non-active linked wallet hijack currentAddress after a real connect", async () => {

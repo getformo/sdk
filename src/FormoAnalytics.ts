@@ -738,16 +738,31 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Delegate to the Privy adapter, which expands the user's linked wallets
       // into one identify per wallet under the shared DID. Kept as a thin
       // dispatch so the Privy-specific logic stays in the privy module.
+      //
+      // The `{ privy: true }` flag alone is not enough to switch forms:
+      // `IFormoEventProperties` is an open record, so a normal identify could
+      // legitimately carry a property named `privy`. Only take the Privy branch
+      // when the first argument is actually Privy-user-shaped (a string `id`,
+      // and not an address-keyed identify params object).
+      const maybeUser = paramsOrUser as
+        | (Partial<PrivyUser> & { address?: unknown })
+        | undefined;
       if (
         propertiesOrOptions &&
-        (propertiesOrOptions as { privy?: unknown }).privy === true
+        (propertiesOrOptions as { privy?: unknown }).privy === true &&
+        maybeUser &&
+        typeof maybeUser.id === "string" &&
+        maybeUser.address === undefined
       ) {
         const opts = propertiesOrOptions as {
           activeAddress?: string;
           properties?: IFormoEventProperties;
         };
-        await identifyPrivyUser(this, paramsOrUser as PrivyUser, {
-          activeAddress: opts.activeAddress,
+        await identifyPrivyUser(this, maybeUser as PrivyUser, {
+          // Prefer an explicit override, else the wallet the SDK already treats
+          // as active (e.g. from a wagmi/EIP-1193 connect) so this multi-wallet
+          // identify doesn't overwrite attribution with Privy's primary wallet.
+          activeAddress: opts.activeAddress ?? this.currentAddress,
           properties: opts.properties,
         });
         return;

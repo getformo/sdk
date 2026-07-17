@@ -25,6 +25,21 @@ export function isPrivyWalletAccount(account: PrivyLinkedAccount): boolean {
   );
 }
 
+/** A 0x-prefixed 20-byte hex string (prefix and hex are case-insensitive). */
+const EVM_ADDRESS_RE = /^0x[0-9a-f]{40}$/i;
+
+/**
+ * Compare two wallet addresses for equality. EVM addresses are hex and
+ * case-insensitive, so they are folded to lowercase; all other chains (notably
+ * Solana, whose Base58 addresses are case-sensitive) are compared exactly, so a
+ * case difference never matches the wrong wallet.
+ */
+function sameAddress(a: string, b: string): boolean {
+  return EVM_ADDRESS_RE.test(a) && EVM_ADDRESS_RE.test(b)
+    ? a.toLowerCase() === b.toLowerCase()
+    : a === b;
+}
+
 /**
  * Extract profile properties and wallet addresses from a Privy user object.
  *
@@ -340,16 +355,15 @@ export async function identifyPrivyUser(
     ...options.properties,
   };
 
-  // Resolve the wallet that should own event attribution (case-insensitive):
-  // an explicit activeAddress wins, otherwise fall back to Privy's own surfaced
-  // wallet (`user.wallet`) — its designated primary — so callers don't have to
-  // pass anything. Only honored if it matches one of the linked wallets.
-  const activeAddress = (
-    options.activeAddress ?? user.wallet?.address
-  )?.toLowerCase();
-  const hasActive =
-    !!activeAddress &&
-    wallets.some((w) => w.address.toLowerCase() === activeAddress);
+  // Resolve the wallet that should own event attribution: an explicit
+  // activeAddress wins, otherwise fall back to Privy's own surfaced wallet
+  // (`user.wallet`) — its designated primary — so callers don't have to pass
+  // anything. Only honored if it matches one of the linked wallets (using
+  // chain-appropriate address comparison, so Solana casing isn't mismatched).
+  const activeAddress = options.activeAddress ?? user.wallet?.address;
+  const activeWallet = activeAddress
+    ? wallets.find((w) => sameAddress(w.address, activeAddress))
+    : undefined;
 
   // Order embedded (Privy) wallets first and external wallets last; when the
   // active wallet is known, move it to the very end. identify() is called in
@@ -361,13 +375,10 @@ export async function identifyPrivyUser(
   const embedded = wallets.filter((w) => w.isEmbedded);
   const external = wallets.filter((w) => !w.isEmbedded);
   let ordered: PrivyWalletInfo[] = [...embedded, ...external];
-  if (hasActive) {
-    const active = wallets.find(
-      (w) => w.address.toLowerCase() === activeAddress
-    )!;
+  if (activeWallet) {
     ordered = [
-      ...ordered.filter((w) => w.address.toLowerCase() !== activeAddress),
-      active,
+      ...ordered.filter((w) => w !== activeWallet),
+      activeWallet,
     ];
   }
 

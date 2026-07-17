@@ -86,10 +86,16 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     rdns: string,
     userId?: string
   ): string {
-    // If rdns is missing, use address-only key as fallback for empty identifies
-    const parts = [address];
-    if (rdns) parts.push(rdns);
-    if (userId) parts.push(userId);
+    // Percent-encode each component before joining. The identified-wallet list
+    // is persisted comma-joined in a cookie and later split on commas, so a raw
+    // comma in an arbitrary external userId would corrupt the key and defeat
+    // dedup (the same identify would re-emit on every call). Encoding also keeps
+    // the ":" separator unambiguous. Addresses and RDNS contain no reserved
+    // characters, so their encoded form is unchanged — existing stored keys
+    // still match (backward compatible).
+    const parts = [encodeURIComponent(address)];
+    if (rdns) parts.push(encodeURIComponent(rdns));
+    if (userId) parts.push(encodeURIComponent(userId));
     return parts.join(":");
   }
 

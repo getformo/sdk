@@ -509,6 +509,34 @@ describe("Privy Utilities", () => {
       expect(calls[calls.length - 1].params.address).to.equal(EXTERNAL);
     });
 
+    it("compares Solana active addresses case-sensitively (no false match)", async () => {
+      // A Base58 Solana address (case-sensitive), lower-cased into a variant
+      // that is NOT the same address.
+      const SOL = "So11111111111111111111111111111111111111112";
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        linkedAccounts: [
+          // embedded Solana wallet (would be identified first by the heuristic)
+          { type: "wallet", address: SOL, walletClientType: "privy", chainType: "solana" },
+          // external EVM wallet (heuristic attributes here, last)
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
+        ],
+      };
+
+      // Wrong-case Solana address must NOT match → attribution falls back to the
+      // heuristic (external EXTERNAL last), not the mis-cased SOL wallet.
+      const miss = makeRecorder();
+      await identifyPrivyUser(miss.analytics, user, {
+        activeAddress: SOL.toLowerCase(),
+      });
+      expect(miss.calls[miss.calls.length - 1].params.address).to.equal(EXTERNAL);
+
+      // Exact-case Solana address IS accepted → moved last.
+      const hit = makeRecorder();
+      await identifyPrivyUser(hit.analytics, user, { activeAddress: SOL });
+      expect(hit.calls[hit.calls.length - 1].params.address).to.equal(SOL);
+    });
+
     it("merges options.properties into every identify call", async () => {
       const user: PrivyUser = {
         id: "did:privy:abc123",
