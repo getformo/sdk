@@ -211,6 +211,30 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
 
+  it("preserves the connected wallet via the direct identifyPrivyUser() form too", async () => {
+    const formo = await makeAnalytics();
+    captureIdentifies(formo);
+
+    await formo.identify({ address: EXTERNAL, rdns: "io.metamask" });
+    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
+
+    const user: PrivyUser = {
+      id: DID,
+      wallet: { address: EMBEDDED }, // Privy's primary is the embedded wallet
+      linkedAccounts: [
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+      ],
+    };
+
+    // Direct helper, no activeAddress: it must read the SDK's connected wallet
+    // and keep attribution there, identical to the flag form (not switch to
+    // user.wallet).
+    await identifyPrivyUser(formo, user);
+
+    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
+  });
+
   it("preserves a connected wallet that is not linked in Privy", async () => {
     const formo = await makeAnalytics();
     const events = captureIdentifies(formo);

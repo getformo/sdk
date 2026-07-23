@@ -761,12 +761,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         // identifyPrivyUser records every linked wallet for clustering WITHOUT
         // touching active state (internal setActive:false), promotes only the
         // resolved active wallet, and reconciles the chain id with that wallet's
-        // namespace before emitting. Prefer an explicit override, else the wallet
-        // the SDK already treats as active (e.g. from a wagmi/EIP-1193 connect);
-        // a connected wallet that isn't linked in Privy simply doesn't match, so
-        // the sync leaves attribution untouched — no snapshot/restore needed.
+        // namespace before emitting. It reads this.currentAddress itself to
+        // preserve an already-connected wallet, so this dispatch is a thin
+        // pass-through and both entry points behave identically.
         await identifyPrivyUser(this, maybeUser as PrivyUser, {
-          activeAddress: opts.activeAddress ?? this.currentAddress,
+          activeAddress: opts.activeAddress,
           properties: opts.properties,
         });
         return;

@@ -370,13 +370,19 @@ export async function identifyPrivyUser(
     ...options.properties,
   };
 
+  const target = analytics as unknown as PrivySyncTarget;
+
+  // Resolve the wallet that should own attribution. An explicit activeAddress
+  // wins; otherwise fall back to the address Formo already treats as active
+  // (e.g. from a wagmi/EIP-1193 connect) BEFORE user.wallet, so the direct
+  // identifyPrivyUser() form preserves a connected wallet exactly like the
+  // identify(user,{privy:true}) form. A connected wallet that isn't linked here
+  // simply doesn't match, leaving attribution untouched.
   const activeWallet = resolveActiveWallet(
     wallets,
-    options.activeAddress,
+    options.activeAddress ?? target.currentAddress,
     user.wallet?.address
   );
-
-  const target = analytics as unknown as PrivySyncTarget;
 
   // Reconcile the chain BEFORE emitting any identify. identify() runs each event
   // through the tracking gate (which enforces `excludeChains` against the
@@ -422,10 +428,12 @@ export async function identifyPrivyUser(
  * Internal capabilities of the analytics instance that `identifyPrivyUser` uses
  * but that are not part of the public {@link IFormoAnalytics} contract:
  * `identify` with the `setActive` flag (clustering identifies that don't repoint
- * attribution), and `syncPrivyActiveChain` (reconcile the chain id with the
- * active wallet's namespace). Both are optional so a minimal stub still works.
+ * attribution), `syncPrivyActiveChain` (reconcile the chain id with the active
+ * wallet's namespace), and read access to `currentAddress` (the wallet Formo
+ * already treats as active). All optional so a minimal stub still works.
  */
 interface PrivySyncTarget {
+  readonly currentAddress?: string;
   identify: (
     params: { address: string; userId?: string; setActive?: boolean },
     properties?: IFormoEventProperties
