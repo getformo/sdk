@@ -352,6 +352,15 @@ export async function identifyPrivyUser(
 ): Promise<{ address: string; chainType?: string } | undefined> {
   if (!analytics || !user) return undefined;
 
+  const target = analytics as unknown as PrivySyncTarget;
+
+  // If tracking is suppressed for this visitor/route (opt-out / timezone / host /
+  // path), do nothing. The inner identify() calls would each be gated anyway,
+  // but the chain reconciliation below runs BEFORE them — so without this guard
+  // it would clear an excluded chain id while no identify actually happens,
+  // leaving later events on an allowed route unable to apply `excludeChains`.
+  if (target.isTrackingSuppressed?.()) return undefined;
+
   const { properties, wallets } = parsePrivyProperties(user);
 
   // identify() is keyed on a wallet address, so with no linked wallets there is
@@ -369,8 +378,6 @@ export async function identifyPrivyUser(
     ...properties,
     ...options.properties,
   };
-
-  const target = analytics as unknown as PrivySyncTarget;
 
   // Resolve the wallet that should own attribution. An explicit activeAddress
   // wins; otherwise fall back to the address Formo already treats as active
@@ -429,8 +436,9 @@ export async function identifyPrivyUser(
  * but that are not part of the public {@link IFormoAnalytics} contract:
  * `identify` with the `setActive` flag (clustering identifies that don't repoint
  * attribution), `syncPrivyActiveChain` (reconcile the chain id with the active
- * wallet's namespace), and read access to `currentAddress` (the wallet Formo
- * already treats as active). All optional so a minimal stub still works.
+ * wallet's namespace), `isTrackingSuppressed` (skip everything for suppressed
+ * visitors), and read access to `currentAddress` (the wallet Formo already
+ * treats as active). All optional so a minimal stub still works.
  */
 interface PrivySyncTarget {
   readonly currentAddress?: string;
@@ -439,6 +447,7 @@ interface PrivySyncTarget {
     properties?: IFormoEventProperties
   ) => Promise<void>;
   syncPrivyActiveChain?(chainType?: string): void;
+  isTrackingSuppressed?(): boolean;
 }
 
 /**

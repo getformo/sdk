@@ -572,5 +572,34 @@ describe("Privy Utilities", () => {
 
       expect(calls).to.have.length(0);
     });
+
+    it("emits nothing and does not reconcile chain when tracking is suppressed", async () => {
+      const calls: RecordedIdentify[] = [];
+      let chainReconciled = false;
+      const analytics = {
+        identify: async (params: any, properties: any) => {
+          calls.push({ params, properties });
+        },
+        syncPrivyActiveChain: () => {
+          chainReconciled = true;
+        },
+        isTrackingSuppressed: () => true,
+      } as unknown as IFormoAnalytics;
+
+      const user: PrivyUser = {
+        id: "did:privy:abc123",
+        linkedAccounts: [
+          { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+        ],
+      };
+
+      const result = await identifyPrivyUser(analytics, user);
+
+      // No identifies emitted, and — critically — no chain reconciliation, which
+      // would otherwise clear an excluded chain id while no identify runs.
+      expect(calls).to.have.length(0);
+      expect(chainReconciled).to.equal(false);
+      expect(result).to.equal(undefined);
+    });
   });
 });

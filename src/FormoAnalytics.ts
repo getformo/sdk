@@ -1998,8 +1998,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    * before reaching the `shouldTrack()` event gate (identify/connect/detect)
    * check this first so suppressed visitors leave no cookies or session state.
    * @returns {boolean} True if all tracking and persistence must be suppressed
+   * @internal Also read by `identifyPrivyUser` (via a structural cast) so the
+   * Privy sync skips chain reconciliation and emission for suppressed visitors.
    */
-  private isTrackingSuppressed(): boolean {
+  isTrackingSuppressed(): boolean {
     return this.hasOptedOutTracking() || this.isCurrentEnvironmentExcluded();
   }
 
