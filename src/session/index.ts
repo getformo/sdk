@@ -59,10 +59,23 @@ export interface IFormoAnalyticsSession {
  * Tracks:
  * - Detected wallets (by RDNS) - to prevent duplicate detection events
  * - Identified wallet-address pairs - to prevent duplicate identification events
- * 
+ *
  * Session data expires at end of day (86400 seconds).
  */
 const MAX_SESSION_ENTRIES = 20;
+
+/**
+ * Byte budget for the identified-wallet cookie value.
+ *
+ * A Privy user can identify far more than 20 wallets in one session (an 8+
+ * wallet user is the motivating case), so a fixed entry count would evict
+ * `(wallet, userId)` keys and let a later sync re-emit them. Instead we bound
+ * the store by serialized size and evict oldest only when it would overflow the
+ * cookie — so every identity that fits is retained. Kept well under the ~4KB
+ * per-cookie browser limit (leaving room for the cookie name and attributes);
+ * that comfortably holds ~40 identities, beyond any realistic linked-wallet set.
+ */
+const MAX_IDENTIFIED_BYTES = 3500;
 
 export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
@@ -186,10 +199,17 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
 
     if (!alreadyExists) {
       identifiedWallets.push(identifiedKey);
-      if (identifiedWallets.length > MAX_SESSION_ENTRIES) {
-        identifiedWallets.splice(0, identifiedWallets.length - MAX_SESSION_ENTRIES);
+      // Bound the stored list by serialized size (not a fixed entry count) so a
+      // many-wallet Privy user's identities all persist, evicting oldest only if
+      // the value would overflow the cookie. Keep at least the just-added key.
+      let newValue = identifiedWallets.join(",");
+      while (
+        identifiedWallets.length > 1 &&
+        newValue.length > MAX_IDENTIFIED_BYTES
+      ) {
+        identifiedWallets.shift();
+        newValue = identifiedWallets.join(",");
       }
-      const newValue = identifiedWallets.join(",");
       cookie().set(SESSION_WALLET_IDENTIFIED_KEY, newValue, {
         // Expires by the end of the day
         expires: new Date(Date.now() + 86400 * 1000).toUTCString(),

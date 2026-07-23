@@ -87,6 +87,23 @@ describe("Session identify dedup with userId", () => {
     expect(session.isWalletIdentified(ADDRESS, "", commaUser)).to.equal(true);
   });
 
+  it("retains every identity for a many-wallet user (size-bounded, not a 20-entry cap)", () => {
+    const session = new FormoAnalyticsSession();
+    const did = "did:privy:manywallets";
+    const addrs = Array.from(
+      { length: 40 },
+      (_, i) => "0x" + (i + 1).toString(16).padStart(40, "0")
+    );
+
+    for (const a of addrs) session.markWalletIdentified(a, "", did);
+
+    // All 40 remain recognized — well past the old fixed 20-entry limit, which
+    // would have evicted the first 20 and re-emitted them on a later sync.
+    for (const a of addrs) {
+      expect(session.isWalletIdentified(a, "", did)).to.equal(true);
+    }
+  });
+
   it("does not collide a userId with a provider RDNS of the same value", () => {
     const session = new FormoAnalyticsSession();
     // Anonymous identify with rdns = "io.metamask".
