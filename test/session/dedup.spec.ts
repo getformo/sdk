@@ -87,6 +87,17 @@ describe("Session identify dedup with userId", () => {
     expect(session.isWalletIdentified(ADDRESS, "", commaUser)).to.equal(true);
   });
 
+  it("does not collide a userId with a provider RDNS of the same value", () => {
+    const session = new FormoAnalyticsSession();
+    // Anonymous identify with rdns = "io.metamask".
+    session.markWalletIdentified(ADDRESS, "io.metamask");
+    expect(session.isWalletIdentified(ADDRESS, "io.metamask")).to.equal(true);
+    // A later identify whose userId equals that RDNS string is a distinct tuple
+    // (address + empty rdns + userId), so it must NOT be considered already
+    // identified — its identity-link event still emits.
+    expect(session.isWalletIdentified(ADDRESS, "", "io.metamask")).to.equal(false);
+  });
+
   it("stays backward compatible: omitting userId matches legacy keys", () => {
     const session = new FormoAnalyticsSession();
 

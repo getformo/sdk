@@ -24,7 +24,9 @@ describe("identifyPrivyUser (integration with real identify)", () => {
   const EXTERNAL_2 = "0x3333333333333333333333333333333333333333";
   const DID = "did:privy:integration";
 
-  async function makeAnalytics(): Promise<FormoAnalytics> {
+  async function makeAnalytics(
+    tracking?: boolean | { excludeChains?: number[] }
+  ): Promise<FormoAnalytics> {
     // wagmi mode skips browser-dependent EIP-1193/EIP-6963 provider detection.
     const mockWagmiConfig = {
       subscribe: sandbox.stub().returns(() => {}),
@@ -38,6 +40,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     };
     return FormoAnalytics.init("test-write-key", {
       wagmi: { config: mockWagmiConfig as any },
+      ...(tracking !== undefined ? { tracking: tracking as any } : {}),
     });
   }
 
@@ -267,6 +270,57 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentAddress).to.equal(SOL);
     // The stale EVM chain id (1) must be cleared so the Solana address isn't
     // paired with an EVM chain in events / the active-wallet cookie.
+    expect(formo.currentChainId).to.be.oneOf([undefined, null]);
+  });
+
+  it("still emits identifies when on an excluded chain but activating a Solana wallet", async () => {
+    // Chain 1 (EVM) is excluded from tracking.
+    const formo = await makeAnalytics({ excludeChains: [1] });
+    const events = captureIdentifies(formo);
+
+    const SOL = "So11111111111111111111111111111111111111112";
+
+    // The current chain is the excluded EVM chain.
+    await formo.connect({ chainId: 1, address: EXTERNAL });
+    expect(formo.currentChainId).to.equal(1);
+
+    const user: PrivyUser = {
+      id: DID,
+      linkedAccounts: [
+        { type: "wallet", address: SOL, walletClientType: "phantom", chainType: "solana" },
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
+      ],
+    };
+
+    // Activate the Solana wallet. The chain must be reconciled BEFORE emitting,
+    // otherwise every inner identify is dropped by the excluded EVM chain and
+    // the Privy identity is silently lost.
+    await formo.identify(user, { privy: true, activeAddress: SOL });
+
+    expect(events.map((e) => e.address)).to.include(SOL);
+    for (const e of events) expect(e.userId).to.equal(DID);
+  });
+
+  it("reconciles chain via the direct identifyPrivyUser() entry point too", async () => {
+    const formo = await makeAnalytics();
+    captureIdentifies(formo);
+
+    const SOL = "So11111111111111111111111111111111111111112";
+    await formo.connect({ chainId: 1, address: EXTERNAL });
+    expect(formo.currentChainId).to.equal(1);
+
+    const user: PrivyUser = {
+      id: DID,
+      linkedAccounts: [
+        { type: "wallet", address: SOL, walletClientType: "phantom", chainType: "solana" },
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
+      ],
+    };
+
+    // Called directly (not via the flag form) — must reconcile chain the same way.
+    await identifyPrivyUser(formo, user, { activeAddress: SOL });
+
+    expect(formo.currentAddress).to.equal(SOL);
     expect(formo.currentChainId).to.be.oneOf([undefined, null]);
   });
 

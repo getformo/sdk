@@ -759,19 +759,16 @@ export class FormoAnalytics implements IFormoAnalytics {
           properties?: IFormoEventProperties;
         };
         // identifyPrivyUser records every linked wallet for clustering WITHOUT
-        // touching active state (internal setActive:false), and promotes only
-        // the resolved active wallet. Prefer an explicit override, else the
-        // wallet the SDK already treats as active (e.g. from a wagmi/EIP-1193
-        // connect). Passing that address means a connected wallet that isn't
-        // linked in Privy simply doesn't match, so the sync leaves attribution
-        // untouched instead of overwriting it — no snapshot/restore needed.
-        const active = await identifyPrivyUser(this, maybeUser as PrivyUser, {
+        // touching active state (internal setActive:false), promotes only the
+        // resolved active wallet, and reconciles the chain id with that wallet's
+        // namespace before emitting. Prefer an explicit override, else the wallet
+        // the SDK already treats as active (e.g. from a wagmi/EIP-1193 connect);
+        // a connected wallet that isn't linked in Privy simply doesn't match, so
+        // the sync leaves attribution untouched — no snapshot/restore needed.
+        await identifyPrivyUser(this, maybeUser as PrivyUser, {
           activeAddress: opts.activeAddress ?? this.currentAddress,
           properties: opts.properties,
         });
-        // Reconcile the chain id with the newly-active wallet's chain namespace
-        // so a Solana address isn't left paired with a stale EVM chain id.
-        if (active) this.syncPrivyActiveChain(active.chainType);
         return;
       }
 
@@ -961,8 +958,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * a namespace mismatch we clear the chain id rather than assert a wrong one; a
    * real wallet connect will set the correct chain. Same-namespace activations
    * (and unknown chainTypes) leave the chain id untouched.
+   *
+   * @internal Not part of the public IFormoAnalytics contract — invoked by
+   * `identifyPrivyUser` (via a structural cast) before it emits, so both the
+   * `identify(user,{privy:true})` and direct `identifyPrivyUser()` paths
+   * reconcile the chain.
    */
-  private syncPrivyActiveChain(chainType?: string): void {
+  syncPrivyActiveChain(chainType?: string): void {
     if (this.currentChainId === undefined || this.currentChainId === null) return;
     if (!chainType) return;
     const walletIsSolana = chainType.toLowerCase() === "solana";

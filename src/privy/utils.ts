@@ -308,11 +308,16 @@ export interface IdentifyPrivyUserOptions {
  * active state, a connected wallet that isn't linked in Privy is left untouched
  * rather than overwritten. This does not change the public `identify()` API.
  *
+ * Before emitting, it reconciles the SDK's chain id with the active wallet's
+ * chain namespace (clearing a stale EVM chain id when a Solana wallet becomes
+ * active, and vice versa), so identifies aren't dropped by an `excludeChains`
+ * gate and later events aren't paired with the wrong chain. This happens here,
+ * so the direct helper and the `formo.identify(user, { privy: true })` form
+ * behave identically.
+ *
  * Returns the active linked wallet's `{ address, chainType }` (the one now
  * owning attribution), or `undefined` when no linked wallet matched the
- * requested active address (or the user had no wallets). The
- * `formo.identify(user, { privy: true })` form uses the returned `chainType` to
- * reconcile the SDK's chain id with the active wallet.
+ * requested active address (or the user had no wallets).
  *
  * All linked wallet addresses used here come from `user.linkedAccounts`, which
  * is fully available on the frontend from Privy's `usePrivy()` hook.
@@ -371,15 +376,25 @@ export async function identifyPrivyUser(
     user.wallet?.address
   );
 
+  const target = analytics as unknown as PrivySyncTarget;
+
+  // Reconcile the chain BEFORE emitting any identify. identify() runs each event
+  // through the tracking gate (which enforces `excludeChains` against the
+  // current chain id); if the active wallet is on a different chain namespace
+  // than the stale current chain id (e.g. a Solana wallet while an EVM chain was
+  // current, and that EVM chain is excluded), reconciling first prevents the
+  // clustering identifies from being silently dropped. Doing it here — rather
+  // than in the identify(user,{privy:true}) dispatch — means the direct
+  // identifyPrivyUser() entry point gets the same treatment.
+  target.syncPrivyActiveChain?.(activeWallet?.chainType);
+
   // Emit an identify for every linked wallet under the shared DID. Only the
   // active wallet promotes the SDK's active identity (via the internal
   // setActive flag); the rest are recorded purely for clustering and never
   // repoint attribution — so ordering is irrelevant, and a connected wallet
   // that isn't linked here (activeWallet === undefined) leaves the SDK's
   // current address/user untouched instead of being overwritten.
-  const identify = analytics.identify.bind(
-    analytics
-  ) as unknown as InternalIdentifyFn;
+  const identify = target.identify.bind(analytics);
   for (const wallet of wallets) {
     const walletProperties: IFormoEventProperties = {
       ...baseProperties,
@@ -404,14 +419,19 @@ export async function identifyPrivyUser(
 }
 
 /**
- * The internal shape of `identify()` including the `setActive` flag that is not
- * part of the public {@link IFormoAnalytics} contract. `identifyPrivyUser` uses
- * it to record clustering identifies without repointing attribution.
+ * Internal capabilities of the analytics instance that `identifyPrivyUser` uses
+ * but that are not part of the public {@link IFormoAnalytics} contract:
+ * `identify` with the `setActive` flag (clustering identifies that don't repoint
+ * attribution), and `syncPrivyActiveChain` (reconcile the chain id with the
+ * active wallet's namespace). Both are optional so a minimal stub still works.
  */
-type InternalIdentifyFn = (
-  params: { address: string; userId?: string; setActive?: boolean },
-  properties?: IFormoEventProperties
-) => Promise<void>;
+interface PrivySyncTarget {
+  identify: (
+    params: { address: string; userId?: string; setActive?: boolean },
+    properties?: IFormoEventProperties
+  ) => Promise<void>;
+  syncPrivyActiveChain?(chainType?: string): void;
+}
 
 /**
  * Choose the linked wallet that should own event attribution.

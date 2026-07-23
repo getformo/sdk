@@ -73,10 +73,11 @@ the SDK's "current address" (what later `track()`/`page()` events attribute to).
 - A connected wallet that **isn't** linked in Privy is preserved: a strict,
   unmatched `activeAddress` promotes no wallet, so the current address/user are
   left untouched.
-- **Chain state:** the dispatch clears `currentChainId` when the active wallet's
-  chain namespace no longer matches the current chain id (e.g. a Solana wallet
-  while an EVM chain id was current), so events / the active‑wallet cookie can't
-  pair an address with the wrong chain.
+- **Chain state:** `identifyPrivyUser` clears `currentChainId` when the active
+  wallet's chain namespace no longer matches the current chain id (e.g. a Solana
+  wallet while an EVM chain id was current). It reconciles **before** emitting —
+  so identifies aren't dropped by an `excludeChains` gate — and does so for both
+  the `identify(user,{privy:true})` and direct `identifyPrivyUser()` paths.
 
 ### Validated against Privy docs
 

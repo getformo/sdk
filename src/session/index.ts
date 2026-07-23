@@ -94,8 +94,17 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     // characters, so their encoded form is unchanged — existing stored keys
     // still match (backward compatible).
     const parts = [encodeURIComponent(address)];
-    if (rdns) parts.push(encodeURIComponent(rdns));
-    if (userId) parts.push(encodeURIComponent(userId));
+    if (userId) {
+      // With a userId, always emit the rdns slot (even when empty) so the tuple
+      // has a fixed 3-component shape. Otherwise a userId that happens to equal
+      // a provider RDNS (e.g. "io.metamask") would produce the same key as an
+      // anonymous `address:rdns` identify and be wrongly deduped. userId keys
+      // are new, so this shape change has no backward-compat cost.
+      parts.push(encodeURIComponent(rdns || ""));
+      parts.push(encodeURIComponent(userId));
+    } else if (rdns) {
+      parts.push(encodeURIComponent(rdns));
+    }
     return parts.join(":");
   }
 
