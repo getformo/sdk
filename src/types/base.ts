@@ -7,6 +7,7 @@ import {
 } from "./events";
 import { EIP1193Provider } from "./provider";
 import { SolanaOptions } from "../solana/types";
+import type { PrivyUser } from "../privy/types";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID
@@ -88,6 +89,22 @@ export interface IFormoAnalytics {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  /**
+   * Privy convenience form. Pass the `usePrivy()` user with `{ privy: true }`
+   * to identify every wallet linked to that Privy account under the user's DID
+   * in a single call. The SDK expands `user.linkedAccounts` and forwards each
+   * wallet's metadata; only the active wallet (explicit `activeAddress`, else
+   * the already-connected wallet, else Privy's `user.wallet`) takes over event
+   * attribution — the rest are recorded purely for identity clustering.
+   */
+  identify(
+    user: PrivyUser,
+    options: {
+      privy: true;
+      activeAddress?: string;
+      properties?: IFormoEventProperties;
+    }
   ): Promise<void>;
   identify(
     params: {

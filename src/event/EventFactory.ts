@@ -801,7 +801,17 @@ class EventFactory implements IEventFactory {
       const chainId = 'chainId' in event ? (event.chainId as ChainID) : undefined;
       formoEvent.address = this.validateEventAddress(address, chainId);
     }
-    formoEvent.user_id = userId || null;
+    // An identify event asserts an explicit identity in its own payload (e.g. a
+    // Privy DID for each wallet being clustered). Keep that payload user_id
+    // rather than overwriting it with the active-session user id — otherwise a
+    // clustering identify that intentionally leaves the active user unchanged
+    // (setActive:false) would be stripped of its DID, defeating server-side
+    // wallet clustering. Fall back to the active-session user id when the
+    // identify payload carries none; all other events use the session user id.
+    formoEvent.user_id =
+      event.type === "identify"
+        ? formoEvent.user_id ?? userId ?? null
+        : userId || null;
 
     return formoEvent as IFormoEvent;
   }

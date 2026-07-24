@@ -59,6 +59,8 @@ import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
+import { identifyPrivyUser } from "./privy";
+import type { PrivyUser } from "./privy";
 
 /**
  * Constants for provider switching reasons
@@ -690,17 +692,22 @@ export class FormoAnalytics implements IFormoAnalytics {
    * // Basic identify
    * formo.identify({ address: '0x...', userId: 'user123' });
    *
-   * // With Privy user
-   * import { parsePrivyProperties } from '@formo/analytics';
+   * // Privy: pass the usePrivy() user with `{ privy: true }` to identify every
+   * // linked wallet under the user's DID in one call. Attribution stays on the
+   * // already-connected wallet when there is one, else Privy's primary
+   * // (user.wallet); pass `activeAddress` to pin a specific wallet.
    * const { user } = usePrivy();
-   * if (user) {
-   *   const { properties, wallets } = parsePrivyProperties(user);
-   *   for (const wallet of wallets) {
-   *     formo.identify({ address: wallet.address, userId: user.id }, properties);
-   *   }
-   * }
+   * if (user) formo.identify(user, { privy: true });
    * ```
    */
+  async identify(
+    user: PrivyUser,
+    options: {
+      privy: true;
+      activeAddress?: string;
+      properties?: IFormoEventProperties;
+    }
+  ): Promise<void>;
   async identify(
     params?: {
       address: Address;
@@ -711,8 +718,75 @@ export class FormoAnalytics implements IFormoAnalytics {
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
+  ): Promise<void>;
+  async identify(
+    paramsOrUser?:
+      | {
+          address: Address;
+          providerName?: string;
+          userId?: string;
+          rdns?: string;
+        }
+      | PrivyUser,
+    propertiesOrOptions?:
+      | IFormoEventProperties
+      | { privy: true; activeAddress?: string; properties?: IFormoEventProperties },
+    context?: IFormoEventContext,
+    callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
+      // Privy convenience form: identify(user, { privy: true, activeAddress? }).
+      // Delegate to the Privy adapter, which expands the user's linked wallets
+      // into one identify per wallet under the shared DID. Kept as a thin
+      // dispatch so the Privy-specific logic stays in the privy module.
+      //
+      // The `{ privy: true }` flag alone is not enough to switch forms:
+      // `IFormoEventProperties` is an open record, so a normal identify could
+      // legitimately carry a property named `privy`. Only take the Privy branch
+      // when the first argument is actually Privy-user-shaped (a string `id`,
+      // and not an address-keyed identify params object).
+      const maybeUser = paramsOrUser as
+        | (Partial<PrivyUser> & { address?: unknown })
+        | undefined;
+      if (
+        propertiesOrOptions &&
+        (propertiesOrOptions as { privy?: unknown }).privy === true &&
+        maybeUser &&
+        typeof maybeUser.id === "string" &&
+        maybeUser.address === undefined
+      ) {
+        const opts = propertiesOrOptions as {
+          activeAddress?: string;
+          properties?: IFormoEventProperties;
+        };
+        // identifyPrivyUser records every linked wallet for clustering WITHOUT
+        // touching active state (internal setActive:false), promotes only the
+        // resolved active wallet, and reconciles the chain id with that wallet's
+        // namespace before emitting. It reads this.currentAddress itself to
+        // preserve an already-connected wallet, so this dispatch is a thin
+        // pass-through and both entry points behave identically.
+        await identifyPrivyUser(this, maybeUser as PrivyUser, {
+          activeAddress: opts.activeAddress,
+          properties: opts.properties,
+        });
+        return;
+      }
+
+      const params = paramsOrUser as
+        | {
+            address: Address;
+            providerName?: string;
+            userId?: string;
+            rdns?: string;
+            // Internal only (not on the public IFormoAnalytics.identify overloads):
+            // when false, record the wallet↔user link for clustering/dedup but do
+            // NOT change the SDK's active identity. Used by identifyPrivyUser so
+            // clustering identifies for non-active wallets don't hijack attribution.
+            setActive?: boolean;
+          }
+        | undefined;
+      const properties = propertiesOrOptions as IFormoEventProperties | undefined;
+
       // identify() writes the user-id cookie and marks wallet
       // identification before trackEvent's consent check — gate the whole
       // method so a suppressed visitor or excluded environment (opt-out /
@@ -790,7 +864,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
 
-      const { address, providerName, userId, rdns } = params;
+      const { address, providerName, userId, rdns, setActive } = params;
 
       // Runtime validation: address is required
       if (!address) {
@@ -801,25 +875,38 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Explicit identify
       logger.info("Identify", address, userId, providerName, rdns);
       const validAddress = validateAddress(address);
-      if (validAddress) {
-        this.currentAddress = validAddress;
-        this.persistActiveWallet();
-      } else {
+      if (!validAddress) {
         logger.warn?.("Invalid address provided to identify:", address);
         return;
       }
-      if (userId) {
-        this.currentUserId = userId;
-        const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
-        cookie().set(SESSION_USER_ID_KEY, userId, {
-          path: "/",
-          ...getIdentityCookieSecurity(),
-          ...(domain ? { domain } : {}),
-        });
+      // Promote this wallet to the SDK's active identity — the (currentAddress,
+      // currentUserId) pair later events are attributed to — unless the caller
+      // opts out with setActive:false. A non-active identify still emits its
+      // event and marks dedup below (for clustering), it just doesn't repoint
+      // attribution. Gating address and userId together prevents leaving the
+      // active address paired with a different wallet's user id.
+      if (setActive !== false) {
+        this.currentAddress = validAddress;
+        this.persistActiveWallet();
+        if (userId) {
+          this.currentUserId = userId;
+          const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
+          cookie().set(SESSION_USER_ID_KEY, userId, {
+            path: "/",
+            ...getIdentityCookieSecurity(),
+            ...(domain ? { domain } : {}),
+          });
+        }
       }
 
-      // Check for duplicate identify events in this session
-      const isAlreadyIdentified = this.session.isWalletIdentified(validAddress, rdns || "");
+      // Check for duplicate identify events in this session. The userId is
+      // folded into the dedup key so re-identifying an already-seen wallet with
+      // a newly-attached userId (e.g. a Privy DID after login) still emits.
+      const isAlreadyIdentified = this.session.isWalletIdentified(
+        validAddress,
+        rdns || "",
+        userId
+      );
 
       logger.debug("Identify: Checking deduplication", {
         validAddress,
@@ -841,7 +928,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Mark as identified before emitting the event
-      this.session.markWalletIdentified(validAddress, rdns || "");
+      this.session.markWalletIdentified(validAddress, rdns || "", userId);
 
       await this.trackEvent(
         EventType.IDENTIFY,
@@ -857,6 +944,34 @@ export class FormoAnalytics implements IFormoAnalytics {
       );
     } catch (e) {
       logger.log("identify error", e);
+    }
+  }
+
+  /**
+   * Reconcile currentChainId with a newly-activated Privy wallet's chain
+   * namespace. identify() sets currentAddress but never touches the chain id
+   * (that comes from connect()/chain()/wagmi), so activating e.g. a Solana
+   * wallet while an EVM chain id is current would leave the address paired with
+   * a mismatched chain in events, excludeChains, and the active-wallet cookie.
+   *
+   * We can't infer the wallet's specific chain id from Privy's chainType, so on
+   * a namespace mismatch we clear the chain id rather than assert a wrong one; a
+   * real wallet connect will set the correct chain. Same-namespace activations
+   * (and unknown chainTypes) leave the chain id untouched.
+   *
+   * @internal Not part of the public IFormoAnalytics contract — invoked by
+   * `identifyPrivyUser` (via a structural cast) before it emits, so both the
+   * `identify(user,{privy:true})` and direct `identifyPrivyUser()` paths
+   * reconcile the chain.
+   */
+  syncPrivyActiveChain(chainType?: string): void {
+    if (this.currentChainId === undefined || this.currentChainId === null) return;
+    if (!chainType) return;
+    const walletIsSolana = chainType.toLowerCase() === "solana";
+    const currentIsSolana = isSolanaChainId(this.currentChainId);
+    if (walletIsSolana !== currentIsSolana) {
+      this.currentChainId = undefined;
+      this.persistActiveWallet();
     }
   }
 
@@ -1884,8 +1999,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    * before reaching the `shouldTrack()` event gate (identify/connect/detect)
    * check this first so suppressed visitors leave no cookies or session state.
    * @returns {boolean} True if all tracking and persistence must be suppressed
+   * @internal Also read by `identifyPrivyUser` (via a structural cast) so the
+   * Privy sync skips chain reconciliation and emission for suppressed visitors.
    */
-  private isTrackingSuppressed(): boolean {
+  isTrackingSuppressed(): boolean {
     return this.hasOptedOutTracking() || this.isCurrentEnvironmentExcluded();
   }
 
