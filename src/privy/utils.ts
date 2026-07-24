@@ -14,11 +14,9 @@ import { logger } from "../logger";
 
 /**
  * Whether a Privy linked account is a usable wallet — an EVM/Solana wallet or
- * smart wallet with an address. Shared by {@link parsePrivyProperties} and the
- * React binding so the "which accounts are wallets" rule can't drift between
- * them.
+ * smart wallet with an address.
  */
-export function isPrivyWalletAccount(account: PrivyLinkedAccount): boolean {
+function isPrivyWalletAccount(account: PrivyLinkedAccount): boolean {
   return (
     (account.type === "wallet" || account.type === "smart_wallet") &&
     !!account.address
@@ -265,12 +263,13 @@ export interface IdentifyPrivyUserOptions {
    * one promoted to the SDK's current address/user, while every other linked
    * wallet is recorded only for clustering.
    *
-   * You usually don't need this. When omitted, the helper defaults to Privy's
-   * own surfaced wallet (`user.wallet`), then to a best-effort guess (embedded
-   * wallets deprioritized, so the last external wallet). Pass it only when you
-   * want to pin attribution to a specific wallet — e.g. the currently connected
-   * wallet from `useWallets()[0]?.address` or your wagmi account, which reflects
-   * the live active wallet more precisely than `user.wallet`.
+   * You usually don't need this. When omitted, the helper first uses the wallet
+   * the SDK already treats as active (a prior wagmi/EIP-1193 connect), then
+   * Privy's own surfaced wallet (`user.wallet`), then a best-effort guess
+   * (embedded wallets deprioritized, so the last external wallet). Pass it only
+   * when you want to pin attribution to a specific wallet — e.g. the currently
+   * connected wallet from `useWallets()[0]?.address`, which reflects the live
+   * active wallet more precisely than `user.wallet`.
    *
    * Matched strictly: if it doesn't correspond to one of the user's linked
    * wallets, no wallet is promoted and the SDK's current wallet is left as-is

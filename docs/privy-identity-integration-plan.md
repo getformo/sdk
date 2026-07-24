@@ -102,11 +102,27 @@ the SDK's "current address" (what later `track()`/`page()` events attribute to).
 - Preserve the unmatched active wallet's address **and** user id → structural,
   via `setActive` (non‑active identifies never repoint either).
 - Clear stale chain id when activating a Solana wallet → chain‑namespace sync.
+- Reconcile the chain **before** emitting (and in the helper, not the dispatch) →
+  identifies aren't dropped by a stale `excludeChains` chain id, and both entry
+  points reconcile identically.
+- A `userId` equal to a provider RDNS can't collide with an anonymous
+  `address:rdns` dedup key → fixed 3‑component key shape when a userId is set.
+- The dedup store no longer evicts identities for many‑wallet users → bounded by
+  serialized cookie size (~40 identities) instead of a fixed 20‑entry cap.
+- The direct `identifyPrivyUser()` form preserves a connected wallet exactly like
+  the flag form → the helper itself reads the SDK's `currentAddress`.
+- Clustering identifies carry the DID in the emitted event → identify events keep
+  their payload `user_id` instead of being overwritten by the active‑session
+  user id in `EventFactory.create()` (this one silently broke clustering for
+  every non‑active wallet).
+- Suppressed visitors (opt‑out / excluded host/path/timezone) → the whole sync is
+  a no‑op, so chain reconciliation can't clear an excluded chain id while no
+  identify runs.
 
 ### Verification
 
-675 tests passing (unit + real‑`identify()` integration + session dedup); lint
-and full build clean.
+685 tests passing (unit + real‑`identify()` integration + `EventFactory.create`
+user‑id resolution + session dedup); lint and full build clean.
 
 ## Phase 2 — deferred (product / backend)
 

@@ -123,8 +123,9 @@ formo.identify(
 );
 ```
 
-The wallets are identified in a deliberate order — the active wallet last — so
-event attribution lands on it rather than an arbitrary linked wallet (see below).
+Only the active wallet takes over event attribution; the other linked wallets
+are recorded purely for clustering and never become the current address (see
+[attribution](#event-attribution-and-the-active-wallet) below).
 
 The shared **profile properties** are parsed from the Privy user's linked
 accounts (see [`parsePrivyProperties`](#advanced-parseprivyproperties)) and

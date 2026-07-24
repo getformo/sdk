@@ -93,8 +93,10 @@ export interface IFormoAnalytics {
   /**
    * Privy convenience form. Pass the `usePrivy()` user with `{ privy: true }`
    * to identify every wallet linked to that Privy account under the user's DID
-   * in a single call — the SDK expands `user.linkedAccounts`, forwards each
-   * wallet's metadata, and identifies the active wallet last for attribution.
+   * in a single call. The SDK expands `user.linkedAccounts` and forwards each
+   * wallet's metadata; only the active wallet (explicit `activeAddress`, else
+   * the already-connected wallet, else Privy's `user.wallet`) takes over event
+   * attribution — the rest are recorded purely for identity clustering.
    */
   identify(
     user: PrivyUser,
