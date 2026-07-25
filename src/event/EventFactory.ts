@@ -35,6 +35,7 @@ import {
   VERSION,
 } from "./constants";
 import { IEventFactory } from "./type";
+import { sanitizeTrafficSources } from "./sanitize";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
 
@@ -268,18 +269,24 @@ class EventFactory implements IEventFactory {
 
   private getTrafficSources = (url: string): ITrafficSource => {
     const urlObj = new URL(url);
-    const contextTrafficSources: ITrafficSource = {
+    // Sanitize at the source so scanner-injected garbage (XSS probes in
+    // utm_*/click-id/ref query params) never wins the context-over-stored
+    // merge below, never gets persisted, and never reaches an event.
+    const contextTrafficSources: ITrafficSource = sanitizeTrafficSources({
       ...this.extractUTMParameters(url),
       ...this.extractClickIdParameters(urlObj),
       ref: this.extractReferralParameter(urlObj),
       referrer: this.getExternalReferrer(),
-    };
+    });
     // Sticky traffic sources may have been persisted by an older SDK version or
     // a looser config, before the current excludeQueryParams was in effect.
     // Honor the current denylist on the way out so excluded values can never
-    // resurface from session storage (or get re-persisted below).
-    const storedTrafficSources = this.redactStoredTrafficSources(
-      (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {}
+    // resurface from session storage (or get re-persisted below). Sanitizing
+    // here too flushes poisoned values persisted by a pre-sanitization SDK.
+    const storedTrafficSources = sanitizeTrafficSources(
+      this.redactStoredTrafficSources(
+        (session().get(SESSION_TRAFFIC_SOURCE_KEY) as ITrafficSource) || {}
+      )
     );
 
     const mergedClickIds = {} as ClickIdParameters;
