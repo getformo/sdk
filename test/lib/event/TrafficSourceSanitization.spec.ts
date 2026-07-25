@@ -55,6 +55,15 @@ describe("traffic-source sanitizers", () => {
       expect(sanitizeClickId("a".repeat(256))).to.equal("");
       expect(sanitizeClickId("a".repeat(255))).to.equal("a".repeat(255));
     });
+
+    it("returns empty for empty input", () => {
+      expect(sanitizeClickId("")).to.equal("");
+    });
+
+    it("drops values with embedded whitespace", () => {
+      expect(sanitizeClickId("abc def")).to.equal("");
+      expect(sanitizeClickId("abc\tdef")).to.equal("");
+    });
   });
 
   describe("sanitizeRef", () => {
@@ -91,6 +100,17 @@ describe("traffic-source sanitizers", () => {
     it("caps length at 64 characters", () => {
       expect(sanitizeRef("a".repeat(64))).to.equal("a".repeat(64));
       expect(sanitizeRef("a".repeat(65))).to.equal("");
+    });
+
+    it("returns empty for empty input", () => {
+      expect(sanitizeRef("")).to.equal("");
+    });
+
+    it("drops non-ASCII referral codes", () => {
+      // The strict token allowlist is intentional: no legitimate production
+      // ref uses characters outside [A-Za-z0-9._-].
+      expect(sanitizeRef("код")).to.equal("");
+      expect(sanitizeRef("REF•CODE")).to.equal("");
     });
   });
 
@@ -136,8 +156,16 @@ describe("traffic-source sanitizers", () => {
 
     it("drops control, zero-width, and replacement characters", () => {
       expect(sanitizeUtm("camp\u0000aign")).to.equal("");
+      expect(sanitizeUtm("camp\taign")).to.equal("");
+      expect(sanitizeUtm("camp\naign")).to.equal("");
       expect(sanitizeUtm("camp\u200baign")).to.equal("");
+      expect(sanitizeUtm("camp\u202eaign")).to.equal(""); // RTL override
+      expect(sanitizeUtm("campaign\ufeff")).to.equal(""); // BOM
       expect(sanitizeUtm("campaign\ufffd")).to.equal("");
+    });
+
+    it("returns empty for empty input", () => {
+      expect(sanitizeUtm("")).to.equal("");
     });
 
     it("drops values over 255 characters", () => {
@@ -168,6 +196,21 @@ describe("traffic-source sanitizers", () => {
       const sparse = { ref: "GOODCODE" };
       const result = sanitizeTrafficSources(sparse);
       expect(result).to.deep.equal({ ref: "GOODCODE" });
+    });
+
+    it("passes empty strings through untouched", () => {
+      const result = sanitizeTrafficSources({
+        utm_source: "",
+        twclid: "",
+        ref: "",
+        referrer: "",
+      });
+      expect(result).to.deep.equal({
+        utm_source: "",
+        twclid: "",
+        ref: "",
+        referrer: "",
+      });
     });
   });
 });
@@ -328,5 +371,49 @@ describe("EventFactory traffic-source sanitization", () => {
     expect(context.twclid).to.equal("");
     expect(context.utm_source).to.equal("");
     expect(context.ref).to.equal("GOODCODE");
+  });
+
+  it("lets a legit stored value win when the fresh value is poisoned", async () => {
+    // First pageview captures a legitimate click ID and persists it.
+    setMockLocation("https://formo.so/?twclid=26cq47zg1e7en9nn2n7dj0y7n1");
+    await getContext(new EventFactory());
+
+    // A scanner then hits the same session with a poisoned twclid. The
+    // poisoned value must not shadow the stored legitimate one in the
+    // context-over-stored merge.
+    setMockLocation(
+      `https://formo.so/scan?twclid=${encodeURIComponent(ACUNETIX_PAYLOAD)}`
+    );
+    const context = await getContext(new EventFactory());
+
+    expect(context.twclid).to.equal("26cq47zg1e7en9nn2n7dj0y7n1");
+  });
+
+  it("sanitizes a ref extracted via referral.pathPattern", async () => {
+    const options = { referral: { pathPattern: "^/r/([^/]+)$" } };
+
+    setMockLocation(`https://formo.so/r/${encodeURIComponent("javascript:alert(1)")}`);
+    const poisoned = await getContext(new EventFactory(options));
+    expect(poisoned.ref).to.equal("");
+
+    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+    setMockLocation("https://formo.so/r/GOODCODE");
+    const legit = await getContext(new EventFactory(options));
+    expect(legit.ref).to.equal("GOODCODE");
+  });
+
+  it("sanitizes a ref from custom referral.queryParams", async () => {
+    const options = { referral: { queryParams: ["invite"] } };
+
+    setMockLocation(
+      `https://formo.so/?invite=${encodeURIComponent("javascript:alert(1)")}`
+    );
+    const poisoned = await getContext(new EventFactory(options));
+    expect(poisoned.ref).to.equal("");
+
+    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+    setMockLocation("https://formo.so/?invite=GOODCODE");
+    const legit = await getContext(new EventFactory(options));
+    expect(legit.ref).to.equal("GOODCODE");
   });
 });
