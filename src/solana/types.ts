@@ -75,11 +75,11 @@ export interface SolanaOptions {
    * When provided, wallet connect/disconnect and transaction events are tracked
    * automatically by subscribing to zustand store state changes.
    *
-   * This is the recommended approach for apps using @solana-foundation/framework-kit.
+   * This is the recommended approach for apps using framework-kit.
    *
    * @example
    * ```tsx
-   * import { createClient } from '@solana-foundation/framework-kit';
+   * import { createClient, autoDiscover } from '@solana/client';
    * const client = createClient({ endpoint, walletConnectors: autoDiscover() });
    * const formo = await Formo.init(writeKey, { solana: { store: client.store } });
    * ```

@@ -47,7 +47,7 @@ export class SolanaManager {
    *
    * @example
    * ```tsx
-   * import { createClient } from '@solana-foundation/framework-kit';
+   * import { createClient, autoDiscover } from '@solana/client';
    *
    * const client = createClient({ endpoint: '...', walletConnectors: autoDiscover() });
    * formo.solana.setStore(client.store);
