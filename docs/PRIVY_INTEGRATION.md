@@ -128,9 +128,28 @@ are recorded purely for clustering and never become the current address (see
 [attribution](#event-attribution-and-the-active-wallet) below).
 
 The shared **profile properties** are parsed from the Privy user's linked
-accounts (see [`parsePrivyProperties`](#advanced-parseprivyproperties)) and
-include email, connected socials (Twitter/X, Discord, GitHub, Farcaster,
-Google, …), the Privy DID, and account creation time.
+accounts (see [`parsePrivyProperties`](#advanced-parseprivyproperties)):
+
+| Property | Source |
+| --- | --- |
+| `privyDid`, `privyCreatedAt` | The Privy user itself |
+| `email`, `phone` | Linked `email` / `phone` account |
+| `google`, `apple`, `twitter`, `twitch`, `discord`, `github`, `linkedin`, `spotify`, `tiktok`, `instagram`, `line`, `telegram`, `farcaster` | Linked social accounts |
+| `customUserId` | A linked `custom_auth` account |
+
+Each property is omitted when Privy doesn't supply it; only `privyDid` is
+always present.
+
+Account-set summaries (wallet counts, a list of linked account types) are
+deliberately **not** sent. They're derivable server-side from the per-wallet
+identifies, and because such a property would be shared across every wallet,
+any link or unlink would change it for all of them and re-emit every wallet.
+
+**Which accounts count as wallets:** `wallet` and `smart_wallet` accounts, plus
+the `embeddedWallets` and `smartWallets` of a `cross_app` account (e.g. Abstract
+Global Wallet), which carry their addresses in arrays rather than a top-level
+`address`. Wallets are deduplicated by address (case-insensitively for EVM, so
+an address linked as both a `wallet` and a `smart_wallet` is identified once).
 
 The **per-wallet metadata** (`wallet_client`, `chain_type`, `is_embedded`) is
 attached per-address, so you can tell an embedded wallet apart from an external
@@ -138,12 +157,13 @@ one, and an Ethereum wallet apart from a Solana one, in your analytics.
 `wallet_client` and `chain_type` are omitted when Privy doesn't provide them;
 `is_embedded` is always present.
 
-> **`options.properties` are captured at first identify.** Identify events are
-> deduped per `(wallet, user)` per session (see [below](#when-identity-re-emits)),
-> so extra properties you pass are recorded on the first identify for each wallet
-> and are **not** refreshed by later calls in the same session. Treat them as
-> identity metadata set at identify time, not a live user profile. To update a
-> live trait (plan, org, …), send it on your own events instead.
+> **Changed properties re-emit.** Identify events are deduped per
+> `(wallet, user, properties)` per session (see
+> [below](#when-identity-re-emits)), so passing changed `options.properties`
+> updates the profile rather than being swallowed. The flip side: a property
+> whose value changes on every call (a timestamp, a random id, a re-computed
+> object) makes every identify a new event. Pass stable identity metadata here
+> and put volatile values on your own `track()` events.
 
 ## Event attribution and the active wallet
 
@@ -172,19 +192,41 @@ only to pin attribution to a specific wallet.
 
 ## When identity re-emits
 
-Formo deduplicates identify events per session. The dedup key now includes the
-`userId`, so:
+Formo deduplicates identify events per session, keyed on the wallet address, the
+`userId`, and a fingerprint of the properties. So:
 
-- Identifying the same wallet twice with the **same** Privy DID is deduped (no
-  spam on re-render).
+The key records each wallet-user's **latest** state, not every state it has ever
+had — so dedup means "same as this wallet's last identify", and a profile that
+reverts to an earlier value still re-emits. So:
+
+- Identifying the same wallet twice with the **same** DID and the **same**
+  properties is deduped (no spam on re-render). Key order doesn't matter — an
+  equal object is an equal key.
 - A wallet that was already identified anonymously (e.g. on connect) **re-emits**
   once the Privy DID is attached after login.
 - Switching Privy users on the same wallet re-emits under the new DID.
+- **Linking _or unlinking_ a profile account re-emits.** Linking e.g. a Google
+  account adds a `google` property shared by every wallet, so each linked wallet
+  re-emits with the updated profile; unlinking it removes the property again and
+  re-emits, rather than being suppressed as a state already seen this session.
+- **Linking or unlinking a _wallet_ does not re-emit the others.** A new wallet
+  is a new address, so it emits on its own; the existing wallets' properties are
+  unchanged, so they dedupe.
 
-Combined with re-running your effect on `user` changes, login and `linkWallet`
-produce exactly the identify events you'd expect and nothing more. `unlinkWallet`
-re-runs the effect for the remaining wallets but emits no event of its own — see
-[Limitations](#limitations--roadmap).
+The first point is what makes [account
+linking](https://docs.privy.io/user-management/users/linking-accounts) work end
+to end: `user` is reactive, so an effect keyed on it re-runs after every
+`link*`/`unlink*` call and the new profile propagates to all of the user's
+wallets.
+
+**Volume:** because profile properties are shared across wallets, one
+profile-linking action re-emits one identify **per linked wallet**. An 8-wallet
+user linking a social account produces 8 identify events. That's the cost of
+keeping every clustered wallet's profile current; it's bounded by (wallets ×
+profile link actions per session), not by render count.
+
+`unlinkWallet` emits no event of its own for the *removed* wallet — links are
+additive server-side. See [Limitations](#limitations--roadmap).
 
 ## Advanced: `parsePrivyProperties`
 

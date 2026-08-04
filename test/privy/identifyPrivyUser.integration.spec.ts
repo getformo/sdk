@@ -297,6 +297,77 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentChainId).to.be.oneOf([undefined, null]);
   });
 
+  it("infers the EVM namespace from the address when Privy omits chainType", async () => {
+    const formo = await makeAnalytics();
+    captureIdentifies(formo);
+
+    const SOL = "So11111111111111111111111111111111111111112";
+
+    // Start on a Solana chain.
+    // 900001 = Solana mainnet-beta in this SDK's chain-id space.
+    await formo.connect({ chainId: 900001, address: SOL });
+    const solanaChainId = formo.currentChainId;
+
+    // A smart_wallet entry is `{ type, address, smartWalletType }` — Privy
+    // sends no chainType. The 0x address is still unambiguously EVM, so the
+    // stale Solana chain id must be cleared rather than left paired with it.
+    const user: PrivyUser = {
+      id: DID,
+      linkedAccounts: [{ type: "smart_wallet", address: EXTERNAL }],
+    };
+
+    await formo.identify(user, { privy: true, activeAddress: EXTERNAL });
+
+    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
+    expect(formo.currentChainId).to.not.equal(solanaChainId);
+    expect(formo.currentChainId).to.be.oneOf([undefined, null]);
+  });
+
+  it("leaves the chain id alone when the namespace cannot be determined", async () => {
+    const formo = await makeAnalytics();
+    captureIdentifies(formo);
+
+    const SOL = "So11111111111111111111111111111111111111112";
+
+    // 900001 = Solana mainnet-beta in this SDK's chain-id space.
+    await formo.connect({ chainId: 900001, address: SOL });
+    const solanaChainId = formo.currentChainId;
+
+    // A non-0x address with no chainType proves nothing (it could be Solana,
+    // Bitcoin, Cosmos…), so the chain id must be left untouched rather than
+    // cleared on a guess.
+    const user: PrivyUser = {
+      id: DID,
+      linkedAccounts: [{ type: "wallet", address: SOL }],
+    };
+
+    await formo.identify(user, { privy: true, activeAddress: SOL });
+
+    expect(formo.currentChainId).to.equal(solanaChainId);
+  });
+
+  it("does not treat an unrecognized chainType as EVM", async () => {
+    const formo = await makeAnalytics();
+    captureIdentifies(formo);
+
+    const SOL = "So11111111111111111111111111111111111111112";
+    const BTC = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+
+    await formo.connect({ chainId: 900001, address: SOL });
+    const solanaChainId = formo.currentChainId;
+
+    // "bitcoin" is neither solana nor ethereum. Classifying anything non-solana
+    // as EVM would clear a perfectly valid Solana chain id here.
+    const user: PrivyUser = {
+      id: DID,
+      linkedAccounts: [{ type: "wallet", address: BTC, chainType: "bitcoin" }],
+    };
+
+    await formo.identify(user, { privy: true, activeAddress: BTC });
+
+    expect(formo.currentChainId).to.equal(solanaChainId);
+  });
+
   it("still emits identifies when on an excluded chain but activating a Solana wallet", async () => {
     // Chain 1 (EVM) is excluded from tracking.
     const formo = await makeAnalytics({ excludeChains: [1] });
@@ -392,6 +463,72 @@ describe("identifyPrivyUser (integration with real identify)", () => {
 
     // Running the exact same identify again is deduped — no new event.
     await identifyPrivyUser(formo, user);
+    expect(events).to.have.length(2);
+  });
+
+  it("re-emits every linked wallet when the user links a new account", async () => {
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    const linkedAccounts = [
+      { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+      { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+    ];
+    const before: PrivyUser = { id: DID, linkedAccounts };
+
+    await identifyPrivyUser(formo, before);
+    expect(events).to.have.length(2);
+
+    // The user links a Google account. Same wallets, same DID — only the
+    // profile changed. Without the properties fingerprint in the dedup key
+    // both wallets would dedupe and `google` would never reach Formo.
+    const after: PrivyUser = {
+      id: DID,
+      linkedAccounts: [
+        ...linkedAccounts,
+        { type: "google_oauth", email: "user@example.com", subject: "g1" },
+      ],
+      google: { subject: "g1", email: "user@example.com", name: null },
+    };
+
+    await identifyPrivyUser(formo, after);
+    expect(events).to.have.length(4);
+    expect(events[2].properties.google).to.equal("user@example.com");
+    expect(events[3].properties.google).to.equal("user@example.com");
+    // Both re-emits still carry the DID, so clustering is preserved.
+    expect(events[2].userId).to.equal(DID);
+    expect(events[3].userId).to.equal(DID);
+
+    // A repeat of the post-link state is deduped again.
+    await identifyPrivyUser(formo, after);
+    expect(events).to.have.length(4);
+  });
+
+  it("does not re-emit surviving wallets when another wallet is unlinked", async () => {
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    const both: PrivyUser = {
+      id: DID,
+      linkedAccounts: [
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+      ],
+    };
+    await identifyPrivyUser(formo, both);
+    expect(events).to.have.length(2);
+
+    // Unlinking EXTERNAL leaves the surviving wallet's identity untouched — no
+    // account-set counts are sent, so its properties are unchanged and it
+    // dedupes. This is why the summary properties were dropped: had they been
+    // present, every unlink would re-emit every remaining wallet.
+    const one: PrivyUser = {
+      id: DID,
+      linkedAccounts: [
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+      ],
+    };
+    await identifyPrivyUser(formo, one);
     expect(events).to.have.length(2);
   });
 });

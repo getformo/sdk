@@ -75,6 +75,17 @@ export interface PrivyLinkedAccount {
   firstName?: string | null;
   lastName?: string | null;
 
+  // Passkey-specific fields
+  credentialId?: string | null;
+
+  // Custom-auth-specific fields
+  customUserId?: string | null;
+
+  // Cross-app-specific fields. A cross_app account has no top-level `address`;
+  // its wallets live in these arrays (e.g. Abstract Global Wallet).
+  embeddedWallets?: Array<{ address: string; chainType?: string | null }> | null;
+  smartWallets?: Array<{ address: string; chainType?: string | null }> | null;
+
   // Verification timestamps
   firstVerifiedAt?: Date | null;
   latestVerifiedAt?: Date | null;
@@ -132,6 +143,8 @@ export interface PrivyUser {
   instagram?: { subject: string; username: string | null };
   spotify?: { subject: string; email: string | null; name: string | null };
   tiktok?: { subject: string; username: string | null; name: string | null };
+  /** Privy's Twitch account exposes only subject/username — no email. */
+  twitch?: { subject: string; username: string | null };
   line?: { subject: string; name: string | null; email: string | null };
   telegram?: {
     telegramUserId: string;
@@ -159,9 +172,11 @@ export interface PrivyProfileProperties {
   privyDid: string;
   privyCreatedAt?: number;
   email?: string;
+  phone?: string;
   apple?: string;
   discord?: string;
   twitter?: string;
+  twitch?: string;
   farcaster?: string;
   github?: string;
   google?: string;
@@ -171,6 +186,8 @@ export interface PrivyProfileProperties {
   telegram?: string;
   tiktok?: string;
   instagram?: string;
+  /** The `customUserId` of a linked `custom_auth` account, when present. */
+  customUserId?: string;
   [key: string]: unknown;
 }
 

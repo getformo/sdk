@@ -42,11 +42,17 @@ identify(
 )
 ```
 
-- `profileProperties`: email, socials (Twitter/X, Discord, GitHub, Farcaster,
-  Google, …), `privyDid`, `privyCreatedAt`, parsed from `linkedAccounts`.
+- `profileProperties`: email, phone, socials (Twitter/X, Twitch, Discord,
+  GitHub, Farcaster, Google, …), `customUserId`, `privyDid`, `privyCreatedAt`,
+  parsed from `linkedAccounts`. Account‑set summaries (wallet counts, linked
+  type lists) are deliberately **not** sent — derivable server‑side, and being
+  shared across wallets they'd make every link/unlink re‑emit every wallet.
 - Per‑wallet metadata: `wallet_client`, `chain_type`, `is_embedded`
   (`is_embedded` always present; the others omitted when Privy doesn't provide
   them).
+- Wallet set: `wallet` + `smart_wallet` accounts, plus a `cross_app` account's
+  `embeddedWallets`/`smartWallets` arrays, deduplicated by address
+  (case‑insensitive for EVM).
 
 ### Gaps closed (vs. the original brief)
 
@@ -54,7 +60,7 @@ identify(
 | --- | --- |
 | **2 — per‑wallet metadata dropped** | `wallet_client` / `chain_type` / `is_embedded` forwarded per wallet. |
 | **3 — attribution fell on an arbitrary wallet** | Only the **active** wallet updates the SDK's current address/user; the rest are clustering‑only. |
-| **4 — dedup suppressed the DID re‑emit** | `userId` folded into the session dedup key, so attaching a DID to an already‑identified wallet re‑emits (and repeats still dedupe). |
+| **4 — dedup suppressed the DID re‑emit** | `userId` **and a properties fingerprint** folded into the session dedup key, so attaching a DID to an already‑identified wallet re‑emits, and so does a changed profile after a link/unlink (repeats still dedupe). |
 | **5 — React freshness** | Integrator's own `useEffect(…, [user])` + the flag; no SDK hook. |
 
 ### Attribution model (the core design)
@@ -119,10 +125,45 @@ the SDK's "current address" (what later `track()`/`page()` events attribute to).
   a no‑op, so chain reconciliation can't clear an excluded chain id while no
   identify runs.
 
+### Dedup key
+
+`(address, rdns, userId, hash(properties))`, percent‑encoded and comma‑joined in
+a size‑bounded cookie. Shapes are fixed by component count (1 `address`,
+2 `address:rdns`, 3 `+userId`, 4 `+hash`) so they can't collide with each other,
+and shapes 1–2 are byte‑identical to pre‑`userId` keys, so existing browser
+sessions still match.
+
+Writing a key **supersedes** the same `(address, rdns, userId)` identity's
+previous entry rather than appending. Dedup therefore means "same as this
+wallet's *last* identify", not "seen at any point this session" — so a profile
+that reverts (link then unlink an account) re‑emits instead of matching the
+stale key, and the cookie stays at one entry per wallet‑user rather than growing
+one per profile change.
+
+The fingerprint is total: `BigInt`, functions, symbols, invalid `Date`s,
+`NaN`/`Infinity`, `Map`/`Set`, and cycles all canonicalize instead of throwing;
+`toJSON()` is honored so wire‑distinct values (a changed `URL`) don't collide;
+`undefined` and `null` stay distinct; and the whole thing is wrapped so a
+throwing getter or exotic `Proxy` degrades to pre‑fingerprint dedup rather than
+losing the identify. Totality is about dedup only — `BigInt`/circular values
+still fail at the event queue's native `JSON.stringify`, a pre‑existing SDK‑wide
+limitation that affects `track()` equally.
+
+The properties hash is what makes **account linking** work: linking a social
+account leaves the wallets and the DID untouched, so without it every
+already‑identified wallet would dedupe and the new property would never reach
+Formo until the session expired. Cost: one link action re‑emits one identify per
+linked wallet (bounded by wallets × link actions, not render count). Volatile
+properties (timestamps, random ids) would defeat dedup — documented in
+`PRIVY_INTEGRATION.md`.
+
 ### Verification
 
-685 tests passing (unit + real‑`identify()` integration + `EventFactory.create`
-user‑id resolution + session dedup); lint and full build clean.
+739 tests passing (unit + real‑`identify()` integration + `EventFactory.create`
+user‑id resolution + session dedup incl. link/unlink re‑emit, profile reversion,
+and hostile property values); lint and full build clean. Reviewed across three
+adversarial Codex passes; all findings resolved except the pre‑existing
+event‑queue serialization limitation noted above.
 
 ## Phase 2 — deferred (product / backend)
 

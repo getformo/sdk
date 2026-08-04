@@ -816,16 +816,24 @@ export class FormoAnalytics implements IFormoAnalytics {
                 isAlreadyIdentified: validAddress
                   ? this.session.isWalletIdentified(
                       validAddress,
-                      providerDetail.info.rdns
+                      providerDetail.info.rdns,
+                      undefined,
+                      properties
                     )
                   : false,
               });
 
+              // Pass `properties` so this pre-check uses the same dedup key as
+              // the inner identify() below. Omitting them would let a stored
+              // no-properties key short-circuit here and silently skip an
+              // identify whose properties have changed.
               if (
                 validAddress &&
                 !this.session.isWalletIdentified(
                   validAddress,
-                  providerDetail.info.rdns
+                  providerDetail.info.rdns,
+                  undefined,
+                  properties
                 )
               ) {
                 logger.info(
@@ -899,13 +907,17 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       }
 
-      // Check for duplicate identify events in this session. The userId is
-      // folded into the dedup key so re-identifying an already-seen wallet with
-      // a newly-attached userId (e.g. a Privy DID after login) still emits.
+      // Check for duplicate identify events in this session. The userId and a
+      // fingerprint of the properties are folded into the dedup key, so
+      // re-identifying an already-seen wallet still emits when the identity
+      // changed — a newly-attached userId (a Privy DID after login) or changed
+      // properties (a Privy user linking a social account, which leaves the
+      // wallets and DID untouched). An identical repeat still dedupes.
       const isAlreadyIdentified = this.session.isWalletIdentified(
         validAddress,
         rdns || "",
-        userId
+        userId,
+        properties
       );
 
       logger.debug("Identify: Checking deduplication", {
@@ -928,7 +940,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Mark as identified before emitting the event
-      this.session.markWalletIdentified(validAddress, rdns || "", userId);
+      this.session.markWalletIdentified(
+        validAddress,
+        rdns || "",
+        userId,
+        properties
+      );
 
       await this.trackEvent(
         EventType.IDENTIFY,
@@ -957,17 +974,40 @@ export class FormoAnalytics implements IFormoAnalytics {
    * We can't infer the wallet's specific chain id from Privy's chainType, so on
    * a namespace mismatch we clear the chain id rather than assert a wrong one; a
    * real wallet connect will set the correct chain. Same-namespace activations
-   * (and unknown chainTypes) leave the chain id untouched.
+   * (and wallets whose namespace can't be determined) leave the chain id alone.
+   *
+   * Privy doesn't always supply `chainType`: a `smart_wallet` entry is
+   * `{ type, address, smartWalletType }`, and `cross_app` wallets are bare
+   * `{ address }`. A `0x`-prefixed 20-byte address is unambiguously EVM though,
+   * so fall back to the address shape — otherwise activating an EVM smart
+   * wallet while a Solana chain id is current would leave the address paired
+   * with the wrong chain, and an `excludeChains` gate could drop the identify
+   * after it was already dedup-marked.
    *
    * @internal Not part of the public IFormoAnalytics contract — invoked by
    * `identifyPrivyUser` (via a structural cast) before it emits, so both the
    * `identify(user,{privy:true})` and direct `identifyPrivyUser()` paths
    * reconcile the chain.
    */
-  syncPrivyActiveChain(chainType?: string): void {
+  syncPrivyActiveChain(chainType?: string, address?: string): void {
     if (this.currentChainId === undefined || this.currentChainId === null) return;
-    if (!chainType) return;
-    const walletIsSolana = chainType.toLowerCase() === "solana";
+
+    let walletIsSolana: boolean | undefined;
+    const namespace = chainType?.toLowerCase();
+    // Only recognized namespaces decide. An unknown or future chainType
+    // ("bitcoin", "cosmos", …) must stay undecided rather than defaulting to
+    // EVM, which would wrongly clear a valid Solana chain id.
+    if (namespace === "solana") {
+      walletIsSolana = true;
+    } else if (namespace === "ethereum") {
+      walletIsSolana = false;
+    } else if (!namespace && address && /^0x[0-9a-f]{40}$/i.test(address)) {
+      // Only the EVM shape is inferable: a non-0x address could be Solana,
+      // Bitcoin, Cosmos, … so absence of 0x proves nothing.
+      walletIsSolana = false;
+    }
+    if (walletIsSolana === undefined) return;
+
     const currentIsSolana = isSolanaChainId(this.currentChainId);
     if (walletIsSolana !== currentIsSolana) {
       this.currentChainId = undefined;

@@ -83,6 +83,11 @@ export function parsePrivyProperties(user: PrivyUser): {
     properties.email = user.email.address;
   }
 
+  // Phone
+  if (user.phone?.number) {
+    properties.phone = user.phone.number;
+  }
+
   // Social accounts - extract usernames/identifiers
   if (user.apple?.email) {
     properties.apple = user.apple.email;
@@ -128,6 +133,10 @@ export function parsePrivyProperties(user: PrivyUser): {
     properties.tiktok = user.tiktok.username;
   }
 
+  if (user.twitch?.username) {
+    properties.twitch = user.twitch.username;
+  }
+
   if (user.twitter?.username) {
     properties.twitter = user.twitter.username;
   }
@@ -137,6 +146,14 @@ export function parsePrivyProperties(user: PrivyUser): {
     const emailAccount = accounts.find((account) => account.type === "email");
     if (emailAccount?.address) {
       properties.email = emailAccount.address;
+    }
+  }
+
+  if (!properties.phone) {
+    // A phone account carries the value in `number`, not `address`.
+    const phoneAccount = accounts.find((a) => a.type === "phone");
+    if (phoneAccount?.number) {
+      properties.phone = phoneAccount.number;
     }
   }
 
@@ -221,11 +238,26 @@ export function parsePrivyProperties(user: PrivyUser): {
     }
   }
 
+  if (!properties.twitch) {
+    const twitchAccount = accounts.find((a) => a.type === "twitch_oauth");
+    if (twitchAccount?.username) {
+      properties.twitch = twitchAccount.username;
+    } else if (twitchAccount?.email) {
+      properties.twitch = twitchAccount.email;
+    }
+  }
+
   if (!properties.twitter) {
     const twitterAccount = accounts.find((a) => a.type === "twitter_oauth");
     if (twitterAccount?.username) {
       properties.twitter = twitterAccount.username;
     }
+  }
+
+  // Custom auth: the app's own user id for this Privy user.
+  const customAuthAccount = accounts.find((a) => a.type === "custom_auth");
+  if (customAuthAccount?.customUserId) {
+    properties.customUserId = customAuthAccount.customUserId;
   }
 
   // Use OAuth emails as fallback for email if still blank
@@ -240,18 +272,80 @@ export function parsePrivyProperties(user: PrivyUser): {
     }
   }
 
-  // Extract wallet addresses
-  const wallets: PrivyWalletInfo[] = accounts
-    .filter(isPrivyWalletAccount)
-    .map((a) => ({
-      address: a.address!,
-      walletClient: (a.walletClientType || a.walletClient) ?? undefined,
-      chainType: a.chainType ?? undefined,
-      isEmbedded:
-        a.walletClientType === "privy" || a.walletClient === "privy",
-    }));
+  // Extract wallet addresses. `fromCrossApp` is internal bookkeeping for the
+  // dedup below and is stripped from the returned wallets.
+  const wallets: Array<PrivyWalletInfo & { fromCrossApp?: boolean }> = [];
+  for (const account of accounts) {
+    if (isPrivyWalletAccount(account)) {
+      wallets.push({
+        address: account.address!,
+        walletClient:
+          (account.walletClientType || account.walletClient) ?? undefined,
+        chainType: account.chainType ?? undefined,
+        isEmbedded:
+          account.walletClientType === "privy" ||
+          account.walletClient === "privy",
+      });
+      continue;
+    }
+    // A cross_app account (e.g. Abstract Global Wallet) has no top-level
+    // address — its wallets live in `embeddedWallets`/`smartWallets`. They are
+    // still wallets the user owns, so identify them for clustering too.
+    if (account.type === "cross_app") {
+      const crossAppWallets = [
+        ...(account.embeddedWallets || []),
+        ...(account.smartWallets || []),
+      ];
+      for (const w of crossAppWallets) {
+        if (!w?.address) continue;
+        wallets.push({
+          address: w.address,
+          walletClient: "cross_app",
+          chainType: w.chainType ?? undefined,
+          isEmbedded: true,
+          fromCrossApp: true,
+        });
+      }
+    }
+  }
 
-  return { properties, wallets };
+  // Deduplicate: the same address can appear as both a `wallet` and a
+  // `smart_wallet`/cross-app entry, and identifying it twice would emit a
+  // redundant event (and, for the active wallet, a redundant promotion).
+  //
+  // Which duplicate wins is not just first-come: a cross_app entry carries only
+  // an address (so it's recorded as `cross_app`/embedded by default), while a
+  // top-level wallet entry carries the real walletClient, chainType, and
+  // embedded classification. Prefer the richer entry regardless of the order
+  // Privy happened to list the accounts in, so the metadata — and the
+  // last-external active-wallet fallback, which keys on isEmbedded — don't
+  // depend on account ordering.
+  const indexByAddress = new Map<string, number>();
+  const deduped: Array<PrivyWalletInfo & { fromCrossApp?: boolean }> = [];
+  for (const wallet of wallets) {
+    const key = EVM_ADDRESS_RE.test(wallet.address)
+      ? wallet.address.toLowerCase()
+      : wallet.address;
+    const existingIndex = indexByAddress.get(key);
+
+    if (existingIndex === undefined) {
+      indexByAddress.set(key, deduped.length);
+      deduped.push(wallet);
+      continue;
+    }
+    // Only upgrade a placeholder cross-app entry to a real wallet entry; never
+    // downgrade, and never let a second cross-app entry replace anything. The
+    // position is kept so wallet order stays stable.
+    if (!wallet.fromCrossApp && deduped[existingIndex].fromCrossApp) {
+      deduped[existingIndex] = wallet;
+    }
+  }
+
+  const uniqueWallets: PrivyWalletInfo[] = deduped.map(
+    ({ fromCrossApp: _fromCrossApp, ...info }) => info
+  );
+
+  return { properties, wallets: uniqueWallets };
 }
 
 /**
@@ -282,10 +376,11 @@ export interface IdentifyPrivyUserOptions {
    * properties parsed from the Privy user (email, socials, DID, …) and the
    * per-wallet metadata (`wallet_client`, `chain_type`, `is_embedded`).
    *
-   * Note: because identify events are deduped per `(wallet, user)` within a
-   * session, these properties are effectively captured on the *first* identify
-   * for each wallet and are not refreshed by later calls in the same session.
-   * Treat them as identity metadata set at identify time, not a live profile.
+   * Identify events are deduped per `(wallet, user, properties)` within a
+   * session, so changing these properties re-emits with the updated profile
+   * rather than being swallowed. The flip side: a value that changes on every
+   * call (a timestamp, a random id) makes every identify a new event. Pass
+   * stable identity metadata here and put volatile values on `track()` events.
    */
   properties?: IFormoEventProperties;
 }
@@ -398,7 +493,12 @@ export async function identifyPrivyUser(
   // clustering identifies from being silently dropped. Doing it here — rather
   // than in the identify(user,{privy:true}) dispatch — means the direct
   // identifyPrivyUser() entry point gets the same treatment.
-  target.syncPrivyActiveChain?.(activeWallet?.chainType);
+  // Pass the address too: Privy omits chainType on smart_wallet and cross_app
+  // entries, and a 0x address is enough to identify the EVM namespace.
+  target.syncPrivyActiveChain?.(
+    activeWallet?.chainType,
+    activeWallet?.address
+  );
 
   // Emit an identify for every linked wallet under the shared DID. Only the
   // active wallet promotes the SDK's active identity (via the internal
@@ -445,7 +545,7 @@ interface PrivySyncTarget {
     params: { address: string; userId?: string; setActive?: boolean },
     properties?: IFormoEventProperties
   ) => Promise<void>;
-  syncPrivyActiveChain?(chainType?: string): void;
+  syncPrivyActiveChain?(chainType?: string, address?: string): void;
   isTrackingSuppressed?(): boolean;
 }
 

@@ -8,6 +8,140 @@
 import { cookie } from "../storage";
 import { getIdentityCookieSecurity } from "../storage/cookiePolicy";
 import { logger } from "../logger";
+import type { IFormoEventProperties } from "../types/events";
+
+/**
+ * Serialize a value so that equal values always produce the same string,
+ * regardless of object key insertion order.
+ *
+ * `JSON.stringify` preserves insertion order, so `{a:1,b:2}` and `{b:2,a:1}`
+ * would hash differently and re-emit an identify that carries identical
+ * properties. Object keys are therefore sorted; arrays keep their order, since
+ * order is meaningful there.
+ *
+ * **This function must never throw.** It runs inside `identify()` *after* the
+ * active address/user have been updated, so a throw would leave the SDK with
+ * mutated identity state and no emitted event. `JSON.stringify` throws on
+ * circular references and on `BigInt` — both realistic here, since a web3 app
+ * can easily pass a token balance (`123n`) or a wallet object with a back
+ * reference in `properties`. Every such case is therefore handled explicitly
+ * and degrades to a stable marker instead of an exception.
+ *
+ * Totality here is only about *dedup*: it guarantees the fingerprint step can't
+ * be what loses an identify. It does **not** make such values sendable — the
+ * event queue still serializes with native `JSON.stringify`, so a `BigInt` or
+ * circular value in `properties` fails downstream exactly as it does for
+ * `track()`. That is a separate, pre-existing SDK-wide limitation.
+ *
+ * `undefined` and `null` are deliberately distinct: JSON omits an `undefined`
+ * property but sends `null`, so collapsing them would let a real
+ * value → `null` update be suppressed as a duplicate.
+ */
+function stableStringify(value: unknown, seen: Set<unknown> = new Set()): string {
+  if (value === undefined) return "undef";
+  if (value === null) return "null";
+  if (typeof value === "bigint") return `${value.toString()}n`;
+  if (typeof value === "function") return "fn";
+  if (typeof value === "symbol") return `sym(${String(value.description)})`;
+  if (value instanceof Date) {
+    // An invalid Date throws from toISOString().
+    const time = value.getTime();
+    return Number.isNaN(time) ? "invalid-date" : `"${value.toISOString()}"`;
+  }
+  if (typeof value !== "object") {
+    // Remaining primitives: string, number, boolean. NaN/Infinity stringify to
+    // "null" via JSON, so encode them directly to keep them distinguishable.
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      return String(value);
+    }
+    return JSON.stringify(value) ?? "null";
+  }
+
+  // Cycle guard: a repeated reference within the current path is replaced by a
+  // marker rather than recursing forever.
+  if (seen.has(value)) return "circular";
+  seen.add(value);
+  try {
+    // Honor toJSON() the way JSON.stringify does, so the fingerprint reflects
+    // what actually goes on the wire. Without this, objects that serialize via
+    // toJSON but expose no enumerable own keys — URL is the common one — all
+    // canonicalize to "{}" and a genuinely changed value is falsely deduped.
+    const maybeToJSON = (value as { toJSON?: unknown }).toJSON;
+    if (typeof maybeToJSON === "function") {
+      return stableStringify(
+        (maybeToJSON as () => unknown).call(value),
+        seen
+      );
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => stableStringify(item, seen)).join(",")}]`;
+    }
+    if (value instanceof Map) {
+      return `Map{${Array.from(value.entries())
+        .map(
+          ([k, v]) =>
+            `${stableStringify(k, seen)}:${stableStringify(v, seen)}`
+        )
+        .sort()
+        .join(",")}}`;
+    }
+    if (value instanceof Set) {
+      return `Set{${Array.from(value.values())
+        .map((item) => stableStringify(item, seen))
+        .sort()
+        .join(",")}}`;
+    }
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key], seen)}`)
+      .join(",")}}`;
+  } finally {
+    // Only guard against cycles, not repeated siblings: the same object used
+    // twice in one payload must serialize the same both times.
+    seen.delete(value);
+  }
+}
+
+/**
+ * Short, stable fingerprint of an identify's properties (FNV-1a, base36).
+ *
+ * Folded into the dedup key so that re-identifying a known wallet with *changed*
+ * properties re-emits, while an unchanged repeat still dedupes. Kept to a few
+ * characters because every key is stored in a size-bounded cookie.
+ *
+ * A 32-bit hash can collide. The consequence is bounded and matches the old
+ * behavior — a changed-properties identify that collides is suppressed for the
+ * rest of the session; a wrong event is never emitted.
+ */
+function fingerprintProperties(
+  properties?: IFormoEventProperties
+): string | undefined {
+  if (!properties) return undefined;
+  let serialized: string;
+  try {
+    // Object.keys() is inside the guard on purpose: reading keys can itself run
+    // user code (a Proxy with a throwing ownKeys trap), and this whole function
+    // must be total.
+    if (Object.keys(properties).length === 0) return undefined;
+    serialized = stableStringify(properties);
+  } catch (error) {
+    // stableStringify handles every value type it knows about, but reading a
+    // property can still run arbitrary user code (a throwing getter, an exotic
+    // Proxy). Identity state has already been updated by the time we get here,
+    // so failing closed to a constant is the safe outcome: dedup degrades to
+    // the pre-fingerprint behavior (identify once per session for this wallet)
+    // instead of the whole identify being swallowed by the catch in identify().
+    logger.warn?.("Session: failed to fingerprint identify properties", error);
+    return "nohash";
+  }
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < serialized.length; i++) {
+    hash ^= serialized.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
 
 /**
  * Cookie keys for session tracking
@@ -40,8 +174,17 @@ export interface IFormoAnalyticsSession {
    * @param userId Optional external user ID (e.g. a Privy DID). When provided,
    *   it is folded into the dedup key so attaching a new user ID to an
    *   already-identified wallet re-emits instead of being silently deduped.
+   * @param properties Optional identify properties. Fingerprinted into the
+   *   dedup key so an identify whose properties have *changed* (e.g. a Privy
+   *   user linked a new social account) re-emits, while an unchanged repeat
+   *   still dedupes.
    */
-  isWalletIdentified(address: string, rdns: string, userId?: string): boolean;
+  isWalletIdentified(
+    address: string,
+    rdns: string,
+    userId?: string,
+    properties?: IFormoEventProperties
+  ): boolean;
 
   /**
    * Mark a wallet-address pair as identified in this session
@@ -49,8 +192,15 @@ export interface IFormoAnalyticsSession {
    * @param rdns The reverse domain name (RDNS) of the wallet provider
    * @param userId Optional external user ID (e.g. a Privy DID). See
    *   {@link isWalletIdentified} for how it affects the dedup key.
+   * @param properties Optional identify properties. See
+   *   {@link isWalletIdentified}.
    */
-  markWalletIdentified(address: string, rdns: string, userId?: string): void;
+  markWalletIdentified(
+    address: string,
+    rdns: string,
+    userId?: string,
+    properties?: IFormoEventProperties
+  ): void;
 }
 
 /**
@@ -79,26 +229,82 @@ const MAX_IDENTIFIED_BYTES = 3500;
 
 export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
-   * Generate a unique key for wallet identification tracking
-   * Combines address, RDNS, and (optionally) the external user ID to track
-   * specific wallet-address-user combinations.
+   * Generate a unique key for wallet identification tracking.
    *
-   * Folding the user ID into the key means the same wallet identified first
-   * anonymously and later with a user ID (e.g. after a Privy login attaches a
-   * DID) produces two distinct keys, so the second identify is not deduped.
-   * When `userId` is omitted the key is unchanged (`address` or `address:rdns`),
-   * preserving backward compatibility with keys already stored in browsers.
+   * Combines address, RDNS, and (optionally) the external user ID and a
+   * fingerprint of the identify's properties, so the key identifies a specific
+   * wallet-user-profile combination rather than just an address.
+   *
+   * Folding the user ID in means the same wallet identified first anonymously
+   * and later with a user ID (e.g. after a Privy login attaches a DID) produces
+   * two distinct keys, so the second identify is not deduped.
+   *
+   * Folding the properties hash in means a *changed* profile re-emits. This
+   * matters for account linking: a Privy user who links a Google account keeps
+   * the same wallets and the same DID, so without the hash every already-seen
+   * wallet would dedupe and the new `google` property would never reach Formo
+   * until the session expired. An identify repeated with identical properties
+   * still dedupes, so this does not turn a re-render into an event.
+   *
+   * Key shapes, by component count — each is unambiguous, so they cannot
+   * collide with one another:
+   *
+   * | Components | Shape | When |
+   * | --- | --- | --- |
+   * | 1 | `address` | no rdns, no userId, no properties |
+   * | 2 | `address:rdns` | rdns only |
+   * | 3 | `address:rdns:userId` | userId, no properties |
+   * | 4 | `address:rdns:userId:hash` | properties present |
+   *
+   * Shapes 1 and 2 are unchanged from before user IDs and property hashes
+   * existed, so keys already stored in browsers still match (backward
+   * compatible). An identify that carries properties moves to shape 4, so the
+   * first identify after an upgrade re-emits once per wallet — a one-off, and
+   * the correct outcome, since those properties were never recorded under the
+   * new key.
    *
    * @param address The wallet address
    * @param rdns The reverse domain name of the wallet provider
    * @param userId Optional external user ID (e.g. a Privy DID)
+   * @param properties Optional identify properties, fingerprinted into the key
    * @returns A unique identification key
    */
   private generateIdentificationKey(
     address: string,
     rdns: string,
-    userId?: string
+    userId?: string,
+    properties?: IFormoEventProperties
   ): string {
+    return this.buildIdentificationKey(address, rdns, userId, properties).key;
+  }
+
+  /**
+   * Build the dedup key plus the **identity prefix** it belongs to.
+   *
+   * The identity prefix is the key with the properties hash stripped —
+   * `address:rdns:userId` — i.e. *which wallet-user this is*, independent of
+   * *what profile it last had*. `markWalletIdentified` uses it to drop that
+   * identity's previous state before storing the new one, which matters twice:
+   *
+   * - **Reversion.** Keeping every state seen would make dedup mean "have I
+   *   ever seen this exact profile", so a profile that goes A → B → A (link
+   *   then unlink an account) would find the old A key and emit nothing. Dedup
+   *   should mean "is this the same as this wallet's *last* identify", so only
+   *   the current state is retained.
+   * - **Growth.** Otherwise each profile change adds a key per wallet, and an
+   *   8-wallet user linking a few accounts would push the cookie into eviction.
+   *   Superseding keeps it at one entry per wallet-user.
+   *
+   * The prefix is only defined for keys that have a userId and/or a properties
+   * hash (3+ components). The legacy 1- and 2-component shapes are the whole
+   * identity already, so there is nothing to supersede.
+   */
+  private buildIdentificationKey(
+    address: string,
+    rdns: string,
+    userId?: string,
+    properties?: IFormoEventProperties
+  ): { key: string; identityPrefix?: string } {
     // Percent-encode each component before joining. The identified-wallet list
     // is persisted comma-joined in a cookie and later split on commas, so a raw
     // comma in an arbitrary external userId would corrupt the key and defeat
@@ -106,19 +312,27 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     // the ":" separator unambiguous. Addresses and RDNS contain no reserved
     // characters, so their encoded form is unchanged — existing stored keys
     // still match (backward compatible).
+    // An identify with no properties keeps the pre-hash key shape, so the
+    // common `identify({ address })` call is unaffected.
+    const propertiesHash = fingerprintProperties(properties);
+
     const parts = [encodeURIComponent(address)];
-    if (userId) {
-      // With a userId, always emit the rdns slot (even when empty) so the tuple
-      // has a fixed 3-component shape. Otherwise a userId that happens to equal
-      // a provider RDNS (e.g. "io.metamask") would produce the same key as an
-      // anonymous `address:rdns` identify and be wrongly deduped. userId keys
-      // are new, so this shape change has no backward-compat cost.
+    if (userId || propertiesHash) {
+      // Once any later slot is set, always emit the intervening slots (even when
+      // empty) so the tuple has a fixed shape. Otherwise a userId that happens to
+      // equal a provider RDNS (e.g. "io.metamask") would produce the same key as
+      // an anonymous `address:rdns` identify and be wrongly deduped. userId and
+      // hash keys are new, so this shape has no backward-compat cost.
       parts.push(encodeURIComponent(rdns || ""));
-      parts.push(encodeURIComponent(userId));
-    } else if (rdns) {
+      parts.push(encodeURIComponent(userId || ""));
+      const identityPrefix = parts.join(":");
+      if (propertiesHash) parts.push(propertiesHash);
+      return { key: parts.join(":"), identityPrefix };
+    }
+    if (rdns) {
       parts.push(encodeURIComponent(rdns));
     }
-    return parts.join(":");
+    return { key: parts.join(":") };
   }
 
   /**
@@ -164,9 +378,15 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   public isWalletIdentified(
     address: string,
     rdns: string,
-    userId?: string
+    userId?: string,
+    properties?: IFormoEventProperties
   ): boolean {
-    const identifiedKey = this.generateIdentificationKey(address, rdns, userId);
+    const identifiedKey = this.generateIdentificationKey(
+      address,
+      rdns,
+      userId,
+      properties
+    );
     const cookieValue = cookie().get(SESSION_WALLET_IDENTIFIED_KEY);
     const identifiedWallets = cookieValue?.split(",") || [];
     const isIdentified = identifiedWallets.includes(identifiedKey);
@@ -190,14 +410,31 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   public markWalletIdentified(
     address: string,
     rdns: string,
-    userId?: string
+    userId?: string,
+    properties?: IFormoEventProperties
   ): void {
-    const identifiedKey = this.generateIdentificationKey(address, rdns, userId);
-    const identifiedWallets =
+    const { key: identifiedKey, identityPrefix } = this.buildIdentificationKey(
+      address,
+      rdns,
+      userId,
+      properties
+    );
+    let identifiedWallets: string[] =
       cookie().get(SESSION_WALLET_IDENTIFIED_KEY)?.split(",") || [];
     const alreadyExists = identifiedWallets.includes(identifiedKey);
 
     if (!alreadyExists) {
+      // Supersede this wallet-user's previous profile state rather than
+      // accumulating one key per state. Without this, a profile that reverts to
+      // an earlier value (link then unlink an account) would match the stale key
+      // and emit nothing, and every profile change would grow the cookie.
+      if (identityPrefix) {
+        identifiedWallets = identifiedWallets.filter(
+          (entry) =>
+            entry !== identityPrefix &&
+            !entry.startsWith(`${identityPrefix}:`)
+        );
+      }
       identifiedWallets.push(identifiedKey);
       // Bound the stored list by serialized size (not a fixed entry count) so a
       // many-wallet Privy user's identities all persist, evicting oldest only if

@@ -1,8 +1,11 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import { JSDOM } from "jsdom";
-import { FormoAnalyticsSession } from "../../src/session";
-import { initStorageManager } from "../../src/storage";
+import {
+  FormoAnalyticsSession,
+  SESSION_WALLET_IDENTIFIED_KEY,
+} from "../../src/session";
+import { cookie, initStorageManager } from "../../src/storage";
 
 /**
  * Session identify deduplication with a user ID folded into the key.
@@ -124,5 +127,276 @@ describe("Session identify dedup with userId", () => {
     // address-only fallback (no rdns, no userId) is also unchanged.
     session.markWalletIdentified(ADDRESS, "");
     expect(session.isWalletIdentified(ADDRESS, "")).to.equal(true);
+  });
+
+  describe("properties fingerprint in the dedup key", () => {
+    it("re-emits when the properties change for the same wallet + userId", () => {
+      const session = new FormoAnalyticsSession();
+      const before = { privyDid: DID, email: "a@b.com" };
+      // The motivating case: the user links a Google account. Same wallet,
+      // same DID — only the properties changed.
+      const after = { privyDid: DID, email: "a@b.com", google: "a@b.com" };
+
+      session.markWalletIdentified(ADDRESS, RDNS, DID, before);
+      expect(session.isWalletIdentified(ADDRESS, RDNS, DID, before)).to.equal(
+        true
+      );
+
+      expect(session.isWalletIdentified(ADDRESS, RDNS, DID, after)).to.equal(
+        false
+      );
+    });
+
+    it("dedups a repeat with identical properties", () => {
+      const session = new FormoAnalyticsSession();
+      const properties = { privyDid: DID, email: "a@b.com", is_embedded: false };
+
+      session.markWalletIdentified(ADDRESS, RDNS, DID, properties);
+
+      // A re-render passing an equal (but not identical) object must not
+      // re-emit, or every React render would produce an identify event.
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          privyDid: DID,
+          email: "a@b.com",
+          is_embedded: false,
+        })
+      ).to.equal(true);
+    });
+
+    it("is insensitive to property key order", () => {
+      const session = new FormoAnalyticsSession();
+
+      session.markWalletIdentified(ADDRESS, RDNS, DID, {
+        email: "a@b.com",
+        privyDid: DID,
+      });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          privyDid: DID,
+          email: "a@b.com",
+        })
+      ).to.equal(true);
+    });
+
+    it("distinguishes nested and array property changes", () => {
+      const session = new FormoAnalyticsSession();
+
+      session.markWalletIdentified(ADDRESS, RDNS, DID, {
+        meta: { plan: "free", tags: ["a", "b"] },
+      });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          meta: { plan: "pro", tags: ["a", "b"] },
+        })
+      ).to.equal(false);
+      // Array order is meaningful, unlike object key order.
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          meta: { plan: "free", tags: ["b", "a"] },
+        })
+      ).to.equal(false);
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          meta: { plan: "free", tags: ["a", "b"] },
+        })
+      ).to.equal(true);
+    });
+
+    it("treats empty properties as no properties (legacy key shape)", () => {
+      const session = new FormoAnalyticsSession();
+
+      // An identify with no properties must keep matching a key stored by the
+      // pre-hash SDK, so upgrading doesn't re-emit every plain identify.
+      session.markWalletIdentified(ADDRESS, RDNS, DID);
+      expect(session.isWalletIdentified(ADDRESS, RDNS, DID, {})).to.equal(true);
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, undefined)
+      ).to.equal(true);
+    });
+
+    it("never throws on values JSON.stringify rejects", () => {
+      const session = new FormoAnalyticsSession();
+
+      // A web3 app can easily pass a BigInt balance or an object with a back
+      // reference. Hashing runs AFTER identify() has updated the active
+      // address/user, so a throw here would leave mutated identity state and
+      // emit nothing.
+      const circular: Record<string, unknown> = { name: "wallet" };
+      circular.self = circular;
+
+      // Built at runtime, not as a `10n` literal: this project targets ES5,
+      // where BigInt literals aren't available to the compiler.
+      const bigIntValue = (global as any).BigInt(10);
+
+      const awkward = {
+        balance: bigIntValue,
+        circular,
+        fn: () => undefined,
+        sym: Symbol("s"),
+        invalidDate: new Date("nonsense"),
+        nan: NaN,
+        infinite: Infinity,
+        set: new Set([1, 2]),
+        map: new Map([["k", "v"]]),
+      };
+
+      expect(() =>
+        session.markWalletIdentified(ADDRESS, RDNS, DID, awkward)
+      ).to.not.throw();
+      expect(session.isWalletIdentified(ADDRESS, RDNS, DID, awkward)).to.equal(
+        true
+      );
+    });
+
+    it("distinguishes a BigInt change and a repeated object reference", () => {
+      const session = new FormoAnalyticsSession();
+
+      const big = (global as any).BigInt;
+      session.markWalletIdentified(ADDRESS, RDNS, DID, { balance: big(10) });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, { balance: big(11) })
+      ).to.equal(false);
+
+      // The same object used twice in one payload is not a cycle, so both
+      // occurrences must serialize identically rather than one becoming
+      // "circular".
+      const shared = { plan: "pro" };
+      session.markWalletIdentified(ADDRESS, RDNS, DID, {
+        a: shared,
+        b: shared,
+      });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          a: { plan: "pro" },
+          b: { plan: "pro" },
+        })
+      ).to.equal(true);
+    });
+
+    it("re-emits when a profile reverts to an earlier state", () => {
+      const session = new FormoAnalyticsSession();
+      const withoutGoogle = { privyDid: DID, email: "a@b.com" };
+      const withGoogle = { privyDid: DID, email: "a@b.com", google: "a@b.com" };
+
+      // Link Google, then unlink it. Dedup means "same as this wallet's LAST
+      // identify", not "seen at any point", so the revert must re-emit —
+      // otherwise unlinking would silently produce no event.
+      session.markWalletIdentified(ADDRESS, RDNS, DID, withoutGoogle);
+      session.markWalletIdentified(ADDRESS, RDNS, DID, withGoogle);
+
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, withoutGoogle)
+      ).to.equal(false);
+      // ...and the current state still dedupes.
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, withGoogle)
+      ).to.equal(true);
+    });
+
+    it("keeps one entry per wallet-user instead of one per profile state", () => {
+      const session = new FormoAnalyticsSession();
+
+      // Five profile changes must not leave five keys behind, or a many-wallet
+      // user would push the cookie into size-based eviction.
+      for (let i = 0; i < 5; i++) {
+        session.markWalletIdentified(ADDRESS, RDNS, DID, { step: i });
+      }
+
+      const stored = cookie().get(SESSION_WALLET_IDENTIFIED_KEY) ?? "";
+      const keys = stored.split(",").filter(Boolean);
+
+      expect(keys).to.have.length(1);
+      expect(session.isWalletIdentified(ADDRESS, RDNS, DID, { step: 4 })).to.equal(
+        true
+      );
+      expect(session.isWalletIdentified(ADDRESS, RDNS, DID, { step: 0 })).to.equal(
+        false
+      );
+    });
+
+    it("supersedes only the same wallet-user, not other identities", () => {
+      const session = new FormoAnalyticsSession();
+      const OTHER_DID = "did:privy:other";
+
+      session.markWalletIdentified(ADDRESS, RDNS, DID, { v: 1 });
+      session.markWalletIdentified(ADDRESS, RDNS, OTHER_DID, { v: 1 });
+      // A legacy anonymous key for the same wallet must also survive.
+      session.markWalletIdentified(ADDRESS, RDNS);
+
+      session.markWalletIdentified(ADDRESS, RDNS, DID, { v: 2 });
+
+      expect(session.isWalletIdentified(ADDRESS, RDNS, DID, { v: 2 })).to.equal(true);
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, OTHER_DID, { v: 1 })
+      ).to.equal(true);
+      expect(session.isWalletIdentified(ADDRESS, RDNS)).to.equal(true);
+    });
+
+    it("honors toJSON() so wire-distinct values are distinct keys", () => {
+      const session = new FormoAnalyticsSession();
+
+      // URL has no enumerable own keys — without honoring toJSON() both of
+      // these canonicalize to "{}" and the changed URL is falsely deduped.
+      session.markWalletIdentified(ADDRESS, RDNS, DID, {
+        endpoint: new URL("https://a.example/"),
+      });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          endpoint: new URL("https://b.example/"),
+        })
+      ).to.equal(false);
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          endpoint: new URL("https://a.example/"),
+        })
+      ).to.equal(true);
+    });
+
+    it("does not throw when reading properties throws", () => {
+      const session = new FormoAnalyticsSession();
+
+      // A Proxy whose ownKeys trap throws escapes a naive Object.keys() call
+      // made outside the fingerprint guard.
+      const hostile = new Proxy(
+        {},
+        {
+          ownKeys() {
+            throw new Error("hostile ownKeys");
+          },
+        }
+      ) as Record<string, unknown>;
+
+      expect(() =>
+        session.markWalletIdentified(ADDRESS, RDNS, DID, hostile)
+      ).to.not.throw();
+      expect(() =>
+        session.isWalletIdentified(ADDRESS, RDNS, DID, hostile)
+      ).to.not.throw();
+    });
+
+    it("treats undefined and null property values as different", () => {
+      const session = new FormoAnalyticsSession();
+
+      // JSON omits an undefined property but sends null, so collapsing the two
+      // would suppress a real value -> null update.
+      session.markWalletIdentified(ADDRESS, RDNS, DID, { plan: undefined });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, { plan: null })
+      ).to.equal(false);
+    });
+
+    it("keys properties without a userId, without colliding on rdns", () => {
+      const session = new FormoAnalyticsSession();
+      const properties = { plan: "pro" };
+
+      session.markWalletIdentified(ADDRESS, RDNS, undefined, properties);
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, undefined, properties)
+      ).to.equal(true);
+      // The legacy 2-component `address:rdns` key must stay distinct from the
+      // 4-component keyed-with-properties form.
+      expect(session.isWalletIdentified(ADDRESS, RDNS)).to.equal(false);
+    });
   });
 });

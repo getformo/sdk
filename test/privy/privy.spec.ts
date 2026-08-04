@@ -191,6 +191,76 @@ describe("Privy Utilities", () => {
         expect(properties.email).to.be.undefined;
         expect(properties.twitter).to.be.undefined;
       });
+
+      it("should extract phone from user.phone", () => {
+        const user: PrivyUser = {
+          id: "did:privy:abc123",
+          phone: { number: "+15551234567" },
+        };
+
+        expect(parsePrivyProperties(user).properties.phone).to.equal(
+          "+15551234567"
+        );
+      });
+
+      it("should extract phone from a linked phone account (number, not address)", () => {
+        const user: PrivyUser = {
+          id: "did:privy:abc123",
+          linkedAccounts: [{ type: "phone", number: "+15559876543" }],
+        };
+
+        expect(parsePrivyProperties(user).properties.phone).to.equal(
+          "+15559876543"
+        );
+      });
+
+      it("should extract twitch from the accessor and from linkedAccounts", () => {
+        expect(
+          parsePrivyProperties({
+            id: "did:privy:abc123",
+            twitch: { subject: "s", username: "streamer" },
+          }).properties.twitch
+        ).to.equal("streamer");
+
+        expect(
+          parsePrivyProperties({
+            id: "did:privy:abc123",
+            linkedAccounts: [
+              { type: "twitch_oauth", username: "streamer2" },
+            ],
+          }).properties.twitch
+        ).to.equal("streamer2");
+      });
+
+      it("should extract customUserId from a custom_auth account", () => {
+        const user: PrivyUser = {
+          id: "did:privy:abc123",
+          linkedAccounts: [{ type: "custom_auth", customUserId: "app-user-42" }],
+        };
+
+        expect(parsePrivyProperties(user).properties.customUserId).to.equal(
+          "app-user-42"
+        );
+      });
+
+      it("should not derive account-set summary properties", () => {
+        // Counts and type lists are intentionally NOT sent: they are derivable
+        // server-side from the per-wallet identifies, and because they would be
+        // shared across every wallet, any link/unlink would change them for all
+        // wallets and re-emit each one.
+        const { properties } = parsePrivyProperties({
+          id: "did:privy:abc123",
+          linkedAccounts: [
+            { type: "wallet", address: EXTERNAL },
+            { type: "passkey", credentialId: "cred-1" },
+          ],
+        });
+
+        expect(properties.privyLinkedAccounts).to.be.undefined;
+        expect(properties.privyLinkedAccountCount).to.be.undefined;
+        expect(properties.privyWalletCount).to.be.undefined;
+        expect(properties.privyHasPasskey).to.be.undefined;
+      });
     });
 
     describe("wallets extraction", () => {
@@ -334,6 +404,79 @@ describe("Privy Utilities", () => {
         const { wallets } = parsePrivyProperties(user);
 
         expect(wallets).to.deep.equal([]);
+      });
+
+      it("should extract cross_app embedded and smart wallets", () => {
+        const user: PrivyUser = {
+          id: "did:privy:abc123",
+          linkedAccounts: [
+            {
+              type: "cross_app",
+              subject: "provider-subject",
+              embeddedWallets: [{ address: EMBEDDED }],
+              smartWallets: [{ address: EXTERNAL_2, chainType: "ethereum" }],
+            },
+          ],
+        };
+
+        const { wallets } = parsePrivyProperties(user);
+
+        expect(wallets).to.have.length(2);
+        expect(wallets.map((w) => w.address)).to.deep.equal([
+          EMBEDDED,
+          EXTERNAL_2,
+        ]);
+        expect(wallets.every((w) => w.isEmbedded)).to.equal(true);
+        expect(wallets[0].walletClient).to.equal("cross_app");
+        expect(wallets[1].chainType).to.equal("ethereum");
+      });
+
+      it("should prefer the richer wallet entry regardless of account order", () => {
+        // A cross_app entry carries only an address, so it defaults to
+        // cross_app/embedded. When the same address also appears as a real
+        // wallet account, the real one must win even if Privy listed the
+        // cross_app account first — otherwise metadata (and the last-external
+        // active-wallet fallback, which keys on isEmbedded) depends on ordering.
+        const user: PrivyUser = {
+          id: "did:privy:abc123",
+          linkedAccounts: [
+            {
+              type: "cross_app",
+              subject: "provider-subject",
+              embeddedWallets: [{ address: EXTERNAL }],
+            },
+            {
+              type: "wallet",
+              address: EXTERNAL,
+              walletClientType: "metamask",
+              chainType: "ethereum",
+            },
+          ],
+        };
+
+        const { wallets } = parsePrivyProperties(user);
+
+        expect(wallets).to.have.length(1);
+        expect(wallets[0].walletClient).to.equal("metamask");
+        expect(wallets[0].chainType).to.equal("ethereum");
+        expect(wallets[0].isEmbedded).to.equal(false);
+      });
+
+      it("should deduplicate an address linked as both wallet and smart_wallet", () => {
+        const user: PrivyUser = {
+          id: "did:privy:abc123",
+          linkedAccounts: [
+            { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+            // Same address, different casing — EVM addresses are case-insensitive.
+            { type: "smart_wallet", address: EXTERNAL.toUpperCase().replace("0X", "0x") },
+          ],
+        };
+
+        const { wallets } = parsePrivyProperties(user);
+
+        expect(wallets).to.have.length(1);
+        // The first occurrence wins, so the richer `wallet` entry is kept.
+        expect(wallets[0].walletClient).to.equal("metamask");
       });
 
       it("should include chainType when available", () => {
