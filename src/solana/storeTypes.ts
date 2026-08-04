@@ -1,7 +1,7 @@
 /**
  * Type definitions for framework-kit's zustand store integration.
  *
- * These types mirror the state shape of @solana-foundation/framework-kit's
+ * These types mirror the state shape of framework-kit's
  * vanilla zustand store, allowing the SDK to subscribe to wallet and
  * transaction state changes without wrapping any wallet methods.
  *
