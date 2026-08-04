@@ -33,69 +33,84 @@ import type { IFormoEventProperties } from "../types/events";
  * circular value in `properties` fails downstream exactly as it does for
  * `track()`. That is a separate, pre-existing SDK-wide limitation.
  *
- * `undefined` and `null` are deliberately distinct: JSON omits an `undefined`
- * property but sends `null`, so collapsing them would let a real
- * value → `null` update be suppressed as a duplicate.
+ * It mirrors `JSON.stringify`'s own value semantics so the fingerprint tracks
+ * **what actually goes on the wire**, not what happens to be in the object:
+ *
+ * - `undefined`, functions, and symbols are *omitted* as object properties and
+ *   become `null` as array elements, exactly as JSON does. Two property sets
+ *   that serialize identically must fingerprint identically, or dedup emits a
+ *   second identify carrying a byte-identical payload.
+ * - `null` stays `null`, so a real value → `null` update is never mistaken for
+ *   an omitted key.
+ * - `NaN`/`Infinity` become `null`, because that is what is sent.
+ * - `toJSON()` is honored, so `Date` and `URL` reflect their serialized form
+ *   rather than their (often empty) enumerable keys.
+ * - `Map`/`Set` have no enumerable own properties and no `toJSON`, so they send
+ *   as `{}` — and therefore canonicalize as `{}`.
+ *
+ * The exceptions are the two things JSON *cannot* represent: `BigInt` and
+ * circular references both make `JSON.stringify` throw. They get distinct
+ * markers instead, because this function must never throw — it runs inside
+ * `identify()` *after* the active address/user have been updated, so a throw
+ * would leave the SDK with mutated identity state and no emitted event.
+ *
+ * Totality here is only about *dedup*: it guarantees the fingerprint step can't
+ * be what loses an identify. It does **not** make such values sendable — the
+ * event queue still serializes with native `JSON.stringify`, so a `BigInt` or
+ * circular value in `properties` fails downstream exactly as it does for
+ * `track()`. That is a separate, pre-existing SDK-wide limitation.
+ *
+ * Returns `undefined` when JSON would omit the value entirely.
  */
-function stableStringify(value: unknown, seen: Set<unknown> = new Set()): string {
-  if (value === undefined) return "undef";
+function stableStringify(
+  value: unknown,
+  seen: Set<unknown> = new Set()
+): string | undefined {
+  // JSON omits these as object properties; array elements are mapped to "null"
+  // by the caller below.
+  if (value === undefined) return undefined;
+  if (typeof value === "function") return undefined;
+  if (typeof value === "symbol") return undefined;
+
   if (value === null) return "null";
-  if (typeof value === "bigint") return `${value.toString()}n`;
-  if (typeof value === "function") return "fn";
-  if (typeof value === "symbol") return `sym(${String(value.description)})`;
-  if (value instanceof Date) {
-    // An invalid Date throws from toISOString().
-    const time = value.getTime();
-    return Number.isNaN(time) ? "invalid-date" : `"${value.toISOString()}"`;
+  // JSON.stringify throws on BigInt, so it has no wire form to mirror.
+  if (typeof value === "bigint") return `bigint:${value.toString()}`;
+  if (typeof value === "number") {
+    // NaN and Infinity are sent as null.
+    return Number.isFinite(value) ? JSON.stringify(value) : "null";
   }
   if (typeof value !== "object") {
-    // Remaining primitives: string, number, boolean. NaN/Infinity stringify to
-    // "null" via JSON, so encode them directly to keep them distinguishable.
-    if (typeof value === "number" && !Number.isFinite(value)) {
-      return String(value);
-    }
-    return JSON.stringify(value) ?? "null";
+    // Remaining primitives: string, boolean.
+    return JSON.stringify(value);
   }
 
   // Cycle guard: a repeated reference within the current path is replaced by a
-  // marker rather than recursing forever.
-  if (seen.has(value)) return "circular";
+  // marker rather than recursing forever. JSON.stringify would throw here.
+  if (seen.has(value)) return '"[circular]"';
   seen.add(value);
   try {
-    // Honor toJSON() the way JSON.stringify does, so the fingerprint reflects
-    // what actually goes on the wire. Without this, objects that serialize via
-    // toJSON but expose no enumerable own keys — URL is the common one — all
-    // canonicalize to "{}" and a genuinely changed value is falsely deduped.
+    // JSON calls toJSON() before inspecting the value, so do it first. This is
+    // what makes an invalid Date canonicalize as null (Date.prototype.toJSON
+    // returns null rather than throwing) and a URL reflect its href.
     const maybeToJSON = (value as { toJSON?: unknown }).toJSON;
     if (typeof maybeToJSON === "function") {
-      return stableStringify(
-        (maybeToJSON as () => unknown).call(value),
-        seen
-      );
+      return stableStringify((maybeToJSON as () => unknown).call(value), seen);
     }
     if (Array.isArray(value)) {
-      return `[${value.map((item) => stableStringify(item, seen)).join(",")}]`;
+      return `[${value
+        .map((item) => stableStringify(item, seen) ?? "null")
+        .join(",")}]`;
     }
-    if (value instanceof Map) {
-      return `Map{${Array.from(value.entries())
-        .map(
-          ([k, v]) =>
-            `${stableStringify(k, seen)}:${stableStringify(v, seen)}`
-        )
-        .sort()
-        .join(",")}}`;
-    }
-    if (value instanceof Set) {
-      return `Set{${Array.from(value.values())
-        .map((item) => stableStringify(item, seen))
-        .sort()
-        .join(",")}}`;
-    }
+    // Everything else, Map and Set included, serializes from its enumerable own
+    // properties. Keys are sorted so insertion order can't change the result.
     const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key], seen)}`)
-      .join(",")}}`;
+    const parts: string[] = [];
+    for (const key of Object.keys(record).sort()) {
+      const encoded = stableStringify(record[key], seen);
+      if (encoded === undefined) continue; // JSON omits this property
+      parts.push(`${JSON.stringify(key)}:${encoded}`);
+    }
+    return `{${parts.join(",")}}`;
   } finally {
     // Only guard against cycles, not repeated siblings: the same object used
     // twice in one payload must serialize the same both times.
@@ -104,15 +119,18 @@ function stableStringify(value: unknown, seen: Set<unknown> = new Set()): string
 }
 
 /**
- * Short, stable fingerprint of an identify's properties (FNV-1a, base36).
+ * Short, stable fingerprint of an identify's properties (two FNV-1a lanes,
+ * base36).
  *
  * Folded into the dedup key so that re-identifying a known wallet with *changed*
- * properties re-emits, while an unchanged repeat still dedupes. Kept to a few
- * characters because every key is stored in a size-bounded cookie.
+ * properties re-emits, while an unchanged repeat still dedupes. Kept short
+ * because every key is stored in a size-bounded cookie.
  *
- * A 32-bit hash can collide. The consequence is bounded and matches the old
- * behavior — a changed-properties identify that collides is suppressed for the
- * rest of the session; a wrong event is never emitted.
+ * Two independent lanes (different offset bases, combined into ~64 bits) rather
+ * than one: a single 32-bit lane collides readily — `{"x":"xefn1fnkq0"}` and
+ * `{"x":"filot3n704"}` both hash to `1mgjpo5` — and a collision here silently
+ * suppresses a legitimately changed profile for the rest of the session. At 64
+ * bits that is no longer a practical concern, for six more characters per key.
  */
 function fingerprintProperties(
   properties?: IFormoEventProperties
@@ -120,11 +138,15 @@ function fingerprintProperties(
   if (!properties) return undefined;
   let serialized: string;
   try {
-    // Object.keys() is inside the guard on purpose: reading keys can itself run
-    // user code (a Proxy with a throwing ownKeys trap), and this whole function
-    // must be total.
-    if (Object.keys(properties).length === 0) return undefined;
-    serialized = stableStringify(properties);
+    // Canonicalize first, then decide emptiness from the result. Anything that
+    // serializes to `{}` — a literal `{}`, or an object whose every value JSON
+    // omits — carries no wire payload, so it keeps the legacy no-hash key shape
+    // rather than getting a hash of "{}". Doing this inside the guard matters:
+    // reading properties can run user code (a Proxy with a throwing ownKeys
+    // trap), and this whole function must be total.
+    const canonical = stableStringify(properties);
+    if (canonical === undefined || canonical === "{}") return undefined;
+    serialized = canonical;
   } catch (error) {
     // stableStringify handles every value type it knows about, but reading a
     // property can still run arbitrary user code (a throwing getter, an exotic
@@ -135,12 +157,18 @@ function fingerprintProperties(
     logger.warn?.("Session: failed to fingerprint identify properties", error);
     return "nohash";
   }
-  let hash = 0x811c9dc5;
+  let lane1 = 0x811c9dc5;
+  let lane2 = 0x01000193;
   for (let i = 0; i < serialized.length; i++) {
-    hash ^= serialized.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
+    const code = serialized.charCodeAt(i);
+    lane1 ^= code;
+    lane1 = Math.imul(lane1, 0x01000193);
+    // A second lane with a different seed and multiplier, fed the position as
+    // well as the character, so the two lanes don't move together.
+    lane2 ^= code + i;
+    lane2 = Math.imul(lane2, 0x85ebca6b);
   }
-  return (hash >>> 0).toString(36);
+  return `${(lane1 >>> 0).toString(36)}${(lane2 >>> 0).toString(36)}`;
 }
 
 /**
@@ -215,17 +243,33 @@ export interface IFormoAnalyticsSession {
 const MAX_SESSION_ENTRIES = 20;
 
 /**
- * Byte budget for the identified-wallet cookie value.
+ * Byte budget for the identified-wallet cookie, measured on the value as the
+ * browser actually stores it.
  *
  * A Privy user can identify far more than 20 wallets in one session (an 8+
  * wallet user is the motivating case), so a fixed entry count would evict
  * `(wallet, userId)` keys and let a later sync re-emit them. Instead we bound
  * the store by serialized size and evict oldest only when it would overflow the
- * cookie — so every identity that fits is retained. Kept well under the ~4KB
- * per-cookie browser limit (leaving room for the cookie name and attributes);
- * that comfortably holds ~40 identities, beyond any realistic linked-wallet set.
+ * cookie — so every identity that fits is retained.
+ *
+ * The budget must be applied to the **encoded** length. Key components are
+ * already percent-encoded, and `CookieStorage.set()` then encodes the whole
+ * joined value again, so `%3A` becomes `%253A` and each `,` separator becomes
+ * `%2C`. Measuring the raw string underestimates what is written: 37 realistic
+ * DID-bearing keys measure 3500 raw but 3956 encoded, and a non-ASCII external
+ * user id inflates far more than that. Overflowing makes the browser reject the
+ * write outright, so nothing is persisted and every identify re-emits for the
+ * rest of the session — the exact failure the store exists to prevent.
  */
-const MAX_IDENTIFIED_BYTES = 3500;
+const MAX_COOKIE_BYTES = 4096;
+/** Reserve for the cookie name plus path/expires/SameSite/Secure attributes. */
+const COOKIE_OVERHEAD_RESERVE = 512;
+const MAX_IDENTIFIED_ENCODED_BYTES = MAX_COOKIE_BYTES - COOKIE_OVERHEAD_RESERVE;
+
+/** Length of a cookie value as written, i.e. after CookieStorage encodes it. */
+function encodedCookieLength(value: string): number {
+  return encodeURIComponent(value).length;
+}
 
 export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
@@ -438,11 +482,17 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
       identifiedWallets.push(identifiedKey);
       // Bound the stored list by serialized size (not a fixed entry count) so a
       // many-wallet Privy user's identities all persist, evicting oldest only if
-      // the value would overflow the cookie. Keep at least the just-added key.
+      // the value would overflow the cookie.
+      //
+      // `shift()` drops the oldest from the front while the new key was pushed
+      // to the back, and the loop stops at one entry, so the just-added key can
+      // never be evicted. A single key is bounded by its components (address +
+      // rdns + external user id + a 13-char hash) and cannot on its own approach
+      // the budget, so there is no oversized-single-entry case to handle.
       let newValue = identifiedWallets.join(",");
       while (
         identifiedWallets.length > 1 &&
-        newValue.length > MAX_IDENTIFIED_BYTES
+        encodedCookieLength(newValue) > MAX_IDENTIFIED_ENCODED_BYTES
       ) {
         identifiedWallets.shift();
         newValue = identifiedWallets.join(",");

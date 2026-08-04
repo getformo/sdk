@@ -192,6 +192,55 @@ describe("Privy Utilities", () => {
         expect(properties.twitter).to.be.undefined;
       });
 
+      it("should accept every form createdAt arrives in", () => {
+        // The React SDK gives a Date, but a user from the REST API or a JSON
+        // round-trip carries a string or number. Calling .getTime() on those
+        // throws, and identify()'s outer catch would swallow it — so the whole
+        // one-liner would silently emit nothing.
+        const expected = 1699900000000;
+
+        expect(
+          parsePrivyProperties({
+            id: "did:privy:abc123",
+            createdAt: new Date(expected),
+          }).properties.privyCreatedAt
+        ).to.equal(expected);
+
+        expect(
+          parsePrivyProperties({
+            id: "did:privy:abc123",
+            createdAt: new Date(expected).toISOString(),
+          }).properties.privyCreatedAt
+        ).to.equal(expected);
+
+        // Epoch milliseconds pass through; REST-style seconds are scaled up.
+        expect(
+          parsePrivyProperties({ id: "did:privy:abc123", createdAt: expected })
+            .properties.privyCreatedAt
+        ).to.equal(expected);
+        expect(
+          parsePrivyProperties({
+            id: "did:privy:abc123",
+            createdAt: expected / 1000,
+          }).properties.privyCreatedAt
+        ).to.equal(expected);
+      });
+
+      it("should not throw or emit NaN for an unusable createdAt", () => {
+        for (const createdAt of [
+          "not a date",
+          new Date("nonsense"),
+          NaN,
+          null as unknown as undefined,
+        ]) {
+          const { properties } = parsePrivyProperties({
+            id: "did:privy:abc123",
+            createdAt: createdAt as never,
+          });
+          expect(properties.privyCreatedAt).to.be.undefined;
+        }
+      });
+
       it("should extract phone from user.phone", () => {
         const user: PrivyUser = {
           id: "did:privy:abc123",

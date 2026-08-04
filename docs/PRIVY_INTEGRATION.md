@@ -54,9 +54,29 @@ That single `identify(user, { privy: true })` call identifies **every** wallet
 linked to the Privy user under the user's DID, forwards each wallet's metadata,
 and pins event attribution to the active wallet.
 
-> The effect above is yours to own — key it on `user` (and `wallets`) so it
-> re-runs on login and link/unlink. The SDK deduplicates the underlying identify
-> events per `(wallet, user)`, so re-running on every render is safe.
+> The effect above is yours to own — key it on `user` so it re-runs on login and
+> on every link/unlink. Dedup makes re-running *safe* (no duplicate events), but
+> not *free*: each run still re-parses the linked accounts, walks every wallet,
+> and fingerprints properties. Privy recreates `user` on many renders, so for a
+> user with several linked wallets prefer a stable dependency that still changes
+> when the profile does:
+>
+> ```ts
+> // Re-runs on login, link, and unlink — not on every render.
+> const identityKey = user
+>   ? `${user.id}:${user.linkedAccounts?.length ?? 0}`
+>   : null;
+>
+> useEffect(() => {
+>   if (formo && authenticated && user) {
+>     formo.identify(user, { privy: true });
+>   }
+> }, [formo, authenticated, identityKey]);
+> ```
+>
+> If you also pass `activeAddress`, derive it as a string (e.g.
+> `wallets[0]?.address`) rather than depending on the `wallets` array, which is a
+> new reference on most renders.
 
 ## How it works
 
@@ -79,10 +99,14 @@ paired with the wrong chain.
 Not using React (or prefer an explicit function)? `identifyPrivyUser` is the
 same thing without the flag, and works from the `core` entry too.
 
+Obtain the Privy user however your framework's Privy integration provides it —
+the SDK only needs the user object itself, not React:
+
 ```ts
 import { identifyPrivyUser } from "@formo/analytics";
 
-const { user } = usePrivy();
+// `user` is Privy's user object from whatever binding you use: React's
+// usePrivy(), a Vue/Svelte store, or `privy.user` from the core SDK.
 if (user) {
   await identifyPrivyUser(formo, user, {
     activeAddress: connectedWallet?.address, // optional; see "attribution" below
@@ -104,7 +128,9 @@ identifyPrivyUser(
     activeAddress?: string;               // active/connected wallet
     properties?: IFormoEventProperties;   // merged into every identify call
   }
-): Promise<void>
+// Resolves to the linked wallet that now owns attribution, or undefined when
+// no linked wallet matched (or the user had none).
+): Promise<{ address: string; chainType?: string } | undefined>
 ```
 
 ## What gets sent
@@ -178,9 +204,15 @@ touching attribution. The active wallet is chosen, in order:
    the live active wallet most precisely). It's matched **strictly**: if the
    address you pass isn't one of the linked wallets, the sync promotes *no*
    wallet and leaves your current address untouched.
-2. else **`user.wallet`** — the primary wallet Privy surfaces on the user object,
+2. else the SDK's existing **`currentAddress`** — the wallet Formo already
+   treats as active from a prior wagmi/EIP-1193 connect. Matched just as
+   strictly: if it isn't one of the linked wallets, no wallet is promoted and
+   the current identity is left alone rather than falling through to
+   `user.wallet`. This is what stops the clustering pass from repointing
+   attribution away from a wallet the user is actually connected with;
+3. else **`user.wallet`** — the primary wallet Privy surfaces on the user object,
    so `identify(user, { privy: true })` needs no argument at all;
-3. else a best-effort guess: embedded (Privy) wallets deprioritized, so the last
+4. else a best-effort guess: embedded (Privy) wallets deprioritized, so the last
    external wallet.
 
 Because only the active wallet repoints attribution (via an internal flag, not a
@@ -240,18 +272,24 @@ import { parsePrivyProperties } from "@formo/analytics";
 const { properties, wallets } = parsePrivyProperties(user);
 // properties: { privyDid, email, twitter, github, … }
 // wallets:    [{ address, walletClient, chainType, isEmbedded }, …]
-
-for (const wallet of wallets) {
-  formo.identify(
-    { address: wallet.address, userId: user.id },
-    { ...properties, wallet_client: wallet.walletClient },
-  );
-}
 ```
 
-Reach for this only if you need behavior `identifyPrivyUser` doesn't cover —
-otherwise prefer the one-liner, which also handles per-wallet metadata and
-active-wallet attribution.
+> [!WARNING]
+> **Don't loop `identify()` over `wallets` yourself.** The public `identify()`
+> always promotes the wallet it is given to the SDK's current address, so a loop
+> hands attribution to whichever wallet happens to be last — typically not the
+> one the user is connected with. Suppressing that is exactly what the internal
+> `setActive` flag does, and it is not part of the public API. If you need every
+> linked wallet clustered, call `identifyPrivyUser` (optionally with
+> `activeAddress`) and let it place attribution:
+>
+> ```ts
+> const active = await identifyPrivyUser(formo, user, { activeAddress });
+> ```
+
+Use `parsePrivyProperties` for reading a Privy user — populating your own UI,
+deriving traits, counting linked wallets — rather than as a way to emit
+identifies by hand.
 
 ## Limitations & roadmap
 

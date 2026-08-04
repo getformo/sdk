@@ -23,6 +23,31 @@ function isPrivyWalletAccount(account: PrivyLinkedAccount): boolean {
   );
 }
 
+/**
+ * Coerce a Privy timestamp to epoch milliseconds, tolerating the forms a
+ * `PrivyUser` can actually arrive in: a `Date` (React SDK), an ISO string or
+ * epoch number (REST API / JSON round-trip). Returns undefined for anything
+ * unparseable rather than throwing or emitting NaN.
+ */
+function toEpochMillis(value: unknown): number | undefined {
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? undefined : time;
+  }
+  if (typeof value === "number") {
+    // Privy's REST API reports seconds; a Date-derived value is milliseconds.
+    // Anything below this threshold is far too old to be a millisecond
+    // timestamp, so treat it as seconds.
+    if (!Number.isFinite(value)) return undefined;
+    return value < 1e11 ? value * 1000 : value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  return undefined;
+}
+
 /** A 0x-prefixed 20-byte hex string (prefix and hex are case-insensitive). */
 const EVM_ADDRESS_RE = /^0x[0-9a-f]{40}$/i;
 
@@ -72,10 +97,17 @@ export function parsePrivyProperties(user: PrivyUser): {
 } {
   const accounts = user.linkedAccounts || [];
 
-  // Extract profile properties
+  // Extract profile properties.
+  //
+  // Privy's React SDK types `createdAt` as a Date, but PrivyUser is a
+  // structural interface — a user object from the REST API, or one that made a
+  // JSON round-trip through a cache, carries a string or epoch number instead.
+  // Calling .getTime() on those throws, and identify()'s outer catch would
+  // swallow it, so the whole one-liner would silently emit nothing. Normalize
+  // instead of trusting the declared type.
   const properties: PrivyProfileProperties = {
     privyDid: user.id,
-    privyCreatedAt: user.createdAt?.getTime(),
+    privyCreatedAt: toEpochMillis(user.createdAt),
   };
 
   // Email

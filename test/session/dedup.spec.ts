@@ -375,6 +375,70 @@ describe("Session identify dedup with userId", () => {
       ).to.not.throw();
     });
 
+    it("dedupes payloads that serialize identically on the wire", () => {
+      const session = new FormoAnalyticsSession();
+
+      // JSON omits undefined/function/symbol properties, so all of these send
+      // the exact same bytes. Fingerprinting them differently would emit a
+      // second identify carrying a byte-identical payload.
+      session.markWalletIdentified(ADDRESS, RDNS, DID, { a: 1 });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, {
+          a: 1,
+          b: undefined,
+          c: () => undefined,
+          d: Symbol("s"),
+        })
+      ).to.equal(true);
+
+      // NaN and Infinity are both sent as null.
+      session.markWalletIdentified(ADDRESS, RDNS, DID, { n: null });
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, { n: NaN })
+      ).to.equal(true);
+    });
+
+    it("treats an all-omitted property bag as no properties", () => {
+      const session = new FormoAnalyticsSession();
+
+      // Sends `{}`, exactly like passing nothing, so it must keep the legacy
+      // key shape rather than minting a distinct hashed key.
+      session.markWalletIdentified(ADDRESS, RDNS, DID);
+      expect(
+        session.isWalletIdentified(ADDRESS, RDNS, DID, { a: undefined })
+      ).to.equal(true);
+    });
+
+    it("keeps the stored cookie within the browser's size limit", () => {
+      const session = new FormoAnalyticsSession();
+
+      // Keys are percent-encoded once when built and again by CookieStorage,
+      // so a raw-length budget understates what is written. Overflowing makes
+      // the browser reject the write, so nothing persists and every identify
+      // re-emits for the rest of the session.
+      for (let i = 0; i < 200; i++) {
+        session.markWalletIdentified(
+          `0x${i.toString(16).padStart(40, "0")}`,
+          RDNS,
+          // A DID-shaped id, whose colons percent-encode twice.
+          `did:privy:cm3np${i}`,
+          { privyDid: `did:privy:cm3np${i}`, email: "user@example.com" }
+        );
+      }
+
+      const stored = cookie().get(SESSION_WALLET_IDENTIFIED_KEY) ?? "";
+      expect(encodeURIComponent(stored).length).to.be.at.most(4096 - 512);
+      // Eviction must never drop the key it just wrote.
+      expect(
+        session.isWalletIdentified(
+          `0x${(199).toString(16).padStart(40, "0")}`,
+          RDNS,
+          "did:privy:cm3np199",
+          { privyDid: "did:privy:cm3np199", email: "user@example.com" }
+        )
+      ).to.equal(true);
+    });
+
     it("treats undefined and null property values as different", () => {
       const session = new FormoAnalyticsSession();
 

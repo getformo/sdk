@@ -102,8 +102,12 @@ export interface PrivyUser {
   /** Privy user ID in DID format (e.g., "did:privy:cm3np...") */
   id: string;
 
-  /** Account creation timestamp */
-  createdAt?: Date;
+  /**
+   * Account creation timestamp. Privy's React SDK supplies a `Date`, but a user
+   * object from the REST API or one that made a JSON round-trip carries an ISO
+   * string or epoch number, so all three are accepted and normalized.
+   */
+  createdAt?: Date | string | number;
 
   /** All linked accounts */
   linkedAccounts?: PrivyLinkedAccount[];

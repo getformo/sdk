@@ -18,6 +18,7 @@ import { initStorageManager } from "../../src/storage";
 describe("identifyPrivyUser (integration with real identify)", () => {
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
+  let originalGlobalThis: PropertyDescriptor | undefined;
 
   const EMBEDDED = "0x1111111111111111111111111111111111111111";
   const EXTERNAL = "0x2222222222222222222222222222222222222222";
@@ -69,6 +70,11 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     Object.defineProperty(global, "location", {
       value: jsdom.window.location, writable: true, configurable: true,
     });
+    // globalThis is a real Node binding, unlike window/document/localStorage
+    // which don't exist here natively. Capture its descriptor so afterEach can
+    // put it back — deleting it would unbind globalThis process-wide for every
+    // test file that runs after this one.
+    originalGlobalThis = Object.getOwnPropertyDescriptor(global, "globalThis");
     Object.defineProperty(global, "globalThis", {
       value: jsdom.window, writable: true, configurable: true,
     });
@@ -93,7 +99,11 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     delete (global as any).window;
     delete (global as any).document;
     delete (global as any).location;
-    delete (global as any).globalThis;
+    if (originalGlobalThis) {
+      Object.defineProperty(global, "globalThis", originalGlobalThis);
+    } else {
+      delete (global as any).globalThis;
+    }
     delete (global as any).navigator;
     delete (global as any).localStorage;
     delete (global as any).sessionStorage;
