@@ -95,6 +95,44 @@ a different chain namespace than the current chain id (e.g. a Solana wallet whil
 an EVM chain was current), the mismatched chain id is cleared so events aren't
 paired with the wrong chain.
 
+## Apps with both Privy and non-Privy users
+
+If some users authenticate through Privy and others connect a wallet directly,
+branch on which identity you actually have. The two forms take different inputs,
+so the conditional falls out naturally:
+
+```tsx
+const { user } = usePrivy();      // null when the session isn't a Privy one
+const { address } = useAccount(); // plain wallet connect
+const formo = useFormo();
+
+useEffect(() => {
+  if (!formo) return;
+
+  if (user) {
+    // Privy session: identifies every linked wallet under the DID.
+    formo.identify(user);
+  } else if (address) {
+    // Plain wallet session: the single connected address.
+    formo.identify({ address });
+  }
+}, [user, address, formo]);
+```
+
+**Check `user` first.** A Privy session usually *also* has a wagmi `address`, so
+testing `address` first would send that user down the plain path and lose the
+clustering — the exact fragmentation this integration exists to prevent.
+
+Use `else if` rather than two independent `if`s. Both branches would otherwise
+fire for a Privy user, emitting an extra identify for the connected wallet with
+no DID attached. That isn't harmful — the DID-tagged identify still clusters the
+wallet — but it's a redundant event.
+
+This assumes `PrivyProvider` is mounted for every session, with `user` simply
+null for non-Privy ones. If your app mounts the provider conditionally, you
+can't call `usePrivy()` unconditionally, and the branch has to live above
+whichever component owns the Privy context.
+
 ## Framework-agnostic usage
 
 Not using React (or prefer naming the intent at the call site)?
