@@ -438,7 +438,7 @@ export interface IdentifyPrivyUserOptions {
  * chain namespace (clearing a stale EVM chain id when a Solana wallet becomes
  * active, and vice versa), so identifies aren't dropped by an `excludeChains`
  * gate and later events aren't paired with the wrong chain. This happens here,
- * so the direct helper and the `formo.identify(user, { privy: true })` form
+ * so the direct helper and the `formo.identify(user)` form
  * behave identically.
  *
  * Returns the active linked wallet's `{ address, chainType }` (the one now
