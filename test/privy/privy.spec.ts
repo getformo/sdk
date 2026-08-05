@@ -1,10 +1,8 @@
 import { describe, it } from "mocha";
 import { expect } from "chai";
-import {
-  parsePrivyProperties,
-  identifyPrivyUser,
-  PrivyUser,
-} from "../../src/privy";
+import { parsePrivyProperties, PrivyUser } from "../../src/privy";
+// Internal: not part of the public API, reached publicly via identify(user).
+import { identifyPrivyUser } from "../../src/privy/utils";
 import type { IFormoAnalytics } from "../../src/types";
 
 interface RecordedIdentify {
