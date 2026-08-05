@@ -1,0 +1,8 @@
+* @yosriady
+
+# Publishing identity and dependency resolution are security boundaries.
+/.github/workflows/ @yosriady
+/package.json @yosriady
+/pnpm-lock.yaml @yosriady
+/pnpm-workspace.yaml @yosriady
+/scripts/ @yosriady
