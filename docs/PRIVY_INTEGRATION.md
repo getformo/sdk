@@ -351,6 +351,102 @@ related product concerns are out of scope for it today:
 Both are natural next steps for a users/clustering product surface, not part of
 the identify one-liner.
 
+## Design notes
+
+Internals, for anyone changing this code. Skip if you are just integrating.
+
+### What one call does
+
+`identifyPrivyUser` (`src/privy/utils.ts`) runs five steps in order:
+
+1. **Bail if tracking is suppressed** (opt-out, excluded host/path/timezone).
+   This has to come first, because step 4 mutates chain state before anything is
+   emitted, so a suppressed visitor could otherwise have their chain id cleared
+   with no identify to show for it.
+2. **Parse `user.linkedAccounts`** into shared profile properties and wallets.
+3. **Resolve the one active wallet.**
+4. **Reconcile the chain** with that wallet's namespace, before emitting.
+5. **Emit one identify per wallet**, all tagged `userId: user.id`, with
+   `setActive: wallet === activeWallet`.
+
+### The `setActive` flag
+
+The concrete `identify()` implementation carries an internal `setActive` flag
+that is deliberately *not* on the public `IFormoAnalytics.identify` overloads.
+`setActive: false` emits the event and marks dedup, but does not touch
+`currentAddress`, `currentUserId`, or the user-id cookie. That is what makes
+ordering irrelevant: there is no snapshot/restore, and clustering identifies
+cannot repoint attribution.
+
+`EventFactory.create()` used to overwrite an identify's payload `user_id` with
+the active-session user id. That stripped the DID from every `setActive: false`
+event, silently breaking clustering for exactly the wallets this feature exists
+to link. Identify events now keep their own `user_id` and skip address backfill.
+
+### Dedup key
+
+`(address, rdns, userId, hash(properties))`, percent-encoded and comma-joined in
+a size-bounded cookie. Shapes are fixed by component count (1 `address`,
+2 `address:rdns`, 3 `+userId`, 4 `+hash`) so they cannot collide, and shapes 1
+and 2 are byte-identical to pre-`userId` keys, so sessions already in browsers
+still match.
+
+Writing a key **supersedes** that identity's previous entry rather than
+appending. Without that, a profile reverting to an earlier value (link then
+unlink) would match the stale key and emit nothing, and every profile change
+would grow the cookie by one entry per wallet.
+
+The fingerprint mirrors `JSON.stringify` semantics so it tracks what is actually
+sent: `undefined`/function/symbol properties are omitted, `NaN`/`Infinity`
+become `null`, `toJSON()` is honored, `Map`/`Set` serialize as `{}`. Payloads
+that serialize identically must fingerprint identically, or dedup emits a
+byte-identical duplicate. It is also total and never throws: `BigInt` and
+circular references get distinct markers, and a throwing getter degrades to
+pre-fingerprint dedup. This matters because it runs *after* active state is
+mutated, so a throw would leave mutated identity with no emitted event.
+
+The cookie budget is measured on the **encoded** value. Components are
+percent-encoded when built and `CookieStorage` encodes the joined value again,
+so 37 realistic DID-bearing keys measure 3500 raw but 3956 encoded, which with
+the cookie name and attributes clears the ~4KB limit and makes the browser
+reject the write outright.
+
+> This dedup behaviour is global, not Privy-scoped: any `identify()` passing
+> changed properties re-emits. A caller passing a volatile value (a timestamp, a
+> random id) will emit one identify per call instead of one per session.
+
+### Chain reconciliation
+
+Privy omits `chainType` on `smart_wallet` and `cross_app` entries, so the EVM
+namespace is inferred from a `0x` address shape when it is absent. Only
+`"solana"` and `"ethereum"` are treated as known, so an unrecognized or future
+namespace leaves the chain id alone rather than guessing. On a real mismatch the
+chain id is cleared rather than asserted, since `chainType` cannot tell us the
+specific chain; a real connect sets it correctly.
+
+### Verified end to end
+
+Against a live Privy app and a real Formo project, with a 3-wallet user:
+
+- one identify per wallet, `HTTP 202`, all sharing the DID and one
+  `anonymous_id`;
+- the persisted active-wallet cookie held the wagmi-active wallet, not either of
+  the other two;
+- linking X and then Discord produced exactly one re-emit per wallet each time,
+  with properties accumulating. Without the properties fingerprint both waves
+  would have been suppressed, since `(address, userId)` never changed;
+- `identities` resolved the DID to those 3 addresses across 4 `anonymous_id`s,
+  `identity_links` carried anon-to-address edges predating the DID, and
+  `user_profiles_mv` showed all 3 addresses carrying the DID plus both socials.
+
+### Non-goals
+
+- **Auto-detecting Privy with zero integrator code.** The full `user` object
+  lives in Privy's React context; the SDK cannot observe it from outside, and the
+  persisted tokens carry only the DID, not the wallet list.
+- **An `alias()` API.** The shared-`userId` model already merges wallets
+  server-side.
+
 ## The Privy user object
 
 The integration reads the standard Privy user object returned by
