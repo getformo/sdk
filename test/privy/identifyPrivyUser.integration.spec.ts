@@ -514,6 +514,97 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(events).to.have.length(4);
   });
 
+  it("re-emits every wallet again for each successive social link", async () => {
+    // Mirrors a real session: a 3-wallet user links X, then links Discord.
+    // Each link must produce its own wave of one identify per wallet, with the
+    // properties accumulating — the second link is the case that would regress
+    // if the fingerprint were computed once and cached rather than per call.
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    const wallets = [
+      { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+      { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+      { type: "wallet", address: EXTERNAL_2, walletClientType: "metamask" },
+    ];
+
+    await identifyPrivyUser(formo, { id: DID, linkedAccounts: wallets });
+    expect(events).to.have.length(3);
+
+    // Link X.
+    await identifyPrivyUser(formo, {
+      id: DID,
+      linkedAccounts: [
+        ...wallets,
+        { type: "twitter_oauth", subject: "t1", username: "yosriady" },
+      ],
+      twitter: {
+        subject: "t1",
+        username: "yosriady",
+        name: null,
+        profilePictureUrl: null,
+      },
+    });
+    expect(events).to.have.length(6);
+    const afterTwitter = events.slice(3);
+    expect(afterTwitter.map((e) => e.properties.twitter)).to.deep.equal([
+      "yosriady",
+      "yosriady",
+      "yosriady",
+    ]);
+    expect(afterTwitter.every((e) => e.properties.discord === undefined)).to.equal(
+      true
+    );
+
+    // Link Discord on top. The DID and wallet set are unchanged, so only the
+    // properties fingerprint distinguishes this from the previous state.
+    await identifyPrivyUser(formo, {
+      id: DID,
+      linkedAccounts: [
+        ...wallets,
+        { type: "twitter_oauth", subject: "t1", username: "yosriady" },
+        { type: "discord_oauth", subject: "d1", username: "yosriady#0" },
+      ],
+      twitter: {
+        subject: "t1",
+        username: "yosriady",
+        name: null,
+        profilePictureUrl: null,
+      },
+      discord: { subject: "d1", username: "yosriady#0", email: null },
+    });
+    expect(events).to.have.length(9);
+    const afterDiscord = events.slice(6);
+    expect(afterDiscord.map((e) => e.address?.toLowerCase())).to.have.members([
+      EMBEDDED,
+      EXTERNAL,
+      EXTERNAL_2,
+    ]);
+    for (const e of afterDiscord) {
+      expect(e.userId).to.equal(DID);
+      expect(e.properties.twitter).to.equal("yosriady");
+      expect(e.properties.discord).to.equal("yosriady#0");
+    }
+
+    // Re-running the final state is deduped — three waves, not four.
+    await identifyPrivyUser(formo, {
+      id: DID,
+      linkedAccounts: [
+        ...wallets,
+        { type: "twitter_oauth", subject: "t1", username: "yosriady" },
+        { type: "discord_oauth", subject: "d1", username: "yosriady#0" },
+      ],
+      twitter: {
+        subject: "t1",
+        username: "yosriady",
+        name: null,
+        profilePictureUrl: null,
+      },
+      discord: { subject: "d1", username: "yosriady#0", email: null },
+    });
+    expect(events).to.have.length(9);
+  });
+
   it("does not re-emit surviving wallets when another wallet is unlinked", async () => {
     const formo = await makeAnalytics();
     const events = captureIdentifies(formo);

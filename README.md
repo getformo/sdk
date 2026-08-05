@@ -29,13 +29,8 @@ You can install Formo on:
 
 Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on local testing, debugging, and consent management.
 
-## Integrations
-
-In-depth guides for specific stacks live in [`docs/`](./docs):
-
-- [Wagmi](./docs/WAGMI_INTEGRATION.md) · [Wagmi + Next.js](./docs/WAGMI_NEXTJS_SETUP.md)
-- [Solana](./docs/SOLANA_INTEGRATION.md)
-- [Privy](./docs/PRIVY_INTEGRATION.md) — one-liner to cluster a Privy user's many wallets under a single identity
+Using [Privy](./docs/PRIVY_INTEGRATION.md)? `identify(user, { privy: true })`
+clusters all of a Privy user's linked wallets under a single identity.
 
 ## Methodology
 
