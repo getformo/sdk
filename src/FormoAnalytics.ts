@@ -702,8 +702,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   async identify(
     user: PrivyUser,
-    options: {
-      privy: true;
+    options?: {
       activeAddress?: string;
       properties?: IFormoEventProperties;
     }
@@ -730,32 +729,32 @@ export class FormoAnalytics implements IFormoAnalytics {
       | PrivyUser,
     propertiesOrOptions?:
       | IFormoEventProperties
-      | { privy: true; activeAddress?: string; properties?: IFormoEventProperties },
+      | { activeAddress?: string; properties?: IFormoEventProperties },
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
-      // Privy convenience form: identify(user, { privy: true, activeAddress? }).
+      // Privy form: identify(user) / identify(user, { activeAddress? }).
       // Delegate to the Privy adapter, which expands the user's linked wallets
       // into one identify per wallet under the shared DID. Kept as a thin
       // dispatch so the Privy-specific logic stays in the privy module.
       //
-      // The `{ privy: true }` flag alone is not enough to switch forms:
-      // `IFormoEventProperties` is an open record, so a normal identify could
-      // legitimately carry a property named `privy`. Only take the Privy branch
-      // when the first argument is actually Privy-user-shaped (a string `id`,
-      // and not an address-keyed identify params object).
+      // Recognized purely by shape, so no flag is needed at the call site. The
+      // two forms are mutually exclusive: an address-keyed identify always
+      // carries an `address` (it is the required field and the thing the event
+      // is keyed on), while a Privy user carries a string `id` and never a
+      // top-level `address`. Requiring the absence of `address` is what keeps a
+      // normal identify from ever being mistaken for a Privy user.
       const maybeUser = paramsOrUser as
         | (Partial<PrivyUser> & { address?: unknown })
         | undefined;
       if (
-        propertiesOrOptions &&
-        (propertiesOrOptions as { privy?: unknown }).privy === true &&
         maybeUser &&
         typeof maybeUser.id === "string" &&
         maybeUser.address === undefined
       ) {
-        const opts = propertiesOrOptions as {
+        // Options are optional: `identify(user)` is the common call.
+        const opts = (propertiesOrOptions ?? {}) as {
           activeAddress?: string;
           properties?: IFormoEventProperties;
         };

@@ -22,12 +22,12 @@ today, connect three more next week — they all roll up under the same identity
               Formo clusters them into one user
 ```
 
-The whole thing is a single `identify(user, { privy: true })` call — a one-line
+The whole thing is a single `identify(user)` call — a one-line
 replacement for hand-rolling an `identify()` loop over the linked wallets.
 
 ## Quick start (React)
 
-Pass the `usePrivy()` user to `identify()` with `{ privy: true }`. Call it from
+Pass the `usePrivy()` user straight to `identify()`. Call it from
 an effect that runs when the user changes, so login, `linkWallet`, and
 `unlinkWallet` all keep Formo's identity in sync. No separate helper or hook.
 
@@ -42,7 +42,7 @@ function AnalyticsIdentity() {
 
   useEffect(() => {
     if (formo && authenticated && user) {
-      formo.identify(user, { privy: true });
+      formo.identify(user);
     }
   }, [formo, authenticated, user]);
 
@@ -50,7 +50,7 @@ function AnalyticsIdentity() {
 }
 ```
 
-That single `identify(user, { privy: true })` call identifies **every** wallet
+That single `identify(user)` call identifies **every** wallet
 linked to the Privy user under the user's DID, forwards each wallet's metadata,
 and pins event attribution to the active wallet.
 
@@ -69,7 +69,7 @@ and pins event attribution to the active wallet.
 >
 > useEffect(() => {
 >   if (formo && authenticated && user) {
->     formo.identify(user, { privy: true });
+>     formo.identify(user);
 >   }
 > }, [formo, authenticated, identityKey]);
 > ```
@@ -80,11 +80,12 @@ and pins event attribution to the active wallet.
 
 ## How it works
 
-`identify(user, { privy: true })` is a thin convenience form of `identify()`:
-when it sees the `{ privy: true }` flag it treats the first argument as a Privy
-user and expands `user.linkedAccounts`, emitting one identify per linked wallet
-under the shared DID. The Privy-specific logic lives in the SDK's Privy module;
-the core `identify()` just dispatches to it.
+`identify()` recognizes a Privy user by shape — a string `id` and no `address` —
+and expands `user.linkedAccounts`, emitting one identify per linked wallet under
+the shared DID. No flag is needed: the two forms are mutually exclusive, because
+an address-keyed identify always carries an `address` and a Privy user never
+does. The Privy-specific logic lives in the SDK's Privy module; the core
+`identify()` just dispatches to it.
 
 Only the **active** wallet updates the SDK's current address/user (what later
 events are attributed to). The other linked wallets are recorded purely for
@@ -96,8 +97,9 @@ paired with the wrong chain.
 
 ## Framework-agnostic usage
 
-Not using React (or prefer an explicit function)? `identifyPrivyUser` is the
-same thing without the flag, and works from the `core` entry too.
+Not using React (or prefer naming the intent at the call site)?
+`identifyPrivyUser` does exactly what `identify(user)` does, and works from the
+React-free `core` entry too.
 
 Obtain the Privy user however your framework's Privy integration provides it —
 the SDK only needs the user object itself, not React:
@@ -114,7 +116,7 @@ if (user) {
 }
 ```
 
-`formo.identify(user, { privy: true, activeAddress, properties })` and
+`formo.identify(user, { activeAddress, properties })` and
 `identifyPrivyUser(formo, user, { activeAddress, properties })` are equivalent —
 the former is sugar over the latter.
 
@@ -211,14 +213,14 @@ touching attribution. The active wallet is chosen, in order:
    `user.wallet`. This is what stops the clustering pass from repointing
    attribution away from a wallet the user is actually connected with;
 3. else **`user.wallet`** — the primary wallet Privy surfaces on the user object,
-   so `identify(user, { privy: true })` needs no argument at all;
+   so `identify(user)` needs no argument at all;
 4. else a best-effort guess: embedded (Privy) wallets deprioritized, so the last
    external wallet.
 
 Because only the active wallet repoints attribution (via an internal flag, not a
 public `identify()` option), a wallet you've already connected is never
 clobbered by the clustering identifies. In practice you can just call
-`formo.identify(user, { privy: true })`: if the SDK already tracks a connected
+`formo.identify(user)`: if the SDK already tracks a connected
 wallet it's kept; otherwise it falls to Privy's primary. Pass `activeAddress`
 only to pin attribution to a specific wallet.
 
@@ -302,7 +304,7 @@ related product concerns are out of scope for it today:
   users until they have a wallet. Surfacing account identity independent of a
   wallet needs a userId-keyed identify on the ingest side — a separate,
   backend-coordinated change.
-- **Unlink is additive.** `identify(user, { privy: true })` emits positive
+- **Unlink is additive.** `identify(user)` emits positive
   wallet↔user link events only. When a wallet is unlinked in Privy your effect
   re-runs for the smaller set, but there is no SDK-level "unlink" event, so from
   the backend's perspective links only accumulate. Modeling removal needs an
@@ -345,7 +347,7 @@ No. Because every wallet is identified with the same `userId`, Formo merges them
 server-side. There's no separate alias step.
 
 **What about wallets the user links later?**
-Because you call `identify(user, { privy: true })` from an effect keyed on
+Because you call `identify(user)` from an effect keyed on
 `user`, it re-runs whenever the linked-wallet set changes, so newly linked
 wallets are identified automatically.
 

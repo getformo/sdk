@@ -30,12 +30,12 @@ onto every wallet's identify. See [Deferred](#deferred) below.
 
 | Symbol | Purpose |
 | --- | --- |
-| `formo.identify(user, { privy: true, activeAddress?, properties? })` | Identify every linked wallet under the DID in one call. |
-| `identifyPrivyUser(analytics, user, options?)` | Framework-agnostic equivalent the flag delegates to. Resolves to the active wallet's `{ address, chainType }`, or `undefined`. |
+| `formo.identify(user)` — options `{ activeAddress?, properties? }` | Identify every linked wallet under the DID in one call. |
+| `identifyPrivyUser(analytics, user, options?)` | Framework-agnostic equivalent the shorthand delegates to. Resolves to the active wallet's `{ address, chainType }`, or `undefined`. |
 | `parsePrivyProperties(user)` → `{ properties, wallets }` | Low-level parse, for reading a Privy user. Not for emitting identifies by hand — see the warning in the usage guide. |
 
 Exported from the package root and the React-free `./core` entry. There is **no
-React hook**: apps call `identify(user, { privy: true })` from their own effect
+React hook**: apps call `identify(user)` from their own effect
 keyed on the Privy `user`, which is what makes link/unlink propagate.
 
 ## What happens on one call

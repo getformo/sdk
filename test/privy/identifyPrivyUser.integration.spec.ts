@@ -145,7 +145,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
 
-  it("dispatches identify(user, { privy: true }) through the core identify()", async () => {
+  it("dispatches identify(user) through the core identify()", async () => {
     const formo = await makeAnalytics();
     const events = captureIdentifies(formo);
 
@@ -159,7 +159,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     };
 
     // The single-call form: no separate helper or hook.
-    await formo.identify(user, { privy: true, activeAddress: EXTERNAL });
+    await formo.identify(user, { activeAddress: EXTERNAL });
 
     // Both linked wallets identified under the DID, with metadata forwarded.
     expect(events).to.have.length(2);
@@ -174,6 +174,50 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     }
     // Only the active wallet (setActive) owns attribution.
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
+  });
+
+  it("takes the Privy form from shape alone, with no options argument", async () => {
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    // The simplest possible call: just the user.
+    await formo.identify({
+      id: DID,
+      wallet: { address: EXTERNAL },
+      linkedAccounts: [
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy" },
+      ],
+    });
+
+    expect(events).to.have.length(2);
+    for (const e of events) expect(e.userId).to.equal(DID);
+    // With no activeAddress, attribution falls to Privy's surfaced primary.
+    expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
+  });
+
+  it("leaves every existing address-keyed identify form untouched", async () => {
+    const formo = await makeAnalytics();
+    const events = captureIdentifies(formo);
+
+    // Shape dispatch keys on a string `id` AND no `address`, so none of the
+    // pre-existing call forms can be mistaken for a Privy user.
+    await formo.identify({ address: EXTERNAL });
+    await formo.identify({ address: EMBEDDED, userId: "legacy-user-id" });
+    await formo.identify(
+      { address: EXTERNAL_2, providerName: "MetaMask", rdns: "io.metamask" },
+      { plan: "pro" }
+    );
+
+    expect(events).to.have.length(3);
+    expect(events.map((e) => e.address.toLowerCase())).to.have.members([
+      EXTERNAL,
+      EMBEDDED,
+      EXTERNAL_2,
+    ]);
+    // A userId passed the old way still lands on the event.
+    expect(events[1].userId).to.equal("legacy-user-id");
+    expect(events[2].properties.plan).to.equal("pro");
   });
 
   it("does not treat a normal identify carrying a `privy` property as the Privy form", async () => {
@@ -216,7 +260,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
 
     // No activeAddress passed: the flag form must keep attribution on the
     // connected wallet, not overwrite it with user.wallet.
-    await formo.identify(user, { privy: true });
+    await formo.identify(user);
 
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
   });
@@ -264,7 +308,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
       ],
     };
 
-    await formo.identify(user, { privy: true });
+    await formo.identify(user);
 
     // The linked wallets are still identified for clustering...
     const linkedIdentifies = events.filter((e) =>
@@ -299,7 +343,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     };
 
     // Make the Solana wallet the active one.
-    await formo.identify(user, { privy: true, activeAddress: SOL });
+    await formo.identify(user, { activeAddress: SOL });
 
     expect(formo.currentAddress).to.equal(SOL);
     // The stale EVM chain id (1) must be cleared so the Solana address isn't
@@ -326,7 +370,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
       linkedAccounts: [{ type: "smart_wallet", address: EXTERNAL }],
     };
 
-    await formo.identify(user, { privy: true, activeAddress: EXTERNAL });
+    await formo.identify(user, { activeAddress: EXTERNAL });
 
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
     expect(formo.currentChainId).to.not.equal(solanaChainId);
@@ -351,7 +395,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
       linkedAccounts: [{ type: "wallet", address: SOL }],
     };
 
-    await formo.identify(user, { privy: true, activeAddress: SOL });
+    await formo.identify(user, { activeAddress: SOL });
 
     expect(formo.currentChainId).to.equal(solanaChainId);
   });
@@ -373,7 +417,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
       linkedAccounts: [{ type: "wallet", address: BTC, chainType: "bitcoin" }],
     };
 
-    await formo.identify(user, { privy: true, activeAddress: BTC });
+    await formo.identify(user, { activeAddress: BTC });
 
     expect(formo.currentChainId).to.equal(solanaChainId);
   });
@@ -400,7 +444,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     // Activate the Solana wallet. The chain must be reconciled BEFORE emitting,
     // otherwise every inner identify is dropped by the excluded EVM chain and
     // the Privy identity is silently lost.
-    await formo.identify(user, { privy: true, activeAddress: SOL });
+    await formo.identify(user, { activeAddress: SOL });
 
     expect(events.map((e) => e.address)).to.include(SOL);
     for (const e of events) expect(e.userId).to.equal(DID);

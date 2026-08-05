@@ -91,17 +91,19 @@ export interface IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void>;
   /**
-   * Privy convenience form. Pass the `usePrivy()` user with `{ privy: true }`
-   * to identify every wallet linked to that Privy account under the user's DID
-   * in a single call. The SDK expands `user.linkedAccounts` and forwards each
-   * wallet's metadata; only the active wallet (explicit `activeAddress`, else
-   * the already-connected wallet, else Privy's `user.wallet`) takes over event
-   * attribution — the rest are recorded purely for identity clustering.
+   * Privy form. Pass the `usePrivy()` user directly and the SDK identifies
+   * every wallet linked to that Privy account under the user's DID in a single
+   * call, forwarding each wallet's metadata. Only the active wallet (explicit
+   * `activeAddress`, else the already-connected wallet, else Privy's
+   * `user.wallet`) takes over event attribution — the rest are recorded purely
+   * for identity clustering.
+   *
+   * Recognized by shape: a Privy user has a string `id` and no `address`,
+   * while an address-keyed identify always has an `address`.
    */
   identify(
     user: PrivyUser,
-    options: {
-      privy: true;
+    options?: {
       activeAddress?: string;
       properties?: IFormoEventProperties;
     }
