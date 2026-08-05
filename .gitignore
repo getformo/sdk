@@ -81,3 +81,6 @@ test/**/*.js
 example/cra-script-tag/public/sdk
 # Environment configuration
 **/.env
+
+# pnpm local content-addressable store (created by `pnpm install --store-dir .`)
+.pnpm-store/
