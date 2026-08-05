@@ -790,8 +790,17 @@ export class FormoAnalytics implements IFormoAnalytics {
       // identification before trackEvent's consent check - gate the whole
       // method so a suppressed visitor or excluded environment (opt-out /
       // timezone / host / path) gets no identity persistence.
-      if (this.isTrackingSuppressed()) {
-        logger.info("identify() skipped: tracking is suppressed for this visitor or environment");
+      //
+      // The chain check belongs here and NOT in isTrackingSuppressed(), which
+      // identifyPrivyUser calls before it reconciles the chain. Folding it in
+      // there would block a Privy sync that reconciliation was about to make
+      // valid (activating a Solana wallet while an excluded EVM chain id is
+      // still current). By the time the Privy path reaches this guard it has
+      // already reconciled, so each inner identify is judged on the right chain.
+      if (this.isTrackingSuppressed() || this.isCurrentChainExcluded()) {
+        logger.info(
+          "identify() skipped: tracking is suppressed for this visitor, environment, or chain"
+        );
         return;
       }
       if (!params) {
@@ -2043,6 +2052,37 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   isTrackingSuppressed(): boolean {
     return this.hasOptedOutTracking() || this.isCurrentEnvironmentExcluded();
+  }
+
+  /**
+   * Whether the current chain id is in `tracking.excludeChains`.
+   *
+   * Split out from `shouldTrack()` so `identify()` can check it *before*
+   * mutating identity state. `trackEvent()` drops an excluded event silently
+   * and returns void, but `identify()` marks the wallet as identified first, so
+   * without this guard an identify on an excluded chain is dedup-marked and
+   * then discarded, and the wallet never re-emits for the rest of the session
+   * even after switching to an allowed chain. On the Privy path that loses the
+   * user's whole cluster at once rather than a single wallet.
+   *
+   * Mirrors the chain rule in `shouldTrack()`: only applies when `tracking` is
+   * an options object with `excludeChains` set, and only once a chain id is
+   * known.
+   */
+  private isCurrentChainExcluded(): boolean {
+    if (
+      this.options.tracking === null ||
+      typeof this.options.tracking !== "object" ||
+      Array.isArray(this.options.tracking)
+    ) {
+      return false;
+    }
+    const { excludeChains = [] } = this.options.tracking as TrackingOptions;
+    return (
+      excludeChains.length > 0 &&
+      !!this.currentChainId &&
+      excludeChains.includes(this.currentChainId)
+    );
   }
 
   /**

@@ -422,6 +422,57 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(formo.currentChainId).to.equal(solanaChainId);
   });
 
+  it("does not burn the dedup entry when an excluded chain blocks the identify", async () => {
+    // trackEvent() drops an excluded-chain event silently, but identify()
+    // marks the wallet as identified before emitting. Without a chain guard
+    // ahead of that mark, the identify is recorded as done and then discarded,
+    // so switching to an allowed chain never re-emits it. On the Privy path
+    // that loses the whole cluster, not one wallet.
+    const formo = await makeAnalytics({ excludeChains: [1] });
+    const events = captureIdentifies(formo);
+
+    const user: PrivyUser = {
+      id: DID,
+      linkedAccounts: [
+        { type: "wallet", address: EXTERNAL, walletClientType: "metamask", chainType: "ethereum" },
+        { type: "wallet", address: EMBEDDED, walletClientType: "privy", chainType: "ethereum" },
+      ],
+    };
+
+    const identifies = () => events.filter((e) => e.type === "identify");
+
+    // On the excluded chain: nothing emits.
+    await formo.connect({ chainId: 1, address: EXTERNAL });
+    await formo.identify(user, { activeAddress: EXTERNAL });
+    expect(identifies()).to.have.length(0);
+
+    // Switching to an allowed chain must emit both wallets. If the excluded
+    // attempt had marked dedup, this would silently emit nothing.
+    await formo.connect({ chainId: 137, address: EXTERNAL });
+    await formo.identify(user, { activeAddress: EXTERNAL });
+
+    expect(identifies()).to.have.length(2);
+    expect(identifies().map((e) => e.address.toLowerCase())).to.have.members([
+      EMBEDDED,
+      EXTERNAL,
+    ]);
+    for (const e of identifies()) expect(e.userId).to.equal(DID);
+  });
+
+  it("leaves identity state untouched while a chain is excluded", async () => {
+    const formo = await makeAnalytics({ excludeChains: [1] });
+    captureIdentifies(formo);
+
+    await formo.connect({ chainId: 1, address: EXTERNAL });
+    const addressBefore = formo.currentAddress;
+
+    await formo.identify({ address: EXTERNAL_2, userId: "someone" });
+
+    // No identity persistence for an event that was never going to send.
+    expect(formo.currentAddress).to.equal(addressBefore);
+    expect(formo.currentUserId).to.not.equal("someone");
+  });
+
   it("still emits identifies when on an excluded chain but activating a Solana wallet", async () => {
     // Chain 1 (EVM) is excluded from tracking.
     const formo = await makeAnalytics({ excludeChains: [1] });
