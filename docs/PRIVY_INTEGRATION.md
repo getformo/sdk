@@ -135,47 +135,36 @@ whichever component owns the Privy context.
 
 ## Framework-agnostic usage
 
-Not using React (or prefer naming the intent at the call site)?
-`identifyPrivyUser` does exactly what `identify(user)` does, and works from the
-React-free `core` entry too.
-
-Obtain the Privy user however your framework's Privy integration provides it -
-the SDK only needs the user object itself, not React:
+`identify()` is not React-specific. Obtain the Privy user however your
+framework's Privy integration provides it and pass it straight in:
 
 ```ts
-import { identifyPrivyUser } from "@formo/analytics";
-
 // `user` is Privy's user object from whatever binding you use: React's
 // usePrivy(), a Vue/Svelte store, or `privy.user` from the core SDK.
 if (user) {
-  await identifyPrivyUser(formo, user, {
+  await formo.identify(user, {
     activeAddress: connectedWallet?.address, // optional; see "attribution" below
   });
 }
 ```
 
-`formo.identify(user, { activeAddress, properties })` and
-`identifyPrivyUser(formo, user, { activeAddress, properties })` are equivalent -
-the former is sugar over the latter.
+The same call is available from the React-free `core` entry.
 
 ### Signature
 
 ```ts
-identifyPrivyUser(
-  analytics: IFormoAnalytics,
+identify(
   user: PrivyUser,
   options?: {
     activeAddress?: string;               // active/connected wallet
     properties?: IFormoEventProperties;   // merged into every identify call
   }
-// Resolves to the linked wallet that now owns attribution, or undefined when
-// no linked wallet matched (or the user had none).
-): Promise<{ address: string; chainType?: string } | undefined>
+): Promise<void>
 ```
 
 ## What gets sent
 
-For each linked wallet, `identifyPrivyUser` calls:
+For each linked wallet, the SDK calls:
 
 ```ts
 formo.identify(
@@ -302,7 +291,7 @@ additive server-side. See [Limitations](#limitations--roadmap).
 
 ## Advanced: `parsePrivyProperties`
 
-`identifyPrivyUser` is built on `parsePrivyProperties`, which is still exported
+The Privy identify is built on `parsePrivyProperties`, which is exported
 for advanced or custom flows. It parses a Privy user into a flat properties
 object and the list of linked wallets, without emitting anything:
 
@@ -320,11 +309,11 @@ const { properties, wallets } = parsePrivyProperties(user);
 > hands attribution to whichever wallet happens to be last - typically not the
 > one the user is connected with. Suppressing that is exactly what the internal
 > `setActive` flag does, and it is not part of the public API. If you need every
-> linked wallet clustered, call `identifyPrivyUser` (optionally with
+> linked wallet clustered, call `identify(user)` (optionally with
 > `activeAddress`) and let it place attribution:
 >
 > ```ts
-> const active = await identifyPrivyUser(formo, user, { activeAddress });
+> await formo.identify(user, { activeAddress });
 > ```
 
 Use `parsePrivyProperties` for reading a Privy user - populating your own UI,
@@ -357,7 +346,7 @@ Internals, for anyone changing this code. Skip if you are just integrating.
 
 ### What one call does
 
-`identifyPrivyUser` (`src/privy/utils.ts`) runs five steps in order:
+The internal `identifyPrivyUser` (`src/privy/utils.ts`) runs five steps in order:
 
 1. **Bail if tracking is suppressed** (opt-out, excluded host/path/timezone).
    This has to come first, because step 4 mutates chain state before anything is

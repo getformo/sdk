@@ -3,7 +3,9 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
-import { identifyPrivyUser, PrivyUser } from "../../src/privy";
+import { PrivyUser } from "../../src/privy";
+// Internal: not part of the public API, reached publicly via identify(user).
+import { identifyPrivyUser } from "../../src/privy/utils";
 import { initStorageManager } from "../../src/storage";
 
 /**
