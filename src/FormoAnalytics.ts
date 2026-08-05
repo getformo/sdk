@@ -59,7 +59,8 @@ import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
-import { identifyPrivyUser } from "./privy";
+// Internal: the Privy identify is reached through identify(user), not exported.
+import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
 
 /**

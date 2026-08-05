@@ -1,16 +1,17 @@
 /**
  * Privy integration module
  *
- * Provides utilities for enriching wallet profiles with Privy user data:
- * `parsePrivyProperties` (low-level parsing) and `identifyPrivyUser` (identify
- * every linked wallet under the user's DID). The same behavior is also
- * available as `formo.identify(user, { privy: true })`.
+ * Exports `parsePrivyProperties`, which parses a Privy user into a flat
+ * properties object and the list of linked wallets without emitting anything -
+ * useful for inspecting or displaying what an identify would send.
+ *
+ * The identify itself is `formo.identify(user)`, which recognises a Privy user
+ * by shape. The function behind it lives in ./utils and is internal.
  *
  * This module is React-free so it can be used from the `core` entry.
  */
 
-export { parsePrivyProperties, identifyPrivyUser } from "./utils";
-export type { IdentifyPrivyUserOptions } from "./utils";
+export { parsePrivyProperties } from "./utils";
 export type {
   PrivyUser,
   PrivyLinkedAccount,
