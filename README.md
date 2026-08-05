@@ -29,6 +29,9 @@ You can install Formo on:
 
 Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on local testing, debugging, and consent management.
 
+Using [Privy](./docs/PRIVY_INTEGRATION.md)? `identify(user)`
+clusters all of a Privy user's linked wallets under a single identity.
+
 ## Methodology
 
 Learn how Formo handles [onchain attribution](https://docs.formo.so/data/attribution) and [data collection](https://docs.formo.so/data/what-we-collect).
