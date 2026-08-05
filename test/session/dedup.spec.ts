@@ -100,7 +100,7 @@ describe("Session identify dedup with userId", () => {
 
     for (const a of addrs) session.markWalletIdentified(a, "", did);
 
-    // All 40 remain recognized — well past the old fixed 20-entry limit, which
+    // All 40 remain recognized - well past the old fixed 20-entry limit, which
     // would have evicted the first 20 and re-emitted them on a later sync.
     for (const a of addrs) {
       expect(session.isWalletIdentified(a, "", did)).to.equal(true);
@@ -114,7 +114,7 @@ describe("Session identify dedup with userId", () => {
     expect(session.isWalletIdentified(ADDRESS, "io.metamask")).to.equal(true);
     // A later identify whose userId equals that RDNS string is a distinct tuple
     // (address + empty rdns + userId), so it must NOT be considered already
-    // identified — its identity-link event still emits.
+    // identified - its identity-link event still emits.
     expect(session.isWalletIdentified(ADDRESS, "", "io.metamask")).to.equal(false);
   });
 
@@ -134,7 +134,7 @@ describe("Session identify dedup with userId", () => {
       const session = new FormoAnalyticsSession();
       const before = { privyDid: DID, email: "a@b.com" };
       // The motivating case: the user links a Google account. Same wallet,
-      // same DID — only the properties changed.
+      // same DID - only the properties changed.
       const after = { privyDid: DID, email: "a@b.com", google: "a@b.com" };
 
       session.markWalletIdentified(ADDRESS, RDNS, DID, before);
@@ -280,7 +280,7 @@ describe("Session identify dedup with userId", () => {
       const withGoogle = { privyDid: DID, email: "a@b.com", google: "a@b.com" };
 
       // Link Google, then unlink it. Dedup means "same as this wallet's LAST
-      // identify", not "seen at any point", so the revert must re-emit —
+      // identify", not "seen at any point", so the revert must re-emit -
       // otherwise unlinking would silently produce no event.
       session.markWalletIdentified(ADDRESS, RDNS, DID, withoutGoogle);
       session.markWalletIdentified(ADDRESS, RDNS, DID, withGoogle);
@@ -336,7 +336,7 @@ describe("Session identify dedup with userId", () => {
     it("honors toJSON() so wire-distinct values are distinct keys", () => {
       const session = new FormoAnalyticsSession();
 
-      // URL has no enumerable own keys — without honoring toJSON() both of
+      // URL has no enumerable own keys - without honoring toJSON() both of
       // these canonicalize to "{}" and the changed URL is falsely deduped.
       session.markWalletIdentified(ADDRESS, RDNS, DID, {
         endpoint: new URL("https://a.example/"),

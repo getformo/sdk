@@ -13,7 +13,7 @@ import { IFormoEventProperties } from "../types/events";
 import { logger } from "../logger";
 
 /**
- * Whether a Privy linked account is a usable wallet — an EVM/Solana wallet or
+ * Whether a Privy linked account is a usable wallet - an EVM/Solana wallet or
  * smart wallet with an address.
  */
 function isPrivyWalletAccount(account: PrivyLinkedAccount): boolean {
@@ -100,7 +100,7 @@ export function parsePrivyProperties(user: PrivyUser): {
   // Extract profile properties.
   //
   // Privy's React SDK types `createdAt` as a Date, but PrivyUser is a
-  // structural interface — a user object from the REST API, or one that made a
+  // structural interface - a user object from the REST API, or one that made a
   // JSON round-trip through a cache, carries a string or epoch number instead.
   // Calling .getTime() on those throws, and identify()'s outer catch would
   // swallow it, so the whole one-liner would silently emit nothing. Normalize
@@ -321,7 +321,7 @@ export function parsePrivyProperties(user: PrivyUser): {
       continue;
     }
     // A cross_app account (e.g. Abstract Global Wallet) has no top-level
-    // address — its wallets live in `embeddedWallets`/`smartWallets`. They are
+    // address - its wallets live in `embeddedWallets`/`smartWallets`. They are
     // still wallets the user owns, so identify them for clustering too.
     if (account.type === "cross_app") {
       const crossAppWallets = [
@@ -349,8 +349,8 @@ export function parsePrivyProperties(user: PrivyUser): {
   // an address (so it's recorded as `cross_app`/embedded by default), while a
   // top-level wallet entry carries the real walletClient, chainType, and
   // embedded classification. Prefer the richer entry regardless of the order
-  // Privy happened to list the accounts in, so the metadata — and the
-  // last-external active-wallet fallback, which keys on isEmbedded — don't
+  // Privy happened to list the accounts in, so the metadata - and the
+  // last-external active-wallet fallback, which keys on isEmbedded - don't
   // depend on account ordering.
   const indexByAddress = new Map<string, number>();
   const deduped: Array<PrivyWalletInfo & { fromCrossApp?: boolean }> = [];
@@ -385,7 +385,7 @@ export function parsePrivyProperties(user: PrivyUser): {
  */
 export interface IdentifyPrivyUserOptions {
   /**
-   * Optional override for the wallet that should own event attribution — the
+   * Optional override for the wallet that should own event attribution - the
    * one promoted to the SDK's current address/user, while every other linked
    * wallet is recorded only for clustering.
    *
@@ -393,7 +393,7 @@ export interface IdentifyPrivyUserOptions {
    * the SDK already treats as active (a prior wagmi/EIP-1193 connect), then
    * Privy's own surfaced wallet (`user.wallet`), then a best-effort guess
    * (embedded wallets deprioritized, so the last external wallet). Pass it only
-   * when you want to pin attribution to a specific wallet — e.g. the currently
+   * when you want to pin attribution to a specific wallet - e.g. the currently
    * connected wallet from `useWallets()[0]?.address`, which reflects the live
    * active wallet more precisely than `user.wallet`.
    *
@@ -463,7 +463,7 @@ export interface IdentifyPrivyUserOptions {
  * const { user } = usePrivy();
  * const { wallets } = useWallets();
  * if (user) {
- *   // activeAddress is optional — omit it if the SDK already tracks the
+ *   // activeAddress is optional - omit it if the SDK already tracks the
  *   // connected wallet via a wagmi/EIP-1193 connect.
  *   await identifyPrivyUser(formo, user, {
  *     activeAddress: wallets[0]?.address,
@@ -482,7 +482,7 @@ export async function identifyPrivyUser(
 
   // If tracking is suppressed for this visitor/route (opt-out / timezone / host /
   // path), do nothing. The inner identify() calls would each be gated anyway,
-  // but the chain reconciliation below runs BEFORE them — so without this guard
+  // but the chain reconciliation below runs BEFORE them - so without this guard
   // it would clear an excluded chain id while no identify actually happens,
   // leaving later events on an allowed route unable to apply `excludeChains`.
   if (target.isTrackingSuppressed?.()) return undefined;
@@ -522,8 +522,8 @@ export async function identifyPrivyUser(
   // current chain id); if the active wallet is on a different chain namespace
   // than the stale current chain id (e.g. a Solana wallet while an EVM chain was
   // current, and that EVM chain is excluded), reconciling first prevents the
-  // clustering identifies from being silently dropped. Doing it here — rather
-  // than in the identify(user,{privy:true}) dispatch — means the direct
+  // clustering identifies from being silently dropped. Doing it here - rather
+  // than in the identify(user,{privy:true}) dispatch - means the direct
   // identifyPrivyUser() entry point gets the same treatment.
   // Pass the address too: Privy omits chainType on smart_wallet and cross_app
   // entries, and a 0x address is enough to identify the EVM namespace.
@@ -535,7 +535,7 @@ export async function identifyPrivyUser(
   // Emit an identify for every linked wallet under the shared DID. Only the
   // active wallet promotes the SDK's active identity (via the internal
   // setActive flag); the rest are recorded purely for clustering and never
-  // repoint attribution — so ordering is irrelevant, and a connected wallet
+  // repoint attribution - so ordering is irrelevant, and a connected wallet
   // that isn't linked here (activeWallet === undefined) leaves the SDK's
   // current address/user untouched instead of being overwritten.
   const identify = target.identify.bind(analytics);

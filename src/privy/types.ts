@@ -147,7 +147,7 @@ export interface PrivyUser {
   instagram?: { subject: string; username: string | null };
   spotify?: { subject: string; email: string | null; name: string | null };
   tiktok?: { subject: string; username: string | null; name: string | null };
-  /** Privy's Twitch account exposes only subject/username — no email. */
+  /** Privy's Twitch account exposes only subject/username - no email. */
   twitch?: { subject: string; username: string | null };
   line?: { subject: string; name: string | null; email: string | null };
   telegram?: {

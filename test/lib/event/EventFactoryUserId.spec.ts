@@ -9,7 +9,7 @@ import { initStorageManager } from "../../../src/storage";
  *
  * An identify event asserts an explicit identity in its own payload (e.g. a
  * Privy DID for each wallet being clustered). It must keep that payload user_id
- * rather than being overwritten by the active-session user id passed in — that
+ * rather than being overwritten by the active-session user id passed in - that
  * overwrite would strip the DID from every clustering identify emitted with
  * setActive:false and break server-side wallet clustering.
  */

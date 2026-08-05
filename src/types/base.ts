@@ -95,7 +95,7 @@ export interface IFormoAnalytics {
    * every wallet linked to that Privy account under the user's DID in a single
    * call, forwarding each wallet's metadata. Only the active wallet (explicit
    * `activeAddress`, else the already-connected wallet, else Privy's
-   * `user.wallet`) takes over event attribution — the rest are recorded purely
+   * `user.wallet`) takes over event attribution - the rest are recorded purely
    * for identity clustering.
    *
    * Recognized by shape: a Privy user has a string `id` and no `address`,
@@ -146,7 +146,7 @@ export interface TrackingOptions {
   /**
    * IANA timezone names to opt out of tracking entirely. When the visitor's
    * resolved timezone (via `Intl.DateTimeFormat().resolvedOptions().timeZone`)
-   * matches one of these, no events are enqueued or sent — including `identify`
+   * matches one of these, no events are enqueued or sent - including `identify`
    * and `connect`. Matched case-insensitively against the full timezone string.
    *
    * Note: this is client-side, timezone-derived geolocation. It is best-effort

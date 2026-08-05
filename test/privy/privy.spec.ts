@@ -195,7 +195,7 @@ describe("Privy Utilities", () => {
       it("should accept every form createdAt arrives in", () => {
         // The React SDK gives a Date, but a user from the REST API or a JSON
         // round-trip carries a string or number. Calling .getTime() on those
-        // throws, and identify()'s outer catch would swallow it — so the whole
+        // throws, and identify()'s outer catch would swallow it - so the whole
         // one-liner would silently emit nothing.
         const expected = 1699900000000;
 
@@ -484,7 +484,7 @@ describe("Privy Utilities", () => {
         // A cross_app entry carries only an address, so it defaults to
         // cross_app/embedded. When the same address also appears as a real
         // wallet account, the real one must win even if Privy listed the
-        // cross_app account first — otherwise metadata (and the last-external
+        // cross_app account first - otherwise metadata (and the last-external
         // active-wallet fallback, which keys on isEmbedded) depends on ordering.
         const user: PrivyUser = {
           id: "did:privy:abc123",
@@ -516,7 +516,7 @@ describe("Privy Utilities", () => {
           id: "did:privy:abc123",
           linkedAccounts: [
             { type: "wallet", address: EXTERNAL, walletClientType: "metamask" },
-            // Same address, different casing — EVM addresses are case-insensitive.
+            // Same address, different casing - EVM addresses are case-insensitive.
             { type: "smart_wallet", address: EXTERNAL.toUpperCase().replace("0X", "0x") },
           ],
         };
@@ -718,7 +718,7 @@ describe("Privy Utilities", () => {
 
       // Wrong-case Solana address is explicitly provided but doesn't match, so
       // no wallet is promoted (an explicit address is matched strictly, never
-      // guessed) — while both wallets are still recorded for clustering.
+      // guessed) - while both wallets are still recorded for clustering.
       const miss = makeRecorder();
       await identifyPrivyUser(miss.analytics, user, {
         activeAddress: SOL.toLowerCase(),
@@ -787,7 +787,7 @@ describe("Privy Utilities", () => {
 
       const result = await identifyPrivyUser(analytics, user);
 
-      // No identifies emitted, and — critically — no chain reconciliation, which
+      // No identifies emitted, and - critically - no chain reconciliation, which
       // would otherwise clear an excluded chain id while no identify runs.
       expect(calls).to.have.length(0);
       expect(chainReconciled).to.equal(false);

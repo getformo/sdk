@@ -22,13 +22,13 @@ import type { IFormoEventProperties } from "../types/events";
  * **This function must never throw.** It runs inside `identify()` *after* the
  * active address/user have been updated, so a throw would leave the SDK with
  * mutated identity state and no emitted event. `JSON.stringify` throws on
- * circular references and on `BigInt` — both realistic here, since a web3 app
+ * circular references and on `BigInt` - both realistic here, since a web3 app
  * can easily pass a token balance (`123n`) or a wallet object with a back
  * reference in `properties`. Every such case is therefore handled explicitly
  * and degrades to a stable marker instead of an exception.
  *
  * Totality here is only about *dedup*: it guarantees the fingerprint step can't
- * be what loses an identify. It does **not** make such values sendable — the
+ * be what loses an identify. It does **not** make such values sendable - the
  * event queue still serializes with native `JSON.stringify`, so a `BigInt` or
  * circular value in `properties` fails downstream exactly as it does for
  * `track()`. That is a separate, pre-existing SDK-wide limitation.
@@ -46,16 +46,16 @@ import type { IFormoEventProperties } from "../types/events";
  * - `toJSON()` is honored, so `Date` and `URL` reflect their serialized form
  *   rather than their (often empty) enumerable keys.
  * - `Map`/`Set` have no enumerable own properties and no `toJSON`, so they send
- *   as `{}` — and therefore canonicalize as `{}`.
+ *   as `{}` - and therefore canonicalize as `{}`.
  *
  * The exceptions are the two things JSON *cannot* represent: `BigInt` and
  * circular references both make `JSON.stringify` throw. They get distinct
- * markers instead, because this function must never throw — it runs inside
+ * markers instead, because this function must never throw - it runs inside
  * `identify()` *after* the active address/user have been updated, so a throw
  * would leave the SDK with mutated identity state and no emitted event.
  *
  * Totality here is only about *dedup*: it guarantees the fingerprint step can't
- * be what loses an identify. It does **not** make such values sendable — the
+ * be what loses an identify. It does **not** make such values sendable - the
  * event queue still serializes with native `JSON.stringify`, so a `BigInt` or
  * circular value in `properties` fails downstream exactly as it does for
  * `track()`. That is a separate, pre-existing SDK-wide limitation.
@@ -127,8 +127,8 @@ function stableStringify(
  * because every key is stored in a size-bounded cookie.
  *
  * Two independent lanes (different offset bases, combined into ~64 bits) rather
- * than one: a single 32-bit lane collides readily — `{"x":"xefn1fnkq0"}` and
- * `{"x":"filot3n704"}` both hash to `1mgjpo5` — and a collision here silently
+ * than one: a single 32-bit lane collides readily - `{"x":"xefn1fnkq0"}` and
+ * `{"x":"filot3n704"}` both hash to `1mgjpo5` - and a collision here silently
  * suppresses a legitimately changed profile for the rest of the session. At 64
  * bits that is no longer a practical concern, for six more characters per key.
  */
@@ -139,8 +139,8 @@ function fingerprintProperties(
   let serialized: string;
   try {
     // Canonicalize first, then decide emptiness from the result. Anything that
-    // serializes to `{}` — a literal `{}`, or an object whose every value JSON
-    // omits — carries no wire payload, so it keeps the legacy no-hash key shape
+    // serializes to `{}` - a literal `{}`, or an object whose every value JSON
+    // omits - carries no wire payload, so it keeps the legacy no-hash key shape
     // rather than getting a hash of "{}". Doing this inside the guard matters:
     // reading properties can run user code (a Proxy with a throwing ownKeys
     // trap), and this whole function must be total.
@@ -250,7 +250,7 @@ const MAX_SESSION_ENTRIES = 20;
  * wallet user is the motivating case), so a fixed entry count would evict
  * `(wallet, userId)` keys and let a later sync re-emit them. Instead we bound
  * the store by serialized size and evict oldest only when it would overflow the
- * cookie — so every identity that fits is retained.
+ * cookie - so every identity that fits is retained.
  *
  * The budget must be applied to the **encoded** length. Key components are
  * already percent-encoded, and `CookieStorage.set()` then encodes the whole
@@ -259,7 +259,7 @@ const MAX_SESSION_ENTRIES = 20;
  * DID-bearing keys measure 3500 raw but 3956 encoded, and a non-ASCII external
  * user id inflates far more than that. Overflowing makes the browser reject the
  * write outright, so nothing is persisted and every identify re-emits for the
- * rest of the session — the exact failure the store exists to prevent.
+ * rest of the session - the exact failure the store exists to prevent.
  */
 const MAX_COOKIE_BYTES = 4096;
 /** Reserve for the cookie name plus path/expires/SameSite/Secure attributes. */
@@ -290,7 +290,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    * until the session expired. An identify repeated with identical properties
    * still dedupes, so this does not turn a re-render into an event.
    *
-   * Key shapes, by component count — each is unambiguous, so they cannot
+   * Key shapes, by component count - each is unambiguous, so they cannot
    * collide with one another:
    *
    * | Components | Shape | When |
@@ -303,7 +303,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
    * Shapes 1 and 2 are unchanged from before user IDs and property hashes
    * existed, so keys already stored in browsers still match (backward
    * compatible). An identify that carries properties moves to shape 4, so the
-   * first identify after an upgrade re-emits once per wallet — a one-off, and
+   * first identify after an upgrade re-emits once per wallet - a one-off, and
    * the correct outcome, since those properties were never recorded under the
    * new key.
    *
@@ -325,8 +325,8 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
   /**
    * Build the dedup key plus the **identity prefix** it belongs to.
    *
-   * The identity prefix is the key with the properties hash stripped —
-   * `address:rdns:userId` — i.e. *which wallet-user this is*, independent of
+   * The identity prefix is the key with the properties hash stripped -
+   * `address:rdns:userId` - i.e. *which wallet-user this is*, independent of
    * *what profile it last had*. `markWalletIdentified` uses it to drop that
    * identity's previous state before storing the new one, which matters twice:
    *
@@ -354,7 +354,7 @@ export class FormoAnalyticsSession implements IFormoAnalyticsSession {
     // comma in an arbitrary external userId would corrupt the key and defeat
     // dedup (the same identify would re-emit on every call). Encoding also keeps
     // the ":" separator unambiguous. Addresses and RDNS contain no reserved
-    // characters, so their encoded form is unchanged — existing stored keys
+    // characters, so their encoded form is unchanged - existing stored keys
     // still match (backward compatible).
     // An identify with no properties keeps the pre-hash key shape, so the
     // common `identify({ address })` call is unaffected.

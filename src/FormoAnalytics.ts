@@ -72,14 +72,14 @@ const PROVIDER_SWITCH_REASONS = {
 } as const;
 
 export class FormoAnalytics implements IFormoAnalytics {
-  // Per-chain namespace state — isolates EVM and Solana connection state
+  // Per-chain namespace state - isolates EVM and Solana connection state
   private _chainState: { evm: EvmChainState; solana: ChainState } = {
     evm: {},
     solana: {},
   };
   private _activeNamespace?: ChainNamespace;
 
-  // EVM state accessors — EVM listener paths must use these instead of
+  // EVM state accessors - EVM listener paths must use these instead of
   // currentAddress/currentChainId to avoid cross-namespace reads.
   private get _provider(): EIP1193Provider | undefined {
     return this._chainState.evm.provider;
@@ -437,7 +437,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     // connect() persists wallet/chain state (active-wallet cookie,
-    // currentAddress/currentChainId) before trackEvent's consent check —
+    // currentAddress/currentChainId) before trackEvent's consent check -
     // gate the whole method so a suppressed visitor or excluded environment
     // (opt-out / timezone / host / path) leaves no session state.
     if (this.isTrackingSuppressed()) {
@@ -787,7 +787,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const properties = propertiesOrOptions as IFormoEventProperties | undefined;
 
       // identify() writes the user-id cookie and marks wallet
-      // identification before trackEvent's consent check — gate the whole
+      // identification before trackEvent's consent check - gate the whole
       // method so a suppressed visitor or excluded environment (opt-out /
       // timezone / host / path) gets no identity persistence.
       if (this.isTrackingSuppressed()) {
@@ -886,8 +886,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.warn?.("Invalid address provided to identify:", address);
         return;
       }
-      // Promote this wallet to the SDK's active identity — the (currentAddress,
-      // currentUserId) pair later events are attributed to — unless the caller
+      // Promote this wallet to the SDK's active identity - the (currentAddress,
+      // currentUserId) pair later events are attributed to - unless the caller
       // opts out with setActive:false. A non-active identify still emits its
       // event and marks dedup below (for clustering), it just doesn't repoint
       // attribution. Gating address and userId together prevents leaving the
@@ -909,7 +909,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Check for duplicate identify events in this session. The userId and a
       // fingerprint of the properties are folded into the dedup key, so
       // re-identifying an already-seen wallet still emits when the identity
-      // changed — a newly-attached userId (a Privy DID after login) or changed
+      // changed - a newly-attached userId (a Privy DID after login) or changed
       // properties (a Privy user linking a social account, which leaves the
       // wallets and DID untouched). An identical repeat still dedupes.
       const isAlreadyIdentified = this.session.isWalletIdentified(
@@ -978,12 +978,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Privy doesn't always supply `chainType`: a `smart_wallet` entry is
    * `{ type, address, smartWalletType }`, and `cross_app` wallets are bare
    * `{ address }`. A `0x`-prefixed 20-byte address is unambiguously EVM though,
-   * so fall back to the address shape — otherwise activating an EVM smart
+   * so fall back to the address shape - otherwise activating an EVM smart
    * wallet while a Solana chain id is current would leave the address paired
    * with the wrong chain, and an `excludeChains` gate could drop the identify
    * after it was already dedup-marked.
    *
-   * @internal Not part of the public IFormoAnalytics contract — invoked by
+   * @internal Not part of the public IFormoAnalytics contract - invoked by
    * `identifyPrivyUser` (via a structural cast) before it emits, so both the
    * `identify(user,{privy:true})` and direct `identifyPrivyUser()` paths
    * reconcile the chain.
@@ -1036,7 +1036,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     // detect() marks wallet detection (a cookie write) before
-    // trackEvent's consent check — gate it for a suppressed visitor or
+    // trackEvent's consent check - gate it for a suppressed visitor or
     // excluded environment (opt-out / timezone / host / path).
     if (this.isTrackingSuppressed()) {
       logger.info("detect() skipped: tracking is suppressed for this visitor or environment");
@@ -1455,7 +1455,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Update state regardless of whether connect *event* tracking is enabled,
     // so disconnect events keep valid address/chainId values. (excludeChains is
-    // NOT suppression — it still updates state so currentChainId can gate
+    // NOT suppression - it still updates state so currentChainId can gate
     // events.)
     if (this.isTrackingSuppressed()) {
       this.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
@@ -1640,7 +1640,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const isActiveProvider = this._provider === provider;
 
         // Update state from active provider so disconnect events keep valid
-        // address/chainId values — except while suppressed, where we must not
+        // address/chainId values - except while suppressed, where we must not
         // LEARN identity (only drop a stale EVM wallet on a switch).
         if (isActiveProvider) {
           if (this.isTrackingSuppressed()) {
@@ -1921,7 +1921,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private trackPageHits(): void {
     // Install a single, instance-agnostic wrapper around history.pushState /
     // replaceState so concurrent SDK instances (React Strict Mode, HMR) don't
-    // each stack their own wrapper — which would dispatch N synthetic events
+    // each stack their own wrapper - which would dispatch N synthetic events
     // per navigation and produce O(N^2) onLocationChange calls. The wrapper
     // dispatches once; per-instance bookkeeping is done by per-instance
     // listeners that each register/unregister themselves.
@@ -2033,7 +2033,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Visitor-level tracking suppression.
    *
    * Returns true when the SDK must not persist any identity/session/chain
-   * state or send any events for this visitor — i.e. an explicit opt-out or a
+   * state or send any events for this visitor - i.e. an explicit opt-out or a
    * jurisdiction/timezone exclusion. Public entry points that write state
    * before reaching the `shouldTrack()` event gate (identify/connect/detect)
    * check this first so suppressed visitors leave no cookies or session state.
@@ -2046,12 +2046,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Whether the current environment is excluded from tracking — the visitor's
+   * Whether the current environment is excluded from tracking - the visitor's
    * timezone, the current hostname, or the current pathname matches a
    * configured exclusion.
    *
    * Timezone is visitor/session-level (stable for the session); host/path are
-   * current-page-level and transient — if a SPA navigates to an allowed path,
+   * current-page-level and transient - if a SPA navigates to an allowed path,
    * tracking resumes for future actions. Used as the "do not write identity or
    * send events" gate at every entry point that would persist state before the
    * `shouldTrack()` event gate.
@@ -2067,7 +2067,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Whether the current hostname matches a configured `tracking.excludeHosts`
-   * entry (exact match). Current-page-level — see isCurrentEnvironmentExcluded.
+   * entry (exact match). Current-page-level - see isCurrentEnvironmentExcluded.
    * @returns {boolean} True if the current hostname is excluded
    */
   private isHostExcluded(): boolean {
@@ -2088,7 +2088,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Whether the current pathname matches a configured `tracking.excludePaths`
-   * entry (exact match). Current-page-level — see isCurrentEnvironmentExcluded.
+   * entry (exact match). Current-page-level - see isCurrentEnvironmentExcluded.
    * @returns {boolean} True if the current pathname is excluded
    */
   private isPathExcluded(): boolean {
@@ -2108,8 +2108,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Whether the current call is in a visitor-level suppression state — opt-out
-   * or excluded timezone — for which any persisted identity cookie should be
+   * Whether the current call is in a visitor-level suppression state - opt-out
+   * or excluded timezone - for which any persisted identity cookie should be
    * actively purged (not merely skipped). Host/path exclusions are
    * deliberately excluded here: they are transient current-page states, so a
    * cookie legitimately written on an allowed page must survive a visit to an
@@ -2123,7 +2123,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   /**
    * Whether the visitor's browser-resolved timezone matches a configured
    * `tracking.excludeTimezones` entry (case-insensitive). Client-side and
-   * best-effort — see TrackingOptions.excludeTimezones.
+   * best-effort - see TrackingOptions.excludeTimezones.
    * @returns {boolean} True if the current timezone is excluded
    */
   private isTimezoneExcluded(): boolean {
@@ -2172,7 +2172,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     ) {
       const { excludeChains = [] } = this.options.tracking as TrackingOptions;
 
-      // Environment exclusions (timezone / host / path) — no identify / connect
+      // Environment exclusions (timezone / host / path) - no identify / connect
       // / track events while excluded. Host/path are exact-match.
       if (this.isCurrentEnvironmentExcluded()) {
         return false;
@@ -2796,7 +2796,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * WITHOUT emitting an event.
    *
    * Integrations (e.g. the wagmi handler) must call this on every
-   * connect / chain-change / disconnect — even when the corresponding
+   * connect / chain-change / disconnect - even when the corresponding
    * autocapture event is disabled. Otherwise `currentChainId` stays
    * stale/undefined and `shouldTrack()`'s `tracking.excludeChains`
    * check (which keys off `currentChainId`, not the event payload) can
@@ -2814,7 +2814,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     if (this.isTrackingSuppressed()) {
       // While suppressed (opt-out / timezone / excluded host or path) we must
-      // never LEARN a new wallet — but we must still CLEAR stale identity.
+      // never LEARN a new wallet - but we must still CLEAR stale identity.
       // Otherwise a disconnect or wallet switch observed on a suppressed route
       // would leave the previously-learned address in memory and in the
       // active-wallet cookie, attaching it to later allowed-page events.
@@ -2902,14 +2902,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   /**
    * Persist (or clear) the current wallet snapshot in a cookie so that the
    * SDK can repopulate `currentAddress`/`currentChainId` at init on the next
-   * page load — closing the gap between page-show and wagmi/EIP-1193
+   * page load - closing the gap between page-show and wagmi/EIP-1193
    * reconnection during which track()/page() events would otherwise ship
    * with an empty address.
    */
   private persistActiveWallet(): void {
     try {
       // Visitor-level suppression (opt-out or excluded timezone): purge any
-      // prior snapshot — these are stable for the session, so deletion is safe.
+      // prior snapshot - these are stable for the session, so deletion is safe.
       if (this.isPersistedIdentityPurgeRequired()) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;

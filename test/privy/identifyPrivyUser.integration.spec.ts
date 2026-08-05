@@ -8,7 +8,7 @@ import { initStorageManager } from "../../src/storage";
 
 /**
  * End-to-end coverage for identifyPrivyUser driving the REAL FormoAnalytics
- * identify() — not a stub. Verifies that:
+ * identify() - not a stub. Verifies that:
  * - every linked wallet emits an identify event tagged with the Privy DID,
  * - the per-wallet metadata is forwarded,
  * - only the active wallet ends up as the SDK's currentAddress (no hijack),
@@ -72,7 +72,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     });
     // globalThis is a real Node binding, unlike window/document/localStorage
     // which don't exist here natively. Capture its descriptor so afterEach can
-    // put it back — deleting it would unbind globalThis process-wide for every
+    // put it back - deleting it would unbind globalThis process-wide for every
     // test file that runs after this one.
     originalGlobalThis = Object.getOwnPropertyDescriptor(global, "globalThis");
     Object.defineProperty(global, "globalThis", {
@@ -225,7 +225,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     const events = captureIdentifies(formo);
 
     // A regular identify whose params is address-shaped must not dispatch to the
-    // Privy form even if a property happens to be named `privy: true` — the
+    // Privy form even if a property happens to be named `privy: true` - the
     // wallet/user must still be recorded, not silently dropped.
     await formo.identify(
       { address: EXTERNAL, userId: "plain" },
@@ -247,7 +247,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     await formo.identify({ address: EXTERNAL, rdns: "io.metamask" });
     expect(formo.currentAddress?.toLowerCase()).to.equal(EXTERNAL);
 
-    // user.wallet is the embedded wallet — Privy's primary, different from the
+    // user.wallet is the embedded wallet - Privy's primary, different from the
     // wallet the user actually connected.
     const user: PrivyUser = {
       id: DID,
@@ -362,7 +362,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     await formo.connect({ chainId: 900001, address: SOL });
     const solanaChainId = formo.currentChainId;
 
-    // A smart_wallet entry is `{ type, address, smartWalletType }` — Privy
+    // A smart_wallet entry is `{ type, address, smartWalletType }` - Privy
     // sends no chainType. The 0x address is still unambiguously EVM, so the
     // stale Solana chain id must be cleared rather than left paired with it.
     const user: PrivyUser = {
@@ -466,7 +466,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
       ],
     };
 
-    // Called directly (not via the flag form) — must reconcile chain the same way.
+    // Called directly (not via the flag form) - must reconcile chain the same way.
     await identifyPrivyUser(formo, user, { activeAddress: SOL });
 
     expect(formo.currentAddress).to.equal(SOL);
@@ -515,7 +515,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     expect(events).to.have.length(2);
     expect(events[1].userId).to.equal(DID);
 
-    // Running the exact same identify again is deduped — no new event.
+    // Running the exact same identify again is deduped - no new event.
     await identifyPrivyUser(formo, user);
     expect(events).to.have.length(2);
   });
@@ -533,7 +533,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     await identifyPrivyUser(formo, before);
     expect(events).to.have.length(2);
 
-    // The user links a Google account. Same wallets, same DID — only the
+    // The user links a Google account. Same wallets, same DID - only the
     // profile changed. Without the properties fingerprint in the dedup key
     // both wallets would dedupe and `google` would never reach Formo.
     const after: PrivyUser = {
@@ -561,7 +561,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
   it("re-emits every wallet again for each successive social link", async () => {
     // Mirrors a real session: a 3-wallet user links X, then links Discord.
     // Each link must produce its own wave of one identify per wallet, with the
-    // properties accumulating — the second link is the case that would regress
+    // properties accumulating - the second link is the case that would regress
     // if the fingerprint were computed once and cached rather than per call.
     const formo = await makeAnalytics();
     const events = captureIdentifies(formo);
@@ -630,7 +630,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
       expect(e.properties.discord).to.equal("yosriady#0");
     }
 
-    // Re-running the final state is deduped — three waves, not four.
+    // Re-running the final state is deduped - three waves, not four.
     await identifyPrivyUser(formo, {
       id: DID,
       linkedAccounts: [
@@ -663,7 +663,7 @@ describe("identifyPrivyUser (integration with real identify)", () => {
     await identifyPrivyUser(formo, both);
     expect(events).to.have.length(2);
 
-    // Unlinking EXTERNAL leaves the surviving wallet's identity untouched — no
+    // Unlinking EXTERNAL leaves the surviving wallet's identity untouched - no
     // account-set counts are sent, so its properties are unchanged and it
     // dedupes. This is why the summary properties were dropped: had they been
     // present, every unlink would re-emit every remaining wallet.
