@@ -64,7 +64,7 @@ const MIN_QUEUE_SIZE = 200; // 200 bytes
 // producing a TypeError: Failed to fetch that cannot be resolved by retrying.
 const KEEPALIVE_PAYLOAD_LIMIT = 64 * 1_024; // 64kB
 
-const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 1 MINUTE
+const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 30 SECONDS
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
@@ -111,7 +111,12 @@ export class EventQueue implements IEventQueue {
       MAX_FLUSH_INTERVAL,
       MIN_FLUSH_INTERVAL
     );
-    this.flushed = true;
+    // Start un-flushed so the first event of the page load is sent
+    // immediately (see enqueue). Short visits — e.g. ad-click landings in
+    // mobile in-app browsers — often end with the webview process killed
+    // before any pagehide/visibilitychange fires, so an event that waits
+    // for the batch timer or a lifecycle flush is lost with the process.
+    this.flushed = false;
     this.errorHandler = options.errorHandler;
     this.pendingFlush = null;
     this.timer = null;
@@ -212,12 +217,12 @@ export class EventQueue implements IEventQueue {
     // before opt-out. Drop everything rather than send post-withdrawal.
     if (this.canSend && !this.canSend()) {
       this.clear();
-      callback();
+      safeCall(callback);
       return Promise.resolve();
     }
 
     if (!this.queue.length) {
-      callback();
+      safeCall(callback);
       return Promise.resolve();
     }
 
