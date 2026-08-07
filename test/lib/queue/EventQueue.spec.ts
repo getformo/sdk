@@ -171,7 +171,12 @@ describe("EventQueue", () => {
   });
 
   describe("enqueue", () => {
+    let fetchStub: sinon.SinonStub;
+
     beforeEach(() => {
+      fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.resolves(makeResponse(200, "OK"));
+      useUniqueCryptoHashes();
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
         flushAt: 5,
@@ -179,10 +184,30 @@ describe("EventQueue", () => {
       });
     });
 
-    it("should add event to queue without immediate flush", async () => {
-      const event = createMockEvent();
-      // Enqueue should not throw
-      await eventQueue.enqueue(event);
+    // Ad-click landings in mobile in-app browsers are often killed before
+    // any lifecycle flush fires; if the landing page event waits for the
+    // batch timer it dies with the process. So the very first event must
+    // reach the wire immediately, and only subsequent events may batch.
+    it("should flush the first event immediately", async () => {
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+
+      expect(fetchStub.calledOnce).to.be.true;
+      const body = JSON.parse(fetchStub.firstCall.args[1].body);
+      expect(body).to.have.length(1);
+    });
+
+    it("should batch subsequent events instead of flushing each", async () => {
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+      await eventQueue.enqueue(
+        createMockEvent({ original_timestamp: new Date(Date.now() + 1).toISOString() })
+      );
+      await (eventQueue as any).pendingFlush;
+
+      // Only the first event's immediate flush hit the network; the second
+      // stays queued for the flushAt/interval/pagehide paths.
+      expect(fetchStub.calledOnce).to.be.true;
     });
 
     it("should accept callback parameter", async () => {
@@ -671,6 +696,7 @@ describe("EventQueue", () => {
     });
 
     it("does not send when consent is revoked before flush", async () => {
+      useUniqueCryptoHashes();
       let allowed = true;
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
@@ -679,6 +705,12 @@ describe("EventQueue", () => {
         retryCount: 1,
         canSend: () => allowed,
       });
+
+      // The first event flushes immediately while consent is still granted;
+      // let it through so the next enqueue exercises the buffered path.
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
 
       await eventQueue.enqueue(createMockEvent());
       allowed = false; // consent withdrawn while buffered
@@ -710,6 +742,12 @@ describe("EventQueue", () => {
         flushInterval: 30000,
         retryCount: 1,
       });
+
+      // Let the immediate first-event flush through, then test clear()
+      // against events that are actually buffered.
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
 
       await eventQueue.enqueue(createMockEvent());
       await eventQueue.enqueue(createMockEvent());
