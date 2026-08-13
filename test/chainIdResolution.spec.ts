@@ -111,7 +111,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(active.request.called).to.be.false;
   });
 
-  it("falls back to the cached chain when the other provider cannot answer", async () => {
+  it("reports unknown rather than the active chain when the other provider cannot answer", async () => {
     const active = providerOnChain(ACTIVE_CHAIN);
     const broken = {
       request: sandbox.stub().rejects(new Error("no")),
@@ -126,7 +126,24 @@ describe("Chain id resolution for autocaptured requests", () => {
       broken as any
     );
 
-    expect(payload.chainId).to.equal(ACTIVE_CHAIN);
+    // The cached chain belongs to a different wallet, so it is known-wrong
+    // here. 0 is the honest answer.
+    expect(payload.chainId).to.equal(0);
+  });
+
+  it("asks the signing provider when no active provider is established yet", async () => {
+    // loadActiveWallet() restores a persisted chainId with no provider
+    // attached; a request arriving before connect must not inherit it.
+    (formo as any)._provider = undefined;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    const signer = providerOnChain(OTHER_CHAIN);
+
+    const payload = await (formo as any).buildTransactionEventPayload(
+      [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      signer
+    );
+
+    expect(payload.chainId).to.equal(OTHER_CHAIN);
   });
 
   it("queries the provider when no chain is cached yet", async () => {

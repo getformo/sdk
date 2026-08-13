@@ -2517,10 +2517,22 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async resolveChainIdForProvider(
     provider?: EIP1193Provider
   ): Promise<number> {
-    if (provider && this._provider && provider !== this._provider) {
-      const fromProvider = await this.getCurrentChainId(provider);
-      if (fromProvider) return fromProvider;
+    // The cache is only trustworthy for the provider whose `chainChanged`
+    // events maintain it. Any other case asks the signer itself.
+    //
+    // `!this._provider` counts as "other": loadActiveWallet() restores a
+    // persisted chainId with no provider attached, so a request arriving
+    // before connect establishes `_provider` would otherwise be tagged with a
+    // chain from a previous session.
+    const cacheApplies = !!provider && provider === this._provider;
+
+    if (!cacheApplies && provider) {
+      // Deliberately no fall back to `_evmChainId` here. That value describes
+      // a different wallet, so it is known-wrong for this request; 0 (unknown)
+      // is the honest answer.
+      return this.getCurrentChainId(provider);
     }
+
     return this._evmChainId || (await this.getCurrentChainId(provider));
   }
 
