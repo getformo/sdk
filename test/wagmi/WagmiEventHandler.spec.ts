@@ -22,8 +22,10 @@ describe("WagmiEventHandler", () => {
   let chainIdListener: ((chainId: number | undefined, prevChainId: number | undefined) => void) | null;
   let mutationListener: ((event: MutationCacheEvent) => void) | null;
   let queryListener: ((event: QueryCacheEvent) => void) | null;
+  let addressListener: ((address: string | undefined, prevAddress: string | undefined) => void) | null;
 
   const mockAddress = "0x1234567890123456789012345678901234567890";
+  const PROBE_ADDRESS = "0x00000000000000000000000000000000000pr0be";
   const mockChainId = 1;
 
   const createMockState = (overrides: Partial<WagmiState> = {}): WagmiState => ({
@@ -56,6 +58,7 @@ describe("WagmiEventHandler", () => {
     chainIdListener = null;
     mutationListener = null;
     queryListener = null;
+    addressListener = null;
 
     // Create mock FormoAnalytics
     mockFormo = {
@@ -81,21 +84,36 @@ describe("WagmiEventHandler", () => {
     let currentState = createMockState();
     mockWagmiConfig = {
       subscribe: sandbox.stub().callsFake((selector: any, listener: any) => {
-        // Determine which listener based on the selector
-        const testState = createMockState({ status: "connected", chainId: 1 });
+        // Route each subscription to the right local by probing the selector.
+        // The probe state carries a distinguishable value for all three
+        // slices, because the status and address selectors both return
+        // strings and cannot be told apart by type alone.
+        const probeConnections = new Map();
+        probeConnections.set("probe", {
+          accounts: [PROBE_ADDRESS],
+          chainId: 1,
+          connector: { id: "probe", name: "Probe", type: "injected", uid: "p" },
+        });
+        const testState = createMockState({
+          status: "connected",
+          chainId: 1,
+          connections: probeConnections,
+          current: "probe",
+        });
         const selectedValue = selector(testState);
 
-        if (typeof selectedValue === "string") {
-          // Status selector
+        if (selectedValue === PROBE_ADDRESS) {
+          addressListener = listener;
+        } else if (typeof selectedValue === "string") {
           statusListener = listener;
         } else if (typeof selectedValue === "number" || selectedValue === undefined) {
-          // ChainId selector
           chainIdListener = listener;
         }
 
         return () => {
           statusListener = null;
           chainIdListener = null;
+          addressListener = null;
         };
       }),
       getState: sandbox.stub().callsFake(() => currentState),
@@ -142,7 +160,11 @@ describe("WagmiEventHandler", () => {
     it("should initialize and set up connection listeners", () => {
       new WagmiEventHandler(mockFormo as any, mockWagmiConfig);
 
-      expect((mockWagmiConfig.subscribe as sinon.SinonStub).calledTwice).to.be.true;
+      // status, chainId, and the active address
+      expect((mockWagmiConfig.subscribe as sinon.SinonStub).calledThrice).to.be.true;
+      expect(statusListener).to.not.be.null;
+      expect(chainIdListener).to.not.be.null;
+      expect(addressListener).to.not.be.null;
     });
 
     it("should set up mutation tracking when QueryClient is provided", () => {
@@ -2240,6 +2262,176 @@ describe("WagmiEventHandler", () => {
 
       // Missing status must NOT be treated as a confirmation.
       expect(mockFormo.transaction.called).to.be.false;
+    });
+  });
+
+  describe("explicit per-call account and chain", () => {
+    const OTHER = "0x9999999999999999999999999999999999999999";
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+    const connectHandler = async () => {
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      (mockWagmiConfig as any).setState(createConnectedState());
+      if (statusListener) await statusListener("connected", "disconnected");
+      await settle();
+    };
+
+    it("prefers the mutation's account over the active connection", async () => {
+      await connectHandler();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 40,
+            options: { mutationKey: ["sendTransaction"] },
+            state: {
+              status: "success",
+              data: "0xhash",
+              variables: { account: OTHER, to: "0xabc", data: "0x" },
+            },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.transaction.lastCall.args[0].address).to.equal(OTHER);
+    });
+
+    it("prefers the mutation's chainId over the active connection", async () => {
+      await connectHandler();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 41,
+            options: { mutationKey: ["sendTransaction"] },
+            state: {
+              status: "success",
+              data: "0xhash",
+              variables: { chainId: 137, to: "0xabc", data: "0x" },
+            },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.transaction.lastCall.args[0].chainId).to.equal(137);
+    });
+
+    it("accepts an account object as well as a bare address", async () => {
+      await connectHandler();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 42,
+            options: { mutationKey: ["signMessage"] },
+            state: {
+              status: "success",
+              variables: { account: { address: OTHER }, message: "hi" },
+            },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.signature.lastCall.args[0].address).to.equal(OTHER);
+    });
+
+    it("still falls back to the active connection when unspecified", async () => {
+      await connectHandler();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 43,
+            options: { mutationKey: ["sendTransaction"] },
+            state: {
+              status: "success",
+              data: "0xhash",
+              variables: { to: "0xabc", data: "0x" },
+            },
+          },
+        } as any);
+      }
+
+      const call = mockFormo.transaction.lastCall.args[0];
+      expect(call.address).to.equal(mockAddress);
+      expect(call.chainId).to.equal(mockChainId);
+    });
+  });
+
+  describe("account switched inside an already-connected wallet", () => {
+    const SWITCHED = "0x7777777777777777777777777777777777777777";
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+    it("emits connect for the new account while status stays connected", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // wagmi keeps status === "connected"; only the accounts array changes.
+      (mockWagmiConfig as any).setState(createConnectedState(SWITCHED, mockChainId));
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.connect.calledTwice).to.be.true;
+      expect(mockFormo.connect.secondCall.args[0]).to.deep.include({
+        chainId: mockChainId,
+        address: SWITCHED,
+      });
+    });
+
+    it("re-points signature and transaction attribution at the new account", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createConnectedState(SWITCHED, mockChainId));
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 50,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.signature.lastCall.args[0].address).to.equal(SWITCHED);
+    });
+
+    it("does not double-emit on a fresh connect", async () => {
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      // Both listeners fire for the same transition; status is registered
+      // first and records the address synchronously.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      if (statusListener) await statusListener("connected", "disconnected");
+      if (addressListener) await addressListener(mockAddress, undefined);
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
+    it("ignores an address change while disconnected", async () => {
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
     });
   });
 

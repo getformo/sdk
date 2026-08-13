@@ -70,6 +70,19 @@ export function __resetSeededWallet(): void {
 }
 
 /**
+ * wagmi accepts an `account` as either a bare address or a viem Account
+ * object. Normalise both to an address, or undefined when absent.
+ */
+function resolveAccountAddress(account: unknown): string | undefined {
+  if (typeof account === "string") return account;
+  if (account && typeof account === "object") {
+    const address = (account as { address?: unknown }).address;
+    if (typeof address === "string") return address;
+  }
+  return undefined;
+}
+
+/**
  * Clean up old entries from a Set to prevent memory leaks.
  * Removes oldest entries when size exceeds maxSize.
  *
@@ -176,6 +189,20 @@ export class WagmiEventHandler {
       }
     );
     this.unsubscribers.push(chainIdUnsubscribe);
+
+    // Subscribe to the active address.
+    //
+    // `state.status` is a single global value, so it stays "connected" when a
+    // user switches account inside an already-connected wallet. Without this
+    // the switch is invisible: no event, and the tracked address goes stale
+    // and mis-attributes every later signature and transaction.
+    const addressUnsubscribe = this.wagmiConfig.subscribe(
+      (state: WagmiState) => this.getConnectedAddress(state),
+      (address, prevAddress) => {
+        this.handleActiveAddressChange(address, prevAddress);
+      }
+    );
+    this.unsubscribers.push(addressUnsubscribe);
 
     logger.info("WagmiEventHandler: Connection listeners set up successfully");
   }
@@ -420,6 +447,59 @@ export class WagmiEventHandler {
       logger.error("WagmiEventHandler: Error handling status change:", error);
     } finally {
       this.trackingState.isProcessing = false;
+    }
+  }
+
+  /**
+   * Handle a switch to a different account on an already-connected wallet.
+   *
+   * Only fires for a genuine in-place switch. A fresh connect and a disconnect
+   * both move `state.status`, and that listener is registered first, so it has
+   * already recorded the new address synchronously by the time this runs. The
+   * `lastAddress` check below is what makes the two paths mutually exclusive.
+   */
+  private async handleActiveAddressChange(
+    address: string | undefined,
+    prevAddress: string | undefined
+  ): Promise<void> {
+    if (!address || address === prevAddress) return;
+    // Already handled by the status listener (fresh connect, or the seed).
+    if (this.trackingState.lastAddress === address) return;
+
+    const state = this.getState();
+    if (state.status !== "connected") return;
+
+    const chainId = state.chainId;
+    if (chainId === undefined) return;
+
+    logger.info("WagmiEventHandler: Active account switched", {
+      from: prevAddress,
+      to: address,
+      chainId,
+    });
+
+    this.trackingState.lastAddress = address;
+    this.trackingState.lastChainId = chainId;
+
+    // Sync central state unconditionally so tracking.excludeChains is
+    // enforced even when connect autocapture is disabled.
+    this.formo.syncWalletState({ chainId, address });
+
+    if (this.formo.isAutocaptureEnabled("connect")) {
+      try {
+        const connectorName = this.getConnectorName(state);
+        await this.formo.connect(
+          { chainId, address },
+          {
+            ...(connectorName && { providerName: connectorName }),
+          }
+        );
+      } catch (error) {
+        logger.error(
+          "WagmiEventHandler: Error tracking account switch:",
+          error
+        );
+      }
     }
   }
 
@@ -740,8 +820,12 @@ export class WagmiEventHandler {
 
     const state = mutation.state;
     const variables = state.variables || {};
-    const chainId = this.trackingState.lastChainId;
-    const address = this.trackingState.lastAddress;
+    // An explicit per-call `account` wins over the active connection. wagmi
+    // lets a caller sign with an account other than the current one, and the
+    // tracked connection describes a different wallet in that case.
+    const chainId = variables.chainId ?? this.trackingState.lastChainId;
+    const address =
+      resolveAccountAddress(variables.account) || this.trackingState.lastAddress;
 
     if (!address) {
       logger.warn("WagmiEventHandler: Signature event but no address available");
@@ -802,17 +886,17 @@ export class WagmiEventHandler {
 
     const state = mutation.state;
     const variables = state.variables || {};
-    const chainId = this.trackingState.lastChainId || variables.chainId;
-    // For sendTransaction, user's address is the 'from'
-    // For writeContract, variables.address is the contract address, not the user
-    // variables.account can be a string address or an Account object with an address property
-    const accountValue = variables.account;
-    const accountAddress =
-      typeof accountValue === "string"
-        ? accountValue
-        : accountValue?.address;
+    // Explicit per-call values win over the active connection. wagmi lets a
+    // caller target another account or chain, and the tracked connection
+    // describes a different wallet in that case. Fall back to the connection
+    // for the usual call that omits them.
+    //
+    // For sendTransaction the user's address is `from`; for writeContract
+    // `variables.address` is the contract, not the user.
+    const chainId = variables.chainId ?? this.trackingState.lastChainId;
+    const accountAddress = resolveAccountAddress(variables.account);
     const userAddress =
-      this.trackingState.lastAddress || accountAddress || variables.from;
+      accountAddress || variables.from || this.trackingState.lastAddress;
 
     if (!userAddress) {
       logger.warn(
