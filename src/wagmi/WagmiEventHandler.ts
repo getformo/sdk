@@ -112,6 +112,9 @@ export class WagmiEventHandler {
     // Set up connection/disconnection/chain listeners
     this.setupConnectionListeners();
 
+    // Adopt a wallet that connected before this handler existed.
+    this.seedFromCurrentState();
+
     // Set up mutation and query tracking if QueryClient is provided
     if (this.queryClient) {
       this.setupMutationTracking();
@@ -148,6 +151,94 @@ export class WagmiEventHandler {
     this.unsubscribers.push(chainIdUnsubscribe);
 
     logger.info("WagmiEventHandler: Connection listeners set up successfully");
+  }
+
+  /**
+   * Adopt a connection that already existed when this handler was created.
+   *
+   * `config.subscribe` reports *changes* only, so a wallet restored by wagmi's
+   * mount-time `reconnect()` is invisible to a handler built afterwards. That
+   * is the normal case whenever the host app loads the SDK lazily (dynamic
+   * import, `requestIdleCallback`) and can also happen on a plain mount, since
+   * `FormoAnalytics.init()` and wagmi's reconnect are both async and race.
+   *
+   * Without this seed the whole session is lost: no connect event, and
+   * `lastAddress` stays undefined so the signature and transaction handlers
+   * drop their events too, and the eventual disconnect carries neither address
+   * nor chain id.
+   *
+   * `subscribe(..., { fireImmediately: true })` is not a substitute. It reports
+   * the current value with no distinct previous value, so the connect branch's
+   * `prevStatus !== "connected"` test never passes, and wagmi v3 does not
+   * honour the option at all.
+   *
+   * Deliberately synchronous, and deliberately does NOT take the
+   * `isProcessing` lock. Everything that mutates tracking state runs before
+   * any await, so no status change can interleave with it. Holding the lock
+   * across the `connect()` emission instead would make `handleStatusChange()`
+   * drop - not defer - a disconnect or wallet switch that lands in that
+   * window, which is exactly when a lazily loaded SDK is racing app activity.
+   *
+   * A genuine `connected` transition cannot double-emit alongside this seed:
+   * `config.subscribe` only fires on change, so reaching `connected` again
+   * requires leaving it first, which clears the state set here.
+   */
+  private seedFromCurrentState(): void {
+    try {
+      const state = this.getState();
+      if (state.status !== "connected") {
+        return;
+      }
+
+      const address = this.getConnectedAddress(state);
+      const chainId = state.chainId;
+
+      if (!address || chainId === undefined) {
+        logger.debug(
+          "WagmiEventHandler: Connected at init but address or chainId is missing, nothing to seed",
+          { address, chainId }
+        );
+        return;
+      }
+
+      logger.info(
+        "WagmiEventHandler: Adopting connection that predates this handler",
+        { address, chainId }
+      );
+
+      this.trackingState.lastAddress = address;
+      this.trackingState.lastChainId = chainId;
+      this.trackingState.lastStatus = state.status;
+
+      // Sync central state unconditionally so tracking.excludeChains
+      // is enforced even when connect autocapture is disabled.
+      this.formo.syncWalletState({ chainId, address });
+
+      if (this.formo.isAutocaptureEnabled("connect")) {
+        const connectorName = this.getConnectorName(state);
+        // Fire and forget: awaiting here would either stall the constructor
+        // or require holding the lock. Tracking state is already correct, so
+        // a status change arriving mid-flight is handled normally.
+        void Promise.resolve(
+          this.formo.connect(
+            { chainId, address },
+            {
+              ...(connectorName && { providerName: connectorName }),
+            }
+          )
+        ).catch((error) => {
+          logger.error(
+            "WagmiEventHandler: Error emitting seeded connect event:",
+            error
+          );
+        });
+      }
+    } catch (error) {
+      logger.error(
+        "WagmiEventHandler: Error seeding from current state:",
+        error
+      );
+    }
   }
 
   /**

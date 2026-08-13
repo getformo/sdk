@@ -150,12 +150,15 @@ describe("WagmiEventHandler", () => {
 
   describe("connection events", () => {
     it("should track connect event when status changes to connected", async () => {
-      const connectedState = createConnectedState();
-      (mockWagmiConfig as any).setState(connectedState);
+      // Build the handler while disconnected. A transition *into* connected can
+      // only be observed by a handler that was already subscribed while the
+      // status was something else, since subscribe() fires on change only.
+      (mockWagmiConfig as any).setState(createMockState());
 
       new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
 
       // Simulate status change
+      (mockWagmiConfig as any).setState(createConnectedState());
       if (statusListener) {
         await statusListener("connected", "disconnected");
       }
@@ -2227,6 +2230,212 @@ describe("WagmiEventHandler", () => {
 
       // Missing status must NOT be treated as a confirmation.
       expect(mockFormo.transaction.called).to.be.false;
+    });
+  });
+
+  describe("seeding from a connection that predates the handler", () => {
+    // Wagmi's mount-time reconnect() settles before an app that loads the SDK
+    // lazily. config.subscribe only reports changes, so without an explicit
+    // seed the entire session is invisible.
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+    it("should emit connect for a wallet already connected at construction", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0]).to.deep.include({
+        chainId: mockChainId,
+        address: mockAddress,
+      });
+    });
+
+    it("should pass the connector name when seeding", async () => {
+      const connections = new Map();
+      connections.set("connector-1", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: {
+          id: "walletConnect",
+          name: "WalletConnect",
+          type: "walletConnect",
+          uid: "wc-1",
+        },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "connector-1",
+        chainId: mockChainId,
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.firstCall.args[1]).to.deep.equal({
+        providerName: "WalletConnect",
+      });
+    });
+
+    it("should seed the address so signature events are still tracked", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 1,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hello" } },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.signature.calledOnce).to.be.true;
+      expect(mockFormo.signature.firstCall.args[0]).to.deep.include({
+        address: mockAddress,
+        chainId: mockChainId,
+      });
+    });
+
+    it("should seed the address so transaction events are still tracked", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 2,
+            options: { mutationKey: ["sendTransaction"] },
+            state: {
+              status: "success",
+              data: "0xdeadbeef",
+              variables: { to: "0xabc", data: "0x" },
+            },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      expect(mockFormo.transaction.firstCall.args[0]).to.deep.include({
+        address: mockAddress,
+        chainId: mockChainId,
+        transactionHash: "0xdeadbeef",
+      });
+    });
+
+    it("should emit a disconnect carrying the seeded address and chain", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createMockState());
+      if (statusListener) {
+        await statusListener("disconnected", "connected");
+      }
+      await settle();
+
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]).to.deep.equal({
+        chainId: mockChainId,
+        address: mockAddress,
+      });
+    });
+
+    it("should sync wallet state when connect autocapture is disabled", async () => {
+      mockFormo.isAutocaptureEnabled.withArgs("connect").returns(false);
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
+      expect(mockFormo.syncWalletState.calledOnce).to.be.true;
+      expect(mockFormo.syncWalletState.firstCall.args[0]).to.deep.equal({
+        chainId: mockChainId,
+        address: mockAddress,
+      });
+    });
+
+    it("should not emit connect when disconnected at construction", async () => {
+      (mockWagmiConfig as any).setState(createMockState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
+      expect(mockFormo.syncWalletState.called).to.be.false;
+    });
+
+    it("should not emit connect when connected but no address is resolvable", async () => {
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: new Map(),
+        current: undefined,
+        chainId: mockChainId,
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
+    });
+
+    it("should still handle a disconnect that lands while the seeded connect is in flight", async () => {
+      // The seed must not hold trackingState.isProcessing across its connect
+      // emission: handleStatusChange drops - does not defer - status changes
+      // while that flag is set, so a disconnect here would be lost forever.
+      let releaseConnect: () => void = () => undefined;
+      mockFormo.connect.returns(
+        new Promise<void>((resolve) => {
+          releaseConnect = resolve;
+        })
+      );
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      // connect() is still pending at this point.
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      (mockWagmiConfig as any).setState(createMockState());
+      if (statusListener) {
+        await statusListener("disconnected", "connected");
+      }
+      await settle();
+
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]).to.deep.equal({
+        chainId: mockChainId,
+        address: mockAddress,
+      });
+
+      releaseConnect();
+    });
+
+    it("should still emit connect for a later connection after an empty seed", async () => {
+      (mockWagmiConfig as any).setState(createMockState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
     });
   });
 });
