@@ -137,6 +137,12 @@ export class WagmiEventHandler {
    */
   private pendingTransactions = new Map<string, {
     address: string;
+    /**
+     * Chain the transaction was broadcast on. Stored because a mutation may
+     * name an explicit `chainId`, and the active chain can change between
+     * broadcast and receipt; the confirmation must not be relabelled.
+     */
+    chainId?: number;
     data?: string;
     to?: string;
     value?: string;
@@ -502,7 +508,10 @@ export class WagmiEventHandler {
     const state = this.getState();
     if (state.status !== "connected") return;
 
-    const chainId = state.chainId;
+    // Prefer the chain of the connection that is now current. `state.chainId`
+    // is global and can still describe the previous connection - with several
+    // connections, or with syncConnectedChain disabled, they diverge.
+    const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
     if (chainId === undefined) return;
 
     logger.info("WagmiEventHandler: Active account switched", {
@@ -700,7 +709,8 @@ export class WagmiEventHandler {
     // Query key format: ['waitForTransactionReceipt', { hash, chainId, ... }]
     const params = queryKey[1] as { hash?: string; chainId?: number } | undefined;
     const transactionHash = params?.hash;
-    const chainId = params?.chainId || this.trackingState.lastChainId;
+    // Resolved after the pending lookup below, so the broadcast chain wins.
+    const queryChainId = params?.chainId;
 
     if (!transactionHash) {
       logger.warn("WagmiEventHandler: Transaction receipt query but no hash found");
@@ -726,6 +736,12 @@ export class WagmiEventHandler {
       return;
     }
     const address = pendingTx.address;
+
+    // The chain the transaction was actually broadcast on wins. A mutation may
+    // have named an explicit chainId, and the active chain can change between
+    // broadcast and receipt, which would otherwise relabel the confirmation.
+    const chainId =
+      pendingTx.chainId ?? queryChainId ?? this.trackingState.lastChainId;
 
     if (!address) {
       logger.warn("WagmiEventHandler: Transaction receipt query but no address available");
@@ -1008,6 +1024,7 @@ export class WagmiEventHandler {
         const normalizedHash = transactionHash.toLowerCase();
         const txDetails = {
           address: userAddress,
+          ...(chainId !== undefined && { chainId }),
           ...(data && { data }),
           ...(to && { to }),
           ...(value && { value }),
@@ -1096,6 +1113,16 @@ export class WagmiEventHandler {
     }
 
     return connection.accounts[0];
+  }
+
+  /**
+   * Chain of the connection that is currently active, which is authoritative
+   * for that wallet. `state.chainId` is a single global value and can lag or
+   * describe a different connection.
+   */
+  private getActiveConnectionChainId(state: WagmiState): number | undefined {
+    if (!state.current) return undefined;
+    return state.connections.get(state.current)?.chainId;
   }
 
   /**
