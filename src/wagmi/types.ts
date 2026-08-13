@@ -168,6 +168,12 @@ export type WagmiMutationKey =
  * Internal tracking state for Wagmi event handler
  */
 export interface WagmiTrackingState {
+  /**
+   * uid of the wagmi connection the tracked wallet belongs to. Distinguishes a
+   * remount over the same connection from a genuine disconnect/reconnect that
+   * happened while no handler was mounted.
+   */
+  lastConnectionId?: string;
   lastChainId?: number;
   lastAddress?: string;
   lastStatus?: WagmiState['status'];

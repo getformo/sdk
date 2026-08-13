@@ -2611,6 +2611,53 @@ describe("WagmiEventHandler", () => {
       });
     });
 
+    it("should seed on the active connection's chain, not the global one", async () => {
+      // With several connections, or with syncConnectedChain disabled, the
+      // global state.chainId can describe a different connection.
+      const connections = new Map();
+      connections.set("connector-1", {
+        accounts: [mockAddress],
+        chainId: 42161,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "1" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "connector-1",
+        chainId: mockChainId, // global value lags behind
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.firstCall.args[0]).to.deep.include({
+        chainId: 42161,
+        address: mockAddress,
+      });
+    });
+
+    it("should still seed when only the connection carries a chain", async () => {
+      const connections = new Map();
+      connections.set("connector-1", {
+        accounts: [mockAddress],
+        chainId: 42161,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "1" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "connector-1",
+        chainId: undefined, // global not populated yet
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      // Previously this skipped seeding entirely and lost the whole session.
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(42161);
+    });
+
     it("should pass the connector name when seeding", async () => {
       const connections = new Map();
       connections.set("connector-1", {
@@ -2971,6 +3018,67 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.calledOnce).to.be.true;
       // State was still adopted, so later mutations are attributed.
       expect((handler as any).trackingState.lastAddress).to.equal(mockAddress);
+    });
+
+    it("should not adopt an ordinary connect that central state declines", async () => {
+      // The seed and the account-switch path both honour a refusal; the plain
+      // status transition must too, or a suppressed route still ends up
+      // attributing later signatures and transactions.
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      mockFormo.syncWalletState = sandbox.stub() as any;
+      (mockWagmiConfig as any).setState(createConnectedState());
+      if (statusListener) await statusListener("connected", "disconnected");
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 80,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      expect(mockFormo.signature.called).to.be.false;
+    });
+
+    it("should re-emit after a disconnect and reconnect that happened while unmounted", async () => {
+      // cleanup() cannot clear the page-load marker, so the marker also keys on
+      // the connection identity: a new connection is a new session.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      first.cleanup();
+
+      // User disconnects and reconnects with no handler mounted: same address,
+      // new wagmi connection uid.
+      const connections = new Map();
+      connections.set("connector-2", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "2" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "connector-2",
+        chainId: mockChainId,
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.calledTwice).to.be.true;
     });
 
     it("should still emit connect for a later connection after an empty seed", async () => {
