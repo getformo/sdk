@@ -77,6 +77,7 @@ describe("WagmiEventHandler", () => {
       }),
       currentAddress: undefined,
       currentChainId: undefined,
+      writeKey: "test-write-key",
     } as any;
 
     // Create mock Wagmi config with subscribe
@@ -2734,7 +2735,7 @@ describe("WagmiEventHandler", () => {
       });
     });
 
-    it("should treat a reconnect onto a different chain as a chain change", async () => {
+    it("should re-sync, not re-emit connect, when a reconnect lands on a new chain", async () => {
       // Same wallet, same session, new chain. Identity is the address alone,
       // so this is a chain transition and not a second connection.
       (mockWagmiConfig as any).setState(createConnectedState());
@@ -2750,12 +2751,48 @@ describe("WagmiEventHandler", () => {
       }
       await settle();
 
+      // No second connect. The chain emission belongs to the chainId
+      // subscription, which observes the same state update; emitting from the
+      // status branch too would double count it.
       expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.chain.called).to.be.false;
+
+      // And that subscription still reports the change exactly once.
+      if (chainIdListener) await chainIdListener(137, mockChainId);
+      await settle();
       expect(mockFormo.chain.calledOnce).to.be.true;
       expect(mockFormo.chain.firstCall.args[0]).to.deep.include({
         chainId: 137,
         address: mockAddress,
       });
+    });
+
+    it("should keep separate write keys from suppressing each other's seed", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // A second SDK instance for a different write key is a separate
+      // destination with its own queue, so it needs its own connect.
+      const other: any = {
+        connect: sandbox.stub().resolves(),
+        disconnect: sandbox.stub().resolves(),
+        chain: sandbox.stub().resolves(),
+        signature: sandbox.stub().resolves(),
+        transaction: sandbox.stub().resolves(),
+        isAutocaptureEnabled: sandbox.stub().returns(true),
+        syncWalletState: sandbox.stub().callsFake((p: any) => {
+          other.currentAddress = p?.address;
+        }),
+        currentAddress: undefined,
+        writeKey: "other-write-key",
+      };
+      new WagmiEventHandler(other, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(other.connect.calledOnce).to.be.true;
     });
 
     it("should not adopt the wallet when central state declines it", async () => {
