@@ -3081,6 +3081,36 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.calledTwice).to.be.true;
     });
 
+    it("should bound the page-load marker set", async () => {
+      // One entry per wallet adopted this page load. Tiny in practice, but an
+      // app that reconnects in a loop must not grow it without limit.
+      for (let i = 0; i < 60; i++) {
+        const address = `0x${String(i).padStart(40, "0")}`;
+        const connections = new Map();
+        connections.set(`c${i}`, {
+          accounts: [address],
+          chainId: mockChainId,
+          connector: { id: "m", name: "MetaMask", type: "injected", uid: `${i}` },
+        });
+        (mockWagmiConfig as any).setState({
+          status: "connected",
+          connections,
+          current: `c${i}`,
+          chainId: mockChainId,
+        });
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      }
+      await settle();
+
+      // Every one is a distinct wallet on a distinct connection, so all emit.
+      expect(mockFormo.connect.callCount).to.equal(60);
+      // And the newest is still deduplicated, proving the Set is alive and not
+      // simply cleared wholesale.
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.callCount).to.equal(60);
+    });
+
     it("should still emit connect for a later connection after an empty seed", async () => {
       (mockWagmiConfig as any).setState(createMockState());
 
