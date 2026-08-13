@@ -1766,9 +1766,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
           return request({ method, params });
         }
-        // Use current chainId if available, otherwise fetch it
-        const capturedChainId =
-          this._evmChainId || (await this.getCurrentChainId(provider));
+        const capturedChainId = await this.resolveChainIdForProvider(provider);
         // Fire-and-forget tracking
         (async () => {
           try {
@@ -2502,6 +2500,42 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
+  /**
+   * Resolve the chain an autocaptured request actually ran on.
+   *
+   * `_evmChainId` is maintained by `chainChanged` from whichever provider is
+   * currently active. When a request arrives from a *different* tracked
+   * provider - which happens whenever a visitor has two wallets installed -
+   * that cached value describes the wrong wallet, and tagging the event with
+   * it silently mis-attributes the chain.
+   *
+   * Only the mismatched case pays for an `eth_chainId` round trip. The common
+   * case, a request from the active provider, still reads the cache, which
+   * matters because the signature path awaits this before opening the wallet
+   * prompt.
+   */
+  private async resolveChainIdForProvider(
+    provider?: EIP1193Provider
+  ): Promise<number> {
+    // The cache is only trustworthy for the provider whose `chainChanged`
+    // events maintain it. Any other case asks the signer itself.
+    //
+    // `!this._provider` counts as "other": loadActiveWallet() restores a
+    // persisted chainId with no provider attached, so a request arriving
+    // before connect establishes `_provider` would otherwise be tagged with a
+    // chain from a previous session.
+    const cacheApplies = !!provider && provider === this._provider;
+
+    if (!cacheApplies && provider) {
+      // Deliberately no fall back to `_evmChainId` here. That value describes
+      // a different wallet, so it is known-wrong for this request; 0 (unknown)
+      // is the honest answer.
+      return this.getCurrentChainId(provider);
+    }
+
+    return this._evmChainId || (await this.getCurrentChainId(provider));
+  }
+
   private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {
     const p = provider || this.provider;
     if (!p) {
@@ -2584,7 +2618,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
 
-    const chainId = this._evmChainId || (await this.getCurrentChainId(provider));
+    const chainId = await this.resolveChainIdForProvider(provider);
     this.backfillActiveWallet(validAddress, chainId);
 
     return {
