@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
-import { WagmiEventHandler } from "../../src/wagmi/WagmiEventHandler";
+import { WagmiEventHandler, __resetSeededWallet } from "../../src/wagmi/WagmiEventHandler";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
 import {
   WagmiConfig,
@@ -50,6 +50,7 @@ describe("WagmiEventHandler", () => {
   };
 
   beforeEach(() => {
+    __resetSeededWallet();
     sandbox = sinon.createSandbox();
     statusListener = null;
     chainIdListener = null;
@@ -64,7 +65,15 @@ describe("WagmiEventHandler", () => {
       signature: sandbox.stub().resolves(),
       transaction: sandbox.stub().resolves(),
       isAutocaptureEnabled: sandbox.stub().returns(true),
-      syncWalletState: sandbox.stub(),
+      // Model the real method: it learns the wallet into central state, which
+      // the seed then checks before adopting it privately. Tests that need the
+      // suppressed path override this with a no-op.
+      syncWalletState: sandbox.stub().callsFake((params: any) => {
+        (mockFormo as any).currentAddress = params?.address;
+        (mockFormo as any).currentChainId = params?.chainId;
+      }),
+      currentAddress: undefined,
+      currentChainId: undefined,
     } as any;
 
     // Create mock Wagmi config with subscribe
@@ -2462,6 +2471,91 @@ describe("WagmiEventHandler", () => {
         chainId: mockChainId,
         address: mockAddress,
       });
+    });
+
+    it("should treat a reconnect onto a different chain as a chain change", async () => {
+      // Same wallet, same session, new chain. Identity is the address alone,
+      // so this is a chain transition and not a second connection.
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      (mockWagmiConfig as any).setState(createConnectedState(mockAddress, 137));
+      if (statusListener) {
+        await statusListener("reconnecting", "connected");
+        await statusListener("connected", "reconnecting");
+      }
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.chain.calledOnce).to.be.true;
+      expect(mockFormo.chain.firstCall.args[0]).to.deep.include({
+        chainId: 137,
+        address: mockAddress,
+      });
+    });
+
+    it("should not adopt the wallet when central state declines it", async () => {
+      // syncWalletState refuses to learn a wallet while tracking is
+      // suppressed. Retaining it privately would let the mutation handlers
+      // attribute events to an address the SDK must not know.
+      mockFormo.syncWalletState = sandbox.stub() as any;
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 60,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      expect(mockFormo.signature.called).to.be.false;
+    });
+
+    it("should not re-emit connect when the handler is rebuilt over the same connection", async () => {
+      // A provider remount, options change, or HMR rebuilds the SDK instance
+      // while the wallet never disconnected. That is a lifecycle event.
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      const rebuilt = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      // The rebuilt handler must still know the wallet, or its mutation
+      // handlers would drop every signature and transaction.
+      expect((rebuilt as any).trackingState.lastAddress).to.equal(mockAddress);
+    });
+
+    it("should emit again for a genuine reconnect after a disconnect", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createMockState());
+      if (statusListener) await statusListener("disconnected", "connected");
+      await settle();
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      if (statusListener) await statusListener("connected", "disconnected");
+      await settle();
+
+      expect(mockFormo.connect.calledTwice).to.be.true;
     });
 
     it("should still emit connect for a later connection after an empty seed", async () => {

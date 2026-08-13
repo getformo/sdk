@@ -43,6 +43,25 @@ const RESERVED_FIELDS = new Set([
 ]);
 
 /**
+ * Wallet already adopted by a seed during this page load, lowercased.
+ *
+ * Deliberately module scoped rather than per handler or per FormoAnalytics
+ * instance. The duplicate this prevents comes from the SDK instance itself
+ * being rebuilt - a provider remount, an options change, HMR - while the
+ * wallet never disconnected, and per-instance state cannot see that.
+ *
+ * A real disconnect clears it, so a genuine reconnect within the same page
+ * load still emits. A new page load starts with a fresh module scope, which
+ * preserves the intended one-connect-per-page-load behaviour.
+ */
+let seededWallet: string | undefined;
+
+/** Test hook. Real page loads reset this naturally. */
+export function __resetSeededWallet(): void {
+  seededWallet = undefined;
+}
+
+/**
  * Clean up old entries from a Set to prevent memory leaks.
  * Removes oldest entries when size exceeds maxSize.
  *
@@ -179,9 +198,9 @@ export class WagmiEventHandler {
    * drop - not defer - a disconnect or wallet switch that lands in that
    * window, which is exactly when a lazily loaded SDK is racing app activity.
    *
-   * A genuine `connected` transition cannot double-emit alongside this seed:
-   * `config.subscribe` only fires on change, so reaching `connected` again
-   * requires leaving it first, which clears the state set here.
+   * A genuine `connected` transition cannot double-emit alongside this seed.
+   * `config.subscribe` only fires on change, and the connect branch treats a
+   * re-entry for an already-tracked address as a no-op (or a chain change).
    */
   private seedFromCurrentState(): void {
     try {
@@ -206,13 +225,47 @@ export class WagmiEventHandler {
         { address, chainId }
       );
 
+      // Sync central state first so tracking.excludeChains is enforced even
+      // when connect autocapture is disabled.
+      this.formo.syncWalletState({ chainId, address });
+
+      // Only adopt the wallet privately if central state actually accepted it.
+      // While tracking is suppressed (opt-out, excluded host or path)
+      // syncWalletState deliberately refuses to learn a wallet. Retaining it
+      // here anyway would let the mutation handlers attribute signatures and
+      // transactions to an address the SDK has decided it must not know -
+      // including on a chain that excludeChains rejects, since that check
+      // reads the central field rather than the event payload.
+      //
+      // Compared case-insensitively: syncWalletState stores the checksummed
+      // form, which need not match the casing wagmi reported.
+      if (
+        this.formo.currentAddress?.toLowerCase() !== address.toLowerCase()
+      ) {
+        logger.debug(
+          "WagmiEventHandler: Central state declined the connection, not seeding",
+          { address, chainId }
+        );
+        return;
+      }
+
       this.trackingState.lastAddress = address;
       this.trackingState.lastChainId = chainId;
       this.trackingState.lastStatus = state.status;
 
-      // Sync central state unconditionally so tracking.excludeChains
-      // is enforced even when connect autocapture is disabled.
-      this.formo.syncWalletState({ chainId, address });
+      // Adopt the tracking state either way - the mutation handlers need an
+      // address - but only emit the first time this page load adopts this
+      // wallet. A rebuilt SDK instance over an unchanged connection is a
+      // lifecycle event, not a user action.
+      const walletKey = address.toLowerCase();
+      if (seededWallet === walletKey) {
+        logger.debug(
+          "WagmiEventHandler: Wallet already adopted this page load, not re-emitting connect",
+          { address }
+        );
+        return;
+      }
+      seededWallet = walletKey;
 
       if (this.formo.isAutocaptureEnabled("connect")) {
         const connectorName = this.getConnectorName(state);
@@ -276,19 +329,30 @@ export class WagmiEventHandler {
       // silently drops that disconnect and leaves the wallet marked connected
       // forever.
       if (status === "disconnected" && this.trackingState.lastAddress) {
-        // Clear central chain state regardless of autocapture so a later
-        // event can't carry a stale excluded/!excluded chainId.
-        this.formo.syncWalletState({
-          chainId: this.trackingState.lastChainId,
-        });
-        if (this.formo.isAutocaptureEnabled("disconnect")) {
-          await this.formo.disconnect({
-            chainId: this.trackingState.lastChainId,
-            address: this.trackingState.lastAddress,
-          });
-        }
+        // Snapshot and clear BEFORE emitting. The emission is awaited while
+        // `isProcessing` is held, and a status change arriving in that window
+        // is dropped rather than deferred. Clearing first means the wallet is
+        // already gone from tracking state when that happens, so a later
+        // reconnect of the same wallet is not mistaken for a re-entry and
+        // silently swallowed.
+        const disconnectedAddress = this.trackingState.lastAddress;
+        const disconnectedChainId = this.trackingState.lastChainId;
         this.trackingState.lastAddress = undefined;
         this.trackingState.lastChainId = undefined;
+        // A real disconnect ends the adoption, so a genuine reconnect later in
+        // this same page load emits again.
+        seededWallet = undefined;
+
+        // Clear central chain state regardless of autocapture so a later
+        // event can't carry a stale excluded/!excluded chainId.
+        this.formo.syncWalletState({ chainId: disconnectedChainId });
+
+        if (this.formo.isAutocaptureEnabled("disconnect")) {
+          await this.formo.disconnect({
+            chainId: disconnectedChainId,
+            address: disconnectedAddress,
+          });
+        }
       }
 
       // Handle connect
@@ -299,14 +363,27 @@ export class WagmiEventHandler {
           // `prevStatus !== "connected"`. The wallet never actually changed,
           // so re-emitting would double count it - either against the seed
           // from construction or against the previous connect.
-          if (
-            this.trackingState.lastAddress === address &&
-            this.trackingState.lastChainId === chainId
-          ) {
-            logger.debug(
-              "WagmiEventHandler: Ignoring re-entry to connected for an already tracked wallet",
-              { address, chainId }
-            );
+          //
+          // Identity is the ADDRESS alone. A reconnect that lands on a
+          // different chain is still the same session, so it is a chain
+          // transition, not a new connection.
+          if (this.trackingState.lastAddress === address) {
+            if (this.trackingState.lastChainId !== chainId) {
+              logger.info(
+                "WagmiEventHandler: Tracked wallet re-entered connected on a different chain",
+                { address, from: this.trackingState.lastChainId, to: chainId }
+              );
+              this.trackingState.lastChainId = chainId;
+              this.formo.syncWalletState({ chainId, address });
+              if (this.formo.isAutocaptureEnabled("chain")) {
+                await this.formo.chain({ chainId, address });
+              }
+            } else {
+              logger.debug(
+                "WagmiEventHandler: Ignoring re-entry to connected for an already tracked wallet",
+                { address, chainId }
+              );
+            }
             this.trackingState.lastStatus = status;
             return;
           }
