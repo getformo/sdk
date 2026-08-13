@@ -2338,6 +2338,47 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.signature.lastCall.args[0].address).to.equal(OTHER);
     });
 
+    it("confirms on the chain it broadcast on, not the later active chain", async () => {
+      await connectHandler();
+
+      // Broadcast with an explicit chainId that differs from the connection.
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 44,
+            options: { mutationKey: ["sendTransaction"] },
+            state: {
+              status: "success",
+              data: "0xBroadcastHash",
+              variables: { chainId: 42161, to: "0xabc", data: "0x" },
+            },
+          },
+        } as any);
+      }
+      expect(mockFormo.transaction.lastCall.args[0].chainId).to.equal(42161);
+
+      // User switches chain before the receipt arrives.
+      (mockWagmiConfig as any).setState(createConnectedState(mockAddress, 137));
+      if (chainIdListener) await chainIdListener(137, mockChainId);
+      await settle();
+
+      if (queryListener) {
+        queryListener({
+          type: "updated",
+          query: {
+            queryHash: "receipt-44",
+            queryKey: ["waitForTransactionReceipt", { hash: "0xBroadcastHash" }],
+            state: { status: "success", data: { status: "success" } },
+          },
+        } as any);
+      }
+
+      const confirmation = mockFormo.transaction.lastCall.args[0];
+      expect(confirmation.status).to.equal("confirmed");
+      expect(confirmation.chainId).to.equal(42161);
+    });
+
     it("still falls back to the active connection when unspecified", async () => {
       await connectHandler();
 
@@ -2420,6 +2461,34 @@ describe("WagmiEventHandler", () => {
       await settle();
 
       expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
+    it("uses the active connection's chain, not the global one", async () => {
+      // With several connections, or with syncConnectedChain off, the global
+      // state.chainId can still describe the previous connection.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      const connections = new Map();
+      connections.set("connector-1", {
+        accounts: [SWITCHED],
+        chainId: 42161,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "1" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "connector-1",
+        chainId: mockChainId, // global value lags behind
+      });
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.connect.secondCall.args[0]).to.deep.include({
+        chainId: 42161,
+        address: SWITCHED,
+      });
     });
 
     it("ignores an address change while disconnected", async () => {
