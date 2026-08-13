@@ -54,11 +54,19 @@ const RESERVED_FIELDS = new Set([
  * load still emits. A new page load starts with a fresh module scope, which
  * preserves the intended one-connect-per-page-load behaviour.
  */
-let seededWallet: string | undefined;
+const seededWallets = new Set<string>();
+
+/**
+ * Keyed by write key as well as address: two SDK instances for different write
+ * keys are separate analytics destinations with separate queues, so the second
+ * must still receive its own connect for the same wallet.
+ */
+const seedKey = (writeKey: string, address: string) =>
+  `${writeKey}:${address.toLowerCase()}`;
 
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {
-  seededWallet = undefined;
+  seededWallets.clear();
 }
 
 /**
@@ -257,15 +265,15 @@ export class WagmiEventHandler {
       // address - but only emit the first time this page load adopts this
       // wallet. A rebuilt SDK instance over an unchanged connection is a
       // lifecycle event, not a user action.
-      const walletKey = address.toLowerCase();
-      if (seededWallet === walletKey) {
+      const walletKey = seedKey(this.formo.writeKey, address);
+      if (seededWallets.has(walletKey)) {
         logger.debug(
           "WagmiEventHandler: Wallet already adopted this page load, not re-emitting connect",
           { address }
         );
         return;
       }
-      seededWallet = walletKey;
+      seededWallets.add(walletKey);
 
       if (this.formo.isAutocaptureEnabled("connect")) {
         const connectorName = this.getConnectorName(state);
@@ -341,7 +349,7 @@ export class WagmiEventHandler {
         this.trackingState.lastChainId = undefined;
         // A real disconnect ends the adoption, so a genuine reconnect later in
         // this same page load emits again.
-        seededWallet = undefined;
+        seededWallets.delete(seedKey(this.formo.writeKey, disconnectedAddress));
 
         // Clear central chain state regardless of autocapture so a later
         // event can't carry a stale excluded/!excluded chainId.
@@ -369,15 +377,15 @@ export class WagmiEventHandler {
           // transition, not a new connection.
           if (this.trackingState.lastAddress === address) {
             if (this.trackingState.lastChainId !== chainId) {
+              // Re-sync only. The chainId subscription observes this same
+              // state update and owns the `chain` emission; emitting here too
+              // would double count it.
               logger.info(
                 "WagmiEventHandler: Tracked wallet re-entered connected on a different chain",
                 { address, from: this.trackingState.lastChainId, to: chainId }
               );
               this.trackingState.lastChainId = chainId;
               this.formo.syncWalletState({ chainId, address });
-              if (this.formo.isAutocaptureEnabled("chain")) {
-                await this.formo.chain({ chainId, address });
-              }
             } else {
               logger.debug(
                 "WagmiEventHandler: Ignoring re-entry to connected for an already tracked wallet",
