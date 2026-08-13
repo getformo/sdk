@@ -64,6 +64,14 @@ import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
 
 /**
+ * Ceiling on the `eth_chainId` lookup used to attribute an autocaptured
+ * request to the wallet that is handling it. A stalled or disconnected
+ * provider can leave that call pending indefinitely; analytics must degrade
+ * to an unknown chain rather than strand the event.
+ */
+const CHAIN_ID_LOOKUP_TIMEOUT_MS = 2000;
+
+/**
  * Constants for provider switching reasons
  */
 const PROVIDER_SWITCH_REASONS = {
@@ -1766,10 +1774,18 @@ export class FormoAnalytics implements IFormoAnalytics {
           logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
           return request({ method, params });
         }
-        const capturedChainId = await this.resolveChainIdForProvider(provider);
+        // Deliberately NOT awaited here. This forwards `personal_sign` /
+        // `eth_signTypedData_v4` immediately; a provider that leaves
+        // `eth_chainId` pending (disconnected or stalled wallet) must never
+        // hold the wallet prompt closed. Each fire-and-forget block below
+        // awaits the same promise instead, so the lookup happens once.
+        const chainIdPromise = this.resolveChainIdForProvider(provider).catch(
+          () => 0
+        );
         // Fire-and-forget tracking
         (async () => {
           try {
+            const capturedChainId = await chainIdPromise;
             this.signature({
               status: SignatureStatus.REQUESTED,
               ...this.buildSignatureEventPayload(
@@ -1790,6 +1806,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           if (response) {
             (async () => {
               try {
+                const capturedChainId = await chainIdPromise;
                 this.signature({
                   status: SignatureStatus.CONFIRMED,
                   ...this.buildSignatureEventPayload(
@@ -1814,6 +1831,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
+                const capturedChainId = await chainIdPromise;
                 this.signature({
                   status: SignatureStatus.REJECTED,
                   ...this.buildSignatureEventPayload(
@@ -1843,11 +1861,19 @@ export class FormoAnalytics implements IFormoAnalytics {
           logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
           return request({ method, params });
         }
+        // One snapshot for the whole lifecycle of this call. Resolving per
+        // status would let a network switch made while the prompt is open
+        // split STARTED and BROADCASTED across different chains.
+        const txChainIdPromise = this.resolveChainIdForProvider(provider).catch(
+          () => 0
+        );
+
         (async () => {
           try {
             const payload = await this.buildTransactionEventPayload(
               params,
-              provider
+              provider,
+              txChainIdPromise
             );
             this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
@@ -1865,7 +1891,8 @@ export class FormoAnalytics implements IFormoAnalytics {
             try {
               const payload = await this.buildTransactionEventPayload(
                 params,
-                provider
+                provider,
+                txChainIdPromise
               );
               this.transaction({
                 status: TransactionStatus.BROADCASTED,
@@ -1889,7 +1916,8 @@ export class FormoAnalytics implements IFormoAnalytics {
               try {
                 const payload = await this.buildTransactionEventPayload(
                   params,
-                  provider
+                  provider,
+                  txChainIdPromise
                 );
                 this.transaction({
                   status: TransactionStatus.REJECTED,
@@ -2527,10 +2555,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     const cacheApplies = !!provider && provider === this._provider;
 
     if (!cacheApplies && provider) {
-      // Deliberately no fall back to `_evmChainId` here. That value describes
-      // a different wallet, so it is known-wrong for this request; 0 (unknown)
-      // is the honest answer.
-      return this.getCurrentChainId(provider);
+      // Time-boxed: a stalled or disconnected wallet can leave `eth_chainId`
+      // pending forever, and an analytics lookup must never strand the event
+      // that depends on it. 0 (unknown) is the fallback.
+      //
+      // Deliberately no fall back to `_evmChainId`. That value describes a
+      // different wallet, so it is known-wrong for this request.
+      return Promise.race([
+        this.getCurrentChainId(provider),
+        new Promise<number>((resolve) =>
+          setTimeout(() => resolve(0), CHAIN_ID_LOOKUP_TIMEOUT_MS)
+        ),
+      ]);
     }
 
     return this._evmChainId || (await this.getCurrentChainId(provider));
@@ -2604,7 +2640,13 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   private async buildTransactionEventPayload(
     params: unknown[],
-    provider?: EIP1193Provider
+    provider?: EIP1193Provider,
+    /**
+     * Chain resolved once for this request's whole lifecycle. Passing it keeps
+     * every status of one transaction on the same chain even if the user
+     * switches network while the wallet prompt is open.
+     */
+    chainIdPromise?: Promise<number>
   ) {
     const { data, from, to, value } = params[0] as {
       data: string;
@@ -2618,7 +2660,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
 
-    const chainId = await this.resolveChainIdForProvider(provider);
+    const chainId = await (chainIdPromise ??
+      this.resolveChainIdForProvider(provider));
     this.backfillActiveWallet(validAddress, chainId);
 
     return {

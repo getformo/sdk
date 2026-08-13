@@ -146,6 +146,66 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(payload.chainId).to.equal(OTHER_CHAIN);
   });
 
+  it("forwards a signature immediately even if the chain lookup hangs", async () => {
+    // A stalled or disconnected wallet can leave eth_chainId pending forever.
+    // The analytics lookup must never hold the wallet prompt closed.
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = active;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    let signatureForwarded = false;
+    const stalled: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return new Promise(() => undefined); // never settles
+        signatureForwarded = true;
+        return "0xsigned";
+      }),
+    };
+
+    (formo as any).registerRequestListeners(stalled);
+    const result = await stalled.request({
+      method: "personal_sign",
+      params: ["0x68690000", ADDRESS],
+    });
+
+    expect(signatureForwarded).to.be.true;
+    expect(result).to.equal("0xsigned");
+  });
+
+  it("reuses one chain snapshot across a transaction's statuses", async () => {
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = active;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    // A wallet that reports a different chain on each call, as it would if the
+    // user switched network while the prompt was open.
+    let call = 0;
+    const drifting: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return `0x${(++call === 1 ? 1 : 137).toString(16)}`;
+        return "0xtxhash";
+      }),
+    };
+    const seen: number[] = [];
+    sandbox.stub(formo, "transaction").callsFake((async (p: any) => {
+      seen.push(p.chainId);
+    }) as any);
+
+    (formo as any).registerRequestListeners(drifting);
+    await drifting.request({
+      method: "eth_sendTransaction",
+      params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(seen.length).to.be.greaterThan(1);
+    expect(new Set(seen).size).to.equal(1);
+  });
+
   it("queries the provider when no chain is cached yet", async () => {
     const provider = providerOnChain(OTHER_CHAIN);
 
