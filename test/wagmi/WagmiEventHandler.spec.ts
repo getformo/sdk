@@ -2423,6 +2423,47 @@ describe("WagmiEventHandler", () => {
       releaseConnect();
     });
 
+    it("should not re-emit connect when wagmi flaps through reconnecting", async () => {
+      // A successful reconnect() goes connected -> reconnecting -> connected.
+      // The final transition satisfies `prevStatus !== "connected"`, but the
+      // wallet never changed, so it must not be counted twice.
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      if (statusListener) {
+        await statusListener("reconnecting", "connected");
+        await statusListener("connected", "reconnecting");
+      }
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
+    it("should emit disconnect when a failing reconnect drops the wallet", async () => {
+      // A failing reconnect() goes connected -> reconnecting -> disconnected,
+      // so the disconnect never has `prevStatus === "connected"`.
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createMockState());
+      if (statusListener) {
+        await statusListener("reconnecting", "connected");
+        await statusListener("disconnected", "reconnecting");
+      }
+      await settle();
+
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]).to.deep.equal({
+        chainId: mockChainId,
+        address: mockAddress,
+      });
+    });
+
     it("should still emit connect for a later connection after an empty seed", async () => {
       (mockWagmiConfig as any).setState(createMockState());
 

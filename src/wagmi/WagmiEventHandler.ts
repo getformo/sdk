@@ -268,8 +268,14 @@ export class WagmiEventHandler {
         chainId,
       });
 
-      // Handle disconnect
-      if (status === "disconnected" && prevStatus === "connected") {
+      // Handle disconnect.
+      //
+      // Keyed on having a tracked wallet rather than on `prevStatus ===
+      // "connected"`, because wagmi routes a failing `reconnect()` through
+      // `connected -> reconnecting -> disconnected`. Testing prevStatus alone
+      // silently drops that disconnect and leaves the wallet marked connected
+      // forever.
+      if (status === "disconnected" && this.trackingState.lastAddress) {
         // Clear central chain state regardless of autocapture so a later
         // event can't carry a stale excluded/!excluded chainId.
         this.formo.syncWalletState({
@@ -288,6 +294,23 @@ export class WagmiEventHandler {
       // Handle connect
       if (status === "connected" && prevStatus !== "connected") {
         if (address && chainId !== undefined) {
+          // wagmi flaps `connected -> reconnecting -> connected` when a
+          // reconnect succeeds, and that final transition satisfies
+          // `prevStatus !== "connected"`. The wallet never actually changed,
+          // so re-emitting would double count it - either against the seed
+          // from construction or against the previous connect.
+          if (
+            this.trackingState.lastAddress === address &&
+            this.trackingState.lastChainId === chainId
+          ) {
+            logger.debug(
+              "WagmiEventHandler: Ignoring re-entry to connected for an already tracked wallet",
+              { address, chainId }
+            );
+            this.trackingState.lastStatus = status;
+            return;
+          }
+
           this.trackingState.lastAddress = address;
           this.trackingState.lastChainId = chainId;
 
