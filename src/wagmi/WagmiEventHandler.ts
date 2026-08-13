@@ -258,7 +258,11 @@ export class WagmiEventHandler {
       }
 
       const address = this.getConnectedAddress(state);
-      const chainId = state.chainId;
+      // The active connection's chain is authoritative. `state.chainId` is a
+      // single global value that can lag or describe a different connection,
+      // and seeding on it would both mis-tag the connect and skip seeding
+      // entirely when the global is undefined but the connection has one.
+      const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
 
       if (!address || chainId === undefined) {
         logger.debug(
@@ -367,7 +371,8 @@ export class WagmiEventHandler {
     try {
       const state = this.getState();
       const address = this.getConnectedAddress(state);
-      const chainId = state.chainId;
+      // As above: prefer the chain of the connection that is current.
+      const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
 
       logger.info("WagmiEventHandler: Status changed", {
         status,
@@ -541,9 +546,12 @@ export class WagmiEventHandler {
     // Move the page-load marker onto the wallet that is now active, so a later
     // rebuild over this same connection is recognised as already adopted.
     if (prevAddress) {
-      seededWallets.delete(seedKey(this.formo.writeKey, prevAddress));
+      seededWallets.delete(
+        seedKey(this.formo.writeKey, prevAddress, state.current)
+      );
     }
-    seededWallets.add(seedKey(this.formo.writeKey, address));
+    seededWallets.add(seedKey(this.formo.writeKey, address, state.current));
+    this.trackingState.lastConnectionId = state.current;
 
     if (this.formo.isAutocaptureEnabled("connect")) {
       try {

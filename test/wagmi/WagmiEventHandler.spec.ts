@@ -2611,6 +2611,53 @@ describe("WagmiEventHandler", () => {
       });
     });
 
+    it("should seed on the active connection's chain, not the global one", async () => {
+      // With several connections, or with syncConnectedChain disabled, the
+      // global state.chainId can describe a different connection.
+      const connections = new Map();
+      connections.set("connector-1", {
+        accounts: [mockAddress],
+        chainId: 42161,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "1" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "connector-1",
+        chainId: mockChainId, // global value lags behind
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.firstCall.args[0]).to.deep.include({
+        chainId: 42161,
+        address: mockAddress,
+      });
+    });
+
+    it("should still seed when only the connection carries a chain", async () => {
+      const connections = new Map();
+      connections.set("connector-1", {
+        accounts: [mockAddress],
+        chainId: 42161,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "1" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "connector-1",
+        chainId: undefined, // global not populated yet
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      // Previously this skipped seeding entirely and lost the whole session.
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(42161);
+    });
+
     it("should pass the connector name when seeding", async () => {
       const connections = new Map();
       connections.set("connector-1", {
