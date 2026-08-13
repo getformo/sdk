@@ -2944,6 +2944,35 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.calledTwice).to.be.true;
     });
 
+    it("should survive a throwing getState without breaking construction", async () => {
+      // The seed runs inside the constructor, so an exception here would take
+      // the whole handler down and silence every later event.
+      (mockWagmiConfig as any).getState = sandbox.stub().throws(new Error("boom"));
+
+      expect(
+        () => new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient)
+      ).to.not.throw();
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
+    });
+
+    it("should swallow a rejected connect emission", async () => {
+      // The seeded connect is fire-and-forget; a rejection must not surface as
+      // an unhandled rejection or stop the handler working afterwards.
+      mockFormo.connect.rejects(new Error("queue unavailable"));
+      (mockWagmiConfig as any).setState(createConnectedState());
+
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      // State was still adopted, so later mutations are attributed.
+      expect((handler as any).trackingState.lastAddress).to.equal(mockAddress);
+    });
+
     it("should still emit connect for a later connection after an empty seed", async () => {
       (mockWagmiConfig as any).setState(createMockState());
 

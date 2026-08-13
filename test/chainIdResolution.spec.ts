@@ -206,6 +206,80 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(new Set(seen).size).to.equal(1);
   });
 
+  it("tags a rejected signature with the same shared chain", async () => {
+    // The 4001 path reads the same shared promise as REQUESTED, so a user
+    // declining in the wallet must still be attributed to the right chain.
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = active;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const seen: any[] = [];
+    sandbox.stub(formo, "signature").callsFake((async (p: any) => { seen.push(p); }) as any);
+
+    const rejecting: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+        const err: any = new Error("User rejected");
+        err.code = 4001;
+        throw err;
+      }),
+    };
+
+    (formo as any).registerRequestListeners(rejecting);
+    try {
+      await rejecting.request({
+        method: "personal_sign",
+        params: ["0x68690000", ADDRESS],
+      });
+    } catch {
+      /* the wallet's rejection must still propagate to the caller */
+    }
+    await new Promise((r) => setTimeout(r, 20));
+
+    const rejected = seen.find((e) => e.status === "rejected");
+    expect(rejected, "a rejected signature event").to.exist;
+    expect(rejected.chainId).to.equal(OTHER_CHAIN);
+  });
+
+  it("tags a rejected transaction with the same shared chain", async () => {
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = active;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const seen: any[] = [];
+    sandbox.stub(formo, "transaction").callsFake((async (p: any) => { seen.push(p); }) as any);
+
+    const rejecting: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+        const err: any = new Error("User rejected");
+        err.code = 4001;
+        throw err;
+      }),
+    };
+
+    (formo as any).registerRequestListeners(rejecting);
+    try {
+      await rejecting.request({
+        method: "eth_sendTransaction",
+        params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      });
+    } catch {
+      /* propagates */
+    }
+    await new Promise((r) => setTimeout(r, 20));
+
+    const statuses = seen.map((e) => e.status);
+    expect(statuses).to.include("rejected");
+    // Every status of this one call shares the snapshot.
+    expect(new Set(seen.map((e) => e.chainId)).size).to.equal(1);
+    expect(seen[0].chainId).to.equal(OTHER_CHAIN);
+  });
+
   it("queries the provider when no chain is cached yet", async () => {
     const provider = providerOnChain(OTHER_CHAIN);
 
