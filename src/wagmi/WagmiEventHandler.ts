@@ -520,12 +520,30 @@ export class WagmiEventHandler {
       chainId,
     });
 
+    // Sync central state first so tracking.excludeChains is enforced even when
+    // connect autocapture is disabled.
+    this.formo.syncWalletState({ chainId, address });
+
+    // Same rule as the seed: while tracking is suppressed, syncWalletState
+    // refuses to learn a wallet, and retaining it privately would let the
+    // mutation handlers attribute events to an address the SDK declined to
+    // know. Compared case-insensitively because the checksummed form is stored.
+    if (this.formo.currentAddress?.toLowerCase() !== address.toLowerCase()) {
+      logger.debug(
+        "WagmiEventHandler: Central state declined the switched account, not adopting",
+        { address, chainId }
+      );
+      return;
+    }
+
     this.trackingState.lastAddress = address;
     this.trackingState.lastChainId = chainId;
-
-    // Sync central state unconditionally so tracking.excludeChains is
-    // enforced even when connect autocapture is disabled.
-    this.formo.syncWalletState({ chainId, address });
+    // Move the page-load marker onto the wallet that is now active, so a later
+    // rebuild over this same connection is recognised as already adopted.
+    if (prevAddress) {
+      seededWallets.delete(seedKey(this.formo.writeKey, prevAddress));
+    }
+    seededWallets.add(seedKey(this.formo.writeKey, address));
 
     if (this.formo.isAutocaptureEnabled("connect")) {
       try {
@@ -942,7 +960,10 @@ export class WagmiEventHandler {
     //
     // For sendTransaction the user's address is `from`; for writeContract
     // `variables.address` is the contract, not the user.
-    const chainId = variables.chainId ?? this.trackingState.lastChainId;
+    // Distinguish an explicitly requested chain from one merely inferred from
+    // the active connection: only the former is authoritative for the receipt.
+    const explicitChainId: number | undefined = variables.chainId;
+    const chainId = explicitChainId ?? this.trackingState.lastChainId;
     const accountAddress = resolveAccountAddress(variables.account);
     const userAddress =
       accountAddress || variables.from || this.trackingState.lastAddress;
@@ -1024,7 +1045,7 @@ export class WagmiEventHandler {
         const normalizedHash = transactionHash.toLowerCase();
         const txDetails = {
           address: userAddress,
-          ...(chainId !== undefined && { chainId }),
+          ...(explicitChainId !== undefined && { chainId: explicitChainId }),
           ...(data && { data }),
           ...(to && { to }),
           ...(value && { value }),

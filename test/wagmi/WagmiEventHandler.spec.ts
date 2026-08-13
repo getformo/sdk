@@ -2380,6 +2380,44 @@ describe("WagmiEventHandler", () => {
       expect(confirmation.chainId).to.equal(42161);
     });
 
+    it("lets the receipt query's chain win when the mutation named none", async () => {
+      // Only an explicitly requested chain is authoritative for the receipt.
+      // A chain merely inferred from the active connection must not override
+      // the chainId the receipt query actually carries.
+      await connectHandler();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 45,
+            options: { mutationKey: ["sendTransaction"] },
+            state: {
+              status: "success",
+              data: "0xNoChainHash",
+              variables: { to: "0xabc", data: "0x" }, // no chainId
+            },
+          },
+        } as any);
+      }
+
+      if (queryListener) {
+        queryListener({
+          type: "updated",
+          query: {
+            queryHash: "receipt-45",
+            queryKey: [
+              "waitForTransactionReceipt",
+              { hash: "0xNoChainHash", chainId: 42161 },
+            ],
+            state: { status: "success", data: { status: "success" } },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.transaction.lastCall.args[0].chainId).to.equal(42161);
+    });
+
     it("still falls back to the active connection when unspecified", async () => {
       await connectHandler();
 
@@ -2490,6 +2528,56 @@ describe("WagmiEventHandler", () => {
         chainId: 42161,
         address: SWITCHED,
       });
+    });
+
+    it("does not adopt a switched account that central state declines", async () => {
+      // While tracking is suppressed, syncWalletState refuses to learn the
+      // wallet. Keeping it privately would let later mutations attribute
+      // events to an address the SDK decided it must not know.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      mockFormo.connect.resetHistory();
+
+      mockFormo.syncWalletState = sandbox.stub() as any;
+      (mockFormo as any).currentAddress = mockAddress;
+      (mockWagmiConfig as any).setState(createConnectedState(SWITCHED, mockChainId));
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.connect.called).to.be.false;
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 70,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      // Still the previously adopted wallet, never the declined one.
+      expect(mockFormo.signature.lastCall.args[0].address).to.equal(mockAddress);
+    });
+
+    it("moves the page-load marker onto the switched account", async () => {
+      // Otherwise a rebuild over the same connection treats the switched-to
+      // wallet as never adopted and emits a duplicate connect for it.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createConnectedState(SWITCHED, mockChainId));
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+      expect(mockFormo.connect.calledTwice).to.be.true;
+
+      // Provider remount while SWITCHED is still connected.
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.calledTwice).to.be.true;
     });
 
     it("ignores an address change while disconnected", async () => {
