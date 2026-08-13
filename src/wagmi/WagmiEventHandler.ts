@@ -61,8 +61,15 @@ const seededWallets = new Set<string>();
  * keys are separate analytics destinations with separate queues, so the second
  * must still receive its own connect for the same wallet.
  */
-const seedKey = (writeKey: string, address: string) =>
-  `${writeKey}:${address.toLowerCase()}`;
+const seedKey = (writeKey: string, address: string, connectionId?: string) =>
+  `${writeKey}:${address.toLowerCase()}:${connectionId ?? ""}`;
+
+/**
+ * Bound the Set. Each entry is one wallet adopted this page load, so it stays
+ * tiny in practice, but an app that reconnects in a loop should not grow it
+ * without limit.
+ */
+const MAX_SEEDED_WALLETS = 50;
 
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {
@@ -265,7 +272,10 @@ export class WagmiEventHandler {
       // address - but only emit the first time this page load adopts this
       // wallet. A rebuilt SDK instance over an unchanged connection is a
       // lifecycle event, not a user action.
-      const walletKey = seedKey(this.formo.writeKey, address);
+      // Include the connection identity. A remount over the *same* connection
+      // must stay deduplicated, but a disconnect and reconnect that happened
+      // while no handler was mounted produces a new connection and must emit.
+      const walletKey = seedKey(this.formo.writeKey, address, state.current);
       if (seededWallets.has(walletKey)) {
         logger.debug(
           "WagmiEventHandler: Wallet already adopted this page load, not re-emitting connect",
@@ -274,6 +284,10 @@ export class WagmiEventHandler {
         return;
       }
       seededWallets.add(walletKey);
+      this.trackingState.lastConnectionId = state.current;
+      if (seededWallets.size > MAX_SEEDED_WALLETS) {
+        seededWallets.delete(seededWallets.values().next().value as string);
+      }
 
       if (this.formo.isAutocaptureEnabled("connect")) {
         const connectorName = this.getConnectorName(state);
@@ -345,11 +359,15 @@ export class WagmiEventHandler {
         // silently swallowed.
         const disconnectedAddress = this.trackingState.lastAddress;
         const disconnectedChainId = this.trackingState.lastChainId;
+        const disconnectedConnectionId = this.trackingState.lastConnectionId;
+        this.trackingState.lastConnectionId = undefined;
         this.trackingState.lastAddress = undefined;
         this.trackingState.lastChainId = undefined;
         // A real disconnect ends the adoption, so a genuine reconnect later in
         // this same page load emits again.
-        seededWallets.delete(seedKey(this.formo.writeKey, disconnectedAddress));
+        seededWallets.delete(
+          seedKey(this.formo.writeKey, disconnectedAddress, disconnectedConnectionId)
+        );
 
         // Clear central chain state regardless of autocapture so a later
         // event can't carry a stale excluded/!excluded chainId.
@@ -396,12 +414,27 @@ export class WagmiEventHandler {
             return;
           }
 
+          // Sync central state first so tracking.excludeChains is enforced
+          // even when connect autocapture is disabled.
+          this.formo.syncWalletState({ chainId, address });
+
+          // Same rule as the seed and the account-switch path: while tracking
+          // is suppressed, syncWalletState refuses to learn a wallet, and
+          // retaining it privately would let the mutation handlers attribute
+          // events to an address the SDK declined to know.
+          if (
+            this.formo.currentAddress?.toLowerCase() !== address.toLowerCase()
+          ) {
+            logger.debug(
+              "WagmiEventHandler: Central state declined the connection, not adopting",
+              { address, chainId }
+            );
+            this.trackingState.lastStatus = status;
+            return;
+          }
+
           this.trackingState.lastAddress = address;
           this.trackingState.lastChainId = chainId;
-
-          // Sync central state unconditionally so tracking.excludeChains
-          // is enforced even when connect autocapture is disabled.
-          this.formo.syncWalletState({ chainId, address });
 
           if (this.formo.isAutocaptureEnabled("connect")) {
             const connectorName = this.getConnectorName(state);
