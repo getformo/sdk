@@ -106,7 +106,7 @@ describe("Public method binding", () => {
     "getTrackedProvidersCount",
     "getProviderState",
     "syncWalletState",
-  ];
+  ] as const;
 
   publicMethods.forEach((name) => {
     it(`binds ${name} to the instance`, () => {
@@ -114,6 +114,10 @@ describe("Public method binding", () => {
         Object.prototype.hasOwnProperty.call(formo, name),
         `${name} must be bound in the constructor`
       ).to.equal(true);
+      expect(
+        formo[name],
+        `${name} must differ from the unbound prototype method`
+      ).to.not.equal(FormoAnalytics.prototype[name]);
     });
   });
 
