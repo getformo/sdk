@@ -3111,6 +3111,46 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.callCount).to.equal(60);
     });
 
+    it("should not re-seed a wallet that connected while the handler was alive", async () => {
+      // Previously only seed-adopted wallets were deduplicated, so a wallet
+      // that connected normally was re-emitted by the seed of a rebuilt
+      // handler over the very same connection.
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      if (statusListener) await statusListener("connected", "disconnected");
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // Provider remount over the unchanged connection.
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
+    it("should treat a case-only address difference as the same wallet", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // Same account, different casing, as a wallet can report across a
+      // reconnect flap.
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress.toUpperCase().replace("0X", "0x"), mockChainId)
+      );
+      if (statusListener) {
+        await statusListener("reconnecting", "connected");
+        await statusListener("connected", "reconnecting");
+      }
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
     it("should still emit connect for a later connection after an empty seed", async () => {
       (mockWagmiConfig as any).setState(createMockState());
 
