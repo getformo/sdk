@@ -205,7 +205,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.transaction = this.transaction.bind(this);
     this.detect = this.detect.bind(this);
     this.track = this.track.bind(this);
+    this.page = this.page.bind(this);
+    this.reset = this.reset.bind(this);
+    this.cleanup = this.cleanup.bind(this);
+    this.optOutTracking = this.optOutTracking.bind(this);
+    this.optInTracking = this.optInTracking.bind(this);
+    this.hasOptedOutTracking = this.hasOptedOutTracking.bind(this);
     this.isAutocaptureEnabled = this.isAutocaptureEnabled.bind(this);
+    this.syncPrivyActiveChain = this.syncPrivyActiveChain.bind(this);
+    this.isTrackingSuppressed = this.isTrackingSuppressed.bind(this);
+    this.getTrackedProvidersCount = this.getTrackedProvidersCount.bind(this);
+    this.getProviderState = this.getProviderState.bind(this);
+    this.syncWalletState = this.syncWalletState.bind(this);
 
     // Initialize logger with configuration from options
     Logger.init({
