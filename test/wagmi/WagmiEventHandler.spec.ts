@@ -2557,8 +2557,28 @@ describe("WagmiEventHandler", () => {
           },
         } as any);
       }
-      // Still the previously adopted wallet, never the declined one.
-      expect(mockFormo.signature.lastCall.args[0].address).to.equal(mockAddress);
+      // Nothing is emitted at all. The declined account must not be recorded,
+      // and the account the user switched AWAY from must not be either -
+      // attributing this activity to it would be worse than recording nothing.
+      expect(mockFormo.signature.called).to.be.false;
+    });
+
+    it("clears the previous wallet when a switch is declined", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect((handler as any).trackingState.lastAddress).to.equal(mockAddress);
+
+      mockFormo.syncWalletState = sandbox.stub() as any;
+      (mockFormo as any).currentAddress = mockAddress;
+      (mockWagmiConfig as any).setState(createConnectedState(SWITCHED, mockChainId));
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect((handler as any).trackingState.lastAddress).to.be.undefined;
+      expect((handler as any).trackingState.lastChainId).to.be.undefined;
     });
 
     it("moves the page-load marker onto the switched account", async () => {

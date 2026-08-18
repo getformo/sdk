@@ -523,7 +523,12 @@ export class WagmiEventHandler {
   ): Promise<void> {
     if (!address || address === prevAddress) return;
     // Already handled by the status listener (fresh connect, or the seed).
-    if (this.trackingState.lastAddress === address) return;
+    // Case-insensitive, like every other address comparison here.
+    if (
+      this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
+    ) {
+      return;
+    }
 
     const state = this.getState();
     if (state.status !== "connected") return;
@@ -553,6 +558,18 @@ export class WagmiEventHandler {
         "WagmiEventHandler: Central state declined the switched account, not adopting",
         { address, chainId }
       );
+      // Drop the previous wallet too. The user has moved off it, so leaving it
+      // in tracking state would attribute this account's later signatures and
+      // transactions to the account they switched away from - worse than
+      // recording nothing.
+      this.trackingState.lastAddress = undefined;
+      this.trackingState.lastChainId = undefined;
+      if (prevAddress) {
+        seededWallets.delete(
+          seedKey(this.formo.writeKey, prevAddress, this.trackingState.lastConnectionId)
+        );
+      }
+      this.trackingState.lastConnectionId = undefined;
       return;
     }
 
