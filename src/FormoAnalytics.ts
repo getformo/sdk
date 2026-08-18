@@ -2566,21 +2566,38 @@ export class FormoAnalytics implements IFormoAnalytics {
     const cacheApplies = !!provider && provider === this._provider;
 
     if (!cacheApplies && provider) {
-      // Time-boxed: a stalled or disconnected wallet can leave `eth_chainId`
-      // pending forever, and an analytics lookup must never strand the event
-      // that depends on it. 0 (unknown) is the fallback.
-      //
       // Deliberately no fall back to `_evmChainId`. That value describes a
       // different wallet, so it is known-wrong for this request.
-      return Promise.race([
-        this.getCurrentChainId(provider),
-        new Promise<number>((resolve) =>
-          setTimeout(() => resolve(0), CHAIN_ID_LOOKUP_TIMEOUT_MS)
-        ),
-      ]);
+      return this.timeBoxedChainId(provider);
     }
 
-    return this._evmChainId || (await this.getCurrentChainId(provider));
+    if (this._evmChainId) return this._evmChainId;
+
+    // Empty cache: the active provider can stall too, so this path needs the
+    // same ceiling rather than awaiting `eth_chainId` indefinitely.
+    return this.timeBoxedChainId(provider);
+  }
+
+  /**
+   * `getCurrentChainId` with a ceiling. A stalled or disconnected wallet can
+   * leave `eth_chainId` pending forever, and an analytics lookup must never
+   * strand the event that depends on it; 0 (unknown) is the fallback.
+   *
+   * The timer is cleared once the lookup settles, so a resolved call does not
+   * leave a pending timeout behind for every request.
+   */
+  private async timeBoxedChainId(provider?: EIP1193Provider): Promise<number> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.getCurrentChainId(provider),
+        new Promise<number>((resolve) => {
+          timer = setTimeout(() => resolve(0), CHAIN_ID_LOOKUP_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {

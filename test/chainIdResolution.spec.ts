@@ -280,6 +280,38 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(seen[0].chainId).to.equal(OTHER_CHAIN);
   });
 
+  it("time-boxes the active provider too when nothing is cached", async () => {
+    // The empty-cache path goes to the active provider, which can stall just
+    // as easily; without a ceiling the dependent event is stranded forever.
+    const stalled: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(() => new Promise(() => undefined)),
+    };
+    (formo as any)._provider = stalled;
+    (formo as any).clearChainState("evm");
+
+    const clock = sandbox.useFakeTimers({ shouldAdvanceTime: true });
+    const pending = (formo as any).resolveChainIdForProvider(stalled);
+    await clock.tickAsync(2100);
+    clock.restore();
+
+    expect(await pending).to.equal(0);
+  });
+
+  it("clears the timeout once the lookup settles", async () => {
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = active;
+    (formo as any).clearChainState("evm");
+    const clearSpy = sandbox.spy(global, "clearTimeout");
+
+    const resolved = await (formo as any).resolveChainIdForProvider(active);
+
+    expect(resolved).to.equal(ACTIVE_CHAIN);
+    // Otherwise every autocaptured request leaves a live 2s timer behind.
+    expect(clearSpy.called).to.be.true;
+  });
+
   it("queries the provider when no chain is cached yet", async () => {
     const provider = providerOnChain(OTHER_CHAIN);
 
