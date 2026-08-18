@@ -1,0 +1,155 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - button "Support" [ref=e6] [cursor=pointer]
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - link [ref=e13] [cursor=pointer]:
+          - /url: /
+          - img "logo" [ref=e15]
+        - navigation "Primary" [ref=e16]:
+          - generic [ref=e17]: Trade
+          - link "Earn" [ref=e58] [cursor=pointer]:
+            - /url: /earn
+          - link "Market" [ref=e61] [cursor=pointer]:
+            - /url: /market-overview
+          - generic [ref=e62]: Campaigns
+          - generic [ref=e67]: KyberDAO
+          - link "Analytics" [ref=e73] [cursor=pointer]:
+            - /url: https://lookerstudio.google.com/reporting/a2a0c9ff-6388-4d3a-bbf0-0fcfce9d5def
+          - generic [ref=e74]: About
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - button "Ethereum logo Ethereum" [ref=e81] [cursor=pointer]:
+            - generic [ref=e83]:
+              - img "Ethereum logo" [ref=e84]
+              - generic [ref=e85]: Ethereum
+          - button "Connect" [ref=e89] [cursor=pointer]
+        - generic [ref=e91]:
+          - button [ref=e95] [cursor=pointer]
+          - button "Menu" [ref=e102] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e107]:
+      - generic [ref=e108]:
+        - generic [ref=e109]:
+          - generic [ref=e110]:
+            - generic [ref=e112]:
+              - button "Swap" [ref=e113] [cursor=pointer]
+              - button "Limit Order" [ref=e116] [cursor=pointer]
+              - button "Cross-Chain" [ref=e118] [cursor=pointer]
+            - generic [ref=e119]:
+              - button [ref=e120] [cursor=pointer]
+              - button "Swap Settings" [ref=e125] [cursor=pointer]
+          - generic [ref=e131]:
+            - heading "Swap any token at the best rate across chains." [level=1] [ref=e132]
+            - heading "An advanced aggregator splits your trade across hundreds of DEXs and liquidity sources for minimal slippage." [level=2] [ref=e133]
+            - generic [ref=e134]: Instantly buy or sell tokens at superior prices
+        - generic [ref=e136]:
+          - generic [ref=e138]:
+            - generic [ref=e139]:
+              - generic [ref=e142]:
+                - generic [ref=e143]: "0"
+                - generic [ref=e148]:
+                  - textbox "1" [ref=e149]:
+                    - /placeholder: "0.0"
+                  - generic [ref=e150]: ~$1,884
+                  - button "ETH Logo ETH" [ref=e151] [cursor=pointer]:
+                    - generic [ref=e152]:
+                      - generic [ref=e153]:
+                        - img "ETH Logo" [ref=e154]
+                        - generic [ref=e155]: ETH
+                      - button [ref=e156]
+              - generic [ref=e162] [cursor=pointer]
+              - generic [ref=e168]:
+                - generic [ref=e169]:
+                  - generic [ref=e170]: Est. Output
+                  - generic [ref=e174]: "0"
+                - generic [ref=e178]:
+                  - textbox "1883.304709" [disabled] [ref=e179]:
+                    - /placeholder: "0.0"
+                  - generic [ref=e180]: ~$1,883
+                  - button "USDT logo USDT" [ref=e181] [cursor=pointer]:
+                    - generic [ref=e182]:
+                      - generic [ref=e183]:
+                        - img "USDT logo" [ref=e184]
+                        - generic [ref=e185]: USDT
+                      - button [ref=e186]
+            - generic [ref=e193]:
+              - generic [ref=e195]:
+                - generic [ref=e196]: "Max Slippage:"
+                - generic [ref=e200] [cursor=pointer]
+                - button "0.5%" [ref=e203] [cursor=pointer]
+              - generic [ref=e210]:
+                - button "0.05%" [ref=e211] [cursor=pointer]
+                - button "0.1%" [ref=e212] [cursor=pointer]
+                - button "0.5%" [ref=e213] [cursor=pointer]
+                - button "1%" [ref=e214] [cursor=pointer]
+                - generic [ref=e216]:
+                  - textbox "Custom" [ref=e217]
+                  - generic [ref=e218]: "%"
+          - button "Connect" [ref=e220] [cursor=pointer]
+      - generic [ref=e221]:
+        - generic [ref=e222]:
+          - generic [ref=e223]:
+            - tablist [ref=e224]:
+              - button "ETH Logo ETH/USDT" [ref=e225] [cursor=pointer]:
+                - img "ETH Logo" [ref=e226]
+                - generic [ref=e227]: ETH/USDT
+            - generic [ref=e228]: Powered by KyberSwap Settlement Prices
+          - generic [ref=e232]:
+            - generic [ref=e233]:
+              - generic [ref=e235]:
+                - generic [ref=e236]: $1,882.98
+                - generic [ref=e237]:
+                  - generic [ref=e238]: "-1.519%"
+                  - generic [ref=e239]: ▼
+                - generic [ref=e240]: (24h)
+              - tablist [ref=e242]:
+                - tab "15m" [ref=e243] [cursor=pointer]
+                - tab "1h" [ref=e244] [cursor=pointer]
+                - tab "4h" [ref=e245] [cursor=pointer]
+                - tab "24h" [selected] [ref=e246] [cursor=pointer]
+                - tab "1W" [ref=e247] [cursor=pointer]
+            - table [ref=e253]:
+              - row [ref=e254]:
+                - cell
+                - cell [ref=e255]
+                - cell [ref=e259]
+              - row [ref=e263]:
+                - cell
+                - cell [ref=e264]
+                - cell [ref=e268]
+        - 'button "Route: ETH Logo ETH → USDT logo USDT" [ref=e272] [cursor=pointer]':
+          - generic [ref=e279]:
+            - generic [ref=e280]: "Route:"
+            - generic [ref=e281]:
+              - img "ETH Logo" [ref=e282]
+              - generic [ref=e283]: ETH
+            - generic [ref=e284]: →
+            - generic [ref=e285]:
+              - img "USDT logo" [ref=e286]
+              - generic [ref=e287]: USDT
+  - contentinfo [ref=e291]:
+    - generic [ref=e292]:
+      - generic [ref=e293]:
+        - generic [ref=e294]:
+          - generic [ref=e295]: Powered By
+          - link [ref=e296] [cursor=pointer]:
+            - /url: https://kyber.network
+        - generic [ref=e318]:
+          - generic [ref=e319]: Audited By
+          - generic [ref=e326]: "&"
+          - link "Omniscia" [ref=e327] [cursor=pointer]:
+            - /url: https://omniscia.io/reports/kyber-network-uniswap-v4-hooks-68163cf266222800187026b8/
+          - generic [ref=e329]: "&"
+          - link "Spearbit" [ref=e330] [cursor=pointer]:
+            - /url: https://github.com/spearbit/portfolio/blob/master/pdfs/Kyber-Hook-Uniswap-Foundation-Spearbit-Security-Review-October-2025.pdf
+          - generic [ref=e332]: "&"
+          - link "Hexens" [ref=e333] [cursor=pointer]:
+            - /url: https://github.com/Hexens/Smart-Contract-Review-Public-Reports/blob/main/kyberswap-dec-25(Final).pdf
+      - generic [ref=e335]:
+        - link [ref=e336] [cursor=pointer]:
+          - /url: https://t.me/kybernetwork
+        - link [ref=e340] [cursor=pointer]:
+          - /url: https://x.com/KyberNetwork
+        - link [ref=e350] [cursor=pointer]:
+          - /url: https://discord.gg/kyberswap

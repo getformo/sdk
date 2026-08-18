@@ -431,7 +431,13 @@ export class WagmiEventHandler {
           // Identity is the ADDRESS alone. A reconnect that lands on a
           // different chain is still the same session, so it is a chain
           // transition, not a new connection.
-          if (this.trackingState.lastAddress === address) {
+          // Case-insensitive: a wallet can report the same account with
+          // different casing across a reconnect, and a case-only difference is
+          // not a new wallet.
+          if (
+            this.trackingState.lastAddress?.toLowerCase() ===
+            address.toLowerCase()
+          ) {
             if (this.trackingState.lastChainId !== chainId) {
               // Re-sync only. The chainId subscription observes this same
               // state update and owns the `chain` emission; emitting here too
@@ -473,6 +479,15 @@ export class WagmiEventHandler {
 
           this.trackingState.lastAddress = address;
           this.trackingState.lastChainId = chainId;
+          this.trackingState.lastConnectionId = state.current;
+          // Record it in the page-load marker as well. Without this only
+          // seed-adopted wallets were deduplicated, so a wallet that connected
+          // while this handler was alive would be re-emitted by the seed of a
+          // rebuilt handler over the very same connection.
+          seededWallets.add(seedKey(this.formo.writeKey, address, state.current));
+          if (seededWallets.size > MAX_SEEDED_WALLETS) {
+            seededWallets.delete(seededWallets.values().next().value as string);
+          }
 
           if (this.formo.isAutocaptureEnabled("connect")) {
             const connectorName = this.getConnectorName(state);
@@ -508,7 +523,12 @@ export class WagmiEventHandler {
   ): Promise<void> {
     if (!address || address === prevAddress) return;
     // Already handled by the status listener (fresh connect, or the seed).
-    if (this.trackingState.lastAddress === address) return;
+    // Case-insensitive, like every other address comparison here.
+    if (
+      this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
+    ) {
+      return;
+    }
 
     const state = this.getState();
     if (state.status !== "connected") return;
@@ -538,6 +558,18 @@ export class WagmiEventHandler {
         "WagmiEventHandler: Central state declined the switched account, not adopting",
         { address, chainId }
       );
+      // Drop the previous wallet too. The user has moved off it, so leaving it
+      // in tracking state would attribute this account's later signatures and
+      // transactions to the account they switched away from - worse than
+      // recording nothing.
+      this.trackingState.lastAddress = undefined;
+      this.trackingState.lastChainId = undefined;
+      if (prevAddress) {
+        seededWallets.delete(
+          seedKey(this.formo.writeKey, prevAddress, this.trackingState.lastConnectionId)
+        );
+      }
+      this.trackingState.lastConnectionId = undefined;
       return;
     }
 
