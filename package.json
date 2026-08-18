@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.35.0",
+  "version": "1.35.1",
   "packageManager": "pnpm@11.1.1",
   "repository": {
     "type": "git",
@@ -98,7 +98,7 @@
   "size-limit": [
     {
       "path": "dist/index.umd.min.js",
-      "limit": "39 KB"
+      "limit": "52 KB"
     }
   ],
   "peerDependencies": {
