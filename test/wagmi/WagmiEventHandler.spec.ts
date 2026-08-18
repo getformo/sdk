@@ -3171,6 +3171,32 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.calledOnce).to.be.true;
     });
 
+    it("should bound the marker set for ordinary connects too", async () => {
+      // The status-connect path writes the same marker as the seed, so it
+      // needs the same cap or a reconnect loop grows it for the page lifetime.
+      for (let i = 0; i < 60; i++) {
+        const address = `0x${String(i).padStart(40, "0")}`;
+        const connections = new Map();
+        connections.set(`k${i}`, {
+          accounts: [address],
+          chainId: mockChainId,
+          connector: { id: "m", name: "MetaMask", type: "injected", uid: `k${i}` },
+        });
+        (mockWagmiConfig as any).setState(createMockState());
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+        (mockWagmiConfig as any).setState({
+          status: "connected",
+          connections,
+          current: `k${i}`,
+          chainId: mockChainId,
+        });
+        if (statusListener) await statusListener("connected", "disconnected");
+      }
+      await settle();
+
+      expect(mockFormo.connect.callCount).to.equal(60);
+    });
+
     it("should still emit connect for a later connection after an empty seed", async () => {
       (mockWagmiConfig as any).setState(createMockState());
 
