@@ -36,6 +36,14 @@ describe("Adoption after opting back into tracking", () => {
     ] as const) {
       Object.defineProperty(global, k, { value: v, writable: true, configurable: true });
     }
+    // Node has its own Event/CustomEvent in a different realm, and jsdom
+    // rejects those. mipd's EIP-6963 discovery dispatches one, so the
+    // constructors have to come from the jsdom window.
+    for (const ctor of ["Event", "CustomEvent"] as const) {
+      Object.defineProperty(global, ctor, {
+        value: (jsdom.window as any)[ctor], writable: true, configurable: true,
+      });
+    }
     // mipd's EIP-6963 store subscribes on globalThis, which under mocha is
     // Node's global rather than jsdom's window.
     for (const fn of ["addEventListener", "removeEventListener", "dispatchEvent"] as const) {
@@ -55,7 +63,7 @@ describe("Adoption after opting back into tracking", () => {
 
   afterEach(() => {
     sandbox.restore();
-    for (const k of ["window", "document", "location", "navigator", "globalThis", "localStorage", "sessionStorage", "crypto", "addEventListener", "removeEventListener", "dispatchEvent"]) {
+    for (const k of ["window", "document", "location", "navigator", "globalThis", "localStorage", "sessionStorage", "crypto", "Event", "CustomEvent", "addEventListener", "removeEventListener", "dispatchEvent"]) {
       delete (global as any)[k];
     }
     jsdom?.window.close();
@@ -86,6 +94,20 @@ describe("Adoption after opting back into tracking", () => {
 
     expect(retry.calledOnce, "adoption retried on opt-in").to.be.true;
     formo.cleanup?.();
+  });
+
+  it("reports whether an event would currently be sent", async () => {
+    // The predicate integrations use to avoid marking a wallet as reported
+    // when the tracking gate is going to drop its event.
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    expect(formo.willTrackEvent(), "tracking on").to.be.true;
+    formo.optOutTracking();
+    expect(formo.willTrackEvent(), "opted out").to.be.false;
+    formo.cleanup?.();
+
+    const off = await FormoAnalytics.init("test-write-key", { tracking: false });
+    expect(off.willTrackEvent(), "tracking disabled").to.be.false;
+    off.cleanup?.();
   });
 
   it("asks the wagmi handler to adopt when a SPA navigates", async () => {
