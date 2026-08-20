@@ -366,6 +366,19 @@ export class WagmiEventHandler {
         return;
       }
 
+      // Nothing that will not actually be sent may be marked. `syncWalletState`
+      // accepts a wallet that `trackEvent()` then silently drops - `tracking:
+      // false`, or a chain in `excludeChains` - and marking it would make the
+      // rebuild that turns tracking back on find the marker and stay quiet
+      // about the wallet for the rest of the page load.
+      if (!this.formo.willTrackEvent()) {
+        logger.debug(
+          "WagmiEventHandler: Connect would not be tracked, adopted without emitting",
+          { address, chainId }
+        );
+        return;
+      }
+
       const walletKey = announceKey(this.formo.writeKey, address);
       if (announcedConnections.has(walletKey)) {
         logger.debug(
@@ -378,23 +391,23 @@ export class WagmiEventHandler {
 
       {
         const connectorName = this.getConnectorName(state);
-        // Fire and forget: awaiting here would either stall the constructor
-        // or require holding the lock. Tracking state is already correct, so
-        // a status change arriving mid-flight is handled normally.
-        void Promise.resolve()
-          .then(() => {
-            // The handler can be torn down between scheduling this and running
-            // it - a remount, or an options change that rebuilds the SDK.
-            // Emitting then would enqueue against a disposed instance.
-            if (this.disposed) return;
-            return this.formo.connect(
-              { chainId, address },
-              {
-                ...(connectorName && { providerName: connectorName }),
-              }
-            );
-          })
-          .catch((error) => {
+        // Invoked synchronously, only the completion is fire-and-forget.
+        //
+        // Deferring the call itself to a microtask and guarding it on
+        // `disposed` loses the event outright: a rebuild that tears this
+        // handler down before the microtask runs leaves the marker standing,
+        // so the replacement handler suppresses its own connect while this one
+        // declines to emit. Nobody reports the wallet. Calling now means the
+        // marker and the emission are decided together, and a rebuild can only
+        // arrive after the event is already handed to FormoAnalytics.
+        void Promise.resolve(
+          this.formo.connect(
+            { chainId, address },
+            {
+              ...(connectorName && { providerName: connectorName }),
+            }
+          )
+        ).catch((error) => {
           logger.error(
             "WagmiEventHandler: Error emitting seeded connect event:",
             error
@@ -593,7 +606,10 @@ export class WagmiEventHandler {
           this.trackingState.lastChainId = chainId;
           this.trackingState.lastConnectionId = state.current;
 
-          if (this.formo.isAutocaptureEnabled("connect")) {
+          if (
+            this.formo.isAutocaptureEnabled("connect") &&
+            this.formo.willTrackEvent()
+          ) {
             // Record it in the page-load marker as well. Without this only
             // seed-adopted wallets were deduplicated, so a wallet that
             // connected while this handler was alive would be re-emitted by

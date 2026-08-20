@@ -2068,6 +2068,19 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @internal Also read by `identifyPrivyUser` (via a structural cast) so the
    * Privy sync skips chain reconciliation and emission for suppressed visitors.
    */
+  /**
+   * Whether an event carrying this chain would currently be sent.
+   *
+   * Exposed for integrations that keep their own "already reported" state.
+   * `syncWalletState()` can accept a wallet that `trackEvent()` then drops -
+   * `tracking: false`, or a chain in `excludeChains` - and an integration that
+   * marked it as reported would stay silent about that wallet even after the
+   * configuration changed to allow it.
+   */
+  public willTrackEvent(): boolean {
+    return this.shouldTrack();
+  }
+
   isTrackingSuppressed(): boolean {
     return this.hasOptedOutTracking() || this.isCurrentEnvironmentExcluded();
   }
