@@ -511,6 +511,28 @@ export class WagmiEventHandler {
   }
 
   /**
+   * Re-assert the tracked wallet into central state.
+   *
+   * Needed when an awaited emission clears the central namespace after a newer
+   * transition has already adopted a different wallet: the two then disagree,
+   * and `trackEvent()` reads the central one.
+   */
+  private restoreCentralStateFromTracking(): void {
+    const { lastAddress, lastChainId } = this.trackingState;
+    if (!lastAddress || lastChainId === undefined) return;
+    if (
+      this.formo.currentAddress?.toLowerCase() === lastAddress.toLowerCase()
+    ) {
+      return;
+    }
+    logger.info(
+      "WagmiEventHandler: Restoring central state a stale disconnect cleared",
+      { address: lastAddress, chainId: lastChainId }
+    );
+    this.formo.syncWalletState({ chainId: lastChainId, address: lastAddress });
+  }
+
+  /**
    * Drop the wallet this handler is attributing events to.
    *
    * Used whenever central state refuses to hold the wallet - an excluded path
@@ -824,16 +846,18 @@ export class WagmiEventHandler {
 
     if (!address) return;
 
+    // Take the ticket BEFORE anything that can return early. A newer
+    // transition has to invalidate the older one even when it cannot finish
+    // itself - a connection whose chain has not arrived yet returns below, and
+    // if that happened after the increment the older continuation would resume
+    // and adopt a connection wagmi had already left.
+    const generation = ++this.transitionGeneration;
+
     // Prefer the chain of the connection that is now current. `state.chainId`
     // is global and can still describe the previous connection - with several
     // connections, or with syncConnectedChain disabled, they diverge.
     const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
     if (chainId === undefined) return;
-
-    // Every transition takes a ticket. Emitting is awaited, and wagmi can move
-    // again while that is in flight; without this the older continuation would
-    // resume with its stale captured state and overwrite the newer one.
-    const generation = ++this.transitionGeneration;
 
     if (trackedConnectionGone) {
       const stillConnected =
@@ -887,6 +911,12 @@ export class WagmiEventHandler {
             "WagmiEventHandler: A newer transition superseded this one, stopping",
             { address }
           );
+          // `disconnect()` clears the central wallet namespace as it
+          // completes, and it has just done so on top of whatever the newer
+          // transition adopted. Private tracking still names the new wallet
+          // while central state is empty, which silently drops the address and
+          // chain from every later event. Put back what is actually live.
+          this.restoreCentralStateFromTracking();
           return;
         }
       }
@@ -990,6 +1020,28 @@ export class WagmiEventHandler {
     const address = this.getConnectedAddress(state);
     if (!address) {
       logger.warn("WagmiEventHandler: Chain changed but no address found");
+      return;
+    }
+
+    // Ignore a chain that belongs to a connection this handler has not adopted
+    // yet.
+    //
+    // Both subscriptions fire for one wagmi update and this one can run first.
+    // During a connector fallback that would overwrite `lastChainId` with the
+    // INCOMING connection's chain, so the outgoing wallet's disconnect - which
+    // the connection handler is about to emit - would be labelled with the
+    // chain of the wallet that replaced it, and a spurious `chain` event would
+    // be emitted for a wallet not yet adopted. The connection handler owns
+    // that transition and records the chain itself.
+    if (
+      this.trackingState.lastConnectionId !== undefined &&
+      state.current !== undefined &&
+      state.current !== this.trackingState.lastConnectionId
+    ) {
+      logger.debug(
+        "WagmiEventHandler: Chain change belongs to a connection not adopted yet, deferring",
+        { chainId, from: this.trackingState.lastConnectionId, to: state.current }
+      );
       return;
     }
 

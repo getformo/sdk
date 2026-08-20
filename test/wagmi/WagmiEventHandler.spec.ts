@@ -2569,8 +2569,17 @@ describe("WagmiEventHandler", () => {
       await settle();
 
       let releaseDisconnect: (() => void) | undefined;
-      (mockFormo as any).disconnect = sandbox.stub().returns(
-        new Promise<void>((resolve) => { releaseDisconnect = () => resolve(); })
+      // The real disconnect() clears the central wallet namespace once it has
+      // emitted. Modelling that is what makes this test able to catch a stale
+      // disconnect wiping a newer transition's wallet.
+      (mockFormo as any).disconnect = sandbox.stub().callsFake(
+        () => new Promise<void>((resolve) => {
+          releaseDisconnect = () => {
+            (mockFormo as any).currentAddress = undefined;
+            (mockFormo as any).currentChainId = undefined;
+            resolve();
+          };
+        })
       );
 
       // A falls away, wagmi falls back to B.
@@ -2611,6 +2620,95 @@ describe("WagmiEventHandler", () => {
         } as any);
       }
       expect(mockFormo.signature.lastCall.args[0].address).to.equal(C);
+      // Central state must agree with tracking, or trackEvent drops the
+      // address and chain from every later event.
+      expect((mockFormo as any).currentAddress, "central state kept C").to.equal(C);
+    });
+
+    it("does not label a fallback disconnect with the incoming wallet's chain", async () => {
+      // Both subscriptions fire for one wagmi update and the chain one can run
+      // first. Letting it record the INCOMING connection's chain meant the
+      // outgoing wallet's disconnect carried the chain of the wallet that
+      // replaced it.
+      const OLD_CHAIN = mockChainId;
+      const NEW_CHAIN = 137;
+      const conns = new Map();
+      conns.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: OLD_CHAIN,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      conns.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: NEW_CHAIN,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: conns,
+        current: "uid-a",
+        chainId: OLD_CHAIN,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      const withoutA = new Map(conns);
+      withoutA.delete("uid-a");
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: withoutA,
+        current: "uid-b",
+        chainId: NEW_CHAIN,
+      });
+      // Chain subscription first, as wagmi can deliver it.
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, OLD_CHAIN);
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.disconnect.calledOnce, "A reported as disconnected").to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]).to.deep.include({
+        address: mockAddress,
+        chainId: OLD_CHAIN,
+      });
+    });
+
+    it("does not emit a chain event for a connection it has not adopted", async () => {
+      const NEW_CHAIN = 137;
+      const conns = new Map();
+      conns.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      conns.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: NEW_CHAIN,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: conns,
+        current: "uid-a",
+        chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      // Wagmi makes B current; the chain callback arrives first.
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: conns,
+        current: "uid-b",
+        chainId: NEW_CHAIN,
+      });
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, mockChainId);
+      await settle();
+
+      expect(
+        mockFormo.chain.called,
+        "no chain event for a wallet not adopted yet"
+      ).to.be.false;
     });
 
 
@@ -3934,17 +4032,33 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.signature.called, "no attribution to a declined wallet").to.be.false;
     });
 
-    it("should not reconcile when reading wagmi state throws", async () => {
+    it("should survive a throwing store while reconciling", async () => {
+      // Reconciliation runs in handleStatusChange's finally block, so a throw
+      // there escapes the handler entirely. `expect(true).to.be.true` asserted
+      // nothing; this drives the handler directly and asserts the promise
+      // fulfils and that reconciliation was actually attempted.
       (mockWagmiConfig as any).setState(createConnectedState());
-      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
       await settle();
 
-      (mockWagmiConfig.getState as sinon.SinonStub).throws(new Error("store gone"));
-      // Must not propagate out of the status listener's finally block.
-      if (statusListener) await statusListener("disconnected", "connected");
-      await settle();
+      const getState = mockWagmiConfig.getState as sinon.SinonStub;
+      const callsBefore = getState.callCount;
+      // The handler's own read succeeds; the reconciliation read throws.
+      getState.onCall(callsBefore).returns(createMockState());
+      getState.throws(new Error("store gone"));
 
-      expect(true).to.be.true;
+      let rejected = false;
+      await (handler as any)
+        .handleStatusChange("disconnected", "connected")
+        .catch(() => { rejected = true; });
+
+      expect(rejected, "the throw must not escape the handler").to.be.false;
+      expect(
+        getState.callCount,
+        "reconciliation attempted a second read"
+      ).to.be.greaterThan(callsBefore + 1);
     });
 
     it("should still emit connect for a later connection after an empty seed", async () => {
