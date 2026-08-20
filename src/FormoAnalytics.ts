@@ -1935,6 +1935,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async onLocationChange(): Promise<void> {
     if (this._currentUrl !== window.location.href) {
       this._currentUrl = window.location.href;
+      // Host/path exclusions are evaluated per navigation, so a SPA can leave
+      // an excluded route and become trackable without any wallet event
+      // firing. The wagmi handler only observes *changes*, so an unchanged
+      // connection it was forced to decline earlier would stay invisible for
+      // the rest of the page load. Give it a chance to adopt it now.
+      this.wagmiHandler?.retryAdoption();
       this.trackPageHit();
     }
   }
