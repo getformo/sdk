@@ -1204,7 +1204,16 @@ export class FormoAnalytics implements IFormoAnalytics {
       // signatures were emitted under the old, allowed chain. Whether an
       // event is emitted is decided inside each handler.
       this.registerChainChangedListener(provider);
-      this.registerConnectListener(provider);
+      if (this.isAutocaptureEnabled("connect")) {
+        this.registerConnectListener(provider);
+      } else {
+        // Observation only. The full connect handler calls `getAddress()`,
+        // which issues `eth_accounts`, and nothing analytics-only may go on
+        // the wallet's transport - a stalled request there sits in front of
+        // the next signature the dapp makes. The chain rides along on the
+        // event itself, so it costs nothing to record.
+        this.registerConnectChainObserver(provider);
+      }
 
       // Seed the chain from the provider's own synchronous state if it exposes
       // one. Deliberately a property read and never an RPC: see
@@ -1489,6 +1498,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Get chain ID and update state
     const nextChainId = await this.getCurrentChainId(provider);
+    // Keep the per-provider snapshot in step. Without this, a provider with no
+    // synchronous `chainId` property is known only while it is active: once
+    // another wallet becomes active, a signature back through this one would
+    // report chain 0 - and, with exclusions configured, be dropped.
+    this.rememberProviderChain(provider, nextChainId);
     const wasDisconnected = !this._evmAddress;
 
     // Update state regardless of whether connect *event* tracking is enabled,
@@ -1572,6 +1586,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     // its chain without putting an RPC on that wallet's transport.
     this.rememberProviderChain(provider, nextChainId);
 
+    // Beyond that, a chain event from a NON-active provider is observation
+    // only when chain autocapture is off.
+    //
+    // This listener is now registered unconditionally, so that a signature can
+    // be labelled with its signer's chain. `handleProviderMismatch()` treats a
+    // chain event from another wallet as a wallet switch and clears the active
+    // wallet's address and chain. That is the established behaviour of the
+    // chain feature and stays exactly as it was, but it must not start firing
+    // for apps that never asked for chain tracking: a second wallet switching
+    // network would silently erase the active wallet's attribution.
+    if (
+      this.isProviderMismatch(provider) &&
+      !this.isAutocaptureEnabled("chain")
+    ) {
+      return;
+    }
+
     // Only handle chain changes for the active provider (or if none is set yet)
     if (this.isProviderMismatch(provider)) {
       this.handleProviderMismatch(provider);
@@ -1608,6 +1639,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     } catch (error) {
       logger.error("OnChainChanged: Failed to emit chain event:", error);
     }
+  }
+
+  /**
+   * Record a provider's chain from its `connect` event, and nothing else.
+   *
+   * Used when connect autocapture is off. `connect` carries `chainId` in its
+   * payload, so this needs no RPC - unlike the full handler, which resolves
+   * the account.
+   */
+  private registerConnectChainObserver(provider: EIP1193Provider): void {
+    const listener = (...args: unknown[]) => {
+      const connection = args[0] as { chainId?: unknown } | undefined;
+      if (typeof connection?.chainId !== "string") return;
+      this.rememberProviderChain(provider, parseChainId(connection.chainId));
+    };
+    provider.on("connect", listener);
+    this.addProviderListener(provider, "connect", listener);
   }
 
   private registerConnectListener(provider: EIP1193Provider): void {
