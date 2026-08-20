@@ -391,6 +391,77 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(0);
   });
 
+  it("issues no RPC from the connect observer when connect autocapture is off", async () => {
+    // The full connect handler resolves the account with `eth_accounts`.
+    // Registering it purely to observe the chain would put an analytics-only
+    // request back on the wallet's single queue - the exact hazard the
+    // request-path work removed.
+    const tracker = await makeFormo({
+      tracking: true,
+      autocapture: { connect: false, signature: true },
+    });
+    const rawRequest = sandbox.stub().rejects(new Error("no RPC may be issued"));
+    const listeners: Record<string, (...a: unknown[]) => void> = {};
+    const provider: any = {
+      on: sandbox.stub().callsFake((ev: string, fn: any) => { listeners[ev] = fn; }),
+      removeListener: sandbox.stub(),
+      request: rawRequest,
+    };
+    (tracker as any).isWagmiMode = false;
+    (tracker as any).trackEIP1193Provider(provider);
+
+    listeners["connect"]?.({ chainId: `0x${OTHER_CHAIN.toString(16)}` });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(rawRequest.called, "no RPC issued").to.be.false;
+    expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
+  });
+
+  it("does not let an inactive wallet's chain change seize the active slot", async () => {
+    // chainChanged is now observed unconditionally so signatures can be
+    // labelled. handleProviderMismatch treats another wallet's chain event as
+    // a wallet switch and clears the active wallet - that must not start
+    // happening for apps that never asked for chain tracking.
+    const tracker = await makeFormo({
+      tracking: true,
+      autocapture: { chain: false, signature: true },
+    });
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (tracker as any)._provider = active;
+    (tracker as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const other = providerOnChain(OTHER_CHAIN);
+    await (tracker as any).onChainChanged(other, `0x${OTHER_CHAIN.toString(16)}`);
+
+    expect((tracker as any)._provider, "active provider unchanged").to.equal(active);
+    expect((tracker as any)._evmAddress, "active address unchanged").to.equal(ADDRESS);
+    expect((tracker as any)._evmChainId, "active chain unchanged").to.equal(ACTIVE_CHAIN);
+    // But its chain was still learned, which is the point of observing.
+    expect((tracker as any).resolveChainIdForProvider(other)).to.equal(OTHER_CHAIN);
+  });
+
+  it("remembers the chain learned while a provider was active", async () => {
+    // A standards-compliant provider with no synchronous `chainId` property is
+    // otherwise known only while active: once another wallet takes over, a
+    // signature back through this one reported 0 and, with exclusions set,
+    // was dropped.
+    const first: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+        return [ADDRESS];
+      }),
+    };
+    await (formo as any).onAccountsChanged(first, [ADDRESS]);
+
+    // Another wallet becomes active.
+    const second = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = second;
+
+    expect((formo as any).resolveChainIdForProvider(first)).to.equal(OTHER_CHAIN);
+  });
+
   it("observes chain changes even when chain autocapture is off", async () => {
     // Observing a chain and reporting one are different concerns. Gating the
     // listener on autocapture.chain froze the chain at whatever was first
