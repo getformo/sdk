@@ -211,6 +211,13 @@ export class WagmiEventHandler {
   private reconciling = false;
 
   /**
+   * Ticket for each active-connection transition. Emissions are awaited, and
+   * wagmi can move again in that window; a continuation whose ticket is no
+   * longer current must not write stale state over the newer one.
+   */
+  private transitionGeneration = 0;
+
+  /**
    * Track processed mutation states to prevent duplicate event emissions
    * Key format: `${mutationId}:${status}`
    */
@@ -787,17 +794,35 @@ export class WagmiEventHandler {
     address: string | undefined,
     prevAddress: string | undefined
   ): Promise<void> {
-    if (!address || address === prevAddress) return;
-    // Already handled by the status listener (fresh connect, or the seed).
-    // Case-insensitive, like every other address comparison here.
-    if (
-      this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
-    ) {
-      return;
-    }
-
     const state = this.getState();
     if (state.status !== "connected") return;
+
+    // Tell an in-place account switch apart from a connector falling away.
+    //
+    // With more than one entry in `state.connections`, disconnecting the
+    // current connector leaves the global status on "connected" and simply
+    // moves `state.current` to another live connection. The status listener
+    // never sees anything, so if this path ignores it the disconnect is lost.
+    //
+    // Checked BEFORE the address comparisons below, because two connectors
+    // can hold the SAME account - MetaMask and Rabby over one hardware wallet
+    // - and then the address does not change at all when one falls away.
+    const trackedConnectionId = this.trackingState.lastConnectionId;
+    const trackedConnectionGone =
+      !!trackedConnectionId && !state.connections.has(trackedConnectionId);
+
+    if (!trackedConnectionGone) {
+      if (!address || address === prevAddress) return;
+      // Already handled by the status listener (fresh connect, or the seed).
+      // Case-insensitive, like every other address comparison here.
+      if (
+        this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
+      ) {
+        return;
+      }
+    }
+
+    if (!address) return;
 
     // Prefer the chain of the connection that is now current. `state.chainId`
     // is global and can still describe the previous connection - with several
@@ -805,42 +830,65 @@ export class WagmiEventHandler {
     const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
     if (chainId === undefined) return;
 
-    // Tell an in-place account switch apart from a connector falling away.
-    //
-    // With more than one entry in `state.connections`, disconnecting the
-    // current connector leaves the global status on "connected" and simply
-    // moves `state.current` to another live connection. The address changes,
-    // so this listener runs - but the wallet the user just disconnected is
-    // gone, and the status listener never saw anything. Treating that as a
-    // switch loses its disconnect entirely.
-    const trackedConnectionId = this.trackingState.lastConnectionId;
-    const trackedConnectionGone =
-      !!trackedConnectionId && !state.connections.has(trackedConnectionId);
+    // Every transition takes a ticket. Emitting is awaited, and wagmi can move
+    // again while that is in flight; without this the older continuation would
+    // resume with its stale captured state and overwrite the newer one.
+    const generation = ++this.transitionGeneration;
 
-    if (trackedConnectionGone && prevAddress) {
-      logger.info(
-        "WagmiEventHandler: Tracked connector disconnected, wagmi fell back to another connection",
-        { disconnected: prevAddress, fallback: address }
-      );
-      const goneChainId = this.trackingState.lastChainId;
-      this.releaseTrackedWallet();
+    if (trackedConnectionGone) {
+      const stillConnected =
+        !!prevAddress && this.isAddressConnected(state, prevAddress);
 
-      if (this.formo.isAutocaptureEnabled("disconnect")) {
-        try {
-          // Emitted before central state is cleared, so excludeChains can
-          // still gate it on the chain the wallet was actually on.
-          await this.formo.disconnect({
-            chainId: goneChainId,
-            address: prevAddress,
-          });
-        } catch (error) {
-          logger.error(
-            "WagmiEventHandler: Error tracking connector fallback disconnect:",
-            error
-          );
+      if (stillConnected) {
+        // The connector went away but the ACCOUNT did not: another live
+        // connection still holds it. Nothing disconnected from the user's
+        // point of view, so no event - just follow the connection.
+        logger.info(
+          "WagmiEventHandler: Tracked connector fell away, account still connected elsewhere",
+          { address: prevAddress, connection: state.current }
+        );
+        this.trackingState.lastConnectionId = state.current;
+        if (
+          this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
+        ) {
+          return;
         }
-      } else {
-        this.formo.syncWalletState({ chainId: goneChainId });
+      } else if (prevAddress) {
+        logger.info(
+          "WagmiEventHandler: Tracked connector disconnected, wagmi fell back to another connection",
+          { disconnected: prevAddress, fallback: address }
+        );
+        const goneChainId = this.trackingState.lastChainId;
+        this.releaseTrackedWallet();
+
+        if (this.formo.isAutocaptureEnabled("disconnect")) {
+          try {
+            // Emitted before central state is cleared, so excludeChains can
+            // still gate it on the chain the wallet was actually on.
+            await this.formo.disconnect({
+              chainId: goneChainId,
+              address: prevAddress,
+            });
+          } catch (error) {
+            logger.error(
+              "WagmiEventHandler: Error tracking connector fallback disconnect:",
+              error
+            );
+          }
+        } else {
+          this.formo.syncWalletState({ chainId: goneChainId });
+        }
+
+        // Wagmi may have moved again while that emission was in flight. The
+        // newer callback owns the wallet now; resuming here would overwrite it
+        // with state captured before the change.
+        if (generation !== this.transitionGeneration) {
+          logger.debug(
+            "WagmiEventHandler: A newer transition superseded this one, stopping",
+            { address }
+          );
+          return;
+        }
       }
       // Fall through: the connection wagmi fell back to becomes the tracked
       // wallet below. The page-load marker keeps it from re-announcing a

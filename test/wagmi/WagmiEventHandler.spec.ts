@@ -2471,11 +2471,11 @@ describe("WagmiEventHandler", () => {
       });
     });
 
-    it("notices a connector falling away even when both hold the same account", async () => {
-      // Two connectors over one hardware wallet report the same account on the
-      // same chain. Selecting only the address meant that when the current one
-      // disconnected, nothing in the subscribed value changed, no callback
-      // ran, and the disconnect was lost for the rest of the page load.
+    it("follows a connector falling away when both hold the same account", async () => {
+      // Two connectors over one hardware wallet report the SAME account. When
+      // the current one disconnects the address does not change at all, so the
+      // address comparisons must not run before the connector check - they
+      // returned early and the fallback went completely unnoticed.
       const shared = new Map();
       shared.set("uid-a", {
         accounts: [mockAddress],
@@ -2493,30 +2493,126 @@ describe("WagmiEventHandler", () => {
         current: "uid-a",
         chainId: mockChainId,
       });
-      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
       await settle();
+      expect((handler as any).trackingState.lastConnectionId).to.equal("uid-a");
 
-      // The composite selector must change even though the address does not.
-      const selectors = (mockWagmiConfig.subscribe as sinon.SinonStub)
-        .getCalls()
-        .map((c) => c.args[0]);
-      const before = {
-        status: "connected" as const,
-        connections: shared,
-        current: "uid-a",
-        chainId: mockChainId,
-      };
       const remaining = new Map();
       remaining.set("uid-b", shared.get("uid-b"));
-      const after = {
-        status: "connected" as const,
+      (mockWagmiConfig as any).setState({
+        status: "connected",
         connections: remaining,
         current: "uid-b",
         chainId: mockChainId,
-      };
-      const noticed = selectors.some((sel) => sel(before) !== sel(after));
-      expect(noticed, "a subscription distinguishes the two connectors").to.be.true;
+      });
+      // Same address on both sides, exactly as wagmi would report it.
+      if (addressListener) await addressListener(mockAddress, mockAddress);
+      await settle();
+
+      // The ACCOUNT never disconnected - the other connector still holds it -
+      // so no disconnect, and no duplicate connect either.
+      expect(mockFormo.disconnect.called, "account is still connected").to.be.false;
+      expect(mockFormo.connect.callCount, "no duplicate connect").to.equal(1);
+
+      // The observable difference: the handler must now be following the
+      // SURVIVING connection. Left pointing at the dead one, it can no longer
+      // tell a later fallback from an ordinary switch.
+      expect(
+        (handler as any).trackingState.lastConnectionId,
+        "follows the surviving connection"
+      ).to.equal("uid-b");
+
+      // Attribution is unchanged, since it is the same account throughout.
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 71,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      expect(mockFormo.signature.lastCall.args[0].address).to.equal(mockAddress);
     });
+
+    it("does not let a superseded fallback overwrite a newer transition", async () => {
+      // A falls away to B; while B's disconnect emission is awaited wagmi
+      // moves again to C. The older continuation must not resume and write B
+      // over C.
+      const C = "0x9999999999999999999999999999999999999999";
+      const conns = new Map();
+      conns.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      conns.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: mockChainId,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      conns.set("uid-c", {
+        accounts: [C],
+        chainId: mockChainId,
+        connector: { id: "c", name: "Frame", type: "injected", uid: "uid-c" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: conns,
+        current: "uid-a",
+        chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      let releaseDisconnect: (() => void) | undefined;
+      (mockFormo as any).disconnect = sandbox.stub().returns(
+        new Promise<void>((resolve) => { releaseDisconnect = () => resolve(); })
+      );
+
+      // A falls away, wagmi falls back to B.
+      const withoutA = new Map(conns);
+      withoutA.delete("uid-a");
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: withoutA,
+        current: "uid-b",
+        chainId: mockChainId,
+      });
+      const stale = addressListener!(SWITCHED, mockAddress);
+      await settle();
+
+      // Before that disconnect settles, wagmi moves on to C.
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: withoutA,
+        current: "uid-c",
+        chainId: mockChainId,
+      });
+      await addressListener!(C, SWITCHED);
+      await settle();
+
+      releaseDisconnect!();
+      await stale;
+      await settle();
+
+      // C is what wagmi actually has, so C is what later events must use.
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 72,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      expect(mockFormo.signature.lastCall.args[0].address).to.equal(C);
+    });
+
 
     it("confirms on the chain it broadcast on when no chain was named", async () => {
       // The common sendTransaction({ to, ... }) case. Broadcasting on chain 1
