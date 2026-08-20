@@ -2625,6 +2625,84 @@ describe("WagmiEventHandler", () => {
       expect((mockFormo as any).currentAddress, "central state kept C").to.equal(C);
     });
 
+    it("restores central state when a stale disconnect clears a newer wallet", async () => {
+      // The real disconnect() clears the central namespace as it completes. If
+      // a newer transition has already adopted a different wallet by then,
+      // private tracking and central state disagree - and trackEvent reads the
+      // central one, so the address and chain vanish from later events.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      (mockFormo as any).currentAddress = undefined;
+      (mockFormo as any).currentChainId = undefined;
+
+      (handler as any).restoreCentralStateFromTracking();
+
+      expect((mockFormo as any).currentAddress).to.equal(mockAddress);
+      expect((mockFormo as any).currentChainId).to.equal(mockChainId);
+    });
+
+    it("leaves central state alone when it already names the tracked wallet", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      const before = mockFormo.syncWalletState.callCount;
+
+      (handler as any).restoreCentralStateFromTracking();
+
+      expect(mockFormo.syncWalletState.callCount, "no redundant sync").to.equal(before);
+    });
+
+    it("does not announce a fallback wallet when the store throws mid-emission", async () => {
+      // The continuation re-reads the live store rather than trusting its
+      // snapshot; a store that has gone away counts as superseded rather than
+      // throwing out of the handler.
+      const conns = new Map();
+      conns.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      conns.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: mockChainId,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: conns, current: "uid-a", chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      const afterSeed = mockFormo.connect.callCount;
+
+      let releaseDisconnect: (() => void) | undefined;
+      (mockFormo as any).disconnect = sandbox.stub().returns(
+        new Promise<void>((resolve) => { releaseDisconnect = () => resolve(); })
+      );
+
+      const withoutA = new Map(conns);
+      withoutA.delete("uid-a");
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: withoutA, current: "uid-b", chainId: mockChainId,
+      });
+      const stale = addressListener!(SWITCHED, mockAddress);
+      await settle();
+
+      (mockWagmiConfig.getState as sinon.SinonStub).throws(new Error("store gone"));
+      releaseDisconnect!();
+      let threw = false;
+      await Promise.resolve(stale).catch(() => { threw = true; });
+      await settle();
+
+      expect(threw, "must not throw out of the handler").to.be.false;
+      expect(mockFormo.connect.callCount, "nothing announced").to.equal(afterSeed);
+    });
+
     it("adopts the fallback connector's chain when the account is unchanged", async () => {
       // Two connectors hold the same account on DIFFERENT chains. The chain
       // callback defers because the new connection is not adopted yet, so the
