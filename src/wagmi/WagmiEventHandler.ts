@@ -666,6 +666,11 @@ export class WagmiEventHandler {
     }
 
     this.trackingState.isProcessing = true;
+    // A status change outranks any connection transition still in flight. A
+    // full disconnect advances no ticket of its own, so without this an older
+    // fallback continuation could resume and announce a wallet wagmi no longer
+    // has.
+    this.transitionGeneration += 1;
 
     try {
       const state = this.getState();
@@ -978,6 +983,14 @@ export class WagmiEventHandler {
         if (
           this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
         ) {
+          // The two connectors can sit on different chains. The chain callback
+          // deferred to this handler because the new connection was not
+          // adopted yet, so returning now would leave `lastChainId` on the
+          // chain of the connector that just went away - mislabelling later
+          // events and letting them past `excludeChains`.
+          if (this.trackingState.lastChainId !== chainId) {
+            await this.applyChainForTrackedWallet(address, chainId);
+          }
           return;
         }
       } else if (prevAddress) {
@@ -1006,10 +1019,24 @@ export class WagmiEventHandler {
           this.formo.syncWalletState({ chainId: goneChainId });
         }
 
-        // Wagmi may have moved again while that emission was in flight. The
-        // newer callback owns the wallet now; resuming here would overwrite it
-        // with state captured before the change.
-        if (generation !== this.transitionGeneration) {
+        // Wagmi may have moved again while that emission was in flight, or the
+        // handler may have been torn down. The newer callback owns the wallet
+        // now; resuming here would overwrite it with state captured before the
+        // change. Re-read the live store rather than trusting the snapshot:
+        // the whole wallet can have disconnected, which advances no
+        // transition ticket of its own.
+        let liveNow: WagmiState | undefined;
+        try {
+          liveNow = this.getState();
+        } catch {
+          /* treated as superseded below */
+        }
+        const stillCurrent =
+          !this.disposed &&
+          liveNow?.status === "connected" &&
+          liveNow.current === state.current;
+
+        if (generation !== this.transitionGeneration || !stillCurrent) {
           logger.debug(
             "WagmiEventHandler: A newer transition superseded this one, stopping",
             { address }
@@ -1104,6 +1131,41 @@ export class WagmiEventHandler {
   }
 
   /**
+   * Record and emit a chain move for the wallet already being tracked.
+   *
+   * Shared by `handleChainChange()` and the connector-fallback path, which
+   * has to apply the chain itself: the chain callback defers while the new
+   * connection is not adopted yet, so nothing else would.
+   */
+  private async applyChainForTrackedWallet(
+    address: string,
+    chainId: number
+  ): Promise<void> {
+    // Sync central state unconditionally so a switch to an excluded chain is
+    // honored even when chain autocapture is disabled.
+    this.formo.syncWalletState({ chainId, address });
+
+    if (this.formo.currentAddress?.toLowerCase() !== address.toLowerCase()) {
+      logger.debug(
+        "WagmiEventHandler: Central state declined the new chain, dropping the wallet",
+        { address, chainId }
+      );
+      this.releaseTrackedWallet();
+      return;
+    }
+
+    this.trackingState.lastChainId = chainId;
+
+    if (this.formo.isAutocaptureEnabled("chain")) {
+      try {
+        await this.formo.chain({ chainId, address });
+      } catch (error) {
+        logger.error("WagmiEventHandler: Error tracking chain change:", error);
+      }
+    }
+  }
+
+  /**
    * Handle chain ID changes
    */
   private async handleChainChange(
@@ -1165,32 +1227,7 @@ export class WagmiEventHandler {
       address,
     });
 
-    // Sync central state unconditionally so a chain switch to an
-    // excluded chain is honored even when chain autocapture is disabled.
-    this.formo.syncWalletState({ chainId, address });
-
-    // Adopt the new chain only if central state kept the wallet. When the
-    // switch is to an excluded chain, `syncWalletState` drops the wallet and
-    // recording the chain privately anyway would let the mutation handlers
-    // label events with a chain `shouldTrack()` is actively excluding.
-    if (this.formo.currentAddress?.toLowerCase() !== address.toLowerCase()) {
-      logger.debug(
-        "WagmiEventHandler: Central state declined the new chain, dropping the wallet",
-        { address, chainId }
-      );
-      this.releaseTrackedWallet();
-      return;
-    }
-
-    this.trackingState.lastChainId = chainId;
-
-    if (this.formo.isAutocaptureEnabled("chain")) {
-      try {
-        await this.formo.chain({ chainId, address });
-      } catch (error) {
-        logger.error("WagmiEventHandler: Error tracking chain change:", error);
-      }
-    }
+    await this.applyChainForTrackedWallet(address, chainId);
   }
 
   /**
@@ -1797,6 +1834,8 @@ export class WagmiEventHandler {
 
     if (!this.disposed) {
       this.disposed = true;
+      // Nothing in flight may complete against a torn-down handler.
+      this.transitionGeneration += 1;
       // Start the grace period. If nothing re-mounts, the markers are dropped
       // so a reconnect that happens while unobserved still emits.
       releaseMarkers(this.formo.writeKey);

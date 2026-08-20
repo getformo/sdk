@@ -2625,6 +2625,123 @@ describe("WagmiEventHandler", () => {
       expect((mockFormo as any).currentAddress, "central state kept C").to.equal(C);
     });
 
+    it("adopts the fallback connector's chain when the account is unchanged", async () => {
+      // Two connectors hold the same account on DIFFERENT chains. The chain
+      // callback defers because the new connection is not adopted yet, so the
+      // fallback path has to apply the chain itself - otherwise the tracked
+      // chain stays on the connector that just went away, mislabelling later
+      // events and letting them past excludeChains.
+      const OLD_CHAIN = mockChainId;
+      const NEW_CHAIN = 137;
+      const shared = new Map();
+      shared.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: OLD_CHAIN,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      shared.set("uid-b", {
+        accounts: [mockAddress],
+        chainId: NEW_CHAIN,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: shared,
+        current: "uid-a",
+        chainId: OLD_CHAIN,
+      });
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect((handler as any).trackingState.lastChainId).to.equal(OLD_CHAIN);
+
+      const remaining = new Map();
+      remaining.set("uid-b", shared.get("uid-b"));
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: remaining,
+        current: "uid-b",
+        chainId: NEW_CHAIN,
+      });
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, OLD_CHAIN);
+      if (addressListener) await addressListener(mockAddress, mockAddress);
+      await settle();
+
+      expect(
+        (handler as any).trackingState.lastChainId,
+        "follows the surviving connector's chain"
+      ).to.equal(NEW_CHAIN);
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 81,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      expect(mockFormo.signature.lastCall.args[0].chainId).to.equal(NEW_CHAIN);
+    });
+
+    it("does not announce a fallback wallet that disconnected mid-emission", async () => {
+      // A falls back to B, and while disconnect(A) is awaited the whole wallet
+      // goes away. A full disconnect advances no transition ticket of its own,
+      // so the stale continuation would resume and emit connect(B) against a
+      // wagmi that is disconnected.
+      const conns = new Map();
+      conns.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      conns.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: mockChainId,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: conns,
+        current: "uid-a",
+        chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      const afterSeed = mockFormo.connect.callCount;
+
+      let releaseDisconnect: (() => void) | undefined;
+      (mockFormo as any).disconnect = sandbox.stub().returns(
+        new Promise<void>((resolve) => { releaseDisconnect = () => resolve(); })
+      );
+
+      const withoutA = new Map(conns);
+      withoutA.delete("uid-a");
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: withoutA,
+        current: "uid-b",
+        chainId: mockChainId,
+      });
+      const stale = addressListener!(SWITCHED, mockAddress);
+      await settle();
+
+      // Everything disconnects while that emission is still pending.
+      (mockWagmiConfig as any).setState(createMockState());
+      await statusListener!("disconnected", "connected");
+
+      releaseDisconnect!();
+      await stale;
+      await settle();
+
+      expect(
+        mockFormo.connect.callCount,
+        "no connect for a wallet wagmi no longer has"
+      ).to.equal(afterSeed);
+    });
+
     it("does not label a fallback disconnect with the incoming wallet's chain", async () => {
       // Both subscriptions fire for one wagmi update and the chain one can run
       // first. Letting it record the INCOMING connection's chain meant the
