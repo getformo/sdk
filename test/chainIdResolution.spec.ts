@@ -17,6 +17,8 @@ describe("Chain id resolution for autocaptured requests", () => {
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
   let formo: FormoAnalytics;
+  let created: FormoAnalytics[] = [];
+  let makeFormo: (options?: Record<string, unknown>) => Promise<FormoAnalytics>;
 
   const ADDRESS = "0x51377e9b985bb90b7c091b9a7d30c93d4c9c1cef";
   const ACTIVE_CHAIN = 1;
@@ -54,22 +56,52 @@ describe("Chain id resolution for autocaptured requests", () => {
 
     initStorageManager("test-write-key");
 
-    const mockWagmiConfig = {
-      subscribe: sandbox.stub().returns(() => {}),
-      state: { status: "disconnected", connections: new Map(), current: undefined, chainId: undefined },
-      _internal: { store: { subscribe: sandbox.stub().returns(() => {}) } },
-    };
-    const mockQueryClient = {
-      getMutationCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
-      getQueryCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
+    // Every instance built by a test, torn down in afterEach. An SDK instance
+    // owns queue flush timers and provider listeners; leaking them keeps the
+    // mocha process alive long after the assertions finish.
+    created = [];
+    makeFormo = async (options: Record<string, unknown> = {}) => {
+      const instance = await FormoAnalytics.init("test-write-key", {
+        wagmi: {
+          config: {
+            subscribe: sandbox.stub().returns(() => {}),
+            state: {
+              status: "disconnected",
+              connections: new Map(),
+              current: undefined,
+              chainId: undefined,
+            },
+            _internal: { store: { subscribe: sandbox.stub().returns(() => {}) } },
+          } as any,
+          queryClient: {
+            getMutationCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
+            getQueryCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
+          } as any,
+        },
+        ...options,
+      });
+      // A broadcasted transaction starts a receipt poll that retries on a
+      // multi-second timer. These mocks never return a recognisable receipt,
+      // so the poll would run to exhaustion and hold the process open for
+      // roughly 28 seconds on top of every run. No test here asserts on
+      // receipts.
+      sandbox.stub(instance as any, "pollTransactionReceipt").resolves(undefined);
+      created.push(instance);
+      return instance;
     };
 
-    formo = await FormoAnalytics.init("test-write-key", {
-      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
-    });
+    formo = await makeFormo();
   });
 
   afterEach(() => {
+    for (const instance of created) {
+      try {
+        instance.cleanup();
+      } catch {
+        /* an instance may already be torn down */
+      }
+    }
+    created = [];
     sandbox.restore();
     for (const key of [
       "window", "document", "location", "globalThis",
@@ -288,8 +320,14 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().callsFake(() => new Promise(() => undefined)),
     };
-    (formo as any)._provider = stalled;
+    // Order matters. `clearChainState("evm")` replaces the whole evm
+    // namespace, and the active provider lives inside it - clearing after
+    // assigning would wipe the provider and send this down the
+    // mismatched-provider branch instead of the empty-cache one under test.
     (formo as any).clearChainState("evm");
+    (formo as any)._provider = stalled;
+    expect((formo as any)._provider, "active provider is set").to.equal(stalled);
+    expect((formo as any)._evmChainId, "no cached chain").to.be.undefined;
 
     const clock = sandbox.useFakeTimers({ shouldAdvanceTime: true });
     const pending = (formo as any).resolveChainIdForProvider(stalled);
@@ -301,8 +339,8 @@ describe("Chain id resolution for autocaptured requests", () => {
 
   it("clears the timeout once the lookup settles", async () => {
     const active = providerOnChain(ACTIVE_CHAIN);
-    (formo as any)._provider = active;
     (formo as any).clearChainState("evm");
+    (formo as any)._provider = active;
     const clearSpy = sandbox.spy(global, "clearTimeout");
 
     const resolved = await (formo as any).resolveChainIdForProvider(active);
@@ -310,6 +348,105 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(resolved).to.equal(ACTIVE_CHAIN);
     // Otherwise every autocaptured request leaves a live 2s timer behind.
     expect(clearSpy.called).to.be.true;
+  });
+
+  it("excludes an event on the signing provider's chain, not the active one", async () => {
+    // The whole point of resolving the signer's chain is lost if the exclusion
+    // gate still reads the active provider's. Active chain 1 is allowed, the
+    // secondary signer is on excluded 8453, so nothing may be emitted.
+    const excluded = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((excluded as any).eventManager, "addEvent").resolves();
+
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (excluded as any)._provider = active;
+    (excluded as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const other: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+        return "0xsigned";
+      }),
+    };
+    (excluded as any).registerRequestListeners(other);
+    await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(addEvent.called, "excluded chain must not be tracked").to.be.false;
+  });
+
+  it("still emits when the active chain is excluded but the signer's is not", async () => {
+    // The inverse. Reading the central field would drop a perfectly allowed
+    // event because the *other* wallet happens to sit on an excluded chain.
+    const excluded = await makeFormo({ tracking: { excludeChains: [ACTIVE_CHAIN] } });
+    const addEvent = sandbox.stub((excluded as any).eventManager, "addEvent").resolves();
+
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (excluded as any)._provider = active;
+    (excluded as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const other: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+        return "0xsigned";
+      }),
+    };
+    (excluded as any).registerRequestListeners(other);
+    await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(addEvent.called, "allowed chain must still be tracked").to.be.true;
+  });
+
+  it("issues the wallet request before starting the chain lookup", async () => {
+    // A provider that serializes RPC - WalletConnect's relay socket - runs
+    // requests in the order it receives them. If the chain lookup goes first,
+    // a stalled lookup holds the wallet prompt closed no matter what the SDK
+    // does with its own promise.
+    const order: string[] = [];
+    const serialized: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        order.push(method);
+        if (method === "eth_chainId") return `0x${ACTIVE_CHAIN.toString(16)}`;
+        return "0xsigned";
+      }),
+    };
+
+    (formo as any).registerRequestListeners(serialized);
+    await serialized.request({
+      method: "personal_sign",
+      params: ["0x68690000", ADDRESS],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(order[0], `saw ${order.join(" then ")}`).to.equal("personal_sign");
+  });
+
+  it("issues the transaction before starting the chain lookup", async () => {
+    const order: string[] = [];
+    const serialized: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        order.push(method);
+        if (method === "eth_chainId") return `0x${ACTIVE_CHAIN.toString(16)}`;
+        return "0xtxhash";
+      }),
+    };
+
+    (formo as any).registerRequestListeners(serialized);
+    await serialized.request({
+      method: "eth_sendTransaction",
+      params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(order[0], `saw ${order.join(" then ")}`).to.equal("eth_sendTransaction");
   });
 
   it("queries the provider when no chain is cached yet", async () => {

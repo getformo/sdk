@@ -1785,11 +1785,21 @@ export class FormoAnalytics implements IFormoAnalytics {
           logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
           return request({ method, params });
         }
-        // Deliberately NOT awaited here. This forwards `personal_sign` /
-        // `eth_signTypedData_v4` immediately; a provider that leaves
-        // `eth_chainId` pending (disconnected or stalled wallet) must never
-        // hold the wallet prompt closed. Each fire-and-forget block below
-        // awaits the same promise instead, so the lookup happens once.
+        // Issue the wallet call FIRST, before the chain lookup is even
+        // started. Not awaiting our own lookup is not enough: a provider that
+        // serializes RPC over a single transport - WalletConnect's relay
+        // socket above all, which is exactly the transport this path exists to
+        // support - would queue the signing request behind an `eth_chainId`
+        // that is already in flight, so a stalled lookup would hold the wallet
+        // prompt closed anyway. The SDK-side timeout cannot help there: it
+        // releases our promise, not the provider's queue.
+        const responsePromise = request({ method, params }) as Promise<T>;
+        // Attach a no-op handler now so a rejection arriving before the await
+        // below is never reported as unhandled. The real handling is there.
+        responsePromise.catch(() => undefined);
+
+        // Each fire-and-forget block awaits the same promise, so the lookup
+        // happens once per call.
         const chainIdPromise = this.resolveChainIdForProvider(provider).catch(
           () => 0
         );
@@ -1812,7 +1822,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         })();
 
         try {
-          const response = (await request({ method, params })) as T;
+          const response = await responsePromise;
           // Track signature confirmation only for truthy responses
           if (response) {
             (async () => {
@@ -1872,6 +1882,12 @@ export class FormoAnalytics implements IFormoAnalytics {
           logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
           return request({ method, params });
         }
+        // Issue the wallet call FIRST, for the same reason as the signature
+        // path above: a provider that serializes RPC would otherwise queue the
+        // transaction behind our `eth_chainId`.
+        const txPromise = request({ method, params }) as Promise<string>;
+        txPromise.catch(() => undefined);
+
         // One snapshot for the whole lifecycle of this call. Resolving per
         // status would let a network switch made while the prompt is open
         // split STARTED and BROADCASTED across different chains.
@@ -1893,10 +1909,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         })();
 
         try {
-          const transactionHash = (await request({
-            method,
-            params,
-          })) as string;
+          const transactionHash = await txPromise;
 
           (async () => {
             try {
@@ -2055,7 +2068,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
     try {
-      if (!this.shouldTrack()) {
+      // Gate on the chain the event actually carries. `connect`, `disconnect`,
+      // `chain`, `signature` and `transaction` all put one in the payload, and
+      // it is authoritative: it can name a provider or a wagmi mutation chain
+      // that is not the active one. Events without a chain (page, track,
+      // identify) fall back to the central value.
+      if (!this.shouldTrack(payload?.chainId)) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
         return;
       }
@@ -2107,7 +2125,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * an options object with `excludeChains` set, and only once a chain id is
    * known.
    */
-  private isCurrentChainExcluded(): boolean {
+  private isCurrentChainExcluded(eventChainId?: ChainID): boolean {
     if (
       this.options.tracking === null ||
       typeof this.options.tracking !== "object" ||
@@ -2116,10 +2134,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       return false;
     }
     const { excludeChains = [] } = this.options.tracking as TrackingOptions;
+    // Mirrors `shouldTrack()`: the event's own chain wins when it has one.
+    const chainToCheck = eventChainId ?? this.currentChainId;
     return (
       excludeChains.length > 0 &&
-      !!this.currentChainId &&
-      excludeChains.includes(this.currentChainId)
+      !!chainToCheck &&
+      excludeChains.includes(chainToCheck)
     );
   }
 
@@ -2231,7 +2251,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Determines if tracking should be enabled based on configuration and consent
    * @returns {boolean} True if tracking should be enabled
    */
-  private shouldTrack(): boolean {
+  private shouldTrack(eventChainId?: ChainID): boolean {
     // First check if user has opted out of tracking
     if (this.hasOptedOutTracking()) {
       return false;
@@ -2256,11 +2276,20 @@ export class FormoAnalytics implements IFormoAnalytics {
         return false;
       }
 
-      // Check chainId exclusions
+      // Check chainId exclusions.
+      //
+      // The event's OWN chain wins over `currentChainId`. They differ whenever
+      // the event did not come from the active provider: a second wallet
+      // signing through its own provider, or a wagmi mutation that names an
+      // explicit chain. Reading only the central field there would emit an
+      // event that is labelled with an excluded chain, which is precisely what
+      // the exclusion forbids - and would drop an allowed event whenever the
+      // active provider happened to sit on an excluded chain.
+      const chainToCheck = eventChainId ?? this.currentChainId;
       if (
         excludeChains.length > 0 &&
-        this.currentChainId &&
-        excludeChains.includes(this.currentChainId)
+        chainToCheck &&
+        excludeChains.includes(chainToCheck)
       ) {
         return false;
       }
