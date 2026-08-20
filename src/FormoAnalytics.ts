@@ -104,6 +104,12 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
+  /**
+   * Bumped on every chain observation. An `eth_chainId` answer that resolves
+   * after a newer `chainChanged` must not overwrite it.
+   */
+  private providerChainGeneration = 0;
+
   private _providerListenersMap: Map<
     EIP1193Provider,
     Record<string, (...args: unknown[]) => void>
@@ -1840,6 +1846,29 @@ export class FormoAnalytics implements IFormoAnalytics {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
+      // Learn the chain from a call the APP was making anyway.
+      //
+      // A standards-compliant provider need not expose a synchronous `chainId`
+      // property, and if it connected before the SDK initialised, its
+      // `connect` event is never replayed. Such a provider stayed unknown -
+      // reported as chain 0, and with `excludeChains` configured its events
+      // were dropped even on an allowed chain. This adds no request of its
+      // own; it only reads the answer to one the dapp already sent.
+      if (method === "eth_chainId") {
+        const generation = ++this.providerChainGeneration;
+        return request({ method, params }).then((result) => {
+          // A `chainChanged` may have landed while this was in flight. It is
+          // newer by definition, so it must not be overwritten by this answer.
+          if (
+            generation === this.providerChainGeneration &&
+            typeof result === "string"
+          ) {
+            this.rememberProviderChain(provider, parseChainId(result));
+          }
+          return result as T;
+        });
+      }
+
       // Handle Signatures
       if (
         Array.isArray(params) &&
@@ -2681,6 +2710,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     chainId: number | undefined
   ): void {
     if (!provider || !chainId) return;
+    // Any observation is newer than an `eth_chainId` still in flight.
+    this.providerChainGeneration += 1;
     this._providerChainIds.set(provider, chainId);
   }
 

@@ -462,6 +462,55 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((formo as any).resolveChainIdForProvider(first)).to.equal(OTHER_CHAIN);
   });
 
+  it("learns the chain from an eth_chainId the app was making anyway", async () => {
+    // A standards-compliant provider need not expose a synchronous chainId,
+    // and if it connected before the SDK initialised its connect event is
+    // never replayed. Reading the answer to a call the dapp already sent adds
+    // no request of our own.
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(async ({ method }: any) => {
+        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+        return "0xsigned";
+      }),
+    };
+    (formo as any).registerRequestListeners(provider);
+    expect((formo as any).resolveChainIdForProvider(provider)).to.equal(0);
+
+    // The APP asks, for its own reasons.
+    const answer = await provider.request({ method: "eth_chainId" });
+    expect(answer, "the answer still reaches the caller").to.equal(
+      `0x${OTHER_CHAIN.toString(16)}`
+    );
+
+    expect((formo as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
+  });
+
+  it("does not let a slow eth_chainId answer overwrite a newer chainChanged", async () => {
+    let releaseChainId: ((v: string) => void) | undefined;
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(({ method }: any) => {
+        if (method === "eth_chainId") {
+          return new Promise((resolve) => { releaseChainId = resolve as any; });
+        }
+        return Promise.resolve("0xsigned");
+      }),
+    };
+    (formo as any).registerRequestListeners(provider);
+
+    const pending = provider.request({ method: "eth_chainId" });
+    // A chainChanged lands first; it is newer by definition.
+    (formo as any).rememberProviderChain(provider, OTHER_CHAIN);
+    // The stale answer now arrives naming the chain the wallet already left.
+    releaseChainId!(`0x${ACTIVE_CHAIN.toString(16)}`);
+    await pending;
+
+    expect((formo as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
+  });
+
   it("observes chain changes even when chain autocapture is off", async () => {
     // Observing a chain and reporting one are different concerns. Gating the
     // listener on autocapture.chain froze the chain at whatever was first
