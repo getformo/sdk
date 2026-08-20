@@ -2464,6 +2464,187 @@ describe("WagmiEventHandler", () => {
       });
     });
 
+    it("emits a disconnect when the tracked connector falls away", async () => {
+      // Two live connections. Disconnecting the current one leaves the global
+      // status on "connected" and moves state.current to the other, so only
+      // the address listener runs. Treating that as an in-place switch loses
+      // the disconnect of the wallet the user actually dropped.
+      const twoConnections = new Map();
+      twoConnections.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      twoConnections.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: mockChainId,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: twoConnections,
+        current: "uid-a",
+        chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.disconnect.called).to.be.false;
+
+      // Connector A disconnects; wagmi falls back to B, status never moves.
+      const remaining = new Map();
+      remaining.set("uid-b", twoConnections.get("uid-b"));
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: remaining,
+        current: "uid-b",
+        chainId: mockChainId,
+      });
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.disconnect.calledOnce, "wallet A reported as disconnected").to.be.true;
+      expect(mockFormo.disconnect.firstCall.args[0]).to.deep.include({
+        address: mockAddress,
+        chainId: mockChainId,
+      });
+    });
+
+    it("does not re-announce a fallback connection already reported", async () => {
+      // Same shape, but B was already announced this page load. Becoming the
+      // active connection is not a new connect.
+      const twoConnections = new Map();
+      twoConnections.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      twoConnections.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: mockChainId,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+
+      // B connects first and is announced.
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: twoConnections,
+        current: "uid-b",
+        chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // A becomes current, then falls away again back to B.
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: twoConnections,
+        current: "uid-a",
+        chainId: mockChainId,
+      });
+      if (addressListener) await addressListener(mockAddress, SWITCHED);
+      await settle();
+      const afterSwitch = mockFormo.connect.callCount;
+
+      const remaining = new Map();
+      remaining.set("uid-b", twoConnections.get("uid-b"));
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: remaining,
+        current: "uid-b",
+        chainId: mockChainId,
+      });
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.connect.callCount, "B not re-announced").to.equal(afterSwitch);
+    });
+
+    it("labels a typed-data signature with the EIP-712 domain chain", async () => {
+      // wagmi carries the signed chain in variables.domain.chainId, not at the
+      // top level. Reading only the top level labelled the signature with the
+      // wallet's current chain instead of the one it is bound to.
+      const DOMAIN_CHAIN = 8453;
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 77,
+            options: { mutationKey: ["signTypedData"] },
+            state: {
+              status: "success",
+              variables: {
+                domain: { name: "App", chainId: DOMAIN_CHAIN },
+                primaryType: "Mail",
+                types: {},
+                message: {},
+              },
+            },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.signature.lastCall.args[0].chainId).to.equal(DOMAIN_CHAIN);
+    });
+
+    it("normalizes a hex or bigint domain chain", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 78,
+            options: { mutationKey: ["signTypedData"] },
+            state: {
+              status: "success",
+              variables: { domain: { chainId: "0x2105" }, message: {} },
+            },
+          },
+        } as any);
+      }
+
+      expect(mockFormo.signature.lastCall.args[0].chainId).to.equal(8453);
+    });
+
+    it("follows the active connection's chain when the global one does not move", async () => {
+      // With several connections, or syncConnectedChain: false, the active
+      // connection can change chain while state.chainId stays put. Selecting
+      // only the global value meant no callback ran at all.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      const NEW_CHAIN = 8453;
+      const connections = new Map();
+      connections.set("k", {
+        accounts: [mockAddress],
+        chainId: NEW_CHAIN,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
+      });
+      const shifted = {
+        status: "connected" as const,
+        connections,
+        current: "k",
+        chainId: mockChainId, // global deliberately unchanged
+      };
+      (mockWagmiConfig as any).setState(shifted);
+
+      // The selector is what must notice; assert on it directly.
+      const selector = (mockWagmiConfig.subscribe as sinon.SinonStub)
+        .getCalls()
+        .map((c) => c.args[0])
+        .find((sel) => sel(shifted) === NEW_CHAIN);
+      expect(selector, "a subscription selects the active connection chain").to.exist;
+    });
+
     it("re-points signature and transaction attribution at the new account", async () => {
       (mockWagmiConfig as any).setState(createConnectedState());
       new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);

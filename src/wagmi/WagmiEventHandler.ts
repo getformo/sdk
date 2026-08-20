@@ -143,6 +143,24 @@ export function __resetSeededWallet(): void {
  * wagmi accepts an `account` as either a bare address or a viem Account
  * object. Normalise both to an address, or undefined when absent.
  */
+/**
+ * Coerce a wagmi/viem chain id to a number.
+ *
+ * An EIP-712 domain carries whatever the caller put in it, and viem accepts a
+ * hex string or a bigint there as well as a number. Passing those straight
+ * through would put a non-number in the event payload and defeat the numeric
+ * comparison in `tracking.excludeChains`.
+ */
+function normalizeChainId(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = value.startsWith("0x") ? Number(value) : Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 function resolveAccountAddress(account: unknown): string | undefined {
   if (typeof account === "string") return account;
   if (account && typeof account === "object") {
@@ -272,9 +290,17 @@ export class WagmiEventHandler {
     );
     this.unsubscribers.push(statusUnsubscribe);
 
-    // Subscribe to chain ID changes
+    // Subscribe to chain ID changes.
+    //
+    // Selects the ACTIVE CONNECTION's chain, with the global as a fallback -
+    // the same rule every read site here uses. Selecting only `state.chainId`
+    // meant that with several connections, or with `syncConnectedChain: false`,
+    // the active connection could move to a new chain while the global stayed
+    // put: no callback ran, and both the tracked chain and Formo's central
+    // chain silently went stale for every later event.
     const chainIdUnsubscribe = this.wagmiConfig.subscribe(
-      (state: WagmiState) => state.chainId,
+      (state: WagmiState) =>
+        this.getActiveConnectionChainId(state) ?? state.chainId,
       (chainId, prevChainId) => {
         this.handleChainChange(chainId, prevChainId);
       }
@@ -745,6 +771,48 @@ export class WagmiEventHandler {
     const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
     if (chainId === undefined) return;
 
+    // Tell an in-place account switch apart from a connector falling away.
+    //
+    // With more than one entry in `state.connections`, disconnecting the
+    // current connector leaves the global status on "connected" and simply
+    // moves `state.current` to another live connection. The address changes,
+    // so this listener runs - but the wallet the user just disconnected is
+    // gone, and the status listener never saw anything. Treating that as a
+    // switch loses its disconnect entirely.
+    const trackedConnectionId = this.trackingState.lastConnectionId;
+    const trackedConnectionGone =
+      !!trackedConnectionId && !state.connections.has(trackedConnectionId);
+
+    if (trackedConnectionGone && prevAddress) {
+      logger.info(
+        "WagmiEventHandler: Tracked connector disconnected, wagmi fell back to another connection",
+        { disconnected: prevAddress, fallback: address }
+      );
+      const goneChainId = this.trackingState.lastChainId;
+      this.releaseTrackedWallet();
+
+      if (this.formo.isAutocaptureEnabled("disconnect")) {
+        try {
+          // Emitted before central state is cleared, so excludeChains can
+          // still gate it on the chain the wallet was actually on.
+          await this.formo.disconnect({
+            chainId: goneChainId,
+            address: prevAddress,
+          });
+        } catch (error) {
+          logger.error(
+            "WagmiEventHandler: Error tracking connector fallback disconnect:",
+            error
+          );
+        }
+      } else {
+        this.formo.syncWalletState({ chainId: goneChainId });
+      }
+      // Fall through: the connection wagmi fell back to becomes the tracked
+      // wallet below. The page-load marker keeps it from re-announcing a
+      // wallet this page load already reported.
+    }
+
     logger.info("WagmiEventHandler: Active account switched", {
       from: prevAddress,
       to: address,
@@ -768,30 +836,41 @@ export class WagmiEventHandler {
       // in tracking state would attribute this account's later signatures and
       // transactions to the account they switched away from - worse than
       // recording nothing.
-      this.trackingState.lastAddress = undefined;
-      this.trackingState.lastChainId = undefined;
-      if (prevAddress) {
-        seededWallets.delete(
-          seedKey(this.formo.writeKey, prevAddress, this.trackingState.lastConnectionId)
-        );
-      }
-      this.trackingState.lastConnectionId = undefined;
+      this.releaseTrackedWallet();
       return;
     }
 
     this.trackingState.lastAddress = address;
     this.trackingState.lastChainId = chainId;
-    // Move the page-load marker onto the wallet that is now active, so a later
-    // rebuild over this same connection is recognised as already adopted.
-    if (prevAddress) {
-      seededWallets.delete(
-        seedKey(this.formo.writeKey, prevAddress, state.current)
-      );
-    }
-    seededWallets.add(seedKey(this.formo.writeKey, address, state.current));
     this.trackingState.lastConnectionId = state.current;
 
     if (this.formo.isAutocaptureEnabled("connect")) {
+      // Move the page-load marker onto the wallet that is now active.
+      //
+      // Only drop the previous wallet's marker when that wallet is genuinely
+      // gone. On an in-place account switch the old account leaves the
+      // connection and must be able to announce itself again later. But with
+      // several connections the previous wallet is often still connected -
+      // it merely stopped being `state.current` - and forgetting it there
+      // would make it re-announce every time wagmi switched back.
+      if (prevAddress && !this.isAddressConnected(state, prevAddress)) {
+        announcedConnections.delete(
+          announceKey(this.formo.writeKey, prevAddress)
+        );
+      }
+      const walletKey = announceKey(this.formo.writeKey, address);
+      const alreadyAnnounced = announcedConnections.has(walletKey);
+      markAnnounced(walletKey);
+      if (alreadyAnnounced) {
+        // Reached by the connector-fallback path above: wagmi made a
+        // connection active that this page load already reported. Becoming
+        // active is not a new connect.
+        logger.debug(
+          "WagmiEventHandler: Fallback connection was already announced, not re-emitting connect",
+          { address }
+        );
+        return;
+      }
       try {
         const connectorName = this.getConnectorName(state);
         await this.formo.connect(
@@ -1160,7 +1239,16 @@ export class WagmiEventHandler {
     // An explicit per-call `account` wins over the active connection. wagmi
     // lets a caller sign with an account other than the current one, and the
     // tracked connection describes a different wallet in that case.
-    const chainId = variables.chainId ?? this.trackingState.lastChainId;
+    //
+    // For typed data the signed chain lives in the EIP-712 domain, not at the
+    // top level: `signTypedData` takes `{ domain, types, primaryType, message }`
+    // and the domain's `chainId` is what the signature is actually bound to.
+    // Reading only `variables.chainId` labelled such a signature with the
+    // wallet's current chain, which can be a different one entirely.
+    const chainId =
+      normalizeChainId(variables.domain?.chainId) ??
+      normalizeChainId(variables.chainId) ??
+      this.trackingState.lastChainId;
     const address =
       resolveAccountAddress(variables.account) || this.trackingState.lastAddress;
 
@@ -1232,7 +1320,10 @@ export class WagmiEventHandler {
     // `variables.address` is the contract, not the user.
     // Distinguish an explicitly requested chain from one merely inferred from
     // the active connection: only the former is authoritative for the receipt.
-    const explicitChainId: number | undefined = variables.chainId;
+    // Normalized: viem accepts a hex string or a bigint for `chainId`, and a
+    // non-number here would both land in the payload and defeat the numeric
+    // `tracking.excludeChains` comparison.
+    const explicitChainId = normalizeChainId(variables.chainId);
     const chainId = explicitChainId ?? this.trackingState.lastChainId;
     const accountAddress = resolveAccountAddress(variables.account);
     const userAddress =
@@ -1404,6 +1495,27 @@ export class WagmiEventHandler {
     }
 
     return connection.accounts[0];
+  }
+
+  /**
+   * Whether any live connection still holds this address.
+   *
+   * Distinguishes "the user switched away from this account" (gone from every
+   * connection) from "this account merely stopped being the current one"
+   * (still connected through its own connector).
+   */
+  private isAddressConnected(state: WagmiState, address: string): boolean {
+    const wanted = address.toLowerCase();
+    let found = false;
+    state.connections.forEach((connection) => {
+      if (
+        !found &&
+        connection.accounts.some((a: string) => a.toLowerCase() === wanted)
+      ) {
+        found = true;
+      }
+    });
+    return found;
   }
 
   /**

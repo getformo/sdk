@@ -87,3 +87,7 @@ example/cra-script-tag/public/sdk
 
 # c8 / istanbul output
 coverage/
+
+# Local MCP / browser-automation scratch
+.playwright-mcp/
+.mcp.json
