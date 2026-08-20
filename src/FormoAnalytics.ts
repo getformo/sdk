@@ -1195,17 +1195,22 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Event emission is controlled conditionally inside the handlers
       this.registerAccountsChangedListener(provider);
 
-      // Register other listeners based on autocapture configuration
-      if (this.isAutocaptureEnabled("chain")) {
-        this.registerChainChangedListener(provider);
-        // Learn this provider's chain once, off the user's critical path, so
-        // an autocaptured request never has to ask.
-        this.primeProviderChain(provider);
-      }
+      // `chainChanged` and `connect` are registered UNCONDITIONALLY: they are
+      // how this provider's chain is observed, and every signature and
+      // transaction has to be labelled with it. Gating registration on
+      // `autocapture.chain` conflated observing a chain with reporting one, so
+      // `{ chain: false, signature: true }` left the chain frozen at whatever
+      // was first seen - a switch to an excluded chain went unnoticed and its
+      // signatures were emitted under the old, allowed chain. Whether an
+      // event is emitted is decided inside each handler.
+      this.registerChainChangedListener(provider);
+      this.registerConnectListener(provider);
 
-      if (this.isAutocaptureEnabled("connect")) {
-        this.registerConnectListener(provider);
-      }
+      // Seed the chain from the provider's own synchronous state if it exposes
+      // one. Deliberately a property read and never an RPC: see
+      // resolveChainIdForProvider for why nothing analytics-only may go on the
+      // wallet's transport.
+      this.seedProviderChainFromState(provider);
 
       if (this.isAutocaptureEnabled("signature") || this.isAutocaptureEnabled("transaction")) {
         this.registerRequestListeners(provider);
@@ -2632,15 +2637,31 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Learn a provider's chain once, in the background, when it is first tracked.
+   * Seed a provider's chain from whatever it already exposes synchronously.
    *
-   * Deliberately outside any user-initiated request, so a slow or stalled
-   * wallet delays nothing the user is waiting on.
+   * Most EIP-1193 implementations carry a `chainId` property (MetaMask,
+   * WalletConnect, Coinbase). Reading it costs nothing and cannot block.
+   *
+   * There is deliberately no RPC fallback. An earlier version probed with
+   * `eth_chainId` when a provider was first tracked, on the theory that
+   * tracking time is off the user's critical path. It is not: a serialized
+   * transport has ONE queue, so a stalled probe sits in front of every later
+   * signature and transaction the dapp makes. It could also land out of order
+   * - a slow probe response overwriting a newer `chainChanged` - and relabel
+   * events onto a chain the wallet had already left.
+   *
+   * A provider that exposes nothing stays unknown until it emits
+   * `chainChanged` or `connect`, and unknown is reported honestly as 0.
    */
-  private primeProviderChain(provider: EIP1193Provider): void {
-    void this.getCurrentChainId(provider)
-      .then((chainId) => this.rememberProviderChain(provider, chainId))
-      .catch(() => undefined);
+  private seedProviderChainFromState(provider: EIP1193Provider): void {
+    const raw = (provider as unknown as { chainId?: unknown }).chainId;
+    const chainId =
+      typeof raw === "string"
+        ? parseChainId(raw)
+        : typeof raw === "number"
+          ? raw
+          : undefined;
+    this.rememberProviderChain(provider, chainId);
   }
 
   private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {

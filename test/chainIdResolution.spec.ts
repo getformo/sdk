@@ -349,6 +349,89 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((formo as any)._evmAddress, "active address untouched").to.be.undefined;
   });
 
+  it("seeds the chain from the provider's own state when tracking starts", async () => {
+    // Covers the wiring, not just the helper. Note this goes through
+    // trackEIP1193Provider, so it would catch any RPC reintroduced there.
+    const tracker = await makeFormo({ tracking: true });
+    const rawRequest = sandbox.stub().rejects(new Error("no RPC may be issued"));
+    const provider: any = {
+      chainId: `0x${OTHER_CHAIN.toString(16)}`,
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: rawRequest,
+    };
+    // Wagmi mode short-circuits provider tracking, so turn it off for this.
+    (tracker as any).isWagmiMode = false;
+
+    (tracker as any).trackEIP1193Provider(provider);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
+    const methods = rawRequest.getCalls().map((c: any) => c.args[0]?.method);
+    expect(methods, "no eth_chainId at tracking time").to.not.include("eth_chainId");
+  });
+
+  it("issues no RPC at all when tracking a provider that exposes no chain", async () => {
+    // The probe this replaces sat on the wallet's single queue, so a stalled
+    // one blocked every later signature and transaction the dapp made. Better
+    // to report the chain as unknown.
+    const tracker = await makeFormo({ tracking: true });
+    const rawRequest = sandbox.stub().rejects(new Error("no RPC may be issued"));
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: rawRequest,
+    };
+    (tracker as any).isWagmiMode = false;
+
+    (tracker as any).trackEIP1193Provider(provider);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(rawRequest.called, "no RPC issued").to.be.false;
+    expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(0);
+  });
+
+  it("observes chain changes even when chain autocapture is off", async () => {
+    // Observing a chain and reporting one are different concerns. Gating the
+    // listener on autocapture.chain froze the chain at whatever was first
+    // seen, so a switch to an excluded chain went unnoticed and its
+    // signatures were emitted under the old, allowed chain.
+    const tracker = await makeFormo({
+      tracking: true,
+      autocapture: { chain: false, signature: true },
+    });
+    const provider: any = {
+      chainId: `0x${ACTIVE_CHAIN.toString(16)}`,
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (tracker as any).isWagmiMode = false;
+    (tracker as any).trackEIP1193Provider(provider);
+    await new Promise((r) => setTimeout(r, 20));
+    expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(ACTIVE_CHAIN);
+
+    // A chainChanged listener must have been registered despite chain: false.
+    const registered = provider.on
+      .getCalls()
+      .map((c: any) => c.args[0]);
+    expect(registered, "chainChanged observed").to.include("chainChanged");
+
+    await (tracker as any).onChainChanged(
+      provider,
+      `0x${OTHER_CHAIN.toString(16)}`
+    );
+    expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
+  });
+
+
+
+  it("reports the active chain when asked without a provider", async () => {
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    expect((formo as any).resolveChainIdForProvider(undefined)).to.equal(ACTIVE_CHAIN);
+  });
+
+
   it("refuses a chain-scoped event whose chain is unknown when exclusions are set", async () => {
     // 0 is in no exclusion list, so treating "unknown" as "allowed" would let
     // through exactly the events an operator excluded.
@@ -383,11 +466,23 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xsigned"),
     };
-    await announceChain(excluded, other, OTHER_CHAIN);
+    // Seeded directly, NOT via onChainChanged: that method treats a chain
+    // event from a different provider as a wallet switch, makes it active and
+    // clears central state, so the secondary chain would become the central
+    // one and the test would pass even against the old central-chain gate.
+    (excluded as any).rememberProviderChain(other, OTHER_CHAIN);
     (excluded as any).registerRequestListeners(other);
     await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
 
+    expect(
+      (excluded as any)._provider,
+      "the active provider must still be the active one"
+    ).to.equal(active);
+    expect(
+      (excluded as any)._evmChainId,
+      "central chain must still be the active provider's"
+    ).to.equal(ACTIVE_CHAIN);
     expect(addEvent.called, "excluded chain must not be tracked").to.be.false;
   });
 
@@ -406,11 +501,15 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xsigned"),
     };
-    await announceChain(excluded, other, OTHER_CHAIN);
+    (excluded as any).rememberProviderChain(other, OTHER_CHAIN);
     (excluded as any).registerRequestListeners(other);
     await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
 
+    expect(
+      (excluded as any)._evmChainId,
+      "central chain must still be the excluded active one"
+    ).to.equal(ACTIVE_CHAIN);
     expect(addEvent.called, "allowed chain must still be tracked").to.be.true;
   });
 
