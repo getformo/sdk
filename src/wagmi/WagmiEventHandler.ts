@@ -803,6 +803,10 @@ export class WagmiEventHandler {
             return;
           }
 
+          // A wallet superseded without an intervening `disconnected` - a
+          // `reconnecting` flap landing on a different account - is handled by
+          // `reconcileWithLiveState()`, which releases the old wallet (and its
+          // marker) before re-seeding. Nothing to do here.
           this.trackingState.lastAddress = address;
           this.trackingState.lastChainId = chainId;
           this.trackingState.lastConnectionId = state.current;
@@ -890,9 +894,26 @@ export class WagmiEventHandler {
     const tracked = this.trackingState.lastAddress;
 
     if (!live && !tracked) return;
-    // A differing address while still connected is an account switch, which
-    // has its own path and does not take this lock.
-    if (live && tracked) return;
+    if (live && tracked) {
+      // Same wallet: nothing to reconcile.
+      if (live.toLowerCase() === tracked.toLowerCase()) return;
+      // Different wallet. Wagmi moved from one to another while the lock was
+      // held, so BOTH status callbacks were dropped. Returning here would
+      // leave every later signature and transaction attributed to the wallet
+      // the user has already left.
+      logger.info(
+        "WagmiEventHandler: Wallet changed while the lock was held, re-adopting",
+        { from: tracked, to: live }
+      );
+      this.reconciling = true;
+      try {
+        this.releaseTrackedWallet();
+        this.seedFromCurrentState();
+      } finally {
+        this.reconciling = false;
+      }
+      return;
+    }
 
     this.reconciling = true;
     try {
@@ -1215,12 +1236,19 @@ export class WagmiEventHandler {
     // The chain arriving can be what completes a connection the constructor
     // saw only half of. Adopt it now rather than waiting for a status change
     // that an unchanged connection will never produce.
-    if (!this.trackingState.lastAddress) {
+    //
+    // Also retries a wallet that IS adopted but was never announced - seeded
+    // on an excluded chain, or while tracking was off. Gating this on
+    // `!lastAddress` alone meant such a wallet could switch to an allowed
+    // chain and get a `chain` event without ever getting its `connect`.
+    if (!this.trackingState.lastAddress || !this.isCurrentWalletAnnounced()) {
+      const announcedBefore = this.isCurrentWalletAnnounced();
       this.retryAdoption();
       // The seed emits the connect and records the chain itself. Falling
       // through would emit a spurious `chain` for a wallet whose first
       // observed chain this is.
-      if (this.trackingState.lastAddress) return;
+      if (!announcedBefore && this.isCurrentWalletAnnounced()) return;
+      if (this.trackingState.lastAddress && !announcedBefore) return;
     }
 
     logger.info("WagmiEventHandler: Chain changed", {
