@@ -63,13 +63,6 @@ import { SolanaManager } from "./solana/SolanaManager";
 import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
 
-/**
- * Ceiling on the `eth_chainId` lookup used to attribute an autocaptured
- * request to the wallet that is handling it. A stalled or disconnected
- * provider can leave that call pending indefinitely; analytics must degrade
- * to an unknown chain rather than strand the event.
- */
-const CHAIN_ID_LOOKUP_TIMEOUT_MS = 2000;
 
 /**
  * Constants for provider switching reasons
@@ -102,6 +95,14 @@ export class FormoAnalytics implements IFormoAnalytics {
   private get _evmChainId(): ChainID | undefined {
     return this._chainState.evm.chainId;
   }
+
+  /**
+   * Last known chain per tracked provider, fed by `chainChanged` / `connect`
+   * and by a one-off probe at tracking time. Read synchronously when labelling
+   * an autocaptured event, so the wallet's request transport is never used for
+   * analytics. Weak so an untracked provider can be collected.
+   */
+  private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
   private _providerListenersMap: Map<
     EIP1193Provider,
@@ -1197,6 +1198,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Register other listeners based on autocapture configuration
       if (this.isAutocaptureEnabled("chain")) {
         this.registerChainChangedListener(provider);
+        // Learn this provider's chain once, off the user's critical path, so
+        // an autocaptured request never has to ask.
+        this.primeProviderChain(provider);
       }
 
       if (this.isAutocaptureEnabled("connect")) {
@@ -1558,6 +1562,11 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const nextChainId = parseChainId(chainIdHex);
 
+    // Record it for THIS provider regardless of which one is active. This is
+    // the only way an autocaptured event from a non-active wallet can learn
+    // its chain without putting an RPC on that wallet's transport.
+    this.rememberProviderChain(provider, nextChainId);
+
     // Only handle chain changes for the active provider (or if none is set yet)
     if (this.isProviderMismatch(provider)) {
       this.handleProviderMismatch(provider);
@@ -1653,6 +1662,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
 
       const chainId = parseChainId(connection.chainId);
+      // Record it for this provider before anything can bail out below.
+      this.rememberProviderChain(provider, chainId);
       const address = await this.getAddress(provider);
 
       if (chainId && address) {
@@ -1798,22 +1809,21 @@ export class FormoAnalytics implements IFormoAnalytics {
         // below is never reported as unhandled. The real handling is there.
         responsePromise.catch(() => undefined);
 
-        // Each fire-and-forget block awaits the same promise, so the lookup
-        // happens once per call.
-        const chainIdPromise = this.resolveChainIdForProvider(provider).catch(
-          () => 0
-        );
+        // One synchronous snapshot for the whole lifecycle of this call, taken
+        // before the wallet can change anything. No RPC: see
+        // resolveChainIdForProvider.
+        const capturedChainId = this.resolveChainIdForProvider(provider);
         // Fire-and-forget tracking
         (async () => {
           try {
-            const capturedChainId = await chainIdPromise;
             this.signature({
               status: SignatureStatus.REQUESTED,
               ...this.buildSignatureEventPayload(
                 method,
                 params,
                 undefined,
-                capturedChainId
+                capturedChainId,
+                provider
               ),
             });
           } catch (e) {
@@ -1827,14 +1837,14 @@ export class FormoAnalytics implements IFormoAnalytics {
           if (response) {
             (async () => {
               try {
-                const capturedChainId = await chainIdPromise;
-                this.signature({
+                    this.signature({
                   status: SignatureStatus.CONFIRMED,
                   ...this.buildSignatureEventPayload(
                     method,
                     params,
                     response,
-                    capturedChainId
+                    capturedChainId,
+                    provider
                   ),
                 });
               } catch (e) {
@@ -1852,14 +1862,14 @@ export class FormoAnalytics implements IFormoAnalytics {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
-                const capturedChainId = await chainIdPromise;
                 this.signature({
                   status: SignatureStatus.REJECTED,
                   ...this.buildSignatureEventPayload(
                     method,
                     params,
                     undefined,
-                    capturedChainId
+                    capturedChainId,
+                    provider
                   ),
                 });
               } catch (e) {
@@ -1891,16 +1901,14 @@ export class FormoAnalytics implements IFormoAnalytics {
         // One snapshot for the whole lifecycle of this call. Resolving per
         // status would let a network switch made while the prompt is open
         // split STARTED and BROADCASTED across different chains.
-        const txChainIdPromise = this.resolveChainIdForProvider(provider).catch(
-          () => 0
-        );
+        const txChainId = this.resolveChainIdForProvider(provider);
 
         (async () => {
           try {
             const payload = await this.buildTransactionEventPayload(
               params,
               provider,
-              txChainIdPromise
+              txChainId
             );
             this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
@@ -1916,7 +1924,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               const payload = await this.buildTransactionEventPayload(
                 params,
                 provider,
-                txChainIdPromise
+                txChainId
               );
               this.transaction({
                 status: TransactionStatus.BROADCASTED,
@@ -1941,7 +1949,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                 const payload = await this.buildTransactionEventPayload(
                   params,
                   provider,
-                  txChainIdPromise
+                  txChainId
                 );
                 this.transaction({
                   status: TransactionStatus.REJECTED,
@@ -2286,12 +2294,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       // the exclusion forbids - and would drop an allowed event whenever the
       // active provider happened to sit on an excluded chain.
       const chainToCheck = eventChainId ?? this.currentChainId;
-      if (
-        excludeChains.length > 0 &&
-        chainToCheck &&
-        excludeChains.includes(chainToCheck)
-      ) {
-        return false;
+      if (excludeChains.length > 0) {
+        // Fail CLOSED on an unknown chain. `resolveChainIdForProvider` reports
+        // 0 when it has never heard a chain from the signing wallet, and 0 is
+        // in no exclusion list, so treating it as "not excluded" would let
+        // exactly the events an operator excluded through - the wallet on the
+        // excluded chain is often the one we know least about. An explicit
+        // exclusion is a directive, so an unresolvable chain is refused.
+        if (eventChainId === 0) return false;
+        if (chainToCheck && excludeChains.includes(chainToCheck)) return false;
       }
 
       // If nothing is excluded, tracking is enabled
@@ -2577,56 +2588,59 @@ export class FormoAnalytics implements IFormoAnalytics {
    * that cached value describes the wrong wallet, and tagging the event with
    * it silently mis-attributes the chain.
    *
-   * Only the mismatched case pays for an `eth_chainId` round trip. The common
-   * case, a request from the active provider, still reads the cache, which
-   * matters because the signature path awaits this before opening the wallet
-   * prompt.
+   * Answered entirely from a per-provider snapshot. This is deliberately
+   * SYNCHRONOUS and never issues an RPC.
+   *
+   * An earlier version called `eth_chainId` on the signing provider and
+   * time-boxed it with `Promise.race`. That is not safe: the race abandons the
+   * SDK's promise but cannot cancel the provider's request. On a transport
+   * that serializes - WalletConnect's relay socket, the very case this path
+   * exists to serve - an abandoned lookup stays at the head of the wallet's
+   * queue, and every later RPC the dapp makes queues behind it until reload.
+   * Mislabelling a chain is a reporting defect; wedging the user's wallet is
+   * not acceptable to avoid one.
+   *
+   * When nothing is known, this reports 0 ("unknown") rather than guessing
+   * with the active provider's chain, which is known-wrong for another wallet.
    */
-  private async resolveChainIdForProvider(
-    provider?: EIP1193Provider
-  ): Promise<number> {
-    // The cache is only trustworthy for the provider whose `chainChanged`
-    // events maintain it. Any other case asks the signer itself.
-    //
-    // `!this._provider` counts as "other": loadActiveWallet() restores a
-    // persisted chainId with no provider attached, so a request arriving
-    // before connect establishes `_provider` would otherwise be tagged with a
-    // chain from a previous session.
-    const cacheApplies = !!provider && provider === this._provider;
-
-    if (!cacheApplies && provider) {
-      // Deliberately no fall back to `_evmChainId`. That value describes a
-      // different wallet, so it is known-wrong for this request.
-      return this.timeBoxedChainId(provider);
+  private resolveChainIdForProvider(provider?: EIP1193Provider): number {
+    if (provider) {
+      const known = this._providerChainIds.get(provider);
+      if (known) return known;
+      // Only the active provider's chain is described by the central cache.
+      if (provider === this._provider && this._evmChainId) {
+        return this._evmChainId;
+      }
+      // A tracked provider we have never heard a chain from. Deliberately no
+      // fall back to `_evmChainId`: it belongs to a different wallet.
+      return 0;
     }
 
-    if (this._evmChainId) return this._evmChainId;
-
-    // Empty cache: the active provider can stall too, so this path needs the
-    // same ceiling rather than awaiting `eth_chainId` indefinitely.
-    return this.timeBoxedChainId(provider);
+    return this._evmChainId || 0;
   }
 
   /**
-   * `getCurrentChainId` with a ceiling. A stalled or disconnected wallet can
-   * leave `eth_chainId` pending forever, and an analytics lookup must never
-   * strand the event that depends on it; 0 (unknown) is the fallback.
-   *
-   * The timer is cleared once the lookup settles, so a resolved call does not
-   * leave a pending timeout behind for every request.
+   * Record a provider's chain. Fed by `chainChanged` and `connect`, and by the
+   * one-off probe at tracking time - never from inside a user request.
    */
-  private async timeBoxedChainId(provider?: EIP1193Provider): Promise<number> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        this.getCurrentChainId(provider),
-        new Promise<number>((resolve) => {
-          timer = setTimeout(() => resolve(0), CHAIN_ID_LOOKUP_TIMEOUT_MS);
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+  private rememberProviderChain(
+    provider: EIP1193Provider | undefined,
+    chainId: number | undefined
+  ): void {
+    if (!provider || !chainId) return;
+    this._providerChainIds.set(provider, chainId);
+  }
+
+  /**
+   * Learn a provider's chain once, in the background, when it is first tracked.
+   *
+   * Deliberately outside any user-initiated request, so a slow or stalled
+   * wallet delays nothing the user is waiting on.
+   */
+  private primeProviderChain(provider: EIP1193Provider): void {
+    void this.getCurrentChainId(provider)
+      .then((chainId) => this.rememberProviderChain(provider, chainId))
+      .catch(() => undefined);
   }
 
   private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {
@@ -2657,7 +2671,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     params: unknown[],
     // Intentionally not read. Kept for positional call-site arity.
     _response?: unknown,
-    chainId?: number
+    chainId?: number,
+    provider?: EIP1193Provider
   ) {
     const rawAddress =
       method === "personal_sign"
@@ -2670,7 +2685,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     const effectiveChainId = chainId ?? this._evmChainId ?? undefined;
-    this.backfillActiveWallet(validAddress, effectiveChainId);
+    // Only the active provider may write central wallet state - see the same
+    // guard in buildTransactionEventPayload.
+    if (!provider || provider === this._provider || !this._provider) {
+      this.backfillActiveWallet(validAddress, effectiveChainId);
+    }
 
     const basePayload = {
       chainId: effectiveChainId,
@@ -2703,7 +2722,7 @@ export class FormoAnalytics implements IFormoAnalytics {
      * every status of one transaction on the same chain even if the user
      * switches network while the wallet prompt is open.
      */
-    chainIdPromise?: Promise<number>
+    capturedChainId?: number
   ) {
     const { data, from, to, value } = params[0] as {
       data: string;
@@ -2717,9 +2736,16 @@ export class FormoAnalytics implements IFormoAnalytics {
       throw new Error(`Invalid address in transaction payload: ${from}`);
     }
 
-    const chainId = await (chainIdPromise ??
-      this.resolveChainIdForProvider(provider));
-    this.backfillActiveWallet(validAddress, chainId);
+    const chainId =
+      capturedChainId ?? this.resolveChainIdForProvider(provider);
+    // Only the ACTIVE provider may write central wallet state. A request from
+    // a second, non-active wallet would otherwise overwrite the active
+    // provider's address and chain, and every later request through the active
+    // provider would then trust the other wallet's chain - persistent
+    // mis-attribution, and a way around `excludeChains`.
+    if (!provider || provider === this._provider || !this._provider) {
+      this.backfillActiveWallet(validAddress, chainId);
+    }
 
     return {
       chainId,

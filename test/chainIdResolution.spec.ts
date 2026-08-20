@@ -112,11 +112,16 @@ describe("Chain id resolution for autocaptured requests", () => {
     if (jsdom) jsdom.window.close();
   });
 
+  /** Feed the per-provider chain cache the way a real `chainChanged` would. */
+  const announceChain = (instance: any, provider: any, chainId: number) =>
+    instance.onChainChanged(provider, `0x${chainId.toString(16)}`);
+
   it("uses the signing provider's chain when it is not the active provider", async () => {
     const active = providerOnChain(ACTIVE_CHAIN);
     const other = providerOnChain(OTHER_CHAIN);
     (formo as any)._provider = active;
     (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    await announceChain(formo, other, OTHER_CHAIN);
 
     const payload = await (formo as any).buildTransactionEventPayload(
       [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
@@ -124,10 +129,71 @@ describe("Chain id resolution for autocaptured requests", () => {
     );
 
     expect(payload.chainId).to.equal(OTHER_CHAIN);
-    expect(other.request.calledWithMatch({ method: "eth_chainId" })).to.be.true;
   });
 
-  it("reads the cache for the active provider without an extra eth_chainId call", async () => {
+  it("never issues an RPC on the wallet's transport while signing", async () => {
+    // The lookup used to run on the signing provider and be time-boxed with
+    // Promise.race. A race cannot cancel the provider's request, so on a
+    // serialized transport (WalletConnect's relay socket) an abandoned
+    // eth_chainId sits at the head of the wallet's queue and wedges every
+    // later RPC the dapp makes. Nothing analytics-only may go on that wire.
+    const raw = sandbox.stub().callsFake(async ({ method }: any) => {
+      if (method === "eth_chainId") throw new Error("must not be called");
+      return "0xsigned";
+    });
+    const signer: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: raw,
+    };
+    // Wrapping replaces provider.request, so assert against the raw stub.
+    (formo as any).registerRequestListeners(signer);
+    await signer.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const methods = raw.getCalls().map((c: any) => c.args[0].method);
+    expect(methods).to.not.include("eth_chainId");
+  });
+
+  it("never issues an RPC on the wallet's transport while sending a transaction", async () => {
+    const raw = sandbox.stub().callsFake(async ({ method }: any) => {
+      if (method === "eth_chainId") throw new Error("must not be called");
+      return "0xtxhash";
+    });
+    const signer: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: raw,
+    };
+    // Wrapping replaces provider.request, so assert against the raw stub.
+    (formo as any).registerRequestListeners(signer);
+    await signer.request({
+      method: "eth_sendTransaction",
+      params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const methods = raw.getCalls().map((c: any) => c.args[0].method);
+    expect(methods).to.not.include("eth_chainId");
+  });
+
+  it("reports unknown rather than the active chain for a wallet it has never heard from", async () => {
+    const active = providerOnChain(ACTIVE_CHAIN);
+    const stranger = providerOnChain(OTHER_CHAIN);
+    (formo as any)._provider = active;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const payload = await (formo as any).buildTransactionEventPayload(
+      [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      stranger
+    );
+
+    // The cached chain belongs to a different wallet, so it is known-wrong
+    // here. 0 is the honest answer.
+    expect(payload.chainId).to.equal(0);
+  });
+
+  it("reads the active provider's chain from central state", async () => {
     const active = providerOnChain(ACTIVE_CHAIN);
     (formo as any)._provider = active;
     (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
@@ -138,32 +204,10 @@ describe("Chain id resolution for autocaptured requests", () => {
     );
 
     expect(payload.chainId).to.equal(ACTIVE_CHAIN);
-    // The signature path awaits this before opening the wallet prompt, so the
-    // common case must not pay for a round trip.
-    expect(active.request.called).to.be.false;
+    expect(active.request.called, "no RPC for the active provider").to.be.false;
   });
 
-  it("reports unknown rather than the active chain when the other provider cannot answer", async () => {
-    const active = providerOnChain(ACTIVE_CHAIN);
-    const broken = {
-      request: sandbox.stub().rejects(new Error("no")),
-      on: sandbox.stub(),
-      removeListener: sandbox.stub(),
-    };
-    (formo as any)._provider = active;
-    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
-
-    const payload = await (formo as any).buildTransactionEventPayload(
-      [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
-      broken as any
-    );
-
-    // The cached chain belongs to a different wallet, so it is known-wrong
-    // here. 0 is the honest answer.
-    expect(payload.chainId).to.equal(0);
-  });
-
-  it("asks the signing provider when no active provider is established yet", async () => {
+  it("does not inherit a persisted chain when no provider is active", async () => {
     // loadActiveWallet() restores a persisted chainId with no provider
     // attached; a request arriving before connect must not inherit it.
     (formo as any)._provider = undefined;
@@ -175,96 +219,72 @@ describe("Chain id resolution for autocaptured requests", () => {
       signer
     );
 
+    expect(payload.chainId).to.equal(0);
+  });
+
+  it("learns a provider's chain when it announces a connection", async () => {
+    const signer: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves([ADDRESS]),
+    };
+    await (formo as any).onConnected(signer, {
+      chainId: `0x${OTHER_CHAIN.toString(16)}`,
+    });
+
+    const payload = await (formo as any).buildTransactionEventPayload(
+      [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      signer
+    );
     expect(payload.chainId).to.equal(OTHER_CHAIN);
   });
 
-  it("forwards a signature immediately even if the chain lookup hangs", async () => {
-    // A stalled or disconnected wallet can leave eth_chainId pending forever.
-    // The analytics lookup must never hold the wallet prompt closed.
-    const active = providerOnChain(ACTIVE_CHAIN);
-    (formo as any)._provider = active;
-    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
-
-    let signatureForwarded = false;
-    const stalled: any = {
-      on: sandbox.stub(),
-      removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        if (method === "eth_chainId") return new Promise(() => undefined); // never settles
-        signatureForwarded = true;
-        return "0xsigned";
-      }),
-    };
-
-    (formo as any).registerRequestListeners(stalled);
-    const result = await stalled.request({
-      method: "personal_sign",
-      params: ["0x68690000", ADDRESS],
-    });
-
-    expect(signatureForwarded).to.be.true;
-    expect(result).to.equal("0xsigned");
-  });
-
   it("reuses one chain snapshot across a transaction's statuses", async () => {
-    const active = providerOnChain(ACTIVE_CHAIN);
-    (formo as any)._provider = active;
-    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
-
-    // A wallet that reports a different chain on each call, as it would if the
-    // user switched network while the prompt was open.
-    let call = 0;
     const drifting: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        if (method === "eth_chainId") return `0x${(++call === 1 ? 1 : 137).toString(16)}`;
-        return "0xtxhash";
-      }),
+      request: sandbox.stub().resolves("0xtxhash"),
     };
+    await announceChain(formo, drifting, ACTIVE_CHAIN);
+
     const seen: number[] = [];
-    sandbox.stub(formo, "transaction").callsFake((async (p: any) => {
-      seen.push(p.chainId);
+    sandbox.stub(formo, "transaction").callsFake((async (pl: any) => {
+      seen.push(pl.chainId);
     }) as any);
 
     (formo as any).registerRequestListeners(drifting);
-    await drifting.request({
+    const call = drifting.request({
       method: "eth_sendTransaction",
       params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
     });
+    // The wallet switches network while the prompt is open.
+    await announceChain(formo, drifting, 137);
+    await call;
     await new Promise((r) => setTimeout(r, 20));
 
     expect(seen.length).to.be.greaterThan(1);
-    expect(new Set(seen).size).to.equal(1);
+    expect(new Set(seen).size, "one snapshot for the whole call").to.equal(1);
+    expect(seen[0]).to.equal(ACTIVE_CHAIN);
   });
 
-  it("tags a rejected signature with the same shared chain", async () => {
-    // The 4001 path reads the same shared promise as REQUESTED, so a user
-    // declining in the wallet must still be attributed to the right chain.
-    const active = providerOnChain(ACTIVE_CHAIN);
-    (formo as any)._provider = active;
-    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
-
-    const seen: any[] = [];
-    sandbox.stub(formo, "signature").callsFake((async (p: any) => { seen.push(p); }) as any);
-
+  it("tags a rejected signature with the signing provider's chain", async () => {
     const rejecting: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+      request: sandbox.stub().callsFake(async () => {
         const err: any = new Error("User rejected");
         err.code = 4001;
         throw err;
       }),
     };
+    await announceChain(formo, rejecting, OTHER_CHAIN);
+
+    const seen: any[] = [];
+    sandbox.stub(formo, "signature").callsFake((async (pl: any) => { seen.push(pl); }) as any);
 
     (formo as any).registerRequestListeners(rejecting);
     try {
-      await rejecting.request({
-        method: "personal_sign",
-        params: ["0x68690000", ADDRESS],
-      });
+      await rejecting.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     } catch {
       /* the wallet's rejection must still propagate to the caller */
     }
@@ -275,24 +295,20 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(rejected.chainId).to.equal(OTHER_CHAIN);
   });
 
-  it("tags a rejected transaction with the same shared chain", async () => {
-    const active = providerOnChain(ACTIVE_CHAIN);
-    (formo as any)._provider = active;
-    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
-
-    const seen: any[] = [];
-    sandbox.stub(formo, "transaction").callsFake((async (p: any) => { seen.push(p); }) as any);
-
+  it("tags a rejected transaction with the signing provider's chain", async () => {
     const rejecting: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
+      request: sandbox.stub().callsFake(async () => {
         const err: any = new Error("User rejected");
         err.code = 4001;
         throw err;
       }),
     };
+    await announceChain(formo, rejecting, OTHER_CHAIN);
+
+    const seen: any[] = [];
+    sandbox.stub(formo, "transaction").callsFake((async (pl: any) => { seen.push(pl); }) as any);
 
     (formo as any).registerRequestListeners(rejecting);
     try {
@@ -305,49 +321,50 @@ describe("Chain id resolution for autocaptured requests", () => {
     }
     await new Promise((r) => setTimeout(r, 20));
 
-    const statuses = seen.map((e) => e.status);
-    expect(statuses).to.include("rejected");
-    // Every status of this one call shares the snapshot.
+    expect(seen.map((e) => e.status)).to.include("rejected");
     expect(new Set(seen.map((e) => e.chainId)).size).to.equal(1);
     expect(seen[0].chainId).to.equal(OTHER_CHAIN);
   });
 
-  it("time-boxes the active provider too when nothing is cached", async () => {
-    // The empty-cache path goes to the active provider, which can stall just
-    // as easily; without a ceiling the dependent event is stranded forever.
-    const stalled: any = {
-      on: sandbox.stub(),
-      removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(() => new Promise(() => undefined)),
-    };
-    // Order matters. `clearChainState("evm")` replaces the whole evm
-    // namespace, and the active provider lives inside it - clearing after
-    // assigning would wipe the provider and send this down the
-    // mismatched-provider branch instead of the empty-cache one under test.
-    (formo as any).clearChainState("evm");
-    (formo as any)._provider = stalled;
-    expect((formo as any)._provider, "active provider is set").to.equal(stalled);
-    expect((formo as any)._evmChainId, "no cached chain").to.be.undefined;
+  it("does not let a non-active provider overwrite active wallet state", async () => {
+    // Provider A is active with a known chain but no address yet. A signature
+    // through B must not write B's address and chain into central state, or
+    // every later request through A is attributed to B's chain.
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = active;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN });
+    const other = providerOnChain(OTHER_CHAIN);
+    // Seeded directly rather than through onChainChanged: a `chainChanged`
+    // from a different provider is a deliberate wallet switch and moves the
+    // active provider. Here the point is a *non-active* provider signing.
+    (formo as any).rememberProviderChain(other, OTHER_CHAIN);
 
-    const clock = sandbox.useFakeTimers({ shouldAdvanceTime: true });
-    const pending = (formo as any).resolveChainIdForProvider(stalled);
-    await clock.tickAsync(2100);
-    clock.restore();
+    const OTHER_ADDRESS = "0x1111111111111111111111111111111111111111";
+    await (formo as any).buildTransactionEventPayload(
+      [{ from: OTHER_ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      other
+    );
 
-    expect(await pending).to.equal(0);
+    expect((formo as any)._evmChainId, "active chain untouched").to.equal(ACTIVE_CHAIN);
+    expect((formo as any)._evmAddress, "active address untouched").to.be.undefined;
   });
 
-  it("clears the timeout once the lookup settles", async () => {
-    const active = providerOnChain(ACTIVE_CHAIN);
-    (formo as any).clearChainState("evm");
-    (formo as any)._provider = active;
-    const clearSpy = sandbox.spy(global, "clearTimeout");
+  it("refuses a chain-scoped event whose chain is unknown when exclusions are set", async () => {
+    // 0 is in no exclusion list, so treating "unknown" as "allowed" would let
+    // through exactly the events an operator excluded.
+    const excluded = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((excluded as any).eventManager, "addEvent").resolves();
 
-    const resolved = await (formo as any).resolveChainIdForProvider(active);
+    const stranger: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (excluded as any).registerRequestListeners(stranger);
+    await stranger.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
 
-    expect(resolved).to.equal(ACTIVE_CHAIN);
-    // Otherwise every autocaptured request leaves a live 2s timer behind.
-    expect(clearSpy.called).to.be.true;
+    expect(addEvent.called, "unknown chain must fail closed").to.be.false;
   });
 
   it("excludes an event on the signing provider's chain, not the active one", async () => {
@@ -364,11 +381,9 @@ describe("Chain id resolution for autocaptured requests", () => {
     const other: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
-        return "0xsigned";
-      }),
+      request: sandbox.stub().resolves("0xsigned"),
     };
+    await announceChain(excluded, other, OTHER_CHAIN);
     (excluded as any).registerRequestListeners(other);
     await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
@@ -389,11 +404,9 @@ describe("Chain id resolution for autocaptured requests", () => {
     const other: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
-        return "0xsigned";
-      }),
+      request: sandbox.stub().resolves("0xsigned"),
     };
+    await announceChain(excluded, other, OTHER_CHAIN);
     (excluded as any).registerRequestListeners(other);
     await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
@@ -401,62 +414,6 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(addEvent.called, "allowed chain must still be tracked").to.be.true;
   });
 
-  it("issues the wallet request before starting the chain lookup", async () => {
-    // A provider that serializes RPC - WalletConnect's relay socket - runs
-    // requests in the order it receives them. If the chain lookup goes first,
-    // a stalled lookup holds the wallet prompt closed no matter what the SDK
-    // does with its own promise.
-    const order: string[] = [];
-    const serialized: any = {
-      on: sandbox.stub(),
-      removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        order.push(method);
-        if (method === "eth_chainId") return `0x${ACTIVE_CHAIN.toString(16)}`;
-        return "0xsigned";
-      }),
-    };
 
-    (formo as any).registerRequestListeners(serialized);
-    await serialized.request({
-      method: "personal_sign",
-      params: ["0x68690000", ADDRESS],
-    });
-    await new Promise((r) => setTimeout(r, 20));
 
-    expect(order[0], `saw ${order.join(" then ")}`).to.equal("personal_sign");
-  });
-
-  it("issues the transaction before starting the chain lookup", async () => {
-    const order: string[] = [];
-    const serialized: any = {
-      on: sandbox.stub(),
-      removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        order.push(method);
-        if (method === "eth_chainId") return `0x${ACTIVE_CHAIN.toString(16)}`;
-        return "0xtxhash";
-      }),
-    };
-
-    (formo as any).registerRequestListeners(serialized);
-    await serialized.request({
-      method: "eth_sendTransaction",
-      params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
-    });
-    await new Promise((r) => setTimeout(r, 20));
-
-    expect(order[0], `saw ${order.join(" then ")}`).to.equal("eth_sendTransaction");
-  });
-
-  it("queries the provider when no chain is cached yet", async () => {
-    const provider = providerOnChain(OTHER_CHAIN);
-
-    const payload = await (formo as any).buildTransactionEventPayload(
-      [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
-      provider
-    );
-
-    expect(payload.chainId).to.equal(OTHER_CHAIN);
-  });
 });
