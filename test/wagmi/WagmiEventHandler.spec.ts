@@ -3947,6 +3947,95 @@ describe("WagmiEventHandler", () => {
       expect(true).to.be.true;
     });
 
+    it("should emit one connect when two overlapping handlers see one transition", async () => {
+      // Strict Mode, or an options change whose replacement mounts before the
+      // old one is torn down: both handlers subscribe to the same config and
+      // both observe the same transition. One user action, one connect.
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const listenerA = statusListener;
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const listenerB = statusListener;
+      await settle();
+      expect(listenerA, "two distinct listeners").to.not.equal(listenerB);
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      await listenerA!("connected", "disconnected");
+      await listenerB!("connected", "disconnected");
+      await settle();
+
+      expect(mockFormo.connect.callCount, "one connect for one action").to.equal(1);
+    });
+
+    it("should still emit a genuine reconnect after a disconnect", async () => {
+      // The counterpart: consulting the marker on the connect path must not
+      // swallow a real reconnect. The disconnect path removes the marker.
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      await statusListener!("connected", "disconnected");
+      await settle();
+      expect(mockFormo.connect.callCount).to.equal(1);
+
+      (mockWagmiConfig as any).setState(createMockState());
+      await statusListener!("disconnected", "connected");
+      await settle();
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      await statusListener!("connected", "disconnected");
+      await settle();
+
+      expect(mockFormo.connect.callCount, "the reconnect still emits").to.equal(2);
+    });
+
+    it("should not let one destination keep another's markers alive", async () => {
+      // Liveness is per write key. A global count let a mounted destination B
+      // preserve A's markers, so a reconnect that happened while A was
+      // unmounted had its genuine connect suppressed when A returned.
+      const clock = sandbox.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const other: any = {
+          connect: sandbox.stub().resolves(),
+          disconnect: sandbox.stub().resolves(),
+          chain: sandbox.stub().resolves(),
+          signature: sandbox.stub().resolves(),
+          transaction: sandbox.stub().resolves(),
+          isAutocaptureEnabled: sandbox.stub().returns(true),
+          willTrackEvent: sandbox.stub().returns(true),
+          syncWalletState: sandbox.stub().callsFake((prm: any) => {
+            other.currentAddress = prm?.address;
+          }),
+          currentAddress: undefined,
+          writeKey: "other-write-key",
+        };
+
+        (mockWagmiConfig as any).setState(createConnectedState());
+        const a = new WagmiEventHandler(
+          mockFormo as any, mockWagmiConfig, mockQueryClient
+        );
+        // Destination B stays mounted for the whole test.
+        new WagmiEventHandler(other, mockWagmiConfig, mockQueryClient);
+        await clock.tickAsync(10);
+        expect(mockFormo.connect.calledOnce).to.be.true;
+
+        // A unmounts and stays away past the grace window; B never does.
+        a.cleanup();
+        await clock.tickAsync(MARKER_GRACE_MS + 100);
+
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+        await clock.tickAsync(10);
+
+        expect(
+          mockFormo.connect.callCount,
+          "A's markers expired independently of B"
+        ).to.equal(2);
+      } finally {
+        clock.restore();
+      }
+    });
+
     it("should still emit connect for a later connection after an empty seed", async () => {
       (mockWagmiConfig as any).setState(createMockState());
 

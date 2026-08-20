@@ -84,27 +84,40 @@ const announceKey = (writeKey: string, address: string) =>
  */
 export const MARKER_GRACE_MS = 3_000;
 
-/** Handlers currently observing wagmi. Markers are only trusted while > 0. */
-let liveHandlers = 0;
-let markerExpiry: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Liveness is tracked PER WRITE KEY, because markers are.
+ *
+ * A global count would let one destination keep another's markers alive: with
+ * destination B still mounted, A's would never expire, so a wallet that
+ * disconnected and reconnected while A was unmounted would have its genuine
+ * connect suppressed when A came back.
+ */
+const liveHandlers = new Map<string, number>();
+const markerExpiry = new Map<string, ReturnType<typeof setTimeout>>();
 
-function retainMarkers(): void {
-  liveHandlers += 1;
-  if (markerExpiry) {
-    clearTimeout(markerExpiry);
-    markerExpiry = undefined;
+function retainMarkers(writeKey: string): void {
+  liveHandlers.set(writeKey, (liveHandlers.get(writeKey) ?? 0) + 1);
+  const pending = markerExpiry.get(writeKey);
+  if (pending) {
+    clearTimeout(pending);
+    markerExpiry.delete(writeKey);
   }
 }
 
-function releaseMarkers(): void {
-  liveHandlers = Math.max(0, liveHandlers - 1);
-  if (liveHandlers > 0 || markerExpiry) return;
-  markerExpiry = setTimeout(() => {
-    markerExpiry = undefined;
-    announcedConnections.clear();
+function releaseMarkers(writeKey: string): void {
+  const remaining = Math.max(0, (liveHandlers.get(writeKey) ?? 0) - 1);
+  liveHandlers.set(writeKey, remaining);
+  if (remaining > 0 || markerExpiry.has(writeKey)) return;
+  const timer = setTimeout(() => {
+    markerExpiry.delete(writeKey);
+    const prefix = `${writeKey}:`;
+    announcedConnections.forEach((key) => {
+      if (key.startsWith(prefix)) announcedConnections.delete(key);
+    });
   }, MARKER_GRACE_MS);
   // Never hold a Node process (or a test run) open for this.
-  (markerExpiry as unknown as { unref?: () => void }).unref?.();
+  (timer as unknown as { unref?: () => void }).unref?.();
+  markerExpiry.set(writeKey, timer);
 }
 
 /**
@@ -132,11 +145,9 @@ function markAnnounced(key: string): void {
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {
   announcedConnections.clear();
-  liveHandlers = 0;
-  if (markerExpiry) {
-    clearTimeout(markerExpiry);
-    markerExpiry = undefined;
-  }
+  liveHandlers.clear();
+  markerExpiry.forEach((timer) => clearTimeout(timer));
+  markerExpiry.clear();
 }
 
 /**
@@ -268,7 +279,7 @@ export class WagmiEventHandler {
     // Keep the page-load markers alive across an SDK rebuild. Must run before
     // the seed, so a handler created moments after its predecessor was torn
     // down still sees what that predecessor announced.
-    retainMarkers();
+    retainMarkers(this.formo.writeKey);
 
     // Set up connection/disconnection/chain listeners
     this.setupConnectionListeners();
@@ -703,7 +714,24 @@ export class WagmiEventHandler {
             // seed-adopted wallets were deduplicated, so a wallet that
             // connected while this handler was alive would be re-emitted by
             // the seed of a rebuilt handler over the very same connection.
-            markAnnounced(announceKey(this.formo.writeKey, address));
+            //
+            // Consulted as well as written. Two handlers can overlap on one
+            // wagmi config - Strict Mode, or an options change whose
+            // replacement mounts before the old one is torn down - and both
+            // observe the same `disconnected -> connected` transition. Without
+            // this check each emitted its own connect for one user action.
+            // A genuine reconnect is unaffected: the disconnect path removes
+            // the marker, so the next connect is unmarked again.
+            const walletKey = announceKey(this.formo.writeKey, address);
+            if (announcedConnections.has(walletKey)) {
+              logger.debug(
+                "WagmiEventHandler: Connect already announced for this wallet, not emitting again",
+                { address }
+              );
+              this.trackingState.lastStatus = status;
+              return;
+            }
+            markAnnounced(walletKey);
             const connectorName = this.getConnectorName(state);
             await this.formo.connect(
               { chainId, address },
@@ -1644,7 +1672,7 @@ export class WagmiEventHandler {
       this.disposed = true;
       // Start the grace period. If nothing re-mounts, the markers are dropped
       // so a reconnect that happens while unobserved still emits.
-      releaseMarkers();
+      releaseMarkers(this.formo.writeKey);
     }
 
     for (const unsubscribe of this.unsubscribers) {
