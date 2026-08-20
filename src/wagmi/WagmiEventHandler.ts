@@ -391,7 +391,9 @@ export class WagmiEventHandler {
       (key, prevKey) => {
         const [, address] = key.split("|");
         const [, prevAddress] = (prevKey ?? "|").split("|");
-        this.handleActiveAddressChange(
+        // Returned so callers that can await it (tests) observe completion.
+        // Wagmi itself ignores the value.
+        return this.handleActiveAddressChange(
           address || undefined,
           prevAddress || undefined
         );
