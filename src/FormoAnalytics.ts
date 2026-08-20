@@ -1112,6 +1112,19 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Opt out of tracking.
    * @returns {void}
    */
+  /**
+   * Whether an event would currently be sent.
+   *
+   * Exposed for integrations that keep their own "already reported" state.
+   * `syncWalletState()` can accept a wallet that `trackEvent()` then drops -
+   * `tracking: false`, or a chain in `excludeChains` - and an integration that
+   * marked it as reported would stay silent about that wallet even after the
+   * configuration changed to allow it.
+   */
+  public willTrackEvent(): boolean {
+    return this.shouldTrack();
+  }
+
   public optOutTracking(): void {
     logger.info("Opting out of tracking");
 
@@ -1136,6 +1149,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Remove opt-out flag
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
+
+    // A wallet connected while opted out was declined by syncWalletState, and
+    // an unchanged wagmi connection produces no status or chain update to
+    // retry on. Without this, opting back in leaves that wallet invisible for
+    // the rest of the page load.
+    this.wagmiHandler?.retryAdoption();
 
     logger.info("Successfully opted back into tracking");
   }
@@ -2068,19 +2087,6 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @internal Also read by `identifyPrivyUser` (via a structural cast) so the
    * Privy sync skips chain reconciliation and emission for suppressed visitors.
    */
-  /**
-   * Whether an event carrying this chain would currently be sent.
-   *
-   * Exposed for integrations that keep their own "already reported" state.
-   * `syncWalletState()` can accept a wallet that `trackEvent()` then drops -
-   * `tracking: false`, or a chain in `excludeChains` - and an integration that
-   * marked it as reported would stay silent about that wallet even after the
-   * configuration changed to allow it.
-   */
-  public willTrackEvent(): boolean {
-    return this.shouldTrack();
-  }
-
   isTrackingSuppressed(): boolean {
     return this.hasOptedOutTracking() || this.isCurrentEnvironmentExcluded();
   }
