@@ -234,6 +234,11 @@ export class WagmiEventHandler {
      * broadcast and receipt; the confirmation must not be relabelled.
      */
     chainId?: number;
+    /**
+     * Whether the caller named the chain. An explicit chain outranks the
+     * receipt query's; an inferred one only outranks the current chain.
+     */
+    chainIdWasExplicit?: boolean;
     data?: string;
     to?: string;
     value?: string;
@@ -307,19 +312,32 @@ export class WagmiEventHandler {
     );
     this.unsubscribers.push(chainIdUnsubscribe);
 
-    // Subscribe to the active address.
+    // Subscribe to the active connection as a whole: its connector id AND its
+    // address, as one string.
     //
     // `state.status` is a single global value, so it stays "connected" when a
     // user switches account inside an already-connected wallet. Without this
     // the switch is invisible: no event, and the tracked address goes stale
     // and mis-attributes every later signature and transaction.
-    const addressUnsubscribe = this.wagmiConfig.subscribe(
-      (state: WagmiState) => this.getConnectedAddress(state),
-      (address, prevAddress) => {
-        this.handleActiveAddressChange(address, prevAddress);
+    //
+    // The connector id has to be in the key too. Selecting the address alone
+    // missed the case where two connectors hold the SAME account - MetaMask
+    // and Rabby over one hardware wallet, say - and the current one
+    // disconnects: wagmi falls back to the other, the address is unchanged, so
+    // nothing fired and the disconnect was lost for good.
+    const connectionUnsubscribe = this.wagmiConfig.subscribe(
+      (state: WagmiState) =>
+        `${state.current ?? ""}|${this.getConnectedAddress(state) ?? ""}`,
+      (key, prevKey) => {
+        const [, address] = key.split("|");
+        const [, prevAddress] = (prevKey ?? "|").split("|");
+        this.handleActiveAddressChange(
+          address || undefined,
+          prevAddress || undefined
+        );
       }
     );
-    this.unsubscribers.push(addressUnsubscribe);
+    this.unsubscribers.push(connectionUnsubscribe);
 
     logger.info("WagmiEventHandler: Connection listeners set up successfully");
   }
@@ -429,6 +447,19 @@ export class WagmiEventHandler {
         return;
       }
 
+      // Nothing that will not actually be sent may be marked. `syncWalletState`
+      // accepts a wallet that `trackEvent()` then silently drops - `tracking:
+      // false`, or a chain in `excludeChains` - and marking it would make the
+      // rebuild that turns tracking back on find the marker and stay quiet
+      // about the wallet for the rest of the page load.
+      if (!this.formo.willTrackEvent(chainId)) {
+        logger.debug(
+          "WagmiEventHandler: Connect would not be tracked, adopted without emitting",
+          { address, chainId }
+        );
+        return;
+      }
+
       const walletKey = announceKey(this.formo.writeKey, address);
       if (announcedConnections.has(walletKey)) {
         logger.debug(
@@ -441,23 +472,23 @@ export class WagmiEventHandler {
 
       {
         const connectorName = this.getConnectorName(state);
-        // Fire and forget: awaiting here would either stall the constructor
-        // or require holding the lock. Tracking state is already correct, so
-        // a status change arriving mid-flight is handled normally.
-        void Promise.resolve()
-          .then(() => {
-            // The handler can be torn down between scheduling this and running
-            // it - a remount, or an options change that rebuilds the SDK.
-            // Emitting then would enqueue against a disposed instance.
-            if (this.disposed) return;
-            return this.formo.connect(
-              { chainId, address },
-              {
-                ...(connectorName && { providerName: connectorName }),
-              }
-            );
-          })
-          .catch((error) => {
+        // Invoked synchronously, only the completion is fire-and-forget.
+        //
+        // Deferring the call itself to a microtask and guarding it on
+        // `disposed` loses the event outright: a rebuild that tears this
+        // handler down before the microtask runs leaves the marker standing,
+        // so the replacement handler suppresses its own connect while this one
+        // declines to emit. Nobody reports the wallet. Calling now means the
+        // marker and the emission are decided together, and a rebuild can only
+        // arrive after the event is already handed to FormoAnalytics.
+        void Promise.resolve(
+          this.formo.connect(
+            { chainId, address },
+            {
+              ...(connectorName && { providerName: connectorName }),
+            }
+          )
+        ).catch((error) => {
           logger.error(
             "WagmiEventHandler: Error emitting seeded connect event:",
             error
@@ -657,7 +688,10 @@ export class WagmiEventHandler {
           this.trackingState.lastChainId = chainId;
           this.trackingState.lastConnectionId = state.current;
 
-          if (this.formo.isAutocaptureEnabled("connect")) {
+          if (
+            this.formo.isAutocaptureEnabled("connect") &&
+            this.formo.willTrackEvent(chainId)
+          ) {
             // Record it in the page-load marker as well. Without this only
             // seed-adopted wallets were deduplicated, so a wallet that
             // connected while this handler was alive would be re-emitted by
@@ -1104,11 +1138,17 @@ export class WagmiEventHandler {
     }
     const address = pendingTx.address;
 
-    // The chain the transaction was actually broadcast on wins. A mutation may
-    // have named an explicit chainId, and the active chain can change between
-    // broadcast and receipt, which would otherwise relabel the confirmation.
-    const chainId =
-      pendingTx.chainId ?? queryChainId ?? this.trackingState.lastChainId;
+    // The chain the transaction was actually broadcast on wins, because the
+    // active chain can change between broadcast and receipt and would
+    // otherwise relabel the confirmation.
+    //
+    // Order: a chain the caller named explicitly, then the receipt query's own
+    // chain, then the chain we observed at broadcast time, then the current
+    // one. The inferred broadcast chain sits below the query's because the
+    // query names the chain the receipt was actually read from.
+    const chainId = pendingTx.chainIdWasExplicit
+      ? pendingTx.chainId
+      : queryChainId ?? pendingTx.chainId ?? this.trackingState.lastChainId;
 
     if (!address) {
       logger.warn("WagmiEventHandler: Transaction receipt query but no address available");
@@ -1406,7 +1446,13 @@ export class WagmiEventHandler {
         const normalizedHash = transactionHash.toLowerCase();
         const txDetails = {
           address: userAddress,
-          ...(explicitChainId !== undefined && { chainId: explicitChainId }),
+          // Record the chain this was broadcast on either way, and remember
+          // whether the caller named it. The common `sendTransaction({ to })`
+          // has no explicit chain, so storing nothing meant a network switch
+          // between broadcast and receipt relabelled the confirmation with the
+          // chain the user had moved to.
+          ...(chainId !== undefined && { chainId }),
+          chainIdWasExplicit: explicitChainId !== undefined,
           ...(data && { data }),
           ...(to && { to }),
           ...(value && { value }),
