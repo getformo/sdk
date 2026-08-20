@@ -2129,8 +2129,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    * marked it as reported would stay silent about that wallet even after the
    * configuration changed to allow it.
    */
-  public willTrackEvent(): boolean {
-    return this.shouldTrack();
+  public willTrackEvent(chainId?: ChainID): boolean {
+    return this.shouldTrack(chainId);
   }
 
   isTrackingSuppressed(): boolean {

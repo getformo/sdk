@@ -103,8 +103,14 @@ describe("WagmiEventHandler", () => {
         });
         const selectedValue = selector(testState);
 
-        if (selectedValue === PROBE_ADDRESS) {
-          addressListener = listener;
+        if (
+          typeof selectedValue === "string" &&
+          selectedValue.includes(PROBE_ADDRESS)
+        ) {
+          // The connection selector returns "<connectorId>|<address>".
+          const raw = listener;
+          addressListener = ((address: string | undefined, prev: string | undefined) =>
+            raw(`probe|${address ?? ""}`, `probe|${prev ?? ""}`)) as any;
         } else if (typeof selectedValue === "string") {
           statusListener = listener;
         } else if (typeof selectedValue === "number" || selectedValue === undefined) {
@@ -2463,6 +2469,111 @@ describe("WagmiEventHandler", () => {
         chainId: mockChainId,
         address: SWITCHED,
       });
+    });
+
+    it("notices a connector falling away even when both hold the same account", async () => {
+      // Two connectors over one hardware wallet report the same account on the
+      // same chain. Selecting only the address meant that when the current one
+      // disconnected, nothing in the subscribed value changed, no callback
+      // ran, and the disconnect was lost for the rest of the page load.
+      const shared = new Map();
+      shared.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      shared.set("uid-b", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections: shared,
+        current: "uid-a",
+        chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      // The composite selector must change even though the address does not.
+      const selectors = (mockWagmiConfig.subscribe as sinon.SinonStub)
+        .getCalls()
+        .map((c) => c.args[0]);
+      const before = {
+        status: "connected" as const,
+        connections: shared,
+        current: "uid-a",
+        chainId: mockChainId,
+      };
+      const remaining = new Map();
+      remaining.set("uid-b", shared.get("uid-b"));
+      const after = {
+        status: "connected" as const,
+        connections: remaining,
+        current: "uid-b",
+        chainId: mockChainId,
+      };
+      const noticed = selectors.some((sel) => sel(before) !== sel(after));
+      expect(noticed, "a subscription distinguishes the two connectors").to.be.true;
+    });
+
+    it("confirms on the chain it broadcast on when no chain was named", async () => {
+      // The common sendTransaction({ to, ... }) case. Broadcasting on chain 1
+      // and switching to 137 before the receipt must not relabel it 137.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      const hash = "0xdeadbeef";
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 61,
+            options: { mutationKey: ["sendTransaction"] },
+            state: {
+              status: "success",
+              data: hash,
+              variables: { to: "0xabc", value: "0x1" },
+            },
+          },
+        } as any);
+      }
+      await settle();
+      const broadcast = mockFormo.transaction
+        .getCalls()
+        .map((c: any) => c.args[0])
+        .find((p: any) => p.status === "broadcasted");
+      expect(broadcast, "a broadcast event").to.exist;
+      expect(broadcast.chainId).to.equal(mockChainId);
+
+      // User switches network before the receipt arrives.
+      const NEW_CHAIN = 137;
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, NEW_CHAIN)
+      );
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, mockChainId);
+      await settle();
+
+      if (queryListener) {
+        queryListener({
+          type: "updated",
+          query: {
+            queryHash: '["waitForTransactionReceipt"]',
+            queryKey: ["waitForTransactionReceipt", { hash }],
+            state: { status: "success", data: { status: "success", transactionHash: hash } },
+          },
+        } as any);
+      }
+      await settle();
+
+      const confirmed = mockFormo.transaction
+        .getCalls()
+        .map((c: any) => c.args[0])
+        .find((p: any) => p.status === "confirmed");
+      expect(confirmed, "a confirmed event").to.exist;
+      expect(confirmed.chainId, "labelled with the broadcast chain").to.equal(mockChainId);
     });
 
     it("emits a disconnect when the tracked connector falls away", async () => {
