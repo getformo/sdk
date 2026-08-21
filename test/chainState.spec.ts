@@ -190,4 +190,49 @@ describe("Per-chain state isolation", () => {
     expect(formo.currentChainId).to.equal(137);
   });
 
+
+  it("does not let a background wallet claim the active slot when chain autocapture is off", async () => {
+    // `isProviderMismatch()` is false while `_provider` is undefined - exactly
+    // the state left by restoring a wallet from the active-wallet cookie. A
+    // background wallet's `chainChanged` could therefore take the active slot
+    // and overwrite the restored wallet's chain.
+    // A wagmi config is supplied only to skip EIP-6963 discovery, which
+    // dispatches a CustomEvent jsdom rejects across realms in this spec.
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      autocapture: { chain: false, signature: true },
+      wagmi: {
+        config: {
+          subscribe: () => () => undefined,
+          state: { status: "disconnected", connections: new Map(), current: undefined, chainId: undefined },
+          _internal: { store: { subscribe: () => () => undefined } },
+        } as any,
+        queryClient: {
+          getMutationCache: () => ({ subscribe: () => () => undefined }),
+          getQueryCache: () => ({ subscribe: () => () => undefined }),
+        } as any,
+      },
+    });
+    // Restored state: address and chain, but no provider associated yet.
+    (formo as any).setChainState("evm", {
+      chainId: 1,
+      address: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf",
+    });
+    expect((formo as any)._provider, "no active provider yet").to.be.undefined;
+
+    const background: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async () => "0x2105",
+    };
+    await (formo as any).onChainChanged(background, "0x2105");
+
+    expect((formo as any)._provider, "the slot is still unclaimed").to.be.undefined;
+    expect((formo as any)._evmChainId, "restored chain untouched").to.equal(1);
+    expect(
+      (formo as any).resolveChainIdForProvider(background),
+      "but the background wallet's chain is still learned"
+    ).to.equal(8453);
+    formo.cleanup?.();
+  });
 });

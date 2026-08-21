@@ -1133,6 +1133,19 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Opt out of tracking.
    * @returns {void}
    */
+  /**
+   * Whether an event would currently be sent.
+   *
+   * Exposed for integrations that keep their own "already reported" state.
+   * `syncWalletState()` can accept a wallet that `trackEvent()` then drops -
+   * `tracking: false`, or a chain in `excludeChains` - and an integration that
+   * marked it as reported would stay silent about that wallet even after the
+   * configuration changed to allow it.
+   */
+  public willTrackEvent(): boolean {
+    return this.shouldTrack();
+  }
+
   public optOutTracking(): void {
     logger.info("Opting out of tracking");
 
@@ -1157,6 +1170,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Remove opt-out flag
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
+
+    // A wallet connected while opted out was declined by syncWalletState, and
+    // an unchanged wagmi connection produces no status or chain update to
+    // retry on. Without this, opting back in leaves that wallet invisible for
+    // the rest of the page load.
+    this.wagmiHandler?.retryAdoption();
 
     logger.info("Successfully opted back into tracking");
   }
@@ -1619,10 +1638,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     // chain feature and stays exactly as it was, but it must not start firing
     // for apps that never asked for chain tracking: a second wallet switching
     // network would silently erase the active wallet's attribution.
-    if (
-      this.isProviderMismatch(provider) &&
-      !this.isAutocaptureEnabled("chain")
-    ) {
+    // Observation only when chain autocapture is off, whether or not an
+    // active provider has been established yet.
+    //
+    // `isProviderMismatch()` is false while `_provider` is undefined, which is
+    // exactly the state left by restoring a wallet from the active-wallet
+    // cookie. A background wallet's `chainChanged` could therefore claim the
+    // active slot and overwrite the restored wallet's chain - suppressing
+    // allowed events, or letting excluded ones through. The active provider is
+    // established by an actual account/connect/request association, not by
+    // another wallet changing network.
+    if (!this.isAutocaptureEnabled("chain") && provider !== this._provider) {
       return;
     }
 
@@ -1649,7 +1675,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // This is just a chain change since we already confirmed _evmAddress exists
       if (this.isAutocaptureEnabled("chain")) {
-        return this.chain({
+        // Awaited, so a failing emission is caught below rather than escaping
+        // as an unhandled rejection out of the provider's event listener.
+        // `return`ing the promise left the catch here unreachable.
+        await this.chain({
           chainId: nextChainId,
           address: this._evmAddress,
         });
@@ -1921,7 +1950,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Fire-and-forget tracking
         (async () => {
           try {
-            this.signature({
+            await this.signature({
               status: SignatureStatus.REQUESTED,
               ...this.buildSignatureEventPayload(
                 method,
@@ -1942,7 +1971,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           if (response) {
             (async () => {
               try {
-                    this.signature({
+                    await this.signature({
                   status: SignatureStatus.CONFIRMED,
                   ...this.buildSignatureEventPayload(
                     method,
@@ -1967,7 +1996,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
-                this.signature({
+                await this.signature({
                   status: SignatureStatus.REJECTED,
                   ...this.buildSignatureEventPayload(
                     method,
@@ -2015,7 +2044,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               provider,
               txChainId
             );
-            this.transaction({ status: TransactionStatus.STARTED, ...payload });
+            await this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
           }
@@ -2031,7 +2060,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                 provider,
                 txChainId
               );
-              this.transaction({
+              await this.transaction({
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
                 transactionHash,
@@ -2056,7 +2085,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                   provider,
                   txChainId
                 );
-                this.transaction({
+                await this.transaction({
                   status: TransactionStatus.REJECTED,
                   ...payload,
                 });
@@ -2087,6 +2116,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   private async onLocationChange(): Promise<void> {
     if (this._currentUrl !== window.location.href) {
       this._currentUrl = window.location.href;
+      // Host/path exclusions are evaluated per navigation, so a SPA can leave
+      // an excluded route and become trackable without any wallet event
+      // firing. The wagmi handler only observes *changes*, so an unchanged
+      // connection it was forced to decline earlier would stay invisible for
+      // the rest of the page load. Give it a chance to adopt it now.
+      this.wagmiHandler?.retryAdoption();
       this.trackPageHit();
     }
   }
