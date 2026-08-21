@@ -4489,6 +4489,78 @@ describe("WagmiEventHandler", () => {
       });
     });
 
+    it("should ignore a chain change with no resolvable address", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      const empty = new Map();
+      empty.set("k", {
+        accounts: [],
+        chainId: 999,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: empty, current: "k", chainId: 999,
+      });
+      if (chainIdListener) await chainIdListener(999, mockChainId);
+      await settle();
+
+      expect(mockFormo.chain.called, "no address, no chain event").to.be.false;
+    });
+
+    it("should fall back to a disconnected snapshot when the store cannot be read", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      // A config exposing neither `getState()` nor `state` - the shape the
+      // fallback exists for.
+      const bare: any = { subscribe: () => () => undefined };
+      (handler as any).wagmiConfig = bare;
+
+      const snapshot = (handler as any).getState();
+      expect(snapshot.status, "treated as disconnected").to.equal("disconnected");
+      expect(snapshot.connections.size).to.equal(0);
+      expect(snapshot.current).to.be.undefined;
+    });
+
+    it("should not invent a disconnect for a transient reconnecting state", async () => {
+      // Reconciliation treated every non-connected state as disconnected. An
+      // ordinary reconnect flap - which parks the store on `reconnecting`
+      // while the lock is held - therefore produced a synthesized disconnect
+      // and then a second connect, for a wallet that never went anywhere.
+      let releaseConnect: (() => void) | undefined;
+      (mockFormo as any).connect = sandbox.stub().returns(
+        new Promise<void>((resolve) => { releaseConnect = () => resolve(); })
+      );
+
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const pending = statusListener!("connected", "disconnected");
+      await settle();
+
+      // The store really does park on `reconnecting` while the lock is held.
+      (mockWagmiConfig as any).setState({
+        ...createConnectedState(),
+        status: "reconnecting" as const,
+      });
+      await statusListener!("reconnecting", "connected");
+
+      releaseConnect!();
+      await pending;
+      await settle();
+
+      expect(
+        mockFormo.disconnect.called,
+        "a reconnect flap is not a disconnect"
+      ).to.be.false;
+    });
+
     it("should replay a chain change dropped while reconnecting", async () => {
       // wagmi reports the chain while still `reconnecting`, so the chain
       // callback drops it; the `connected` transition that follows can then be

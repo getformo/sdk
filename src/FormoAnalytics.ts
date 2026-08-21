@@ -1638,10 +1638,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     // chain feature and stays exactly as it was, but it must not start firing
     // for apps that never asked for chain tracking: a second wallet switching
     // network would silently erase the active wallet's attribution.
-    if (
-      this.isProviderMismatch(provider) &&
-      !this.isAutocaptureEnabled("chain")
-    ) {
+    // Observation only when chain autocapture is off, whether or not an
+    // active provider has been established yet.
+    //
+    // `isProviderMismatch()` is false while `_provider` is undefined, which is
+    // exactly the state left by restoring a wallet from the active-wallet
+    // cookie. A background wallet's `chainChanged` could therefore claim the
+    // active slot and overwrite the restored wallet's chain - suppressing
+    // allowed events, or letting excluded ones through. The active provider is
+    // established by an actual account/connect/request association, not by
+    // another wallet changing network.
+    if (!this.isAutocaptureEnabled("chain") && provider !== this._provider) {
       return;
     }
 
@@ -1668,7 +1675,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // This is just a chain change since we already confirmed _evmAddress exists
       if (this.isAutocaptureEnabled("chain")) {
-        return this.chain({
+        // Awaited, so a failing emission is caught below rather than escaping
+        // as an unhandled rejection out of the provider's event listener.
+        // `return`ing the promise left the catch here unreachable.
+        await this.chain({
           chainId: nextChainId,
           address: this._evmAddress,
         });
@@ -1940,7 +1950,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Fire-and-forget tracking
         (async () => {
           try {
-            this.signature({
+            await this.signature({
               status: SignatureStatus.REQUESTED,
               ...this.buildSignatureEventPayload(
                 method,
@@ -1961,7 +1971,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           if (response) {
             (async () => {
               try {
-                    this.signature({
+                    await this.signature({
                   status: SignatureStatus.CONFIRMED,
                   ...this.buildSignatureEventPayload(
                     method,
@@ -1986,7 +1996,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
-                this.signature({
+                await this.signature({
                   status: SignatureStatus.REJECTED,
                   ...this.buildSignatureEventPayload(
                     method,
@@ -2034,7 +2044,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               provider,
               txChainId
             );
-            this.transaction({ status: TransactionStatus.STARTED, ...payload });
+            await this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
           }
@@ -2050,7 +2060,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                 provider,
                 txChainId
               );
-              this.transaction({
+              await this.transaction({
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
                 transactionHash,
@@ -2075,7 +2085,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                   provider,
                   txChainId
                 );
-                this.transaction({
+                await this.transaction({
                   status: TransactionStatus.REJECTED,
                   ...payload,
                 });
@@ -2778,6 +2788,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     // provider.
     this.bumpProviderChainGeneration(provider);
     this._providerChainIds.set(provider, chainId);
+
+    // If this IS the active provider, central state has to follow. Recording
+    // it only per provider left `currentChainId` on a chain restored from a
+    // previous session, and the unscoped events that fall back to it were sent
+    // despite an exclusion covering the chain the wallet was really on.
+    if (provider === this._provider && this._evmChainId !== chainId) {
+      this.setChainState('evm', { chainId });
+    }
   }
 
   /** Advance and return this provider's chain-observation generation. */
@@ -2860,7 +2878,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Only the active provider may write central wallet state - see the same
     // guard in buildTransactionEventPayload.
     if (!provider || provider === this._provider || !this._provider) {
-      this.backfillActiveWallet(validAddress, effectiveChainId);
+      this.backfillActiveWallet(validAddress, effectiveChainId, provider);
     }
 
     const basePayload = {
@@ -2916,7 +2934,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // provider would then trust the other wallet's chain - persistent
     // mis-attribution, and a way around `excludeChains`.
     if (!provider || provider === this._provider || !this._provider) {
-      this.backfillActiveWallet(validAddress, chainId);
+      this.backfillActiveWallet(validAddress, chainId, provider);
     }
 
     return {
@@ -2936,7 +2954,25 @@ export class FormoAnalytics implements IFormoAnalytics {
    * social-login wrappers). If `accountsChanged` later fires it overwrites this
    * value in the normal way; existing connections are never clobbered.
    */
-  private backfillActiveWallet(address: Address, chainId?: ChainID): void {
+  private backfillActiveWallet(
+    address: Address,
+    chainId?: ChainID,
+    provider?: EIP1193Provider
+  ): void {
+    // Refuse a chain the provider has since moved off.
+    //
+    // A request captures its chain once and reuses that snapshot for every
+    // status it emits, which is right for the event payload - a confirmation
+    // must not be relabelled mid-flight. But writing that captured value back
+    // into central state on the LATER statuses restored a chain the wallet had
+    // already left, and the unscoped events that fall back to it then bypassed
+    // an exclusion that should have caught them.
+    if (provider && chainId !== undefined && chainId !== 0) {
+      const current = this._providerChainIds.get(provider);
+      if (current !== undefined && current !== chainId) {
+        chainId = current;
+      }
+    }
     // `0` is kept deliberately. It means "could not resolve", and persisting
     // it is what lets the exclusion gate refuse the unscoped events - `page`,
     // `track`, `identify` - that carry no chain of their own and fall back to
@@ -2946,11 +2982,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     // excluded chain.
     // Never learn identity while suppressed (opt-out / timezone / excluded host
     // or path). A signature/transaction observed on an excluded route must not
-    // populate currentAddress for later allowed-page events. backfill only ever
-    // *adds* an address (it no-ops when one is already known), so there is no
-    // stale state to clear here.
+    // populate currentAddress for later allowed-page events.
     if (this.isTrackingSuppressed()) return;
-    if (this._evmAddress) return;
+
+    const known = this._evmAddress;
+    if (known) {
+      // Same wallet, newer chain: correct it rather than returning.
+      //
+      // A persisted wallet restores a chain from a previous session. If the
+      // provider has since moved - to an excluded chain, or to one we cannot
+      // resolve - the autocaptured event is gated correctly, but the stale
+      // restored chain stayed in `currentChainId` and the unscoped events
+      // that fall back to it went out under an exclusion that should have
+      // caught them.
+      if (
+        chainId !== undefined &&
+        known.toLowerCase() === address.toLowerCase() &&
+        this._evmChainId !== chainId
+      ) {
+        this.setChainState('evm', { address: known, chainId });
+      }
+      // A DIFFERENT address is another wallet's business; never overwrite.
+      return;
+    }
+
     this.setChainState('evm', { address, chainId });
   }
 

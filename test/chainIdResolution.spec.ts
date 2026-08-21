@@ -541,6 +541,51 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(addEvent.called, "unknown current chain fails closed").to.be.false;
   });
 
+  it("corrects a stale restored chain for the same wallet", async () => {
+    // A persisted wallet restores chain 1 from a previous session while its
+    // provider has since moved to excluded 8453. The signature is gated
+    // correctly, but the stale chain used to survive in currentChainId - and
+    // the unscoped events that fall back to it went out under an exclusion
+    // that should have caught them.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+    // Restored state: same wallet, old chain.
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+    (gated as any)._provider = provider;
+    (gated as any).registerRequestListeners(provider);
+
+    await provider.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "the signature itself is excluded").to.be.false;
+
+    expect(
+      (gated as any)._evmChainId,
+      "the stale chain is corrected to the live one"
+    ).to.equal(OTHER_CHAIN);
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "so the track that follows is excluded too").to.be.false;
+  });
+
+  it("never overwrites a different wallet's chain", async () => {
+    const other = await makeFormo({ tracking: true });
+    const OTHER_ADDRESS = "0x1111111111111111111111111111111111111111";
+    (other as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    (other as any).backfillActiveWallet(OTHER_ADDRESS, OTHER_CHAIN);
+
+    expect(((other as any)._evmAddress as string)?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
+    expect((other as any)._evmChainId, "untouched").to.equal(ACTIVE_CHAIN);
+  });
+
   it("keeps an unresolvable chain as 0 so later events still fail closed", async () => {
     // The end-to-end version of the rule: an unknown-chain signature is
     // dropped, and the `track()` that follows must be dropped too. Erasing 0
@@ -788,4 +833,159 @@ describe("Chain id resolution for autocaptured requests", () => {
 
 
 
+
+  it("passes requests straight through when autocapture is off", async () => {
+    const off = await makeFormo({
+      tracking: true,
+      autocapture: { signature: false, transaction: false },
+    });
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xok"),
+    };
+    (off as any).registerRequestListeners(provider);
+
+    expect(await provider.request({ method: "personal_sign", params: ["0x68", ADDRESS] })).to.equal("0xok");
+    expect(
+      await provider.request({
+        method: "eth_sendTransaction",
+        params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      })
+    ).to.equal("0xok");
+  });
+
+  it("rejects payloads whose address is not a valid EIP-55 address", async () => {
+    const bad = "0xnot-an-address";
+    expect(() =>
+      (formo as any).buildSignatureEventPayload("personal_sign", ["0x68", bad])
+    ).to.throw(/Invalid address in signature payload/);
+    await (formo as any)
+      .buildTransactionEventPayload([{ from: bad, to: "0xabc", value: "0x0", data: "0x" }])
+      .then(
+        () => expect.fail("should have thrown"),
+        (e: Error) => expect(e.message).to.match(/Invalid address in transaction payload/)
+      );
+  });
+
+  it("skips wrapping a provider whose request cannot be replaced", async () => {
+    const frozen: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+    };
+    Object.defineProperty(frozen, "request", {
+      value: async () => "0xok",
+      writable: false,
+      configurable: false,
+    });
+    // Must not throw out of provider tracking.
+    expect(() => (formo as any).registerRequestListeners(frozen)).to.not.throw();
+  });
+
+  it("survives a chain event that fails to emit", async () => {
+    const provider = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = provider;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    sandbox.stub(formo, "chain").rejects(new Error("queue is gone"));
+
+    // Must not reject out of the listener; the error is logged and swallowed.
+    await (formo as any).onChainChanged(
+      provider,
+      `0x${OTHER_CHAIN.toString(16)}`
+    );
+    expect(
+      (formo as any).resolveChainIdForProvider(provider),
+      "and the chain is still recorded"
+    ).to.equal(OTHER_CHAIN);
+  });
+
+  it("does not wrap the same provider twice", async () => {
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xok"),
+    };
+    (formo as any).registerRequestListeners(provider);
+    const wrappedOnce = provider.request;
+    (formo as any).registerRequestListeners(provider);
+
+    expect(provider.request, "left alone the second time").to.equal(wrappedOnce);
+  });
+
+  it("contains a failure while building the signature event", async () => {
+    // The fire-and-forget REQUESTED block must never reject out of the
+    // wrapper - the wallet call has to proceed regardless.
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (formo as any).rememberProviderChain(provider, ACTIVE_CHAIN);
+    sandbox.stub(formo, "signature").rejects(new Error("queue is gone"));
+    (formo as any).registerRequestListeners(provider);
+
+    const result = await provider.request({
+      method: "personal_sign",
+      params: ["0x68690000", ADDRESS],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(result, "the signature still reaches the caller").to.equal("0xsigned");
+  });
+
+  it("does not restore a stale chain when a request completes", async () => {
+    // A request captures its chain once and reuses it for every status, which
+    // is right for the payload. Writing that captured value back into central
+    // state on the later statuses restored a chain the wallet had left.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (gated as any)._provider = provider;
+    (gated as any).rememberProviderChain(provider, ACTIVE_CHAIN);
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    (gated as any).registerRequestListeners(provider);
+
+    // The wallet moves to the excluded chain while the prompt is open.
+    const pending = provider.request({
+      method: "personal_sign",
+      params: ["0x68690000", ADDRESS],
+    });
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+    await pending;
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(
+      (gated as any)._evmChainId,
+      "central state follows the wallet, not the captured snapshot"
+    ).to.equal(OTHER_CHAIN);
+
+    addEvent.resetHistory();
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "so the exclusion still applies").to.be.false;
+  });
+
+  it("syncs central state when the active provider reports a new chain", async () => {
+    // Recording an observation only per provider left `currentChainId` on a
+    // chain restored from a previous session.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+    const provider = providerOnChain(ACTIVE_CHAIN);
+    (gated as any)._provider = provider;
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    // The app asks; the wallet is really on the excluded chain.
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+
+    expect((gated as any)._evmChainId, "central state follows").to.equal(OTHER_CHAIN);
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "and the exclusion applies").to.be.false;
+  });
 });
