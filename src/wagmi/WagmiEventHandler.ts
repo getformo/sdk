@@ -149,87 +149,49 @@ function releaseMarkers(writeKey: string): boolean {
 }
 
 /**
- * Backstop only. Entries are removed on disconnect and cleared whenever the
- * SDK stops observing, so this is reachable only by an app that connects many
- * distinct wallets in one page load without ever disconnecting them.
- */
-export const MAX_ANNOUNCED_CONNECTIONS = 50;
-
-/**
- * Has this destination already announced this wallet on this very connection?
- *
- * `exact` - the wagmi connection object is unchanged since the announcement,
- * which is proof nothing happened in between, so this holds indefinitely.
- * `recent` - the object was replaced, but the announcement is still inside the
- * observation window.
- * `none` - announce it.
- */
-function announcementState(
-  key: string,
-  connection?: object
-): "exact" | "recent" | "none" {
-  if (connection && announcedByConnection.get(connection)?.has(key)) {
-    return "exact";
-  }
-  return announcedConnections.has(key) ? "recent" : "none";
-}
-
-/**
- * Record a connection as announced, evicting the oldest if the backstop is hit.
- * Never evicts the entry just added.
- */
-function markAnnounced(key: string, connection?: object): void {
-  if (connection) {
-    const keys = announcedByConnection.get(connection) ?? new Set<string>();
-    keys.add(key);
-    announcedByConnection.set(connection, keys);
-  }
-  announcedConnections.add(key);
-  while (announcedConnections.size > MAX_ANNOUNCED_CONNECTIONS) {
-    const oldest = announcedConnections.values().next().value as
-      | string
-      | undefined;
-    if (oldest === undefined || oldest === key) break;
-    announcedConnections.delete(oldest);
-  }
-}
-
-/**
  * The one handler allowed to EMIT for a given destination.
  *
  * Two handlers can be alive at once over the same wagmi config and write key:
  * Strict Mode, HMR, or an options change whose replacement mounts before the
  * old one is torn down - which the marker grace period explicitly supports.
- * The page-load marker deduplicates `connect`, but nothing deduplicated
- * `disconnect`, `chain`, or the mutation and query streams, so each of those
- * was emitted once per live handler.
- *
  * Non-owners still track state, so whichever survives cleanup is already
  * correct and takes over immediately; they simply do not emit.
  */
 const emittingOwners = new Map<string, WagmiEventHandler>();
 
+/** Stable per-config id, so the owner key can span SDK instances. */
+const configIds = new WeakMap<object, string>();
+let nextConfigId = 0;
+const ownerKey = (writeKey: string, config: WagmiConfig): string => {
+  let id = configIds.get(config as unknown as object);
+  if (!id) {
+    id = `cfg${(nextConfigId += 1)}`;
+    configIds.set(config as unknown as object, id);
+  }
+  return `${writeKey}:${id}`;
+};
+
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
-    address: string;
-    /**
-     * Chain the transaction was broadcast on. Stored because a mutation may
-     * name an explicit `chainId`, and the active chain can change between
-     * broadcast and receipt; the confirmation must not be relabelled.
-     */
-    chainId?: number;
-    /**
-     * Whether the caller named the chain. An explicit chain outranks the
-     * receipt query's; an inferred one only outranks the current chain.
-     */
-    chainIdWasExplicit?: boolean;
-    data?: string;
-    to?: string;
-    value?: string;
-    function_name?: string;
-    function_args?: Record<string, unknown>;
-    safeFunctionArgs?: Record<string, unknown>;
-  };
+  address: string;
+  /**
+   * Chain the transaction was broadcast on. Stored because a mutation may
+   * name an explicit `chainId`, and the active chain can change between
+   * broadcast and receipt; the confirmation must not be relabelled.
+   */
+  chainId?: number;
+  /**
+   * Whether the caller named the chain. An explicit chain outranks the
+   * receipt query's; an inferred one only outranks the current chain.
+   */
+  chainIdWasExplicit?: boolean;
+  data?: string;
+  to?: string;
+  value?: string;
+  function_name?: string;
+  function_args?: Record<string, unknown>;
+  safeFunctionArgs?: Record<string, unknown>;
+};
 
 /**
  * Pending transactions, shared per destination rather than per handler.
@@ -272,17 +234,41 @@ function cancelPendingTransactionExpiry(key: string): void {
   pendingTransactionExpiry.delete(key);
 }
 
-/** Stable per-config id, so the owner key can span SDK instances. */
-const configIds = new WeakMap<object, string>();
-let nextConfigId = 0;
-const ownerKey = (writeKey: string, config: WagmiConfig): string => {
-  let id = configIds.get(config as unknown as object);
-  if (!id) {
-    id = `cfg${(nextConfigId += 1)}`;
-    configIds.set(config as unknown as object, id);
+/**
+ * Has this destination already announced this wallet on this very connection?
+ *
+ * `exact` means the wagmi connection object is unchanged since the
+ * announcement, which is proof nothing happened in between and holds however
+ * long the SDK was away. `recent` means the object was replaced but the
+ * announcement is still inside the observation window.
+ */
+function announcementState(
+  key: string,
+  connection?: object
+): "exact" | "recent" | "none" {
+  if (connection && announcedByConnection.get(connection)?.has(key)) {
+    return "exact";
   }
-  return `${writeKey}:${id}`;
-};
+  return announcedConnections.has(key) ? "recent" : "none";
+}
+
+/**
+ * Record a connection as announced.
+ *
+ * Deliberately unbounded. Entries are removed when the wallet disconnects,
+ * and pruned against the live connections whenever a handler mounts, so the
+ * set can only hold wallets that are actually connected right now. An earlier
+ * revision carried a size cap as a backstop; with both of those in place it
+ * was unreachable, and the test covering it passed with the cap removed.
+ */
+function markAnnounced(key: string, connection?: object): void {
+  if (connection) {
+    const keys = announcedByConnection.get(connection) ?? new Set<string>();
+    keys.add(key);
+    announcedByConnection.set(connection, keys);
+  }
+  announcedConnections.add(key);
+}
 
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {

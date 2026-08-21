@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
-import { WagmiEventHandler, __resetSeededWallet, MARKER_GRACE_MS, MAX_ANNOUNCED_CONNECTIONS } from "../../src/wagmi/WagmiEventHandler";
+import { WagmiEventHandler, __resetSeededWallet, MARKER_GRACE_MS } from "../../src/wagmi/WagmiEventHandler";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
 import {
   WagmiConfig,
@@ -4843,72 +4843,51 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.calledOnce).to.be.true;
     });
 
-    it("should bound the marker set and evict the oldest entry", async () => {
-      // The status-connect path writes the same marker as the seed, so it
-      // needs the same cap or a reconnect loop grows it for the page lifetime.
-      //
-      // Asserting that all 60 connects emit proves nothing - every address is
-      // distinct, so they emit with or without a cap. The bound is proved by
-      // showing the FIRST wallet's marker was evicted (it re-emits) while the
-      // most recent one is still deduplicated.
-      const connectTo = async (address: string) => {
+    it("should not accumulate markers for wallets that have gone", async () => {
+      // The marker set is unbounded by design: entries are removed when the
+      // wallet disconnects, and pruned against the live connections whenever a
+      // handler mounts. A size cap used to guard this, but with both of those
+      // in place it was unreachable - and its test passed with the cap gone.
+      (mockWagmiConfig as any).setState(createMockState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      for (let i = 0; i < 60; i++) {
+        const address = `0x${String(i).padStart(40, "0")}`;
         const connections = new Map();
         connections.set("k", {
           accounts: [address],
           chainId: mockChainId,
           connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
         });
-        (mockWagmiConfig as any).setState(createMockState());
-        const handler = new WagmiEventHandler(
-          mockFormo as any, mockWagmiConfig, mockQueryClient
-        );
         (mockWagmiConfig as any).setState({
-          status: "connected",
-          connections,
-          current: "k",
-          chainId: mockChainId,
+          status: "connected", connections, current: "k", chainId: mockChainId,
         });
         if (statusListener) await statusListener("connected", "disconnected");
-        return handler;
-      };
-
-      const first = `0x${String(0).padStart(40, "0")}`;
-      for (let i = 0; i < MAX_ANNOUNCED_CONNECTIONS + 10; i++) {
-        await connectTo(`0x${String(i).padStart(40, "0")}`);
+        (mockWagmiConfig as any).setState(createMockState());
+        if (statusListener) await statusListener("disconnected", "connected");
       }
       await settle();
-      const afterFill = mockFormo.connect.callCount;
-      expect(afterFill).to.equal(MAX_ANNOUNCED_CONNECTIONS + 10);
 
-      // Re-adoption goes through the SEED path, which is the only path the
-      // marker gates. A genuine `connected` status transition is a real user
-      // action and always emits.
-      const seedFor = async (address: string) => {
-        const connections = new Map();
-        connections.set("k", {
-          accounts: [address],
-          chainId: mockChainId,
-          connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
-        });
-        (mockWagmiConfig as any).setState({
-          status: "connected",
-          connections,
-          current: "k",
-          chainId: mockChainId,
-        });
-        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
-        await settle();
-      };
+      expect(mockFormo.connect.callCount, "every wallet reported").to.equal(60);
+      expect(mockFormo.disconnect.callCount, "and every disconnect").to.equal(60);
 
-      // The newest wallet is still marked, so re-adopting it stays silent.
-      const newest = `0x${String(MAX_ANNOUNCED_CONNECTIONS + 9).padStart(40, "0")}`;
-      await seedFor(newest);
-      expect(mockFormo.connect.callCount).to.equal(afterFill);
+      // The very first wallet can connect again and is reported, because its
+      // marker went with its disconnect.
+      const firstAgain = `0x${String(0).padStart(40, "0")}`;
+      const connections = new Map();
+      connections.set("k", {
+        accounts: [firstAgain],
+        chainId: mockChainId,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections, current: "k", chainId: mockChainId,
+      });
+      if (statusListener) await statusListener("connected", "disconnected");
+      await settle();
 
-      // The first wallet was evicted by the cap, so it emits again. Without
-      // the bound its marker would still be present and this would stay silent.
-      await seedFor(first);
-      expect(mockFormo.connect.callCount).to.equal(afterFill + 1);
+      expect(mockFormo.connect.callCount).to.equal(61);
     });
 
     it("should not mark a wallet it never announced", async () => {
