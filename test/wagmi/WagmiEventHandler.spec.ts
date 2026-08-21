@@ -3600,23 +3600,38 @@ describe("WagmiEventHandler", () => {
     });
 
     it("should not re-announce on a connect transition for an already-announced wallet", async () => {
-      // A rebuilt handler that sees a `connected` transition for a wallet the
-      // page load already reported must stay silent.
+      // Handler A announces the wallet and is torn down while it is still
+      // connected, so nothing ever processes a disconnect and the marker
+      // survives. Handler B is then built while wagmi reports disconnected -
+      // so it has no tracked address - and sees the wallet connect. Without
+      // the announcement check on the connect path it would report a wallet
+      // this page load already reported.
       (mockWagmiConfig as any).setState(createConnectedState());
       const first = new WagmiEventHandler(
         mockFormo as any, mockWagmiConfig, mockQueryClient
       );
       await settle();
       expect(mockFormo.connect.calledOnce).to.be.true;
-
       first.cleanup();
-      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      // Rebuilt against a disconnected store: no seed, no tracked address.
+      (mockWagmiConfig as any).setState(createMockState());
+      const second = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
       await settle();
-      // The replacement seeds silently, then wagmi replays the transition.
+      expect((second as any).trackingState.lastAddress, "nothing adopted").to.be.undefined;
+
+      // The same wallet appears, via a connect transition.
+      (mockWagmiConfig as any).setState(createConnectedState());
       await statusListener!("connected", "disconnected");
       await settle();
 
       expect(mockFormo.connect.callCount, "still just the one").to.equal(1);
+      expect(
+        (second as any).trackingState.lastAddress,
+        "but it is adopted, so mutations stay attributable"
+      ).to.equal(mockAddress);
     });
 
     it("should let the surviving handler emit after the owner is cleaned up", async () => {
