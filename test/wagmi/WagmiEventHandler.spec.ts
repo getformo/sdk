@@ -2625,6 +2625,72 @@ describe("WagmiEventHandler", () => {
       expect((mockFormo as any).currentAddress, "central state kept C").to.equal(C);
     });
 
+    it("does not mark a switched wallet whose connect the tracking gate drops", async () => {
+      // Unlike the seed and connect paths, the switch path did not consult
+      // willTrackEvent. A switch made while tracking was disabled, or onto an
+      // excluded chain, marked the new wallet even though connect() dropped
+      // the event - silencing it for the rest of the page load.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      const afterSeed = mockFormo.connect.callCount;
+
+      // Tracking gate now rejects.
+      (mockFormo as any).willTrackEvent = sandbox.stub().returns(false);
+      (mockWagmiConfig as any).setState(createConnectedState(SWITCHED, mockChainId));
+      if (addressListener) await addressListener(SWITCHED, mockAddress);
+      await settle();
+      expect(mockFormo.connect.callCount, "gate dropped it").to.equal(afterSeed);
+
+      // Configuration changes to allow it; the SDK is rebuilt over the same
+      // connection. The switched wallet must still get its connect.
+      first.cleanup();
+      (mockFormo as any).willTrackEvent = sandbox.stub().returns(true);
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(
+        mockFormo.connect.callCount,
+        "the switched wallet is finally announced"
+      ).to.equal(afterSeed + 1);
+    });
+
+    it("binds a switched wallet's marker to the live connection", async () => {
+      // The switch path recorded only the address-keyed marker, so the expiry
+      // timer could clear it while the connection was unchanged and the next
+      // seed would emit a duplicate connect.
+      const clock = sandbox.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        (mockWagmiConfig as any).setState(createConnectedState());
+        const first = new WagmiEventHandler(
+          mockFormo as any, mockWagmiConfig, mockQueryClient
+        );
+        await clock.tickAsync(10);
+
+        const switched = createConnectedState(SWITCHED, mockChainId);
+        (mockWagmiConfig as any).setState(switched);
+        if (addressListener) await addressListener(SWITCHED, mockAddress);
+        await clock.tickAsync(10);
+        const afterSwitch = mockFormo.connect.callCount;
+
+        // Unmounted well past the grace window, connection untouched.
+        first.cleanup();
+        await clock.tickAsync(MARKER_GRACE_MS * 5);
+
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+        await clock.tickAsync(10);
+
+        expect(
+          mockFormo.connect.callCount,
+          "no duplicate connect for an unchanged connection"
+        ).to.equal(afterSwitch);
+      } finally {
+        clock.restore();
+      }
+    });
+
     it("restores central state when a stale disconnect clears a newer wallet", async () => {
       // The real disconnect() clears the central namespace as it completes. If
       // a newer transition has already adopted a different wallet by then,

@@ -1184,7 +1184,15 @@ export class WagmiEventHandler {
     this.trackingState.lastChainId = chainId;
     this.trackingState.lastConnectionId = state.current;
 
-    if (this.formo.isAutocaptureEnabled("connect")) {
+    // Gated on `willTrackEvent` as well, like the seed and the ordinary
+    // connect path. Without it a switch made while tracking was disabled, or
+    // onto an excluded chain, marked the new wallet as announced even though
+    // `connect()` dropped the event - and the wallet then stayed silent for
+    // the rest of the page load once the configuration allowed it.
+    if (
+      this.formo.isAutocaptureEnabled("connect") &&
+      this.formo.willTrackEvent(chainId)
+    ) {
       // Move the page-load marker onto the wallet that is now active.
       //
       // Only drop the previous wallet's marker when that wallet is genuinely
@@ -1199,8 +1207,17 @@ export class WagmiEventHandler {
         );
       }
       const walletKey = announceKey(this.formo.writeKey, address);
-      const alreadyAnnounced = announcedConnections.has(walletKey);
-      markAnnounced(walletKey);
+      const connection = state.current
+        ? state.connections.get(state.current)
+        : undefined;
+      // The connection object is passed so this marker gets the same
+      // indefinite, identity-based validity the seed and connect paths give
+      // theirs. Recording only the address-keyed marker meant the expiry
+      // timer could clear it while the connection was unchanged, and the next
+      // seed would emit a duplicate connect.
+      const alreadyAnnounced =
+        announcementState(walletKey, connection) !== "none";
+      markAnnounced(walletKey, connection);
       if (alreadyAnnounced) {
         // Reached by the connector-fallback path above: wagmi made a
         // connection active that this page load already reported. Becoming
