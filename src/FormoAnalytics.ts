@@ -2912,9 +2912,13 @@ export class FormoAnalytics implements IFormoAnalytics {
    * value in the normal way; existing connections are never clobbered.
    */
   private backfillActiveWallet(address: Address, chainId?: ChainID): void {
-    // `0` means "could not resolve", not a chain. Persisting it would make
-    // `currentChainId` look known while naming no chain at all.
-    if (chainId === 0) chainId = undefined;
+    // `0` is kept deliberately. It means "could not resolve", and persisting
+    // it is what lets the exclusion gate refuse the unscoped events - `page`,
+    // `track`, `identify` - that carry no chain of their own and fall back to
+    // `currentChainId`. Erasing it to `undefined` looked tidier but removed
+    // the only marker distinguishing "unknown" from "no wallet yet", and those
+    // events then went out attributed to a wallet that might be sitting on an
+    // excluded chain.
     // Never learn identity while suppressed (opt-out / timezone / excluded host
     // or path). A signature/transaction observed on an excluded route must not
     // populate currentAddress for later allowed-page events. backfill only ever
