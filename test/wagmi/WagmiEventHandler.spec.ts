@@ -2878,6 +2878,50 @@ describe("WagmiEventHandler", () => {
       ).to.equal(NEW_CHAIN);
     });
 
+    it("should replay a dropped chain from reconciliation when the lock swallowed the status change", async () => {
+      // The other half of the replay: here the `connected` transition is
+      // dropped by the processing guard rather than handled by the re-entry
+      // branch, so reconciliation is what has to apply the chain.
+      let releaseConnect: (() => void) | undefined;
+      (mockFormo as any).connect = sandbox.stub().returns(
+        new Promise<void>((resolve) => { releaseConnect = () => resolve(); })
+      );
+
+      (mockWagmiConfig as any).setState(createMockState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const pending = statusListener!("connected", "disconnected");
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      const NEW_CHAIN = 137;
+      // Chain arrives while wagmi is reconnecting: the callback drops it.
+      (mockWagmiConfig as any).setState({
+        ...createConnectedState(mockAddress, NEW_CHAIN),
+        status: "reconnecting" as const,
+      });
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, mockChainId);
+      expect(mockFormo.chain.called, "dropped while reconnecting").to.be.false;
+
+      // Back to connected, but the lock is still held so this is dropped too.
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, NEW_CHAIN)
+      );
+      await statusListener!("connected", "reconnecting");
+
+      releaseConnect!();
+      await pending;
+      await settle();
+
+      expect(mockFormo.chain.calledOnce, "reconciliation replayed it").to.be.true;
+      expect(
+        (handler as any).trackingState.lastChainId,
+        "tracked chain caught up"
+      ).to.equal(NEW_CHAIN);
+    });
+
     it("should not replay a chain the subscription still owns", async () => {
       // The ordinary flap: the chain callback was never prevented from
       // running, so reconciliation must not emit a second event.
