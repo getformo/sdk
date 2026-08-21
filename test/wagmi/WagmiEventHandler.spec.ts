@@ -2772,6 +2772,94 @@ describe("WagmiEventHandler", () => {
       expect((mockFormo as any).currentChainId).to.equal(mockChainId);
     });
 
+    it("still confirms a transaction broadcast before the replacement mounted", async () => {
+      // Handler A sees the broadcast; B takes over as owner before the
+      // receipt lands. A no longer emits because it is not the owner, and B
+      // had no record to match the receipt against - so the confirmation was
+      // lost entirely.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      const hash = "0xbeef01";
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 601,
+            options: { mutationKey: ["sendTransaction"] },
+            state: { status: "success", data: hash, variables: { to: "0xabc" } },
+          },
+        } as any);
+      }
+      await settle();
+      mockFormo.transaction.resetHistory();
+
+      // The replacement mounts and becomes the owner; the old one goes away.
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      // Captured before the teardown: the mock's unsubscribe nulls the shared
+      // listener locals, so A's cleanup would clear B's reference too.
+      const queryB = queryListener;
+      first.cleanup();
+      await settle();
+
+      if (queryB) {
+        queryB({
+          type: "updated",
+          query: {
+            queryHash: '["waitForTransactionReceipt"]',
+            queryKey: ["waitForTransactionReceipt", { hash }],
+            state: { status: "success", data: { status: "success", transactionHash: hash } },
+          },
+        } as any);
+      }
+      await settle();
+
+      const confirmed = mockFormo.transaction
+        .getCalls()
+        .map((c: any) => c.args[0])
+        .find((p: any) => p.status === "confirmed");
+      expect(confirmed, "the confirmation still lands").to.exist;
+    });
+
+    it("emits one disconnect on connector fallback when handlers overlap", async () => {
+      // The fallback path lacked the ownership gate the ordinary disconnect
+      // path has, so overlapping handlers both reported the same fallback.
+      const conns = new Map();
+      conns.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      conns.set("uid-b", {
+        accounts: [SWITCHED],
+        chainId: mockChainId,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: conns, current: "uid-a", chainId: mockChainId,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const addrA = addressListener;
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const addrB = addressListener;
+      await settle();
+      expect(addrA).to.not.equal(addrB);
+
+      const remaining = new Map();
+      remaining.set("uid-b", conns.get("uid-b"));
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: remaining, current: "uid-b", chainId: mockChainId,
+      });
+      if (addrA) await addrA(SWITCHED, mockAddress);
+      if (addrB) await addrB(SWITCHED, mockAddress);
+      await settle();
+
+      expect(mockFormo.disconnect.callCount, "one disconnect").to.equal(1);
+    });
+
     it("does not mark a switched wallet whose connect the tracking gate drops", async () => {
       // Unlike the seed and connect paths, the switch path did not consult
       // willTrackEvent. A switch made while tracking was disabled, or onto an
