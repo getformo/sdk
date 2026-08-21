@@ -777,4 +777,103 @@ describe("Chain id resolution for autocaptured requests", () => {
 
 
 
+
+  it("passes requests straight through when autocapture is off", async () => {
+    const off = await makeFormo({
+      tracking: true,
+      autocapture: { signature: false, transaction: false },
+    });
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xok"),
+    };
+    (off as any).registerRequestListeners(provider);
+
+    expect(await provider.request({ method: "personal_sign", params: ["0x68", ADDRESS] })).to.equal("0xok");
+    expect(
+      await provider.request({
+        method: "eth_sendTransaction",
+        params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      })
+    ).to.equal("0xok");
+  });
+
+  it("rejects payloads whose address is not a valid EIP-55 address", async () => {
+    const bad = "0xnot-an-address";
+    expect(() =>
+      (formo as any).buildSignatureEventPayload("personal_sign", ["0x68", bad])
+    ).to.throw(/Invalid address in signature payload/);
+    await (formo as any)
+      .buildTransactionEventPayload([{ from: bad, to: "0xabc", value: "0x0", data: "0x" }])
+      .then(
+        () => expect.fail("should have thrown"),
+        (e: Error) => expect(e.message).to.match(/Invalid address in transaction payload/)
+      );
+  });
+
+  it("skips wrapping a provider whose request cannot be replaced", async () => {
+    const frozen: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+    };
+    Object.defineProperty(frozen, "request", {
+      value: async () => "0xok",
+      writable: false,
+      configurable: false,
+    });
+    // Must not throw out of provider tracking.
+    expect(() => (formo as any).registerRequestListeners(frozen)).to.not.throw();
+  });
+
+  it("survives a chain event that fails to emit", async () => {
+    const provider = providerOnChain(ACTIVE_CHAIN);
+    (formo as any)._provider = provider;
+    (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    sandbox.stub(formo, "chain").rejects(new Error("queue is gone"));
+
+    // Must not reject out of the listener; the error is logged and swallowed.
+    await (formo as any).onChainChanged(
+      provider,
+      `0x${OTHER_CHAIN.toString(16)}`
+    );
+    expect(
+      (formo as any).resolveChainIdForProvider(provider),
+      "and the chain is still recorded"
+    ).to.equal(OTHER_CHAIN);
+  });
+
+  it("does not wrap the same provider twice", async () => {
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xok"),
+    };
+    (formo as any).registerRequestListeners(provider);
+    const wrappedOnce = provider.request;
+    (formo as any).registerRequestListeners(provider);
+
+    expect(provider.request, "left alone the second time").to.equal(wrappedOnce);
+  });
+
+  it("contains a failure while building the signature event", async () => {
+    // The fire-and-forget REQUESTED block must never reject out of the
+    // wrapper - the wallet call has to proceed regardless.
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (formo as any).rememberProviderChain(provider, ACTIVE_CHAIN);
+    sandbox.stub(formo, "signature").rejects(new Error("queue is gone"));
+    (formo as any).registerRequestListeners(provider);
+
+    const result = await provider.request({
+      method: "personal_sign",
+      params: ["0x68690000", ADDRESS],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(result, "the signature still reaches the caller").to.equal("0xsigned");
+  });
 });

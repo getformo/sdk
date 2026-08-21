@@ -956,6 +956,15 @@ export class WagmiEventHandler {
       return;
     }
 
+    // `connecting` and `reconnecting` are transient: the wallet has not gone
+    // anywhere, wagmi is mid-handshake. Treating them as disconnected made
+    // reconciliation synthesize a disconnect for an ordinary reconnect flap
+    // and then emit a second connect when it completed - two spurious events
+    // for a wallet that never left.
+    if (state.status !== "connected" && state.status !== "disconnected") {
+      return;
+    }
+
     const live =
       state.status === "connected" ? this.getConnectedAddress(state) : undefined;
     const tracked = this.trackingState.lastAddress;

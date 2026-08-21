@@ -1638,10 +1638,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     // chain feature and stays exactly as it was, but it must not start firing
     // for apps that never asked for chain tracking: a second wallet switching
     // network would silently erase the active wallet's attribution.
-    if (
-      this.isProviderMismatch(provider) &&
-      !this.isAutocaptureEnabled("chain")
-    ) {
+    // Observation only when chain autocapture is off, whether or not an
+    // active provider has been established yet.
+    //
+    // `isProviderMismatch()` is false while `_provider` is undefined, which is
+    // exactly the state left by restoring a wallet from the active-wallet
+    // cookie. A background wallet's `chainChanged` could therefore claim the
+    // active slot and overwrite the restored wallet's chain - suppressing
+    // allowed events, or letting excluded ones through. The active provider is
+    // established by an actual account/connect/request association, not by
+    // another wallet changing network.
+    if (!this.isAutocaptureEnabled("chain") && provider !== this._provider) {
       return;
     }
 
@@ -1668,7 +1675,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // This is just a chain change since we already confirmed _evmAddress exists
       if (this.isAutocaptureEnabled("chain")) {
-        return this.chain({
+        // Awaited, so a failing emission is caught below rather than escaping
+        // as an unhandled rejection out of the provider's event listener.
+        // `return`ing the promise left the catch here unreachable.
+        await this.chain({
           chainId: nextChainId,
           address: this._evmAddress,
         });
@@ -1940,7 +1950,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // Fire-and-forget tracking
         (async () => {
           try {
-            this.signature({
+            await this.signature({
               status: SignatureStatus.REQUESTED,
               ...this.buildSignatureEventPayload(
                 method,
@@ -1961,7 +1971,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           if (response) {
             (async () => {
               try {
-                    this.signature({
+                    await this.signature({
                   status: SignatureStatus.CONFIRMED,
                   ...this.buildSignatureEventPayload(
                     method,
@@ -1986,7 +1996,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
-                this.signature({
+                await this.signature({
                   status: SignatureStatus.REJECTED,
                   ...this.buildSignatureEventPayload(
                     method,
@@ -2034,7 +2044,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               provider,
               txChainId
             );
-            this.transaction({ status: TransactionStatus.STARTED, ...payload });
+            await this.transaction({ status: TransactionStatus.STARTED, ...payload });
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
           }
@@ -2050,7 +2060,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                 provider,
                 txChainId
               );
-              this.transaction({
+              await this.transaction({
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
                 transactionHash,
@@ -2075,7 +2085,7 @@ export class FormoAnalytics implements IFormoAnalytics {
                   provider,
                   txChainId
                 );
-                this.transaction({
+                await this.transaction({
                   status: TransactionStatus.REJECTED,
                   ...payload,
                 });
