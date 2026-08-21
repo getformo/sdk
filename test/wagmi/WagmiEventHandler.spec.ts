@@ -2824,6 +2824,111 @@ describe("WagmiEventHandler", () => {
       expect(confirmed, "the confirmation still lands").to.exist;
     });
 
+    it("does not let a non-owner mark a switched wallet", async () => {
+      // Two SDK instances for the SAME destination, as a rebuild produces.
+      // The older handler's subscription runs first. If it marks the switched
+      // wallet, the real owner finds the marker and stays silent - and the
+      // non-owner's own emission dies with its queue when that instance is
+      // torn down, so the connect is lost entirely.
+      //
+      // Each handler gets its OWN Formo instance, or there is no way to tell
+      // which of them emitted.
+      const makeFormoLike = () => {
+        const inst: any = {
+          connect: sandbox.stub().resolves(),
+          disconnect: sandbox.stub().resolves(),
+          chain: sandbox.stub().resolves(),
+          signature: sandbox.stub().resolves(),
+          transaction: sandbox.stub().resolves(),
+          isAutocaptureEnabled: sandbox.stub().returns(true),
+          willTrackEvent: sandbox.stub().returns(true),
+          syncWalletState: sandbox.stub().callsFake((prm: any) => {
+            inst.currentAddress = prm?.address;
+            inst.currentChainId = prm?.chainId;
+          }),
+          currentAddress: undefined,
+          currentChainId: undefined,
+          writeKey: "test-write-key",
+        };
+        return inst;
+      };
+      const older = makeFormoLike();
+      const newer = makeFormoLike();
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(older, mockWagmiConfig, mockQueryClient);
+      const addrA = addressListener;
+      new WagmiEventHandler(newer, mockWagmiConfig, mockQueryClient);
+      const addrB = addressListener;
+      await settle();
+      older.connect.resetHistory();
+      newer.connect.resetHistory();
+
+      (mockWagmiConfig as any).setState(createConnectedState(SWITCHED, mockChainId));
+      // Older subscription first, then the owner's.
+      if (addrA) await addrA(SWITCHED, mockAddress);
+      if (addrB) await addrB(SWITCHED, mockAddress);
+      await settle();
+
+      expect(older.connect.called, "the non-owner stays silent").to.be.false;
+      expect(newer.connect.calledOnce, "the owner reports the switch").to.be.true;
+    });
+
+
+    it("keeps pending transactions across a cleanup-then-remount rebuild", async () => {
+      // The ordinary rebuild is cleanup THEN remount. Dropping the shared
+      // records the instant the last handler goes lost the receipt for
+      // anything broadcast moments before teardown.
+      const clock = sandbox.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        (mockWagmiConfig as any).setState(createConnectedState());
+        const first = new WagmiEventHandler(
+          mockFormo as any, mockWagmiConfig, mockQueryClient
+        );
+        await clock.tickAsync(10);
+
+        const hash = "0xd00d";
+        if (mutationListener) {
+          mutationListener({
+            type: "updated",
+            mutation: {
+              mutationId: 801,
+              options: { mutationKey: ["sendTransaction"] },
+              state: { status: "success", data: hash, variables: { to: "0xabc" } },
+            },
+          } as any);
+        }
+        await clock.tickAsync(10);
+        mockFormo.transaction.resetHistory();
+
+        // Teardown, then remount - the normal order.
+        first.cleanup();
+        await clock.tickAsync(50);
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+        await clock.tickAsync(10);
+
+        if (queryListener) {
+          queryListener({
+            type: "updated",
+            query: {
+              queryHash: '["waitForTransactionReceipt"]',
+              queryKey: ["waitForTransactionReceipt", { hash }],
+              state: { status: "success", data: { status: "success", transactionHash: hash } },
+            },
+          } as any);
+        }
+        await clock.tickAsync(10);
+
+        const confirmed = mockFormo.transaction
+          .getCalls()
+          .map((c: any) => c.args[0])
+          .find((p: any) => p.status === "confirmed");
+        expect(confirmed, "the confirmation survives the rebuild").to.exist;
+      } finally {
+        clock.restore();
+      }
+    });
+
     it("emits one disconnect on connector fallback when handlers overlap", async () => {
       // The fallback path lacked the ownership gate the ordinary disconnect
       // path has, so overlapping handlers both reported the same fallback.
@@ -5223,12 +5328,10 @@ describe("WagmiEventHandler", () => {
     });
 
     it("should not re-announce on a connect transition for an already-announced wallet", async () => {
-      // Handler A announces the wallet and is torn down while it is still
-      // connected, so nothing ever processes a disconnect and the marker
-      // survives. Handler B is then built while wagmi reports disconnected -
-      // so it has no tracked address - and sees the wallet connect. Without
-      // the announcement check on the connect path it would report a wallet
-      // this page load already reported.
+      // The marker is consulted on the connect path too. Reached when a
+      // handler mounts over the announced connection but central state
+      // declines it - so nothing is tracked - and the wallet is then accepted
+      // and re-announced by a status transition.
       (mockWagmiConfig as any).setState(createConnectedState());
       const first = new WagmiEventHandler(
         mockFormo as any, mockWagmiConfig, mockQueryClient
@@ -5237,16 +5340,22 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.calledOnce).to.be.true;
       first.cleanup();
 
-      // Rebuilt against a disconnected store: no seed, no tracked address.
-      (mockWagmiConfig as any).setState(createMockState());
+      // Rebuilt over the SAME live connection, but central state declines it
+      // (an excluded SPA path), so nothing is adopted.
+      (mockFormo as any).syncWalletState = sandbox.stub().callsFake(() => {
+        (mockFormo as any).currentAddress = undefined;
+      });
       const second = new WagmiEventHandler(
         mockFormo as any, mockWagmiConfig, mockQueryClient
       );
       await settle();
       expect((second as any).trackingState.lastAddress, "nothing adopted").to.be.undefined;
 
-      // The same wallet appears, via a connect transition.
-      (mockWagmiConfig as any).setState(createConnectedState());
+      // Navigation makes it trackable again, and wagmi replays the transition.
+      (mockFormo as any).syncWalletState = sandbox.stub().callsFake((prm: any) => {
+        (mockFormo as any).currentAddress = prm?.address;
+        (mockFormo as any).currentChainId = prm?.chainId;
+      });
       await statusListener!("connected", "disconnected");
       await settle();
 
@@ -5256,6 +5365,38 @@ describe("WagmiEventHandler", () => {
         "but it is adopted, so mutations stay attributable"
       ).to.equal(mockAddress);
     });
+
+    it("should drop the marker for a wallet that left during a rebuild", async () => {
+      // Wallet A is announced, the SDK is rebuilt, and B is what wagmi holds
+      // by the time the replacement mounts. Keeping A's marker alive on the
+      // strength of "some connection exists" suppressed A's genuine reconnect
+      // for the rest of the page load.
+      const B = "0x9999999999999999999999999999999999999999";
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // Rebuild, and by the time the replacement mounts it is B connected.
+      first.cleanup();
+      (mockWagmiConfig as any).setState(createConnectedState(B, mockChainId));
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      const afterB = mockFormo.connect.callCount;
+
+      // A comes back.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      await statusListener!("connected", "disconnected");
+      await settle();
+
+      expect(
+        mockFormo.connect.callCount,
+        "A's return is reported, not suppressed by a stale marker"
+      ).to.be.greaterThan(afterB);
+    });
+
 
     it("should let the surviving handler emit after the owner is cleaned up", async () => {
       // Ownership must transfer, or tearing down the newest handler would

@@ -244,6 +244,34 @@ const pendingTransactionsByDestination = new Map<
   Map<string, PendingTransaction>
 >();
 
+/**
+ * Pending records outlive a rebuild by the same grace period as the markers.
+ * The ordinary rebuild is cleanup THEN remount, so dropping them the instant
+ * the last handler goes would lose the receipt for anything broadcast just
+ * before teardown.
+ */
+const pendingTransactionExpiry = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>();
+
+function schedulePendingTransactionExpiry(key: string): void {
+  if (pendingTransactionExpiry.has(key)) return;
+  const timer = setTimeout(() => {
+    pendingTransactionExpiry.delete(key);
+    pendingTransactionsByDestination.delete(key);
+  }, MARKER_GRACE_MS);
+  (timer as unknown as { unref?: () => void }).unref?.();
+  pendingTransactionExpiry.set(key, timer);
+}
+
+function cancelPendingTransactionExpiry(key: string): void {
+  const timer = pendingTransactionExpiry.get(key);
+  if (!timer) return;
+  clearTimeout(timer);
+  pendingTransactionExpiry.delete(key);
+}
+
 /** Stable per-config id, so the owner key can span SDK instances. */
 const configIds = new WeakMap<object, string>();
 let nextConfigId = 0;
@@ -259,6 +287,8 @@ const ownerKey = (writeKey: string, config: WagmiConfig): string => {
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {
   emittingOwners.clear();
+  pendingTransactionExpiry.forEach((t) => clearTimeout(t));
+  pendingTransactionExpiry.clear();
   pendingTransactionsByDestination.clear();
   announcedConnections.clear();
   liveHandlers.clear();
@@ -333,6 +363,38 @@ export class WagmiEventHandler {
    * instance no longer owns.
    */
   private disposed = false;
+
+  /**
+   * Drop markers for wallets wagmi no longer holds, and report whether any
+   * announced wallet is still connected.
+   *
+   * Called when a handler mounts. Cancelling the expiry timer on the strength
+   * of "some connection exists" let a marker for a wallet that had since
+   * disconnected survive indefinitely, suppressing its genuine reconnect.
+   */
+  private pruneMarkersForLostWallets(): boolean {
+    let state: WagmiState;
+    try {
+      state = this.getState();
+    } catch {
+      return false;
+    }
+    const prefix = `${this.formo.writeKey}:`;
+    const live = new Set<string>();
+    state.connections.forEach((connection) => {
+      connection.accounts.forEach((a: string) =>
+        live.add(announceKey(this.formo.writeKey, a))
+      );
+    });
+
+    let announcedStillConnected = false;
+    announcedConnections.forEach((key) => {
+      if (!key.startsWith(prefix)) return;
+      if (live.has(key)) announcedStillConnected = true;
+      else announcedConnections.delete(key);
+    });
+    return announcedStillConnected;
+  }
 
   /** Identifies this handler's destination for emit-ownership. */
   private ownerKey?: string;
@@ -425,15 +487,13 @@ export class WagmiEventHandler {
     // Keep the page-load markers alive across an SDK rebuild. Must run before
     // the seed, so a handler created moments after its predecessor was torn
     // down still sees what that predecessor announced.
-    // Only a handler that finds the wallet still connected may hold the
-    // markers open. One mounting over a disconnected store has observed
-    // nothing and must let them expire.
-    let livesOverConnection = false;
-    try {
-      livesOverConnection = this.getState().status === "connected";
-    } catch {
-      /* unreadable store counts as no live connection */
-    }
+    // Only a handler that finds an ANNOUNCED wallet still connected may hold
+    // the markers open. Mounting over a disconnected store has observed
+    // nothing; mounting over a DIFFERENT wallet is worse still - it would
+    // preserve the previous wallet's marker and suppress its genuine
+    // reconnect for the rest of the page load. Markers for wallets no longer
+    // in `state.connections` are dropped outright.
+    const livesOverConnection = this.pruneMarkersForLostWallets();
     retainMarkers(this.formo.writeKey, livesOverConnection);
 
     // Claim the right to emit for this destination. The NEWEST handler always
@@ -443,6 +503,9 @@ export class WagmiEventHandler {
     // duplicate events this is here to prevent.
     this.ownerKey = ownerKey(this.formo.writeKey, wagmiConfig);
     emittingOwners.set(this.ownerKey, this);
+    // A remount for this destination cancels the pending-record expiry the
+    // previous handler started.
+    cancelPendingTransactionExpiry(this.ownerKey);
 
     // Set up connection/disconnection/chain listeners
     this.setupConnectionListeners();
@@ -1407,9 +1470,15 @@ export class WagmiEventHandler {
     // the rest of the page load once the configuration allowed it.
     if (
       this.formo.isAutocaptureEnabled("connect") &&
+      this.isEmittingOwner &&
       this.formo.willTrackEvent(chainId)
     ) {
       // Move the page-load marker onto the wallet that is now active.
+      //
+      // Gated on ownership as well, like the ordinary connect path. A
+      // non-owner that marked here would make the real owner find the marker
+      // and stay silent, and the non-owner's own emission dies with its queue
+      // when that instance is torn down - losing the connect entirely.
       //
       // Only drop the previous wallet's marker when that wallet is genuinely
       // gone. On an in-place account switch the old account leaves the
@@ -2225,10 +2294,12 @@ export class WagmiEventHandler {
       // Start the grace period. If nothing re-mounts, the markers are dropped
       // so a reconnect that happens while unobserved still emits.
       const wasLastForDestination = releaseMarkers(this.formo.writeKey);
-      // Nothing is left to match a receipt against, so drop the shared
-      // broadcast records rather than leak them for the page's lifetime.
+      // Drop the shared broadcast records rather than leak them - but only
+      // after the same grace period the markers get. The ordinary rebuild is
+      // cleanup THEN remount, so deleting immediately would lose the receipt
+      // for a transaction broadcast moments before teardown.
       if (wasLastForDestination && this.ownerKey) {
-        pendingTransactionsByDestination.delete(this.ownerKey);
+        schedulePendingTransactionExpiry(this.ownerKey);
       }
     }
 
