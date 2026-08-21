@@ -3531,6 +3531,94 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.chain.callCount, "one chain event").to.equal(1);
     });
 
+    it("should emit one signature when two handlers share a mutation cache", async () => {
+      // Both handlers subscribe to the same MutationCache, so without an
+      // owner each of them reports the same mutation.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const mutA = mutationListener;
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const mutB = mutationListener;
+      await settle();
+      expect(mutA).to.not.equal(mutB);
+
+      const event = {
+        type: "updated",
+        mutation: {
+          mutationId: 401,
+          options: { mutationKey: ["signMessage"] },
+          state: { status: "success", variables: { message: "hi" } },
+        },
+      } as any;
+      if (mutA) mutA(event);
+      if (mutB) mutB(event);
+      await settle();
+
+      expect(mockFormo.signature.callCount, "one signature for one mutation").to.equal(1);
+    });
+
+    it("should emit one receipt-derived event when two handlers share a query cache", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const qA = queryListener;
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const qB = queryListener;
+      await settle();
+      expect(qA).to.not.equal(qB);
+
+      const hash = "0xfeed";
+      // Broadcast through the owner so the hash is observed.
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 402,
+            options: { mutationKey: ["sendTransaction"] },
+            state: { status: "success", data: hash, variables: { to: "0xabc" } },
+          },
+        } as any);
+      }
+      await settle();
+      mockFormo.transaction.resetHistory();
+
+      const qEvent = {
+        type: "updated",
+        query: {
+          queryHash: '["waitForTransactionReceipt"]',
+          queryKey: ["waitForTransactionReceipt", { hash }],
+          state: { status: "success", data: { status: "success", transactionHash: hash } },
+        },
+      } as any;
+      if (qA) qA(qEvent);
+      if (qB) qB(qEvent);
+      await settle();
+
+      expect(
+        mockFormo.transaction.callCount,
+        "one confirmation for one receipt"
+      ).to.equal(1);
+    });
+
+    it("should not re-announce on a connect transition for an already-announced wallet", async () => {
+      // A rebuilt handler that sees a `connected` transition for a wallet the
+      // page load already reported must stay silent.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      first.cleanup();
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      // The replacement seeds silently, then wagmi replays the transition.
+      await statusListener!("connected", "disconnected");
+      await settle();
+
+      expect(mockFormo.connect.callCount, "still just the one").to.equal(1);
+    });
+
     it("should let the surviving handler emit after the owner is cleaned up", async () => {
       // Ownership must transfer, or tearing down the newest handler would
       // silence the destination entirely.
