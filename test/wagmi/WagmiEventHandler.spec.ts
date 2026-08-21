@@ -2819,6 +2819,91 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.called, "nothing to adopt").to.be.false;
     });
 
+    it("should emit the chain event when adoption could not announce a connect", async () => {
+      // Constructed against a connection with no chain yet, and connect
+      // autocapture off. The retry adopts the wallet but can never announce
+      // it, so returning on "adopted" alone swallowed the very chain event
+      // the app had enabled.
+      (mockFormo as any).isAutocaptureEnabled = sandbox.stub().callsFake(
+        (t: string) => t !== "connect"
+      );
+      const connections = new Map();
+      connections.set("k", {
+        accounts: [mockAddress],
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections, current: "k", chainId: undefined,
+      });
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.called, "no connect, as configured").to.be.false;
+
+      // The chain arrives.
+      connections.set("k", {
+        accounts: [mockAddress],
+        chainId: mockChainId,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections, current: "k", chainId: mockChainId,
+      });
+      if (chainIdListener) await chainIdListener(mockChainId, undefined);
+      await settle();
+
+      expect(mockFormo.chain.calledOnce, "the chain event lands").to.be.true;
+    });
+
+    it("should still confirm a transaction after ownership moves", async () => {
+      // A observes the broadcast; B takes over as owner before the receipt.
+      // With a per-handler pending map, A stops emitting and B has no record
+      // to match against, so the confirmation was lost.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      const hash = "0xbeefcafe";
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 701,
+            options: { mutationKey: ["sendTransaction"] },
+            state: { status: "success", data: hash, variables: { to: "0xabc" } },
+          },
+        } as any);
+      }
+      await settle();
+      mockFormo.transaction.resetHistory();
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      // Captured before teardown: the mock's unsubscribe nulls the shared
+      // listener locals, so A's cleanup would clear B's reference too.
+      const queryB = queryListener;
+      first.cleanup();
+      await settle();
+
+      if (queryB) {
+        queryB({
+          type: "updated",
+          query: {
+            queryHash: '["waitForTransactionReceipt"]',
+            queryKey: ["waitForTransactionReceipt", { hash }],
+            state: { status: "success", data: { status: "success", transactionHash: hash } },
+          },
+        } as any);
+      }
+      await settle();
+
+      const confirmed = mockFormo.transaction
+        .getCalls()
+        .map((c: any) => c.args[0])
+        .find((p: any) => p.status === "confirmed");
+      expect(confirmed, "the confirmation still lands").to.exist;
+    });
+
     it("should still emit chain events when connect autocapture is disabled", async () => {
       // With connect autocapture off nothing is ever announced, so gating the
       // retry-and-return on "is it announced yet" made every chain change

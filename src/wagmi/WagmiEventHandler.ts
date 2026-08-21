@@ -207,6 +207,23 @@ function markAnnounced(key: string, connection?: object): void {
  */
 const emittingOwners = new Map<string, WagmiEventHandler>();
 
+/** Details of a broadcast awaiting its receipt. */
+type PendingTransaction = {
+    address: string;
+    data?: string;
+    to?: string;
+    value?: string;
+    function_name?: string;
+    function_args?: Record<string, unknown>;
+    safeFunctionArgs?: Record<string, unknown>;
+  };
+
+/** Pending transactions, shared per destination so ownership can change. */
+const pendingTransactionsByDestination = new Map<
+  string,
+  Map<string, PendingTransaction>
+>();
+
 /** Stable per-config id, so the owner key can span SDK instances. */
 const configIds = new WeakMap<object, string>();
 let nextConfigId = 0;
@@ -222,6 +239,7 @@ const ownerKey = (writeKey: string, config: WagmiConfig): string => {
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {
   emittingOwners.clear();
+  pendingTransactionsByDestination.clear();
   announcedConnections.clear();
   liveHandlers.clear();
   markerExpiry.forEach((timer) => clearTimeout(timer));
@@ -310,15 +328,23 @@ export class WagmiEventHandler {
    * Store transaction details from BROADCASTED events for use in CONFIRMED/REVERTED
    * Key: transactionHash, Value: transaction details including the original sender address
    */
-  private pendingTransactions = new Map<string, {
-    address: string;
-    data?: string;
-    to?: string;
-    value?: string;
-    function_name?: string;
-    function_args?: Record<string, unknown>;
-    safeFunctionArgs?: Record<string, unknown>;
-  }>();
+  /**
+   * Shared per destination, not per handler.
+   *
+   * The emit-ownership model means a broadcast observed by handler A, with a
+   * replacement B taking over before the receipt arrives, otherwise loses the
+   * confirmation outright: A no longer emits because it is not the owner, and
+   * B has no record to match the receipt against.
+   */
+  private get pendingTransactions(): Map<string, PendingTransaction> {
+    const key = this.ownerKey ?? "";
+    let map = pendingTransactionsByDestination.get(key);
+    if (!map) {
+      map = new Map();
+      pendingTransactionsByDestination.set(key, map);
+    }
+    return map;
+  }
 
   constructor(
     formoAnalytics: FormoAnalytics,
@@ -1049,9 +1075,12 @@ export class WagmiEventHandler {
       // `autocapture.connect` disabled nothing is ever announced, so an
       // unconditional return here dropped every chain event for the whole
       // page load.
-      const adoptedNow = !hadAddress && !!this.trackingState.lastAddress;
+      // Suppress ONLY when the retry announced a connect, because that
+      // connect already carried the new chain. Adoption on its own reports
+      // nothing - with `autocapture.connect` disabled it never can - so
+      // returning on it swallowed the chain event the app did ask for.
       const announcedNow = !wasAnnounced && this.isCurrentWalletAnnounced();
-      if (adoptedNow || announcedNow) return;
+      if (announcedNow) return;
     }
 
     logger.info("WagmiEventHandler: Chain changed", {
@@ -1667,7 +1696,8 @@ export class WagmiEventHandler {
     this.unsubscribers = [];
     this.processedMutations.clear();
     this.processedQueries.clear();
-    this.pendingTransactions.clear();
+    // Deliberately NOT cleared: shared per destination, and the replacement
+    // handler needs these records to match incoming receipts.
     logger.debug("WagmiEventHandler: Cleanup complete");
   }
 }
