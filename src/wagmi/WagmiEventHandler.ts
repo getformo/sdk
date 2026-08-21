@@ -184,8 +184,36 @@ function markAnnounced(key: string, connection?: object): void {
   }
 }
 
+/**
+ * The one handler allowed to EMIT for a given destination.
+ *
+ * Two handlers can be alive at once over the same wagmi config and write key:
+ * Strict Mode, HMR, or an options change whose replacement mounts before the
+ * old one is torn down - which the marker grace period explicitly supports.
+ * The page-load marker deduplicates `connect`, but nothing deduplicated
+ * `disconnect`, `chain`, or the mutation and query streams, so each of those
+ * was emitted once per live handler.
+ *
+ * Non-owners still track state, so whichever survives cleanup is already
+ * correct and takes over immediately; they simply do not emit.
+ */
+const emittingOwners = new Map<string, WagmiEventHandler>();
+
+/** Stable per-config id, so the owner key can span SDK instances. */
+const configIds = new WeakMap<object, string>();
+let nextConfigId = 0;
+const ownerKey = (writeKey: string, config: WagmiConfig): string => {
+  let id = configIds.get(config as unknown as object);
+  if (!id) {
+    id = `cfg${(nextConfigId += 1)}`;
+    configIds.set(config as unknown as object, id);
+  }
+  return `${writeKey}:${id}`;
+};
+
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {
+  emittingOwners.clear();
   announcedConnections.clear();
   liveHandlers.clear();
   markerExpiry.forEach((timer) => clearTimeout(timer));
@@ -228,6 +256,26 @@ export class WagmiEventHandler {
    * instance no longer owns.
    */
   private disposed = false;
+
+  /** Identifies this handler's destination for emit-ownership. */
+  private ownerKey?: string;
+
+  /**
+   * Whether this handler is the one allowed to emit for its destination.
+   *
+   * A handler that lost the race still tracks state, so it is ready to take
+   * over the moment the owner goes away; it just does not emit.
+   */
+  private get isEmittingOwner(): boolean {
+    if (!this.ownerKey) return true;
+    const owner = emittingOwners.get(this.ownerKey);
+    if (!owner) {
+      // Nobody holds it - the previous owner was torn down. Claim it.
+      emittingOwners.set(this.ownerKey, this);
+      return true;
+    }
+    return owner === this;
+  }
 
   /** Reentrancy guard for `reconcileWithLiveState()`. */
   private reconciling = false;
@@ -280,6 +328,14 @@ export class WagmiEventHandler {
     // down still sees what that predecessor announced.
     retainMarkers(this.formo.writeKey);
 
+    // Claim the right to emit for this destination. The NEWEST handler always
+    // wins, deliberately: an app that rebuilds without calling `cleanup()`
+    // leaks the old handler, and letting that stale one keep ownership would
+    // silence the live one for the rest of the page load - far worse than the
+    // duplicate events this is here to prevent.
+    this.ownerKey = ownerKey(this.formo.writeKey, wagmiConfig);
+    emittingOwners.set(this.ownerKey, this);
+
     // Set up connection/disconnection/chain listeners
     this.setupConnectionListeners();
 
@@ -314,7 +370,8 @@ export class WagmiEventHandler {
 
     // Subscribe to chain ID changes
     const chainIdUnsubscribe = this.wagmiConfig.subscribe(
-      (state: WagmiState) => state.chainId,
+      (state: WagmiState) =>
+        this.getActiveConnectionChainId(state) ?? state.chainId,
       (chainId, prevChainId) => {
         this.handleChainChange(chainId, prevChainId);
       }
@@ -362,7 +419,7 @@ export class WagmiEventHandler {
       }
 
       const address = this.getConnectedAddress(state);
-      const chainId = state.chainId;
+      const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
 
       if (!address || chainId === undefined) {
         logger.debug(
@@ -413,7 +470,7 @@ export class WagmiEventHandler {
       // able to clear the right marker when it later sees the disconnect.
       this.trackingState.lastConnectionId = state.current;
 
-      if (!this.formo.isAutocaptureEnabled("connect")) {
+      if (!this.formo.isAutocaptureEnabled("connect") || !this.isEmittingOwner) {
         // Nothing was announced, so nothing may be marked. Marking here would
         // make a later rebuild with connect autocapture enabled - which is
         // exactly how FormoAnalyticsProvider applies an options change - find
@@ -624,7 +681,7 @@ export class WagmiEventHandler {
     try {
       const state = this.getState();
       const address = this.getConnectedAddress(state);
-      const chainId = state.chainId;
+      const chainId = this.getActiveConnectionChainId(state) ?? state.chainId;
 
       logger.info("WagmiEventHandler: Status changed", {
         status,
@@ -664,7 +721,7 @@ export class WagmiEventHandler {
         // would hide a `tracking.excludeChains` chain from its own exclusion
         // check and emit the very event the exclusion forbids. `disconnect()`
         // clears the chain namespace itself once it has emitted.
-        if (this.formo.isAutocaptureEnabled("disconnect")) {
+        if (this.formo.isAutocaptureEnabled("disconnect") && this.isEmittingOwner) {
           await this.formo.disconnect({
             chainId: disconnectedChainId,
             address: disconnectedAddress,
@@ -779,6 +836,7 @@ export class WagmiEventHandler {
 
           if (
             this.formo.isAutocaptureEnabled("connect") &&
+            this.isEmittingOwner &&
             this.formo.willTrackEvent()
           ) {
             // Record it in the page-load marker as well. Without this only
@@ -1004,7 +1062,7 @@ export class WagmiEventHandler {
 
     this.trackingState.lastChainId = chainId;
 
-    if (this.formo.isAutocaptureEnabled("chain")) {
+    if (this.formo.isAutocaptureEnabled("chain") && this.isEmittingOwner) {
       try {
         await this.formo.chain({ chainId, address });
       } catch (error) {
@@ -1057,6 +1115,11 @@ export class WagmiEventHandler {
    */
   private handleQueryEvent(event: QueryCacheEvent): void {
     if (event.type !== "updated") {
+      return;
+    }
+    // Overlapping handlers share one MutationCache/QueryCache, so without
+    // this each of them emits for the same mutation.
+    if (!this.isEmittingOwner) {
       return;
     }
 
@@ -1224,6 +1287,11 @@ export class WagmiEventHandler {
    */
   private handleMutationEvent(event: MutationCacheEvent): void {
     if (event.type !== "updated") {
+      return;
+    }
+    // Overlapping handlers share one MutationCache/QueryCache, so without
+    // this each of them emits for the same mutation.
+    if (!this.isEmittingOwner) {
       return;
     }
 
@@ -1512,6 +1580,20 @@ export class WagmiEventHandler {
   }
 
   /**
+   * Chain of the connection that is currently active.
+   *
+   * Authoritative, because `state.chainId` is a single global value. With
+   * `syncConnectedChain: false` it stays on the chain the APP selected while
+   * the connection reports the chain the WALLET is actually on, so seeding
+   * from the global could label a wallet on an excluded chain as an allowed
+   * one and send events the exclusion forbids.
+   */
+  private getActiveConnectionChainId(state: WagmiState): number | undefined {
+    if (!state.current) return undefined;
+    return state.connections.get(state.current)?.chainId;
+  }
+
+  /**
    * Get the currently connected address from Wagmi state
    */
   private getConnectedAddress(state: WagmiState): string | undefined {
@@ -1547,6 +1629,11 @@ export class WagmiEventHandler {
 
     if (!this.disposed) {
       this.disposed = true;
+      // Give up the right to emit. Any other live handler for this
+      // destination claims it the next time it needs to emit.
+      if (this.ownerKey && emittingOwners.get(this.ownerKey) === this) {
+        emittingOwners.delete(this.ownerKey);
+      }
       // Start the grace period. If nothing re-mounts, the markers are dropped
       // so a reconnect that happens while unobserved still emits.
       releaseMarkers(this.formo.writeKey);

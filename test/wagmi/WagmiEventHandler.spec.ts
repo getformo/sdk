@@ -3459,6 +3459,101 @@ describe("WagmiEventHandler", () => {
       expect(true).to.be.true;
     });
 
+    it("should seed the connection's chain, not the app-selected global", async () => {
+      // With syncConnectedChain: false, state.chainId stays on the chain the
+      // APP selected while the connection reports what the WALLET is on.
+      // Seeding from the global labels a wallet on an excluded chain as an
+      // allowed one and sends the events the exclusion forbids.
+      const WALLET_CHAIN = 8453;
+      const APP_CHAIN = 1;
+      const connections = new Map();
+      connections.set("k", {
+        accounts: [mockAddress],
+        chainId: WALLET_CHAIN,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected",
+        connections,
+        current: "k",
+        chainId: APP_CHAIN,
+      });
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(
+        mockFormo.connect.firstCall.args[0].chainId,
+        "the wallet's chain, not the app's"
+      ).to.equal(WALLET_CHAIN);
+      expect(mockFormo.syncWalletState.firstCall.args[0].chainId).to.equal(WALLET_CHAIN);
+    });
+
+    it("should emit one disconnect when two handlers overlap", async () => {
+      // The page-load marker only ever deduplicated `connect`. Overlapping
+      // handlers - Strict Mode, HMR, or a rebuild whose replacement mounts
+      // before teardown - each emitted their own disconnect, chain and
+      // mutation events for the same user action.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const listenerA = statusListener;
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const listenerB = statusListener;
+      await settle();
+      expect(listenerA).to.not.equal(listenerB);
+
+      (mockWagmiConfig as any).setState(createMockState());
+      await listenerA!("disconnected", "connected");
+      await listenerB!("disconnected", "connected");
+      await settle();
+
+      expect(mockFormo.disconnect.callCount, "one disconnect for one action").to.equal(1);
+    });
+
+    it("should emit one chain event when two handlers overlap", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const chainA = chainIdListener;
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      const chainB = chainIdListener;
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      const NEW_CHAIN = 137;
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, NEW_CHAIN)
+      );
+      if (chainA) await chainA(NEW_CHAIN, mockChainId);
+      if (chainB) await chainB(NEW_CHAIN, mockChainId);
+      await settle();
+
+      expect(mockFormo.chain.callCount, "one chain event").to.equal(1);
+    });
+
+    it("should let the surviving handler emit after the owner is cleaned up", async () => {
+      // Ownership must transfer, or tearing down the newest handler would
+      // silence the destination entirely.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      const listenerA = statusListener;
+      const second = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      // The newest owns; tear it down and the first must take over.
+      second.cleanup();
+      (mockWagmiConfig as any).setState(createMockState());
+      await listenerA!("disconnected", "connected");
+      await settle();
+
+      expect(mockFormo.disconnect.calledOnce, "the survivor emits").to.be.true;
+      void first;
+    });
+
     it("should emit one connect when two overlapping handlers see one transition", async () => {
       // Strict Mode, or an options change whose replacement mounts before the
       // old one is torn down: both handlers subscribe to the same config and
