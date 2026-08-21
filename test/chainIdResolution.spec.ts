@@ -268,14 +268,11 @@ describe("Chain id resolution for autocaptured requests", () => {
   });
 
   it("tags a rejected signature with the signing provider's chain", async () => {
+    const rejection: any = Object.assign(new Error("User rejected"), { code: 4001 });
     const rejecting: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async () => {
-        const err: any = new Error("User rejected");
-        err.code = 4001;
-        throw err;
-      }),
+      request: sandbox.stub().callsFake(async () => { throw rejection; }),
     };
     await announceChain(formo, rejecting, OTHER_CHAIN);
 
@@ -283,11 +280,20 @@ describe("Chain id resolution for autocaptured requests", () => {
     sandbox.stub(formo, "signature").callsFake((async (pl: any) => { seen.push(pl); }) as any);
 
     (formo as any).registerRequestListeners(rejecting);
+    // Asserted precisely: a bare try/catch also passes if the wrapper
+    // swallows the rejection and resolves, which would make the dapp treat a
+    // declined signature as a successful one.
+    let caught: any;
+    let resolved = false;
     try {
       await rejecting.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
-    } catch {
-      /* the wallet's rejection must still propagate to the caller */
+      resolved = true;
+    } catch (e) {
+      caught = e;
     }
+    expect(resolved, "the wrapper must not swallow the rejection").to.be.false;
+    expect(caught, "the wallet's own error reaches the caller").to.equal(rejection);
+    expect(caught.code).to.equal(4001);
     await new Promise((r) => setTimeout(r, 20));
 
     const rejected = seen.find((e) => e.status === "rejected");
@@ -296,14 +302,11 @@ describe("Chain id resolution for autocaptured requests", () => {
   });
 
   it("tags a rejected transaction with the signing provider's chain", async () => {
+    const rejection: any = Object.assign(new Error("User rejected"), { code: 4001 });
     const rejecting: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async () => {
-        const err: any = new Error("User rejected");
-        err.code = 4001;
-        throw err;
-      }),
+      request: sandbox.stub().callsFake(async () => { throw rejection; }),
     };
     await announceChain(formo, rejecting, OTHER_CHAIN);
 
@@ -311,14 +314,20 @@ describe("Chain id resolution for autocaptured requests", () => {
     sandbox.stub(formo, "transaction").callsFake((async (pl: any) => { seen.push(pl); }) as any);
 
     (formo as any).registerRequestListeners(rejecting);
+    let caught: any;
+    let resolved = false;
     try {
       await rejecting.request({
         method: "eth_sendTransaction",
         params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
       });
-    } catch {
-      /* propagates */
+      resolved = true;
+    } catch (e) {
+      caught = e;
     }
+    expect(resolved, "the wrapper must not swallow the rejection").to.be.false;
+    expect(caught, "the wallet's own error reaches the caller").to.equal(rejection);
+    expect(caught.code).to.equal(4001);
     await new Promise((r) => setTimeout(r, 20));
 
     expect(seen.map((e) => e.status)).to.include("rejected");
