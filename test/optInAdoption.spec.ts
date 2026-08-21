@@ -70,7 +70,64 @@ describe("Adoption after opting back into tracking", () => {
     jsdom?.window.close();
   });
 
-  it("asks the wagmi handler to adopt when opt-in lifts suppression", async () => {
+  /** A wagmi config stub holding one live connection. */
+  const connectedConfig = (address: string, chainId = 1) => {
+    const connections = new Map();
+    connections.set("c1", {
+      accounts: [address],
+      chainId,
+      connector: { id: "mock", name: "Mock", type: "injected", uid: "c1" },
+    });
+    return {
+      subscribe: sandbox.stub().returns(() => {}),
+      state: { status: "connected", connections, current: "c1", chainId },
+      _internal: { store: { subscribe: sandbox.stub().returns(() => {}) } },
+    } as any;
+  };
+
+  const queryClientStub = () =>
+    ({
+      getMutationCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
+      getQueryCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
+    }) as any;
+
+  it("adopts the live wallet when opt-in lifts suppression", async () => {
+    // The real production shape: a wallet already connected while the visitor
+    // is opted out. `syncWalletState()` declines it, and an unchanged wagmi
+    // connection produces no status or chain update to retry on, so without
+    // the opt-in retry that wallet stays invisible for the whole page load.
+    //
+    // Deliberately driven through a CONNECTED wagmi state rather than by
+    // injecting `trackingState` by hand: an injected address is restored by
+    // the central-state resync alone, so the seed could be removed entirely
+    // and such a test would still pass.
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      wagmi: { config: connectedConfig(ADDRESS), queryClient: queryClientStub() },
+    });
+    formo.optOutTracking();
+
+    // Rebuild while suppressed, so the handler is constructed against a live
+    // connection it must decline.
+    formo.cleanup?.();
+    const suppressed = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      wagmi: { config: connectedConfig(ADDRESS), queryClient: queryClientStub() },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(suppressed.currentAddress, "declined while opted out").to.be.undefined;
+
+    suppressed.optInTracking();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(suppressed.currentAddress, "the LIVE wallet is adopted").to.equal(ADDRESS);
+    expect(suppressed.currentChainId, "and its chain").to.equal(1);
+    suppressed.cleanup?.();
+  });
+
+  it("does not resurrect a cached wallet that is no longer connected", async () => {
+    // Opting out and disconnecting, then opting back in, must not restore the
+    // wallet the user has left - later activity would be attributed to it.
     const formo = await FormoAnalytics.init("test-write-key", {
       tracking: true,
       wagmi: {
@@ -79,35 +136,23 @@ describe("Adoption after opting back into tracking", () => {
           state: { status: "disconnected", connections: new Map(), current: undefined, chainId: undefined },
           _internal: { store: { subscribe: sandbox.stub().returns(() => {}) } },
         } as any,
-        queryClient: {
-          getMutationCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
-          getQueryCache: () => ({ subscribe: sandbox.stub().returns(() => {}) }),
-        } as any,
+        queryClient: queryClientStub(),
       },
     });
-
     const handler = (formo as any).wagmiHandler;
-    expect(handler, "wagmi handler is attached").to.exist;
-
-    // A real tracked wallet, not a stub. Stubbing `retryAdoption()` here made
-    // the test pass even when adoption did nothing at all.
+    // A wallet the handler still remembers, while wagmi has none.
     handler.trackingState.lastAddress = ADDRESS;
     handler.trackingState.lastChainId = 1;
-    (formo as any).setChainState("evm", { chainId: 1, address: ADDRESS });
-    expect(formo.currentAddress, "wallet is live before opt-out").to.equal(ADDRESS);
 
-    // opt-out calls reset(), which wipes central identity while the handler
-    // keeps its wallet.
     formo.optOutTracking();
-    expect(formo.currentAddress, "central identity cleared").to.be.undefined;
-
     formo.optInTracking();
+    await new Promise((r) => setTimeout(r, 20));
 
+    expect(formo.currentAddress, "no resurrection").to.be.undefined;
     expect(
-      formo.currentAddress,
-      "the live wallet is restored, so later events carry it"
-    ).to.equal(ADDRESS);
-    expect(formo.currentChainId, "and its chain, so excludeChains still applies").to.equal(1);
+      handler.trackingState.lastAddress,
+      "and the stale wallet is released"
+    ).to.be.undefined;
     formo.cleanup?.();
   });
 

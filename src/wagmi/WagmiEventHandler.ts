@@ -627,12 +627,26 @@ export class WagmiEventHandler {
    */
   public retryAdoption(): void {
     if (this.disposed) return;
+    // The cached wallet may no longer be the live one. While tracking is
+    // suppressed a user can disconnect, or switch account inside the same
+    // wallet - which moves only the connection's accounts, so neither the
+    // status nor the chain subscription fires and nothing tells this handler.
+    // Restoring the cached wallet then resurrects an address the user has
+    // left, and the marker makes the check below return before the live one
+    // is ever adopted.
+    if (this.trackingState.lastAddress && !this.tracksLiveWallet()) {
+      logger.debug(
+        "WagmiEventHandler: Tracked wallet is no longer the live one, releasing before retry",
+        { tracked: this.trackingState.lastAddress }
+      );
+      this.releaseTrackedWallet();
+    }
+
     // Central state can have been cleared underneath a wallet this handler is
     // still tracking: `optOutTracking()` calls `reset()`, which wipes
     // `currentAddress` / `currentChainId` while the handler keeps its wallet.
     // Left unreconciled, later events carry no wallet at all - and
     // `shouldTrack()` sees no chain, so `excludeChains` stops excluding.
-    // Restore it first, whether or not a connect is still owed.
     this.resyncCentralState();
 
     // Adopted is not the same as announced. A wallet connected on an excluded
@@ -644,6 +658,21 @@ export class WagmiEventHandler {
       return;
     }
     this.seedFromCurrentState();
+  }
+
+  /** Whether the wallet this handler tracks is the one wagmi currently has. */
+  private tracksLiveWallet(): boolean {
+    const tracked = this.trackingState.lastAddress;
+    if (!tracked) return false;
+    try {
+      const state = this.getState();
+      if (state.status !== "connected") return false;
+      const live = this.getConnectedAddress(state);
+      return !!live && live.toLowerCase() === tracked.toLowerCase();
+    } catch (error) {
+      logger.error("WagmiEventHandler: Error reading state to compare wallets:", error);
+      return false;
+    }
   }
 
   /**
