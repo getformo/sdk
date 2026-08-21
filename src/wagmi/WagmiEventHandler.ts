@@ -271,6 +271,12 @@ export class WagmiEventHandler {
   private transitionGeneration = 0;
 
   /**
+   * A chain reported while wagmi was not `connected`, so the chain callback
+   * had to drop it. Replayed by `reconcileWithLiveState()`.
+   */
+  private pendingChainId?: number;
+
+  /**
    * Track processed mutation states to prevent duplicate event emissions
    * Key format: `${mutationId}:${status}`
    */
@@ -623,16 +629,74 @@ export class WagmiEventHandler {
    */
   public retryAdoption(): void {
     if (this.disposed) return;
+    // The cached wallet may no longer be the live one. While tracking is
+    // suppressed a user can disconnect, or switch account inside the same
+    // wallet - which moves only the connection's accounts, so neither the
+    // status nor the chain subscription fires and nothing tells this handler.
+    // Restoring the cached wallet then resurrects an address the user has
+    // left, and the marker makes the check below return before the live one
+    // is ever adopted.
+    if (this.trackingState.lastAddress && !this.tracksLiveWallet()) {
+      logger.debug(
+        "WagmiEventHandler: Tracked wallet is no longer the live one, releasing before retry",
+        { tracked: this.trackingState.lastAddress }
+      );
+      this.releaseTrackedWallet();
+    }
+
+    // Central state can have been cleared underneath a wallet this handler is
+    // still tracking: `optOutTracking()` calls `reset()`, which wipes
+    // `currentAddress` / `currentChainId` while the handler keeps its wallet.
+    // Left unreconciled, later events carry no wallet at all - and
+    // `shouldTrack()` sees no chain, so `excludeChains` stops excluding.
+    this.resyncCentralState();
+
     // Adopted is not the same as announced. A wallet connected on an excluded
     // chain, or while tracking was off, is adopted so mutations can be
     // attributed, but its connect is deliberately not emitted or marked. If
     // this returned merely because an address is present, that wallet would
-    // never be reported once the chain or configuration allowed it - only its
-    // later chain and mutation events would appear, with no connect.
+    // never be reported once the chain or configuration allowed it.
     if (this.trackingState.lastAddress && this.isCurrentWalletAnnounced()) {
       return;
     }
     this.seedFromCurrentState();
+  }
+
+  /** Whether the wallet this handler tracks is the one wagmi currently has. */
+  private tracksLiveWallet(): boolean {
+    const tracked = this.trackingState.lastAddress;
+    if (!tracked) return false;
+    try {
+      const state = this.getState();
+      if (state.status !== "connected") return false;
+      const live = this.getConnectedAddress(state);
+      return !!live && live.toLowerCase() === tracked.toLowerCase();
+    } catch (error) {
+      logger.error("WagmiEventHandler: Error reading state to compare wallets:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Put the tracked wallet back into central state without emitting anything.
+   *
+   * Used when the two have diverged for a reason that is not a wallet change:
+   * an opt-out `reset()`, or a stale disconnect completing after a newer
+   * transition adopted a different wallet.
+   */
+  private resyncCentralState(): void {
+    const { lastAddress, lastChainId } = this.trackingState;
+    if (!lastAddress || lastChainId === undefined) return;
+    if (
+      this.formo.currentAddress?.toLowerCase() === lastAddress.toLowerCase()
+    ) {
+      return;
+    }
+    logger.info("WagmiEventHandler: Re-syncing central state for a tracked wallet", {
+      address: lastAddress,
+      chainId: lastChainId,
+    });
+    this.formo.syncWalletState({ chainId: lastChainId, address: lastAddress });
   }
 
   /** Whether the wallet currently tracked has already had a connect emitted. */
@@ -706,6 +770,7 @@ export class WagmiEventHandler {
         this.trackingState.lastConnectionId = undefined;
         this.trackingState.lastAddress = undefined;
         this.trackingState.lastChainId = undefined;
+        this.pendingChainId = undefined;
         // A real disconnect ends the adoption, so a genuine reconnect later in
         // this same page load emits again.
         announcedConnections.delete(
@@ -749,9 +814,28 @@ export class WagmiEventHandler {
             address.toLowerCase()
           ) {
             if (this.trackingState.lastChainId !== chainId) {
-              // Re-sync only. The chainId subscription observes this same
-              // state update and owns the `chain` emission; emitting here too
-              // would double count it.
+              // Normally re-sync only: the chainId subscription observes this
+              // same state update and owns the `chain` emission, so emitting
+              // here too would double count it.
+              //
+              // The exception is a chain the subscription already had to drop
+              // because wagmi was still `reconnecting` when it arrived. In
+              // that case nothing else will ever report it, so hand it back to
+              // the chain handler, which syncs and emits.
+              if (this.pendingChainId === chainId) {
+                this.pendingChainId = undefined;
+                logger.info(
+                  "WagmiEventHandler: Re-entry carries a chain the subscription dropped, emitting it",
+                  { address, from: this.trackingState.lastChainId, to: chainId }
+                );
+                await this.handleChainChange(
+                  chainId,
+                  this.trackingState.lastChainId
+                );
+                this.trackingState.lastStatus = status;
+                return;
+              }
+
               logger.info(
                 "WagmiEventHandler: Tracked wallet re-entered connected on a different chain",
                 { address, from: this.trackingState.lastChainId, to: chainId }
@@ -895,8 +979,37 @@ export class WagmiEventHandler {
 
     if (!live && !tracked) return;
     if (live && tracked) {
-      // Same wallet: nothing to reconcile.
-      if (live.toLowerCase() === tracked.toLowerCase()) return;
+      if (live.toLowerCase() === tracked.toLowerCase()) {
+        // Same wallet. Replay a chain change the chain callback had to drop
+        // because wagmi was still `reconnecting` at the time - the status
+        // callback that would have covered it was then dropped by the
+        // processing guard, so without this both the tracked and the central
+        // chain keep describing the chain the wallet has already left.
+        //
+        // Deliberately keyed on a chain the callback actually dropped rather
+        // than on any difference: in the ordinary flap the chain subscription
+        // still owns the emission, and reconciling on difference alone would
+        // double count it.
+        // A disconnect that completed after a newer transition re-adopted this
+        // same wallet clears the central namespace on its way out. Private
+        // tracking still names the wallet while central state is empty, and
+        // `trackEvent()` reads the central one - so later events lose their
+        // wallet entirely. Put it back.
+        this.resyncCentralState();
+
+        const dropped = this.pendingChainId;
+        if (dropped !== undefined) {
+          this.pendingChainId = undefined;
+          if (dropped !== this.trackingState.lastChainId) {
+            logger.info(
+              "WagmiEventHandler: Replaying a chain change dropped while reconnecting",
+              { address: live, from: this.trackingState.lastChainId, to: dropped }
+            );
+            void this.handleChainChange(dropped, this.trackingState.lastChainId);
+          }
+        }
+        return;
+      }
       // Different wallet. Wagmi moved from one to another while the lock was
       // held, so BOTH status callbacks were dropped. Returning here would
       // leave every later signature and transaction attributed to the wallet
@@ -964,7 +1077,19 @@ export class WagmiEventHandler {
     const trackedConnectionGone =
       !!trackedConnectionId && !state.connections.has(trackedConnectionId);
 
-    if (!trackedConnectionGone) {
+    // A changed active connection is a transition in its own right, even when
+    // the address is identical. Two connectors can hold the same account on
+    // DIFFERENT chains, and switching between them moves neither the address
+    // nor `state.status`; the chain listener also defers because
+    // `state.current` no longer matches what is tracked. Left here, the
+    // tracked chain stays on the connector the user left and later mutations
+    // slip past `excludeChains`.
+    const connectionChanged =
+      this.trackingState.lastConnectionId !== undefined &&
+      state.current !== undefined &&
+      state.current !== this.trackingState.lastConnectionId;
+
+    if (!trackedConnectionGone && !connectionChanged) {
       if (!address || address === prevAddress) return;
       // Already handled by the status listener (fresh connect, or the seed).
       // Case-insensitive, like every other address comparison here.
@@ -973,6 +1098,27 @@ export class WagmiEventHandler {
       ) {
         return;
       }
+    }
+
+    // Same account, different connector, both still live: follow the new
+    // connection and take its chain. Nothing connected or disconnected, so no
+    // connect or disconnect event is owed.
+    if (
+      connectionChanged &&
+      !trackedConnectionGone &&
+      address &&
+      this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
+    ) {
+      const liveChain = this.getActiveConnectionChainId(state) ?? state.chainId;
+      logger.info(
+        "WagmiEventHandler: Active connection changed for the same account",
+        { address, from: this.trackingState.lastConnectionId, to: state.current }
+      );
+      this.trackingState.lastConnectionId = state.current;
+      if (liveChain !== undefined && liveChain !== this.trackingState.lastChainId) {
+        await this.applyChainForTrackedWallet(address, liveChain);
+      }
+      return;
     }
 
     if (!address) return;
@@ -1109,7 +1255,15 @@ export class WagmiEventHandler {
     this.trackingState.lastChainId = chainId;
     this.trackingState.lastConnectionId = state.current;
 
-    if (this.formo.isAutocaptureEnabled("connect")) {
+    // Gated on `willTrackEvent` as well, like the seed and the ordinary
+    // connect path. Without it a switch made while tracking was disabled, or
+    // onto an excluded chain, marked the new wallet as announced even though
+    // `connect()` dropped the event - and the wallet then stayed silent for
+    // the rest of the page load once the configuration allowed it.
+    if (
+      this.formo.isAutocaptureEnabled("connect") &&
+      this.formo.willTrackEvent(chainId)
+    ) {
       // Move the page-load marker onto the wallet that is now active.
       //
       // Only drop the previous wallet's marker when that wallet is genuinely
@@ -1124,8 +1278,17 @@ export class WagmiEventHandler {
         );
       }
       const walletKey = announceKey(this.formo.writeKey, address);
-      const alreadyAnnounced = announcedConnections.has(walletKey);
-      markAnnounced(walletKey);
+      const connection = state.current
+        ? state.connections.get(state.current)
+        : undefined;
+      // The connection object is passed so this marker gets the same
+      // indefinite, identity-based validity the seed and connect paths give
+      // theirs. Recording only the address-keyed marker meant the expiry
+      // timer could clear it while the connection was unchanged, and the next
+      // seed would emit a duplicate connect.
+      const alreadyAnnounced =
+        announcementState(walletKey, connection) !== "none";
+      markAnnounced(walletKey, connection);
       if (alreadyAnnounced) {
         // Reached by the connector-fallback path above: wagmi made a
         // connection active that this page load already reported. Becoming
@@ -1199,11 +1362,18 @@ export class WagmiEventHandler {
       return;
     }
 
-    // Only track chain changes when connected
+    // Only track chain changes when connected.
+    //
+    // Remember what was dropped: wagmi reports the chain while still
+    // `reconnecting`, and the `connected` transition that follows can be
+    // dropped by the processing guard, so nothing else would ever apply it.
+    // `reconcileWithLiveState()` replays it once the lock is free.
     const state = this.getState();
     if (state.status !== "connected") {
+      this.pendingChainId = chainId;
       return;
     }
+    this.pendingChainId = undefined;
 
     const address = this.getConnectedAddress(state);
     if (!address) {
@@ -1241,14 +1411,22 @@ export class WagmiEventHandler {
     // on an excluded chain, or while tracking was off. Gating this on
     // `!lastAddress` alone meant such a wallet could switch to an allowed
     // chain and get a `chain` event without ever getting its `connect`.
-    if (!this.trackingState.lastAddress || !this.isCurrentWalletAnnounced()) {
-      const announcedBefore = this.isCurrentWalletAnnounced();
+    const hadAddress = !!this.trackingState.lastAddress;
+    const wasAnnounced = this.isCurrentWalletAnnounced();
+    if (!hadAddress || !wasAnnounced) {
       this.retryAdoption();
-      // The seed emits the connect and records the chain itself. Falling
-      // through would emit a spurious `chain` for a wallet whose first
-      // observed chain this is.
-      if (!announcedBefore && this.isCurrentWalletAnnounced()) return;
-      if (this.trackingState.lastAddress && !announcedBefore) return;
+      // Suppress the chain event ONLY if the retry actually did something -
+      // adopted a connection that was not tracked, or announced one that was
+      // not announced. In either case the seed already reported the new chain
+      // and falling through would double count it.
+      //
+      // Crucially this must NOT fire when the retry was a no-op. With
+      // `autocapture.connect` disabled nothing is ever announced, so an
+      // unconditional return here dropped every chain event for the whole
+      // page load.
+      const adoptedNow = !hadAddress && !!this.trackingState.lastAddress;
+      const announcedNow = !wasAnnounced && this.isCurrentWalletAnnounced();
+      if (adoptedNow || announcedNow) return;
     }
 
     logger.info("WagmiEventHandler: Chain changed", {
