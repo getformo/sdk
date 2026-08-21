@@ -239,6 +239,43 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     formo.cleanup?.();
   });
 
+  it("reports again when the user toggles back to an earlier wallet", async () => {
+    // Two installed wallets. A's record must not outlive A being the active
+    // provider, or coming back to A finds a stale record and every connect
+    // after the first is silently lost.
+    const a = makeProvider([ADDRESS]);
+    const b = makeProvider([OTHER]);
+    (global as any).window.ethereum = a;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const connect = sandbox.stub(formo, "connect").resolves();
+    sandbox.stub(formo, "disconnect").resolves();
+    for (const p of [a, b]) {
+      (formo as any).registerAccountsChangedListener(p);
+      (formo as any).registerConnectListener(p);
+    }
+
+    a.emit("connect", { chainId: "0x1" });
+    a.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(connect.callCount, "A reported").to.equal(1);
+
+    // B takes over as the active wallet.
+    b.emit("accountsChanged", [OTHER]);
+    await new Promise((r) => setTimeout(r, 60));
+    const afterB = connect.callCount;
+    expect(afterB, "B reported").to.be.greaterThan(1);
+
+    // Back to A.
+    a.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(
+      connect.callCount,
+      "returning to A is reported, not suppressed by a stale record"
+    ).to.be.greaterThan(afterB);
+    formo.cleanup?.();
+  });
+
   it("still emits for an account switch after the wallet is known", async () => {
     // `accountsChanged` must keep reporting a NEW wallet, so the fix cannot
     // simply gate both handlers on the connection transition.

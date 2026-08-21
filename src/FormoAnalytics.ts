@@ -87,6 +87,20 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this._chainState.evm.provider;
   }
   private set _provider(value: EIP1193Provider | undefined) {
+    const previous = this._chainState.evm.provider;
+    // A provider that stops being the active one has, from this SDK's point of
+    // view, ended its connection - so the connect it reported must stop
+    // counting. Otherwise toggling between two installed wallets silently
+    // loses every connect after the first: A's stale record suppresses the
+    // connect when the user comes back to it.
+    //
+    // Done in the setter rather than at each switch site because the active
+    // provider is reassigned from several paths - `accountsChanged`,
+    // `chainChanged`, `connect`, `handleProviderMismatch`, `untrackProvider` -
+    // and any one of them missed would reopen the same hole.
+    if (previous && previous !== value) {
+      this._announcedConnect.delete(previous);
+    }
     this._chainState.evm.provider = value;
   }
   private get _evmAddress(): Address | undefined {
