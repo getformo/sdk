@@ -2625,6 +2625,100 @@ describe("WagmiEventHandler", () => {
       expect((mockFormo as any).currentAddress, "central state kept C").to.equal(C);
     });
 
+    it("takes the new connector's chain when both hold the same account", async () => {
+      // Two connectors over one hardware wallet, on DIFFERENT chains, both
+      // still live. Switching between them moves neither the address nor the
+      // status, and the chain listener defers because state.current no longer
+      // matches what is tracked - so the tracked chain stayed on the connector
+      // the user left and later mutations slipped past excludeChains.
+      const OLD_CHAIN = mockChainId;
+      const NEW_CHAIN = 137;
+      const conns = new Map();
+      conns.set("uid-a", {
+        accounts: [mockAddress],
+        chainId: OLD_CHAIN,
+        connector: { id: "a", name: "MetaMask", type: "injected", uid: "uid-a" },
+      });
+      conns.set("uid-b", {
+        accounts: [mockAddress],
+        chainId: NEW_CHAIN,
+        connector: { id: "b", name: "Rabby", type: "injected", uid: "uid-b" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: conns, current: "uid-a", chainId: OLD_CHAIN,
+      });
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect((handler as any).trackingState.lastChainId).to.equal(OLD_CHAIN);
+      const afterSeed = mockFormo.connect.callCount;
+
+      // B becomes current; A stays connected.
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: conns, current: "uid-b", chainId: NEW_CHAIN,
+      });
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, OLD_CHAIN);
+      if (addressListener) await addressListener(mockAddress, mockAddress);
+      await settle();
+
+      expect(
+        (handler as any).trackingState.lastChainId,
+        "follows the new connector's chain"
+      ).to.equal(NEW_CHAIN);
+      expect(
+        (handler as any).trackingState.lastConnectionId,
+        "and the new connection"
+      ).to.equal("uid-b");
+      expect(mockFormo.connect.callCount, "nothing connected, so no connect").to.equal(afterSeed);
+      expect(mockFormo.disconnect.called, "nothing disconnected either").to.be.false;
+    });
+
+    it("restores central state a stale disconnect wiped after re-adoption", async () => {
+      // The connection listener takes no lock, so it can re-adopt the wallet
+      // while a disconnect emission is still in flight. That disconnect then
+      // clears the central namespace on its way out, leaving private tracking
+      // naming the wallet while central state is empty - and trackEvent reads
+      // the central one, so later events lose their wallet entirely.
+      let releaseDisconnect: (() => void) | undefined;
+      (mockFormo as any).disconnect = sandbox.stub().callsFake(
+        () => new Promise<void>((resolve) => {
+          releaseDisconnect = () => {
+            (mockFormo as any).currentAddress = undefined;
+            (mockFormo as any).currentChainId = undefined;
+            resolve();
+          };
+        })
+      );
+
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      // Disconnect starts and holds the lock.
+      (mockWagmiConfig as any).setState(createMockState());
+      const pending = statusListener!("disconnected", "connected");
+      await settle();
+
+      // The wallet comes back. The status listener is blocked, but the
+      // connection listener is not - it re-adopts and restores central state.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      if (addressListener) await addressListener(mockAddress, undefined);
+      await settle();
+      expect((mockFormo as any).currentAddress, "re-adopted").to.equal(mockAddress);
+
+      // Now the stale disconnect completes and wipes what was just restored.
+      releaseDisconnect!();
+      await pending;
+      await settle();
+
+      expect(
+        (mockFormo as any).currentAddress,
+        "reconciliation puts the live wallet back"
+      ).to.equal(mockAddress);
+      expect((mockFormo as any).currentChainId).to.equal(mockChainId);
+    });
+
     it("does not mark a switched wallet whose connect the tracking gate drops", async () => {
       // Unlike the seed and connect paths, the switch path did not consult
       // willTrackEvent. A switch made while tracking was disabled, or onto an

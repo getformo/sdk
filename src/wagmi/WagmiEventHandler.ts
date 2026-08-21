@@ -988,6 +988,13 @@ export class WagmiEventHandler {
         // than on any difference: in the ordinary flap the chain subscription
         // still owns the emission, and reconciling on difference alone would
         // double count it.
+        // A disconnect that completed after a newer transition re-adopted this
+        // same wallet clears the central namespace on its way out. Private
+        // tracking still names the wallet while central state is empty, and
+        // `trackEvent()` reads the central one - so later events lose their
+        // wallet entirely. Put it back.
+        this.resyncCentralState();
+
         const dropped = this.pendingChainId;
         if (dropped !== undefined) {
           this.pendingChainId = undefined;
@@ -1068,7 +1075,19 @@ export class WagmiEventHandler {
     const trackedConnectionGone =
       !!trackedConnectionId && !state.connections.has(trackedConnectionId);
 
-    if (!trackedConnectionGone) {
+    // A changed active connection is a transition in its own right, even when
+    // the address is identical. Two connectors can hold the same account on
+    // DIFFERENT chains, and switching between them moves neither the address
+    // nor `state.status`; the chain listener also defers because
+    // `state.current` no longer matches what is tracked. Left here, the
+    // tracked chain stays on the connector the user left and later mutations
+    // slip past `excludeChains`.
+    const connectionChanged =
+      this.trackingState.lastConnectionId !== undefined &&
+      state.current !== undefined &&
+      state.current !== this.trackingState.lastConnectionId;
+
+    if (!trackedConnectionGone && !connectionChanged) {
       if (!address || address === prevAddress) return;
       // Already handled by the status listener (fresh connect, or the seed).
       // Case-insensitive, like every other address comparison here.
@@ -1077,6 +1096,27 @@ export class WagmiEventHandler {
       ) {
         return;
       }
+    }
+
+    // Same account, different connector, both still live: follow the new
+    // connection and take its chain. Nothing connected or disconnected, so no
+    // connect or disconnect event is owed.
+    if (
+      connectionChanged &&
+      !trackedConnectionGone &&
+      address &&
+      this.trackingState.lastAddress?.toLowerCase() === address.toLowerCase()
+    ) {
+      const liveChain = this.getActiveConnectionChainId(state) ?? state.chainId;
+      logger.info(
+        "WagmiEventHandler: Active connection changed for the same account",
+        { address, from: this.trackingState.lastConnectionId, to: state.current }
+      );
+      this.trackingState.lastConnectionId = state.current;
+      if (liveChain !== undefined && liveChain !== this.trackingState.lastChainId) {
+        await this.applyChainForTrackedWallet(address, liveChain);
+      }
+      return;
     }
 
     if (!address) return;
