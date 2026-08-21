@@ -4528,6 +4528,145 @@ describe("WagmiEventHandler", () => {
       expect(snapshot.current).to.be.undefined;
     });
 
+    it("should extract the function name and args from a writeContract", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      mockFormo.transaction.resetHistory();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 953,
+            options: { mutationKey: ["writeContract"] },
+            state: {
+              status: "pending",
+              variables: {
+                address: "0x88C0224CEABF6D559d7B622F2918b308285280DE",
+                functionName: "transfer",
+                // BigInt(1) rather than `1n`: the project targets es5.
+                args: ["0x88C0224CEABF6D559d7B622F2918b308285280DE", BigInt(1)],
+                abi: [
+                  {
+                    type: "function",
+                    name: "transfer",
+                    stateMutability: "nonpayable",
+                    inputs: [
+                      { name: "to", type: "address" },
+                      { name: "amount", type: "uint256" },
+                    ],
+                    outputs: [{ name: "", type: "bool" }],
+                  },
+                ],
+              },
+            },
+          },
+        } as any);
+      }
+      await settle();
+
+      const started = mockFormo.transaction.getCalls().map((c: any) => c.args[0])[0];
+      expect(started, "a transaction event").to.exist;
+      expect(started.function_name).to.equal("transfer");
+      expect(started.function_args, "args extracted").to.include({ to: "0x88C0224CEABF6D559d7B622F2918b308285280DE" });
+      // Calldata encoding needs viem, an OPTIONAL peer dependency that is not
+      // installed here, so `data` is deliberately not asserted - the encoding
+      // branch is unreachable in this environment.
+    });
+
+    it("should ignore a receipt query with no hash", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      mockFormo.transaction.resetHistory();
+
+      if (queryListener) {
+        queryListener({
+          type: "updated",
+          query: {
+            queryHash: '["waitForTransactionReceipt"]',
+            queryKey: ["waitForTransactionReceipt", {}],
+            state: { status: "success", data: { status: "success" } },
+          },
+        } as any);
+      }
+      await settle();
+
+      expect(mockFormo.transaction.called, "no hash, nothing to report").to.be.false;
+    });
+
+    it("should contain a failure while handling a signature mutation", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      (mockFormo as any).signature = sandbox.stub().throws(new Error("boom"));
+
+      expect(() => {
+        if (mutationListener) {
+          mutationListener({
+            type: "updated",
+            mutation: {
+              mutationId: 951,
+              options: { mutationKey: ["signMessage"] },
+              state: { status: "success", variables: { message: "hi" } },
+            },
+          } as any);
+        }
+      }, "the failure does not escape the listener").to.not.throw();
+    });
+
+    it("should bound the shared cleanup helper", async () => {
+      // `cleanupOldEntries` guards the per-handler dedup sets from unbounded
+      // growth on a page that never navigates away.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+
+      const processed = (handler as any).processedMutations as Set<string>;
+      for (let i = 0; i < 1200; i++) processed.add(`m${i}`);
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 952,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      await settle();
+
+      expect(processed.size, "trimmed below the cap").to.be.lessThan(1200);
+    });
+
+    it("should retry the connect after a failed emission", async () => {
+      // The marker is a claim, not a record. Leaving it standing after a
+      // failed emission made a retry or a replacement handler treat the wallet
+      // as reported, losing its connect for the rest of the page load even
+      // once the queue recovered.
+      (mockFormo as any).connect = sandbox.stub().rejects(new Error("queue is gone"));
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const first = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect((mockFormo as any).connect.called, "it tried").to.be.true;
+
+      // The queue recovers and the SDK is rebuilt over the same connection.
+      first.cleanup();
+      (mockFormo as any).connect = sandbox.stub().resolves();
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      expect(
+        (mockFormo as any).connect.calledOnce,
+        "the wallet is reported on the retry"
+      ).to.be.true;
+    });
+
     it("should not invent a disconnect for a transient reconnecting state", async () => {
       // Reconciliation treated every non-connected state as disconnected. An
       // ordinary reconnect flap - which parks the store on `reconnecting`

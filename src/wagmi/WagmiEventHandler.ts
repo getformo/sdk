@@ -253,6 +253,21 @@ function announcementState(
 }
 
 /**
+ * Undo an announcement claim whose emission failed.
+ *
+ * `markAnnounced()` is called before the event is handed to FormoAnalytics,
+ * so the claim exists while the emission is in flight and a concurrent
+ * handler cannot double-report. If that emission then fails, nothing was
+ * reported - and leaving the claim standing means a retry or a replacement
+ * handler treats the wallet as done, losing its connect for the rest of the
+ * page load even after the queue recovers.
+ */
+function releaseAnnouncement(key: string, connection?: object): void {
+  announcedConnections.delete(key);
+  if (connection) announcedByConnection.get(connection)?.delete(key);
+}
+
+/**
  * Record a connection as announced.
  *
  * Deliberately unbounded. Entries are removed when the wallet disconnects,
@@ -722,6 +737,11 @@ export class WagmiEventHandler {
             }
           )
         ).catch((error) => {
+          // The marker is a claim, not a record. If the emission failed the
+          // wallet was never reported, so release it - otherwise a retry or a
+          // replacement handler treats it as done and the connect is lost for
+          // the rest of the page load even once the queue recovers.
+          releaseAnnouncement(walletKey, connection);
           logger.error(
             "WagmiEventHandler: Error emitting seeded connect event:",
             error
@@ -1099,12 +1119,19 @@ export class WagmiEventHandler {
             }
             markAnnounced(walletKey, connection);
             const connectorName = this.getConnectorName(state);
-            await this.formo.connect(
-              { chainId, address },
-              {
-                ...(connectorName && { providerName: connectorName }),
-              }
-            );
+            try {
+              await this.formo.connect(
+                { chainId, address },
+                {
+                  ...(connectorName && { providerName: connectorName }),
+                }
+              );
+            } catch (error) {
+              // As in the seed: an emission that failed reported nothing, so
+              // the claim must not stand.
+              releaseAnnouncement(walletKey, connection);
+              throw error;
+            }
           }
         }
       }
@@ -1517,6 +1544,7 @@ export class WagmiEventHandler {
           }
         );
       } catch (error) {
+        releaseAnnouncement(walletKey, connection);
         logger.error(
           "WagmiEventHandler: Error tracking account switch:",
           error
