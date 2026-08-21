@@ -15,6 +15,7 @@ import { initStorageManager } from "../src/storage";
  * of the page load.
  */
 describe("Adoption after opting back into tracking", () => {
+  const ADDRESS = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
 
@@ -87,27 +88,46 @@ describe("Adoption after opting back into tracking", () => {
 
     const handler = (formo as any).wagmiHandler;
     expect(handler, "wagmi handler is attached").to.exist;
-    const retry = sandbox.stub(handler, "retryAdoption");
 
+    // A real tracked wallet, not a stub. Stubbing `retryAdoption()` here made
+    // the test pass even when adoption did nothing at all.
+    handler.trackingState.lastAddress = ADDRESS;
+    handler.trackingState.lastChainId = 1;
+    (formo as any).setChainState("evm", { chainId: 1, address: ADDRESS });
+    expect(formo.currentAddress, "wallet is live before opt-out").to.equal(ADDRESS);
+
+    // opt-out calls reset(), which wipes central identity while the handler
+    // keeps its wallet.
     formo.optOutTracking();
+    expect(formo.currentAddress, "central identity cleared").to.be.undefined;
+
     formo.optInTracking();
 
-    expect(retry.calledOnce, "adoption retried on opt-in").to.be.true;
+    expect(
+      formo.currentAddress,
+      "the live wallet is restored, so later events carry it"
+    ).to.equal(ADDRESS);
+    expect(formo.currentChainId, "and its chain, so excludeChains still applies").to.equal(1);
     formo.cleanup?.();
   });
 
   it("reports whether an event would currently be sent", async () => {
     // The predicate integrations use to avoid marking a wallet as reported
     // when the tracking gate is going to drop its event.
+    // `tracking: false` first, while no opt-out flag exists. Asserting this
+    // after an opt-out would only re-measure the consent flag, since
+    // shouldTrack() short-circuits on it before reading the option.
+    const off = await FormoAnalytics.init("test-write-key", { tracking: false });
+    expect(off.willTrackEvent(), "tracking disabled").to.be.false;
+    off.cleanup?.();
+
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
     expect(formo.willTrackEvent(), "tracking on").to.be.true;
     formo.optOutTracking();
     expect(formo.willTrackEvent(), "opted out").to.be.false;
+    formo.optInTracking();
+    expect(formo.willTrackEvent(), "opted back in").to.be.true;
     formo.cleanup?.();
-
-    const off = await FormoAnalytics.init("test-write-key", { tracking: false });
-    expect(off.willTrackEvent(), "tracking disabled").to.be.false;
-    off.cleanup?.();
   });
 
   it("asks the wagmi handler to adopt when a SPA navigates", async () => {
