@@ -89,9 +89,10 @@ describe("Address backfill from autocapture", () => {
   it("buildTransactionEventPayload backfills currentAddress when none is set", async () => {
     expect(formo.currentAddress).to.be.undefined;
 
-    const mockProvider = {
-      request: sandbox.stub().withArgs(sinon.match({ method: "eth_chainId" })).resolves(`0x${CHAIN_ID.toString(16)}`),
-    } as any;
+    const mockProvider = { request: sandbox.stub() } as any;
+    // The chain now comes from the per-provider snapshot that `chainChanged` /
+    // `connect` maintain, never from an RPC issued inside the request path.
+    (formo as any).rememberProviderChain(mockProvider, CHAIN_ID);
 
     const payload = await (formo as any).buildTransactionEventPayload(
       [{ from: ADDRESS_LOWER, to: "0xabc", value: "0x0", data: "0x" }],
