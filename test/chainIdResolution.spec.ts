@@ -921,4 +921,60 @@ describe("Chain id resolution for autocaptured requests", () => {
 
     expect(result, "the signature still reaches the caller").to.equal("0xsigned");
   });
+
+  it("does not restore a stale chain when a request completes", async () => {
+    // A request captures its chain once and reuses it for every status, which
+    // is right for the payload. Writing that captured value back into central
+    // state on the later statuses restored a chain the wallet had left.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (gated as any)._provider = provider;
+    (gated as any).rememberProviderChain(provider, ACTIVE_CHAIN);
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    (gated as any).registerRequestListeners(provider);
+
+    // The wallet moves to the excluded chain while the prompt is open.
+    const pending = provider.request({
+      method: "personal_sign",
+      params: ["0x68690000", ADDRESS],
+    });
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+    await pending;
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(
+      (gated as any)._evmChainId,
+      "central state follows the wallet, not the captured snapshot"
+    ).to.equal(OTHER_CHAIN);
+
+    addEvent.resetHistory();
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "so the exclusion still applies").to.be.false;
+  });
+
+  it("syncs central state when the active provider reports a new chain", async () => {
+    // Recording an observation only per provider left `currentChainId` on a
+    // chain restored from a previous session.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+    const provider = providerOnChain(ACTIVE_CHAIN);
+    (gated as any)._provider = provider;
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    // The app asks; the wallet is really on the excluded chain.
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+
+    expect((gated as any)._evmChainId, "central state follows").to.equal(OTHER_CHAIN);
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "and the exclusion applies").to.be.false;
+  });
 });

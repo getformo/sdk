@@ -2788,6 +2788,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     // provider.
     this.bumpProviderChainGeneration(provider);
     this._providerChainIds.set(provider, chainId);
+
+    // If this IS the active provider, central state has to follow. Recording
+    // it only per provider left `currentChainId` on a chain restored from a
+    // previous session, and the unscoped events that fall back to it were sent
+    // despite an exclusion covering the chain the wallet was really on.
+    if (provider === this._provider && this._evmChainId !== chainId) {
+      this.setChainState('evm', { chainId });
+    }
   }
 
   /** Advance and return this provider's chain-observation generation. */
@@ -2870,7 +2878,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Only the active provider may write central wallet state - see the same
     // guard in buildTransactionEventPayload.
     if (!provider || provider === this._provider || !this._provider) {
-      this.backfillActiveWallet(validAddress, effectiveChainId);
+      this.backfillActiveWallet(validAddress, effectiveChainId, provider);
     }
 
     const basePayload = {
@@ -2926,7 +2934,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // provider would then trust the other wallet's chain - persistent
     // mis-attribution, and a way around `excludeChains`.
     if (!provider || provider === this._provider || !this._provider) {
-      this.backfillActiveWallet(validAddress, chainId);
+      this.backfillActiveWallet(validAddress, chainId, provider);
     }
 
     return {
@@ -2946,7 +2954,25 @@ export class FormoAnalytics implements IFormoAnalytics {
    * social-login wrappers). If `accountsChanged` later fires it overwrites this
    * value in the normal way; existing connections are never clobbered.
    */
-  private backfillActiveWallet(address: Address, chainId?: ChainID): void {
+  private backfillActiveWallet(
+    address: Address,
+    chainId?: ChainID,
+    provider?: EIP1193Provider
+  ): void {
+    // Refuse a chain the provider has since moved off.
+    //
+    // A request captures its chain once and reuses that snapshot for every
+    // status it emits, which is right for the event payload - a confirmation
+    // must not be relabelled mid-flight. But writing that captured value back
+    // into central state on the LATER statuses restored a chain the wallet had
+    // already left, and the unscoped events that fall back to it then bypassed
+    // an exclusion that should have caught them.
+    if (provider && chainId !== undefined && chainId !== 0) {
+      const current = this._providerChainIds.get(provider);
+      if (current !== undefined && current !== chainId) {
+        chainId = current;
+      }
+    }
     // `0` is kept deliberately. It means "could not resolve", and persisting
     // it is what lets the exclusion gate refuse the unscoped events - `page`,
     // `track`, `identify` - that carry no chain of their own and fall back to
