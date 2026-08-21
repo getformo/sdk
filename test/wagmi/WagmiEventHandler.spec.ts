@@ -3031,6 +3031,64 @@ describe("WagmiEventHandler", () => {
       }
     });
 
+    it("skips signature mutations when signature autocapture is off", async () => {
+      (mockFormo as any).isAutocaptureEnabled = sandbox.stub().callsFake(
+        (t: string) => t !== "signature"
+      );
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 971,
+            options: { mutationKey: ["signMessage"] },
+            state: { status: "success", variables: { message: "hi" } },
+          },
+        } as any);
+      }
+      await settle();
+
+      expect(mockFormo.signature.called, "nothing reported").to.be.false;
+    });
+
+    it("resyncs a chain that changed while on an excluded path", async () => {
+      // A chain switch on an excluded path is refused by syncWalletState, so
+      // central state keeps the old chain while lastChainId moves on. Matching
+      // on the address alone meant the retry after navigating back returned
+      // early, and later events were gated against a chain the wallet had left.
+      const EXCLUDED_CHAIN = 8453;
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect((mockFormo as any).currentChainId).to.equal(mockChainId);
+
+      // Excluded path: the wallet switches chain, central state refuses it.
+      (mockFormo as any).syncWalletState = sandbox.stub();
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, EXCLUDED_CHAIN)
+      );
+      if (chainIdListener) await chainIdListener(EXCLUDED_CHAIN, mockChainId);
+      await settle();
+
+      // Navigation back to an allowed path.
+      (mockFormo as any).syncWalletState = sandbox.stub().callsFake((prm: any) => {
+        (mockFormo as any).currentAddress = prm?.address;
+        (mockFormo as any).currentChainId = prm?.chainId;
+      });
+      handler.retryAdoption();
+      await settle();
+
+      expect(
+        (mockFormo as any).currentChainId,
+        "central chain catches up with the wallet"
+      ).to.equal((handler as any).trackingState.lastChainId);
+    });
+
     it("restores central state when a stale disconnect clears a newer wallet", async () => {
       // The real disconnect() clears the central namespace as it completes. If
       // a newer transition has already adopted a different wallet by then,

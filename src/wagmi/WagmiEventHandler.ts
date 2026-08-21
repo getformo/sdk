@@ -766,8 +766,17 @@ export class WagmiEventHandler {
   private restoreCentralStateFromTracking(): void {
     const { lastAddress, lastChainId } = this.trackingState;
     if (!lastAddress || lastChainId === undefined) return;
+    // Compares the CHAIN as well as the address.
+    //
+    // A chain switch on an excluded path is deliberately refused by
+    // `syncWalletState()`, so central state keeps the old chain while
+    // `lastChainId` moves on. Matching on the address alone returned here,
+    // and after navigating back to an allowed path the events that fall back
+    // to the central chain were gated against a chain the wallet had left -
+    // bypassing an exclusion covering where it actually was.
     if (
-      this.formo.currentAddress?.toLowerCase() === lastAddress.toLowerCase()
+      this.formo.currentAddress?.toLowerCase() === lastAddress.toLowerCase() &&
+      this.formo.currentChainId === lastChainId
     ) {
       return;
     }
@@ -869,8 +878,17 @@ export class WagmiEventHandler {
   private resyncCentralState(): void {
     const { lastAddress, lastChainId } = this.trackingState;
     if (!lastAddress || lastChainId === undefined) return;
+    // Compares the CHAIN as well as the address.
+    //
+    // A chain switch on an excluded path is deliberately refused by
+    // `syncWalletState()`, so central state keeps the old chain while
+    // `lastChainId` moves on. Matching on the address alone returned here,
+    // and after navigating back to an allowed path the events that fall back
+    // to the central chain were gated against a chain the wallet had left -
+    // bypassing an exclusion covering where it actually was.
     if (
-      this.formo.currentAddress?.toLowerCase() === lastAddress.toLowerCase()
+      this.formo.currentAddress?.toLowerCase() === lastAddress.toLowerCase() &&
+      this.formo.currentChainId === lastChainId
     ) {
       return;
     }
