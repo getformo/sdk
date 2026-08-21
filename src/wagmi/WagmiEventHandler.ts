@@ -325,6 +325,13 @@ export class WagmiEventHandler {
   private pendingChainId?: number;
 
   /**
+   * A `disconnected` status that arrived while the lock was held. Final-state
+   * reconciliation cannot see a disconnect/reconnect cycle that completed
+   * inside that window, so this records that one happened.
+   */
+  private missedDisconnect = false;
+
+  /**
    * Track processed mutation states to prevent duplicate event emissions
    * Key format: `${mutationId}:${status}`
    */
@@ -781,6 +788,16 @@ export class WagmiEventHandler {
   ): Promise<void> {
     // Prevent concurrent processing
     if (this.trackingState.isProcessing) {
+      // Dropped, not queued - but remember that a disconnect went past.
+      //
+      // Reconciliation compares only the FINAL state, so a wallet that
+      // disconnects and reconnects entirely inside this window looks
+      // unchanged and neither its disconnect nor its genuine reconnect is
+      // ever reported. Recording the transient lets reconciliation tell that
+      // cycle apart from nothing having happened at all.
+      if (status === "disconnected") {
+        this.missedDisconnect = true;
+      }
       logger.debug("WagmiEventHandler: Already processing status change, skipping");
       return;
     }
@@ -825,6 +842,7 @@ export class WagmiEventHandler {
         this.trackingState.lastAddress = undefined;
         this.trackingState.lastChainId = undefined;
         this.pendingChainId = undefined;
+        this.missedDisconnect = false;
         // A real disconnect ends the adoption, so a genuine reconnect later in
         // this same page load emits again.
         announcedConnections.delete(
@@ -1035,6 +1053,26 @@ export class WagmiEventHandler {
     if (!live && !tracked) return;
     if (live && tracked) {
       if (live.toLowerCase() === tracked.toLowerCase()) {
+        if (this.missedDisconnect) {
+          // The wallet went away and came back entirely while the lock was
+          // held. The addresses match, but this is a new session: report the
+          // disconnect, then let the reconnect announce itself.
+          this.missedDisconnect = false;
+          logger.info(
+            "WagmiEventHandler: A disconnect/reconnect cycle completed while the lock was held",
+            { address: live }
+          );
+          this.reconciling = true;
+          try {
+            void this.handleStatusChange("disconnected", "connected").then(() =>
+              this.retryAdoption()
+            );
+          } finally {
+            this.reconciling = false;
+          }
+          return;
+        }
+
         // Same wallet. Replay a chain change the chain callback had to drop
         // because wagmi was still `reconnecting` at the time - the status
         // callback that would have covered it was then dropped by the
@@ -1798,10 +1836,16 @@ export class WagmiEventHandler {
     // and the domain's `chainId` is what the signature is actually bound to.
     // Reading only `variables.chainId` labelled such a signature with the
     // wallet's current chain, which can be a different one entirely.
+    // Falls back to 0 - "could not resolve" - rather than undefined. A caller
+    // can name an account before any connection chain is known, and an
+    // undefined chain slipped past the exclusion gate, which only refuses an
+    // explicit 0. A chain-scoped event whose chain is unknown must fail
+    // closed like every other.
     const chainId =
       normalizeChainId(variables.domain?.chainId) ??
       normalizeChainId(variables.chainId) ??
-      this.trackingState.lastChainId;
+      this.trackingState.lastChainId ??
+      0;
     const address =
       resolveAccountAddress(variables.account) || this.trackingState.lastAddress;
 
@@ -1877,6 +1921,10 @@ export class WagmiEventHandler {
     // non-number here would both land in the payload and defeat the numeric
     // `tracking.excludeChains` comparison.
     const explicitChainId = normalizeChainId(variables.chainId);
+    // Left undefined on purpose. The emission below already coerces with
+    // `chainId || 0`, and defaulting here instead would write 0 into the
+    // pending-transaction record, where an absent chain is what lets the
+    // receipt query's chain win for the confirmation.
     const chainId = explicitChainId ?? this.trackingState.lastChainId;
     const accountAddress = resolveAccountAddress(variables.account);
     const userAddress =
