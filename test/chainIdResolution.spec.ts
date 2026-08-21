@@ -449,27 +449,23 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((tracker as any).resolveChainIdForProvider(other)).to.equal(OTHER_CHAIN);
   });
 
-  it("remembers the chain learned while a provider was active", async () => {
-    // A standards-compliant provider with no synchronous `chainId` property is
-    // otherwise known only while active: once another wallet takes over, a
-    // signature back through this one reported 0 and, with exclusions set,
-    // was dropped.
+  it("keeps a provider's announced chain after another becomes active", async () => {
+    // A provider is known by what it has announced, not by a lookup. Once
+    // another wallet becomes active, a signature back through the first must
+    // still carry its own chain.
     const first: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(async ({ method }: any) => {
-        if (method === "eth_chainId") return `0x${OTHER_CHAIN.toString(16)}`;
-        return [ADDRESS];
-      }),
+      request: sandbox.stub().resolves([ADDRESS]),
     };
-    await (formo as any).onAccountsChanged(first, [ADDRESS]);
+    await (formo as any).onChainChanged(first, `0x${OTHER_CHAIN.toString(16)}`);
 
-    // Another wallet becomes active.
     const second = providerOnChain(ACTIVE_CHAIN);
     (formo as any)._provider = second;
 
     expect((formo as any).resolveChainIdForProvider(first)).to.equal(OTHER_CHAIN);
   });
+
 
   it("learns the chain from an eth_chainId the app was making anyway", async () => {
     // A standards-compliant provider need not expose a synchronous chainId,
@@ -541,6 +537,51 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(addEvent.called, "unknown current chain fails closed").to.be.false;
   });
 
+  it("corrects a stale restored chain for the same wallet", async () => {
+    // A persisted wallet restores chain 1 from a previous session while its
+    // provider has since moved to excluded 8453. The signature is gated
+    // correctly, but the stale chain used to survive in currentChainId - and
+    // the unscoped events that fall back to it went out under an exclusion
+    // that should have caught them.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+    // Restored state: same wallet, old chain.
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+    (gated as any)._provider = provider;
+    (gated as any).registerRequestListeners(provider);
+
+    await provider.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "the signature itself is excluded").to.be.false;
+
+    expect(
+      (gated as any)._evmChainId,
+      "the stale chain is corrected to the live one"
+    ).to.equal(OTHER_CHAIN);
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "so the track that follows is excluded too").to.be.false;
+  });
+
+  it("never overwrites a different wallet's chain", async () => {
+    const other = await makeFormo({ tracking: true });
+    const OTHER_ADDRESS = "0x1111111111111111111111111111111111111111";
+    (other as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    (other as any).backfillActiveWallet(OTHER_ADDRESS, OTHER_CHAIN);
+
+    expect(((other as any)._evmAddress as string)?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
+    expect((other as any)._evmChainId, "untouched").to.equal(ACTIVE_CHAIN);
+  });
+
   it("keeps an unresolvable chain as 0 so later events still fail closed", async () => {
     // The end-to-end version of the rule: an unknown-chain signature is
     // dropped, and the `track()` that follows must be dropped too. Erasing 0
@@ -601,33 +642,40 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((formo as any).resolveChainIdForProvider(b)).to.equal(OTHER_CHAIN);
   });
 
-  it("does not let a slow accountsChanged lookup undo a newer chainChanged", async () => {
-    // onAccountsChanged resolves the chain itself. Writing that answer back
-    // unconditionally undid a `chainChanged` that landed while it was in
-    // flight, relabelling later activity onto a chain the wallet had left.
-    let releaseLookup: ((v: string) => void) | undefined;
+  it("issues no RPC from accountsChanged", async () => {
+    // This path used to call `eth_chainId`. `accountsChanged` fires exactly
+    // when a user is about to transact, so occupying a serialized wallet
+    // transport there is the worst possible moment.
+    const raw = sandbox.stub().callsFake(async ({ method }: any) => {
+      if (method === "eth_chainId") throw new Error("must not be called");
+      return [ADDRESS];
+    });
     const provider: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
-      request: sandbox.stub().callsFake(({ method }: any) => {
-        if (method === "eth_chainId") {
-          return new Promise((res) => { releaseLookup = res as any; });
-        }
-        return Promise.resolve([ADDRESS]);
-      }),
+      request: raw,
     };
 
-    const pending = (formo as any).onAccountsChanged(provider, [ADDRESS]);
-    // The wallet switches chain while that lookup is outstanding.
-    (formo as any).rememberProviderChain(provider, OTHER_CHAIN);
-    releaseLookup!(`0x${ACTIVE_CHAIN.toString(16)}`);
-    await pending;
+    await (formo as any).onAccountsChanged(provider, [ADDRESS]);
+
+    const methods = raw.getCalls().map((c: any) => c.args?.[0]?.method);
+    expect(methods, "no chain lookup on this path").to.not.include("eth_chainId");
+  });
+
+  it("reports an unannounced provider's chain as unknown on accountsChanged", async () => {
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves([ADDRESS]),
+    };
+    await (formo as any).onAccountsChanged(provider, [ADDRESS]);
 
     expect(
       (formo as any).resolveChainIdForProvider(provider),
-      "the newer chainChanged wins"
-    ).to.equal(OTHER_CHAIN);
+      "unknown rather than guessed"
+    ).to.equal(0);
   });
+
 
   it("does not let a slow eth_chainId answer overwrite a newer chainChanged", async () => {
     let releaseChainId: ((v: string) => void) | undefined;
@@ -875,5 +923,108 @@ describe("Chain id resolution for autocaptured requests", () => {
     await new Promise((r) => setTimeout(r, 20));
 
     expect(result, "the signature still reaches the caller").to.equal("0xsigned");
+  });
+
+  it("does not restore a stale chain when a request completes", async () => {
+    // A request captures its chain once and reuses it for every status, which
+    // is right for the payload. Writing that captured value back into central
+    // state on the later statuses restored a chain the wallet had left.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (gated as any)._provider = provider;
+    (gated as any).rememberProviderChain(provider, ACTIVE_CHAIN);
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+    (gated as any).registerRequestListeners(provider);
+
+    // The wallet moves to the excluded chain while the prompt is open.
+    const pending = provider.request({
+      method: "personal_sign",
+      params: ["0x68690000", ADDRESS],
+    });
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+    await pending;
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(
+      (gated as any)._evmChainId,
+      "central state follows the wallet, not the captured snapshot"
+    ).to.equal(OTHER_CHAIN);
+
+    addEvent.resetHistory();
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "so the exclusion still applies").to.be.false;
+  });
+
+  it("syncs central state when the active provider reports a new chain", async () => {
+    // Recording an observation only per provider left `currentChainId` on a
+    // chain restored from a previous session.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+    const provider = providerOnChain(ACTIVE_CHAIN);
+    (gated as any)._provider = provider;
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    // The app asks; the wallet is really on the excluded chain.
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+
+    expect((gated as any)._evmChainId, "central state follows").to.equal(OTHER_CHAIN);
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "and the exclusion applies").to.be.false;
+  });
+
+  it("does not let an EVM chain report steal an active Solana wallet", async () => {
+    // `setChainState()` makes whichever namespace it touches active. Syncing
+    // the EVM chain unconditionally let a background EVM wallet hijack the
+    // active slot from a live Solana wallet, and every later page or track
+    // event was attributed to the wrong wallet.
+    const SOL = "So11111111111111111111111111111111111111112";
+    const mixed = await makeFormo({ tracking: true });
+    const evm = providerOnChain(ACTIVE_CHAIN);
+    (mixed as any)._provider = evm;
+    (mixed as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    // A Solana wallet becomes the active one.
+    (mixed as any).setChainState("solana", { chainId: 101, address: SOL });
+    expect(mixed.currentAddress, "Solana is active").to.equal(SOL);
+
+    // The EVM wallet reports a chain in the background.
+    (mixed as any).rememberProviderChain(evm, OTHER_CHAIN);
+
+    expect(
+      mixed.currentAddress,
+      "the Solana wallet is still the active one"
+    ).to.equal(SOL);
+    // ...and the EVM chain was still learned for that provider.
+    expect((mixed as any).resolveChainIdForProvider(evm)).to.equal(OTHER_CHAIN);
+  });
+
+  it("wires the full connect listener when connect autocapture is on", async () => {
+    // The counterpart to the chain-only observer: with connect autocapture
+    // enabled the real handler is registered, and its `connect` payload both
+    // records the chain and drives the connect event.
+    const tracker = await makeFormo({ tracking: true, autocapture: { connect: true } });
+    const listeners: Record<string, (...a: unknown[]) => void> = {};
+    const provider: any = {
+      on: sandbox.stub().callsFake((ev: string, fn: any) => { listeners[ev] = fn; }),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves([ADDRESS]),
+    };
+    (tracker as any).isWagmiMode = false;
+    (tracker as any).trackEIP1193Provider(provider);
+
+    expect(Object.keys(listeners), "connect is observed").to.include("connect");
+    listeners["connect"]?.({ chainId: `0x${OTHER_CHAIN.toString(16)}` });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
   });
 });
