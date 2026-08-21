@@ -1533,10 +1533,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     // provider while the lookup is in flight, and is newer by definition.
     // Writing this answer back unconditionally would undo it and relabel
     // later activity onto a chain the wallet had already left.
-    const chainGeneration = this.bumpProviderChainGeneration(provider);
+    const chainGeneration = this._providerChainGenerations.get(provider) ?? 0;
     const lookedUpChainId = await this.getCurrentChainId(provider);
     const superseded =
-      chainGeneration !== this._providerChainGenerations.get(provider);
+      chainGeneration !== (this._providerChainGenerations.get(provider) ?? 0);
     const nextChainId = superseded
       ? this._providerChainIds.get(provider) ?? lookedUpChainId
       : lookedUpChainId;
@@ -1891,13 +1891,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       // were dropped even on an allowed chain. This adds no request of its
       // own; it only reads the answer to one the dapp already sent.
       if (method === "eth_chainId") {
-        const generation = this.bumpProviderChainGeneration(provider);
+        // Snapshot rather than advance. Advancing at request time meant a
+        // second lookup that went on to FAIL still invalidated the first
+        // one's perfectly good answer, leaving the provider unknown.
+        // `rememberProviderChain()` advances it when an observation is
+        // actually accepted.
+        const generation = this._providerChainGenerations.get(provider) ?? 0;
         return request({ method, params }).then((result) => {
           // A `chainChanged` for THIS provider may have landed while this was
           // in flight. It is newer by definition, so it must not be
           // overwritten by this answer.
           if (
-            generation === this._providerChainGenerations.get(provider) &&
+            generation === (this._providerChainGenerations.get(provider) ?? 0) &&
             typeof result === "string"
           ) {
             this.rememberProviderChain(provider, parseChainId(result));
@@ -2267,13 +2272,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       return false;
     }
     const { excludeChains = [] } = this.options.tracking as TrackingOptions;
-    // Mirrors `shouldTrack()`: the event's own chain wins when it has one.
+    if (excludeChains.length === 0) return false;
+    // Mirrors `shouldTrack()`: the event's own chain wins when it has one,
+    // and an unresolvable chain on a known wallet counts as excluded rather
+    // than allowed.
     const chainToCheck = eventChainId ?? this.currentChainId;
-    return (
-      excludeChains.length > 0 &&
-      !!chainToCheck &&
-      excludeChains.includes(chainToCheck)
-    );
+    if (chainToCheck === 0) return true;
+    if (chainToCheck === undefined) return false;
+    return excludeChains.includes(chainToCheck);
   }
 
   /**
@@ -2426,7 +2432,22 @@ export class FormoAnalytics implements IFormoAnalytics {
         // exactly the events an operator excluded through - the wallet on the
         // excluded chain is often the one we know least about. An explicit
         // exclusion is a directive, so an unresolvable chain is refused.
-        if (eventChainId === 0) return false;
+        //
+        // This covers the central value too, not just an explicit event
+        // chain: `page`, `track` and `identify` carry no chain of their own
+        // and fall back to `currentChainId`, so an unknown chain there would
+        // otherwise send wallet-attributed events for a wallet that may well
+        // be sitting on an excluded chain.
+        // Deliberately keyed on 0 and NOT on `undefined`. 0 is the explicit
+        // "we asked and could not tell" marker. `undefined` means no chain
+        // state yet, which is a legitimate transient - the Privy path
+        // reconciles a Solana wallet through exactly that state - and
+        // refusing it would drop real events.
+        //
+        // `backfillActiveWallet()` never persists 0, so an unresolvable chain
+        // cannot leak into `currentChainId` and reach the unscoped events
+        // (page / track / identify) that fall back to it.
+        if (chainToCheck === 0) return false;
         if (chainToCheck && excludeChains.includes(chainToCheck)) return false;
       }
 
@@ -2916,6 +2937,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    * value in the normal way; existing connections are never clobbered.
    */
   private backfillActiveWallet(address: Address, chainId?: ChainID): void {
+    // `0` means "could not resolve", not a chain. Persisting it would make
+    // `currentChainId` look known while naming no chain at all.
+    if (chainId === 0) chainId = undefined;
     // Never learn identity while suppressed (opt-out / timezone / excluded host
     // or path). A signature/transaction observed on an excluded route must not
     // populate currentAddress for later allowed-page events. backfill only ever

@@ -496,6 +496,71 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((formo as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
   });
 
+  it("does not let a failed lookup discard an earlier valid one", async () => {
+    // The generation used to advance when a lookup STARTED, so a second call
+    // that went on to fail still invalidated the first one's good answer and
+    // left the provider unknown - which, with exclusions configured, drops
+    // all of its events.
+    const answers: Array<(v: unknown) => void> = [];
+    const rejecters: Array<(e: unknown) => void> = [];
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(() =>
+        new Promise((res, rej) => { answers.push(res); rejecters.push(rej); })
+      ),
+    };
+    (formo as any).registerRequestListeners(provider);
+
+    const first = provider.request({ method: "eth_chainId" });
+    const second = provider.request({ method: "eth_chainId" });
+
+    // The second call fails; the first then answers correctly.
+    rejecters[1](new Error("boom"));
+    await second.catch(() => undefined);
+    answers[0](`0x${OTHER_CHAIN.toString(16)}`);
+    await first;
+
+    expect(
+      (formo as any).resolveChainIdForProvider(provider),
+      "the good answer survives a failed sibling"
+    ).to.equal(OTHER_CHAIN);
+  });
+
+  it("refuses unscoped events once an unresolvable chain is current", async () => {
+    // page / track / identify carry no chain and fall back to currentChainId.
+    // If 0 ever became that value they would be sent for a wallet that could
+    // be sitting on an excluded chain.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+    (gated as any).setChainState("evm", { chainId: 0, address: ADDRESS });
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(addEvent.called, "unknown current chain fails closed").to.be.false;
+  });
+
+  it("never persists an unresolvable chain as the current one", async () => {
+    // The counterpart: 0 must not reach central state in the first place, or
+    // a legitimate transient `undefined` becomes indistinguishable from it.
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    await (formo as any).buildTransactionEventPayload(
+      [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
+      provider
+    );
+
+    expect(
+      ((formo as any)._evmAddress as string)?.toLowerCase(),
+      "address is still learned"
+    ).to.equal(ADDRESS.toLowerCase());
+    expect((formo as any)._evmChainId, "but not a bogus chain").to.not.equal(0);
+  });
+
   it("keeps each provider's chain generation separate", async () => {
     // A global counter meant any activity on wallet B discarded a valid
     // in-flight answer for wallet A, leaving A at chain 0 - and, since an
