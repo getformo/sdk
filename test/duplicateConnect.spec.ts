@@ -105,6 +105,140 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     expect(await connectAndCount("accountsFirst")).to.equal(1);
   });
 
+  it("still reports the connect when an unknown-chain accounts event was refused", async () => {
+    // `accountsChanged` arrives first on a provider with no synchronous
+    // `chainId`, so it reports chain 0 - which `excludeChains` refuses. The
+    // `connect` payload that follows carries the real chain and must still be
+    // reported, or the connection produces no connect event at all.
+    const provider = makeProvider();
+    delete provider.chainId;                 // nothing to resolve from
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: { excludeChains: [999] },    // exclusions on => unknown fails closed
+    });
+    // Counts what is actually SENT, not what is attempted: the chain-0 attempt
+    // is refused inside connect() by the exclusion gate, so stubbing
+    // `formo.connect` would count an event that never reaches the wire.
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { sent.push(e); });
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 40));
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 60));
+
+    const connects = sent.filter((e) => e.type === "connect");
+    expect(connects.length, "exactly one connect is sent").to.equal(1);
+    expect(
+      connects[0].chainId,
+      "and it carries the authoritative chain"
+    ).to.equal(1);
+    formo.cleanup?.();
+  });
+
+  it("reports the connect when the address was restored before `connect`", async () => {
+    // A wallet restored from the active-wallet cookie means an address exists
+    // with no connect ever sent. Suppressing on address presence lost it.
+    const provider = makeProvider();
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    // Restored identity, exactly as loadActiveWallet() leaves it.
+    (formo as any).setChainState("evm", { chainId: 1, address: ADDRESS });
+    const connect = sandbox.stub(formo, "connect").resolves();
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(connect.callCount, "the connection is still reported").to.equal(1);
+    formo.cleanup?.();
+  });
+
+  it("reports again after a genuine disconnect and reconnect", async () => {
+    const provider = makeProvider();
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const connect = sandbox.stub(formo, "connect").resolves();
+    sandbox.stub(formo, "disconnect").resolves();
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(connect.callCount, "one for the first connection").to.equal(1);
+
+    provider.emit("accountsChanged", []);
+    await new Promise((r) => setTimeout(r, 60));
+
+    provider.emit("connect", { chainId: "0x1" });
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(connect.callCount, "and one for the reconnect").to.equal(2);
+    formo.cleanup?.();
+  });
+
+  it("does not emit a second connect just to correct an unknown chain", async () => {
+    // With no exclusions, an `accountsChanged` that wins the race on a
+    // provider exposing no synchronous chainId reports chain 0 honestly. The
+    // `connect` payload that follows knows the real chain, but relabelling by
+    // emitting again would mean two connects for one connection.
+    const provider = makeProvider();
+    delete provider.chainId;
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const connect = sandbox.stub(formo, "connect").resolves();
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 40));
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(connect.callCount, "exactly one connect").to.equal(1);
+    expect(
+      formo.currentChainId,
+      "and the authoritative chain still lands in state"
+    ).to.equal(1);
+    formo.cleanup?.();
+  });
+
+  it("reports the connect once an excluded path stops suppressing it", async () => {
+    // The connect is refused because the visitor is on an excluded path, not
+    // because of anything about the wallet. Marking a refused event as
+    // reported would silence that wallet for the rest of the page load, even
+    // after navigation makes it trackable.
+    const provider = makeProvider();
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: { excludePaths: ["/"] },
+    });
+    const connect = sandbox.stub(formo, "connect").resolves();
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+    const whileExcluded = connect.callCount;
+
+    // Navigate somewhere allowed; the same wallet is still connected.
+    (global as any).window.history.pushState({}, "", "/allowed");
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(
+      connect.callCount,
+      "the wallet is reported once it becomes trackable"
+    ).to.be.greaterThan(whileExcluded);
+    formo.cleanup?.();
+  });
+
   it("still emits for an account switch after the wallet is known", async () => {
     // `accountsChanged` must keep reporting a NEW wallet, so the fix cannot
     // simply gate both handlers on the connection transition.

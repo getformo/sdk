@@ -102,6 +102,25 @@ export class FormoAnalytics implements IFormoAnalytics {
    * an autocaptured event, so the wallet's request transport is never used for
    * analytics. Weak so an untracked provider can be collected.
    */
+  /**
+   * The connect this SDK has actually REPORTED for a provider.
+   *
+   * Deduplicating on "is an address known" was wrong in both directions.
+   * `onConnected` and `onAccountsChanged` both observe one connection, so
+   * something has to stop them double-reporting - but an address can be
+   * present without a connect ever having been sent: restored from the
+   * active-wallet cookie, or reported with an unresolved chain and then
+   * refused by `tracking.excludeChains`. Suppressing on address presence lost
+   * the connect entirely in those cases.
+   *
+   * Records what was reported, so a later event can be recognised as a
+   * genuine improvement on it rather than a duplicate.
+   */
+  private _announcedConnect = new WeakMap<
+    EIP1193Provider,
+    { address: string; chainId: number }
+  >();
+
   private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
   /**
@@ -1355,6 +1374,11 @@ export class FormoAnalytics implements IFormoAnalytics {
           providerMatch: this._provider === provider,
         });
 
+        // The reported connect ends with the connection, so a genuine
+        // reconnect later reports again rather than being taken for a
+        // duplicate.
+        this._announcedConnect.delete(provider);
+
         // Check if disconnect tracking is enabled before emitting event
         if (this.isAutocaptureEnabled("disconnect")) {
           try {
@@ -1555,7 +1579,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     const providerInfo = this.getProviderInfo(provider);
     const effectiveChainId = nextChainId || 0;
     
-    if (this.isAutocaptureEnabled("connect")) {
+    if (
+      this.isAutocaptureEnabled("connect") &&
+      this.shouldReportConnect(provider, address)
+    ) {
       logger.info(
         "OnAccountsChanged: Detected wallet connection, emitting connect event",
         {
@@ -1574,6 +1601,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         );
       }
 
+      this.markConnectReported(provider, address, effectiveChainId);
       this.connect(
         {
           chainId: effectiveChainId,
@@ -1704,6 +1732,45 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.addProviderListener(provider, "connect", listener);
   }
 
+  /**
+   * Whether a connect for this wallet still needs reporting.
+   *
+   * True when nothing has been reported for this provider, or when the account
+   * changed. A wallet already reported is not reported again.
+   *
+   * Deliberately does NOT re-report to correct a chain. When `accountsChanged`
+   * wins the race on a provider that exposes no synchronous `chainId`, the
+   * connect carries 0 - honestly, since the chain is unknown at that instant -
+   * and the `connect` payload that follows knows the real one. Emitting again
+   * to relabel would mean two connects for one connection, which is the bug
+   * this whole path exists to prevent. That payload still corrects
+   * `currentChainId`, so everything after it is attributed properly.
+   */
+  private shouldReportConnect(
+    provider: EIP1193Provider,
+    address: Address
+  ): boolean {
+    const reported = this._announcedConnect.get(provider);
+    if (!reported) return true;
+    return reported.address.toLowerCase() !== address.toLowerCase();
+  }
+
+  /**
+   * Record a connect as reported - but only if it will actually be sent.
+   *
+   * `connect()` passes through `shouldTrack()`, which refuses an unresolvable
+   * chain when `tracking.excludeChains` is configured. Marking a refused event
+   * as reported would suppress the authoritative one that follows.
+   */
+  private markConnectReported(
+    provider: EIP1193Provider,
+    address: Address,
+    chainId: number
+  ): void {
+    if (!this.willTrackEvent(chainId)) return;
+    this._announcedConnect.set(provider, { address, chainId });
+  }
+
   private registerConnectListener(provider: EIP1193Provider): void {
     logger.info("registerConnectListener");
     const listener = (...args: unknown[]) => {
@@ -1718,6 +1785,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info("registerDisconnectListener");
     const listener = async (_error?: unknown) => {
       if (this._provider !== provider) return;
+      // As in the accountsChanged disconnect path: the reported connect ends
+      // with the connection.
+      this._announcedConnect.delete(provider);
       logger.info(
         "OnDisconnect: Wallet disconnect event received, current state:",
         {
@@ -1794,19 +1864,18 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         // Conditionally emit connect event based on tracking configuration.
         //
-        // Gated on `wasDisconnected`: this handler reports the transition from
-        // "no wallet" to "wallet", and if the address was already learned then
-        // `accountsChanged` observed the same connection first and has already
-        // reported it.
-        //
-        // Both handlers fire for one connection, and which of them saw the
-        // address first was decided purely by how many awaits each happened to
-        // contain - so removing an RPC from the `accountsChanged` path was
-        // enough to make both emit. `accountsChanged` deliberately keeps
-        // emitting whether or not the wallet was previously connected, because
-        // it also covers an account switch, where there is a new wallet to
-        // report.
-        if (isActiveProvider && this._evmAddress && wasDisconnected) {
+        // Both handlers observe one connection, so `shouldReportConnect()`
+        // decides which of them reports it. It keys on what was actually
+        // REPORTED, not on whether an address is known: an address can be
+        // present with no connect ever sent - restored from the active-wallet
+        // cookie, or reported with an unresolved chain and then refused by
+        // `excludeChains` - and this payload carries the authoritative chain,
+        // so it must be able to supersede such a report.
+        if (
+          isActiveProvider &&
+          this._evmAddress &&
+          this.shouldReportConnect(provider, address)
+        ) {
           const providerInfo = this.getProviderInfo(provider);
           const effectiveChainId = chainId || 0;
 
@@ -1829,6 +1898,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               );
             }
 
+            this.markConnectReported(provider, address, effectiveChainId);
             this.connect(
               {
                 chainId: effectiveChainId,
