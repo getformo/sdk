@@ -23,7 +23,7 @@ import { validateAddress } from "../utils/address";
 import { getCurrentTimeFormatted } from "../utils/timestamp";
 import { isUndefined } from "../validators";
 import { logger } from "../logger";
-import mergeDeepRight from "../ramda/mergeDeepRight";
+import mergeDeepRight from "../utils/mergeDeepRight";
 import { session } from "../storage";
 import { version } from "../version";
 import {
