@@ -1792,8 +1792,21 @@ export class FormoAnalytics implements IFormoAnalytics {
           }
         }
 
-        // Conditionally emit connect event based on tracking configuration
-        if (isActiveProvider && this._evmAddress) {
+        // Conditionally emit connect event based on tracking configuration.
+        //
+        // Gated on `wasDisconnected`: this handler reports the transition from
+        // "no wallet" to "wallet", and if the address was already learned then
+        // `accountsChanged` observed the same connection first and has already
+        // reported it.
+        //
+        // Both handlers fire for one connection, and which of them saw the
+        // address first was decided purely by how many awaits each happened to
+        // contain - so removing an RPC from the `accountsChanged` path was
+        // enough to make both emit. `accountsChanged` deliberately keeps
+        // emitting whether or not the wallet was previously connected, because
+        // it also covers an account switch, where there is a new wallet to
+        // report.
+        if (isActiveProvider && this._evmAddress && wasDisconnected) {
           const providerInfo = this.getProviderInfo(provider);
           const effectiveChainId = chainId || 0;
 
