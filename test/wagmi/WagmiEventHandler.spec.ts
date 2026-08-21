@@ -4843,6 +4843,82 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.calledOnce).to.be.true;
     });
 
+    it("should handle defensive gaps without throwing", async () => {
+      // The early returns that guard against wagmi or TanStack handing us
+      // half-formed state. None should throw out of a listener.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      // Connected, but the connection has no accounts.
+      const empty = new Map();
+      empty.set("k", {
+        accounts: [],
+        chainId: 999,
+        connector: { id: "m", name: "MetaMask", type: "injected", uid: "k" },
+      });
+      (mockWagmiConfig as any).setState({
+        status: "connected", connections: empty, current: "k", chainId: 999,
+      });
+      if (chainIdListener) await chainIdListener(999, mockChainId);
+      expect(mockFormo.chain.called, "no address, no chain event").to.be.false;
+
+      // No current connection at all: the connector name is simply unknown.
+      expect(
+        (handler as any).getConnectorName({
+          status: "connected", connections: new Map(), current: undefined, chainId: 1,
+        }),
+        "no connector name without a current connection"
+      ).to.be.undefined;
+
+      // A receipt for a transaction with no known sender.
+      mockFormo.transaction.resetHistory();
+      (handler as any).pendingTransactions.set("0xnoaddr", { address: undefined });
+      if (queryListener) {
+        queryListener({
+          type: "updated",
+          query: {
+            queryHash: '["waitForTransactionReceipt"]',
+            queryKey: ["waitForTransactionReceipt", { hash: "0xnoaddr" }],
+            state: { status: "success", data: { status: "success" } },
+          },
+        } as any);
+      }
+      await settle();
+      expect(mockFormo.transaction.called, "no address, no receipt event").to.be.false;
+
+      // A mutation with no resolvable address either.
+      (handler as any).trackingState.lastAddress = undefined;
+      if (mutationListener) {
+        mutationListener({
+          type: "updated",
+          mutation: {
+            mutationId: 901,
+            options: { mutationKey: ["sendTransaction"] },
+            state: { status: "pending", variables: { to: "0xabc" } },
+          },
+        } as any);
+      }
+      await settle();
+      expect(mockFormo.transaction.called, "no address, no transaction event").to.be.false;
+    });
+
+    it("should survive a throwing unsubscribe during cleanup", async () => {
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      (handler as any).unsubscribers = [
+        () => { throw new Error("unsubscribe blew up"); },
+      ];
+
+      expect(() => handler.cleanup(), "cleanup still completes").to.not.throw();
+    });
+
     it("should not accumulate markers for wallets that have gone", async () => {
       // The marker set is unbounded by design: entries are removed when the
       // wallet disconnects, and pruned against the live connections whenever a
