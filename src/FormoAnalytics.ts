@@ -1134,7 +1134,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {void}
    */
   /**
-   * Whether an event would currently be sent.
+   * Whether an event carrying this chain would currently be sent.
    *
    * Exposed for integrations that keep their own "already reported" state.
    * `syncWalletState()` can accept a wallet that `trackEvent()` then drops -
@@ -1142,8 +1142,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    * marked it as reported would stay silent about that wallet even after the
    * configuration changed to allow it.
    */
-  public willTrackEvent(): boolean {
-    return this.shouldTrack();
+  public willTrackEvent(chainId?: ChainID): boolean {
+    return this.shouldTrack(chainId);
   }
 
   public optOutTracking(): void {

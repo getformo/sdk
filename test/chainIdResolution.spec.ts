@@ -742,6 +742,17 @@ describe("Chain id resolution for autocaptured requests", () => {
   });
 
 
+  it("exposes whether an event carrying a chain would be sent", async () => {
+    // Integrations that keep their own "already reported" state need this:
+    // syncWalletState can accept a wallet whose event trackEvent then drops.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    expect(gated.willTrackEvent(ACTIVE_CHAIN), "allowed chain").to.be.true;
+    expect(gated.willTrackEvent(OTHER_CHAIN), "excluded chain").to.be.false;
+
+    const off = await makeFormo({ tracking: false });
+    expect(off.willTrackEvent(ACTIVE_CHAIN), "tracking disabled").to.be.false;
+  });
+
   it("refuses a chain-scoped event whose chain is unknown when exclusions are set", async () => {
     // 0 is in no exclusion list, so treating "unknown" as "allowed" would let
     // through exactly the events an operator excluded.

@@ -84,3 +84,10 @@ example/cra-script-tag/public/sdk
 
 # pnpm local content-addressable store (created by `pnpm install --store-dir .`)
 .pnpm-store/
+
+# c8 / istanbul output
+coverage/
+
+# Local MCP / browser-automation scratch
+.playwright-mcp/
+.mcp.json
