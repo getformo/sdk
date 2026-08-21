@@ -113,8 +113,16 @@ export const MARKER_GRACE_MS = 3_000;
 const liveHandlers = new Map<string, number>();
 const markerExpiry = new Map<string, ReturnType<typeof setTimeout>>();
 
-function retainMarkers(writeKey: string): void {
+/**
+ * @param adoptsLiveConnection whether the arriving handler actually found the
+ *   announced connection still in place. Only then may it cancel the expiry:
+ *   a replacement that mounts over a DISCONNECTED store has observed nothing,
+ *   so cancelling would strand the markers for the rest of the page load and
+ *   suppress a genuine connect hours later.
+ */
+function retainMarkers(writeKey: string, adoptsLiveConnection: boolean): void {
   liveHandlers.set(writeKey, (liveHandlers.get(writeKey) ?? 0) + 1);
+  if (!adoptsLiveConnection) return;
   const pending = markerExpiry.get(writeKey);
   if (pending) {
     clearTimeout(pending);
@@ -326,7 +334,16 @@ export class WagmiEventHandler {
     // Keep the page-load markers alive across an SDK rebuild. Must run before
     // the seed, so a handler created moments after its predecessor was torn
     // down still sees what that predecessor announced.
-    retainMarkers(this.formo.writeKey);
+    // Only a handler that finds the wallet still connected may hold the
+    // markers open. One mounting over a disconnected store has observed
+    // nothing and must let them expire.
+    let livesOverConnection = false;
+    try {
+      livesOverConnection = this.getState().status === "connected";
+    } catch {
+      /* unreadable store counts as no live connection */
+    }
+    retainMarkers(this.formo.writeKey, livesOverConnection);
 
     // Claim the right to emit for this destination. The NEWEST handler always
     // wins, deliberately: an app that rebuilds without calling `cleanup()`
