@@ -487,6 +487,65 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((formo as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
   });
 
+  it("keeps each provider's chain generation separate", async () => {
+    // A global counter meant any activity on wallet B discarded a valid
+    // in-flight answer for wallet A, leaving A at chain 0 - and, since an
+    // unresolved chain fails closed, dropping all of A's events whenever
+    // excludeChains is set.
+    let releaseA: ((v: string) => void) | undefined;
+    const a: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(({ method }: any) =>
+        method === "eth_chainId"
+          ? new Promise((res) => { releaseA = res as any; })
+          : Promise.resolve("0xsigned")
+      ),
+    };
+    const b = providerOnChain(OTHER_CHAIN);
+    (formo as any).registerRequestListeners(a);
+
+    const pendingA = a.request({ method: "eth_chainId" });
+    // Unrelated activity on B while A's lookup is still in flight.
+    (formo as any).rememberProviderChain(b, OTHER_CHAIN);
+    releaseA!(`0x${ACTIVE_CHAIN.toString(16)}`);
+    await pendingA;
+
+    expect(
+      (formo as any).resolveChainIdForProvider(a),
+      "A's own answer survives B's activity"
+    ).to.equal(ACTIVE_CHAIN);
+    expect((formo as any).resolveChainIdForProvider(b)).to.equal(OTHER_CHAIN);
+  });
+
+  it("does not let a slow accountsChanged lookup undo a newer chainChanged", async () => {
+    // onAccountsChanged resolves the chain itself. Writing that answer back
+    // unconditionally undid a `chainChanged` that landed while it was in
+    // flight, relabelling later activity onto a chain the wallet had left.
+    let releaseLookup: ((v: string) => void) | undefined;
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().callsFake(({ method }: any) => {
+        if (method === "eth_chainId") {
+          return new Promise((res) => { releaseLookup = res as any; });
+        }
+        return Promise.resolve([ADDRESS]);
+      }),
+    };
+
+    const pending = (formo as any).onAccountsChanged(provider, [ADDRESS]);
+    // The wallet switches chain while that lookup is outstanding.
+    (formo as any).rememberProviderChain(provider, OTHER_CHAIN);
+    releaseLookup!(`0x${ACTIVE_CHAIN.toString(16)}`);
+    await pending;
+
+    expect(
+      (formo as any).resolveChainIdForProvider(provider),
+      "the newer chainChanged wins"
+    ).to.equal(OTHER_CHAIN);
+  });
+
   it("does not let a slow eth_chainId answer overwrite a newer chainChanged", async () => {
     let releaseChainId: ((v: string) => void) | undefined;
     const provider: any = {

@@ -105,10 +105,16 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
   /**
-   * Bumped on every chain observation. An `eth_chainId` answer that resolves
-   * after a newer `chainChanged` must not overwrite it.
+   * Bumped on every chain observation, PER PROVIDER. An `eth_chainId` answer
+   * that resolves after a newer observation for the same provider must not
+   * overwrite it.
+   *
+   * Deliberately per provider, not per SDK instance: a global counter meant
+   * any activity on wallet B discarded a perfectly valid in-flight answer for
+   * wallet A, leaving A at chain 0 - and, since an unresolved chain fails
+   * closed, dropping all of A's events whenever `excludeChains` is set.
    */
-  private providerChainGeneration = 0;
+  private _providerChainGenerations = new WeakMap<EIP1193Provider, number>();
 
   private _providerListenersMap: Map<
     EIP1193Provider,
@@ -1502,13 +1508,24 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    // Get chain ID and update state
-    const nextChainId = await this.getCurrentChainId(provider);
+    // Get chain ID and update state.
+    //
+    // Ticketed like the request wrapper: a `chainChanged` can land for this
+    // provider while the lookup is in flight, and is newer by definition.
+    // Writing this answer back unconditionally would undo it and relabel
+    // later activity onto a chain the wallet had already left.
+    const chainGeneration = this.bumpProviderChainGeneration(provider);
+    const lookedUpChainId = await this.getCurrentChainId(provider);
+    const superseded =
+      chainGeneration !== this._providerChainGenerations.get(provider);
+    const nextChainId = superseded
+      ? this._providerChainIds.get(provider) ?? lookedUpChainId
+      : lookedUpChainId;
     // Keep the per-provider snapshot in step. Without this, a provider with no
     // synchronous `chainId` property is known only while it is active: once
     // another wallet becomes active, a signature back through this one would
     // report chain 0 - and, with exclusions configured, be dropped.
-    this.rememberProviderChain(provider, nextChainId);
+    if (!superseded) this.rememberProviderChain(provider, nextChainId);
     const wasDisconnected = !this._evmAddress;
 
     // Update state regardless of whether connect *event* tracking is enabled,
@@ -1855,12 +1872,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       // were dropped even on an allowed chain. This adds no request of its
       // own; it only reads the answer to one the dapp already sent.
       if (method === "eth_chainId") {
-        const generation = ++this.providerChainGeneration;
+        const generation = this.bumpProviderChainGeneration(provider);
         return request({ method, params }).then((result) => {
-          // A `chainChanged` may have landed while this was in flight. It is
-          // newer by definition, so it must not be overwritten by this answer.
+          // A `chainChanged` for THIS provider may have landed while this was
+          // in flight. It is newer by definition, so it must not be
+          // overwritten by this answer.
           if (
-            generation === this.providerChainGeneration &&
+            generation === this._providerChainGenerations.get(provider) &&
             typeof result === "string"
           ) {
             this.rememberProviderChain(provider, parseChainId(result));
@@ -2710,9 +2728,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     chainId: number | undefined
   ): void {
     if (!provider || !chainId) return;
-    // Any observation is newer than an `eth_chainId` still in flight.
-    this.providerChainGeneration += 1;
+    // Any observation is newer than an `eth_chainId` still in flight for this
+    // provider.
+    this.bumpProviderChainGeneration(provider);
     this._providerChainIds.set(provider, chainId);
+  }
+
+  /** Advance and return this provider's chain-observation generation. */
+  private bumpProviderChainGeneration(provider: EIP1193Provider): number {
+    const next = (this._providerChainGenerations.get(provider) ?? 0) + 1;
+    this._providerChainGenerations.set(provider, next);
+    return next;
   }
 
   /**
