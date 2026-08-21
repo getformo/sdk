@@ -541,24 +541,33 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(addEvent.called, "unknown current chain fails closed").to.be.false;
   });
 
-  it("never persists an unresolvable chain as the current one", async () => {
-    // The counterpart: 0 must not reach central state in the first place, or
-    // a legitimate transient `undefined` becomes indistinguishable from it.
-    const provider: any = {
+  it("keeps an unresolvable chain as 0 so later events still fail closed", async () => {
+    // The end-to-end version of the rule: an unknown-chain signature is
+    // dropped, and the `track()` that follows must be dropped too. Erasing 0
+    // to undefined here would leave the wallet persisted with no marker, and
+    // that track() would go out attributed to a wallet that may well be on an
+    // excluded chain.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+
+    const stranger: any = {
       on: sandbox.stub(),
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xsigned"),
     };
-    await (formo as any).buildTransactionEventPayload(
-      [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
-      provider
-    );
+    (gated as any).registerRequestListeners(stranger);
+    await stranger.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "the signature itself is dropped").to.be.false;
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "and so is the track that follows").to.be.false;
 
     expect(
-      ((formo as any)._evmAddress as string)?.toLowerCase(),
-      "address is still learned"
-    ).to.equal(ADDRESS.toLowerCase());
-    expect((formo as any)._evmChainId, "but not a bogus chain").to.not.equal(0);
+      (gated as any)._evmChainId,
+      "the unknown marker is retained, not erased"
+    ).to.equal(0);
   });
 
   it("keeps each provider's chain generation separate", async () => {

@@ -4396,6 +4396,45 @@ describe("WagmiEventHandler", () => {
       }
     });
 
+    it("should let markers expire when the replacement sees no connection", async () => {
+      // A handler mounting over a DISCONNECTED store has observed nothing, so
+      // it must not hold the markers open. Cancelling expiry there stranded
+      // them for the rest of the page load, and a genuine connection to the
+      // same wallet - hours later - was suppressed.
+      const clock = sandbox.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        (mockWagmiConfig as any).setState(createConnectedState());
+        const first = new WagmiEventHandler(
+          mockFormo as any, mockWagmiConfig, mockQueryClient
+        );
+        await clock.tickAsync(10);
+        expect(mockFormo.connect.calledOnce).to.be.true;
+
+        // Torn down, and the wallet goes away.
+        first.cleanup();
+        (mockWagmiConfig as any).setState(createMockState());
+
+        // A replacement mounts promptly, but over nothing.
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+        await clock.tickAsync(10);
+
+        // The markers must still expire on schedule.
+        await clock.tickAsync(MARKER_GRACE_MS + 100);
+
+        // The wallet genuinely connects again.
+        (mockWagmiConfig as any).setState(createConnectedState());
+        await statusListener!("connected", "disconnected");
+        await clock.tickAsync(10);
+
+        expect(
+          mockFormo.connect.callCount,
+          "the genuine connect is reported"
+        ).to.equal(2);
+      } finally {
+        clock.restore();
+      }
+    });
+
     it("should not re-emit for a rebuild that lands inside the grace window", async () => {
       // The counterpart to the test above, and the reason the grace window
       // exists: FormoAnalyticsProvider tears the handler down and builds a new
