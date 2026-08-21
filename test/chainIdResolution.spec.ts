@@ -541,6 +541,51 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect(addEvent.called, "unknown current chain fails closed").to.be.false;
   });
 
+  it("corrects a stale restored chain for the same wallet", async () => {
+    // A persisted wallet restores chain 1 from a previous session while its
+    // provider has since moved to excluded 8453. The signature is gated
+    // correctly, but the stale chain used to survive in currentChainId - and
+    // the unscoped events that fall back to it went out under an exclusion
+    // that should have caught them.
+    const gated = await makeFormo({ tracking: { excludeChains: [OTHER_CHAIN] } });
+    const addEvent = sandbox.stub((gated as any).eventManager, "addEvent").resolves();
+    // Restored state: same wallet, old chain.
+    (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const provider: any = {
+      on: sandbox.stub(),
+      removeListener: sandbox.stub(),
+      request: sandbox.stub().resolves("0xsigned"),
+    };
+    (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
+    (gated as any)._provider = provider;
+    (gated as any).registerRequestListeners(provider);
+
+    await provider.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "the signature itself is excluded").to.be.false;
+
+    expect(
+      (gated as any)._evmChainId,
+      "the stale chain is corrected to the live one"
+    ).to.equal(OTHER_CHAIN);
+
+    await gated.track("thing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called, "so the track that follows is excluded too").to.be.false;
+  });
+
+  it("never overwrites a different wallet's chain", async () => {
+    const other = await makeFormo({ tracking: true });
+    const OTHER_ADDRESS = "0x1111111111111111111111111111111111111111";
+    (other as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    (other as any).backfillActiveWallet(OTHER_ADDRESS, OTHER_CHAIN);
+
+    expect(((other as any)._evmAddress as string)?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
+    expect((other as any)._evmChainId, "untouched").to.equal(ACTIVE_CHAIN);
+  });
+
   it("keeps an unresolvable chain as 0 so later events still fail closed", async () => {
     // The end-to-end version of the rule: an unknown-chain signature is
     // dropped, and the `track()` that follows must be dropped too. Erasing 0

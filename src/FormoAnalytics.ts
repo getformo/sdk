@@ -2921,11 +2921,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     // excluded chain.
     // Never learn identity while suppressed (opt-out / timezone / excluded host
     // or path). A signature/transaction observed on an excluded route must not
-    // populate currentAddress for later allowed-page events. backfill only ever
-    // *adds* an address (it no-ops when one is already known), so there is no
-    // stale state to clear here.
+    // populate currentAddress for later allowed-page events.
     if (this.isTrackingSuppressed()) return;
-    if (this._evmAddress) return;
+
+    const known = this._evmAddress;
+    if (known) {
+      // Same wallet, newer chain: correct it rather than returning.
+      //
+      // A persisted wallet restores a chain from a previous session. If the
+      // provider has since moved - to an excluded chain, or to one we cannot
+      // resolve - the autocaptured event is gated correctly, but the stale
+      // restored chain stayed in `currentChainId` and the unscoped events
+      // that fall back to it went out under an exclusion that should have
+      // caught them.
+      if (
+        chainId !== undefined &&
+        known.toLowerCase() === address.toLowerCase() &&
+        this._evmChainId !== chainId
+      ) {
+        this.setChainState('evm', { address: known, chainId });
+      }
+      // A DIFFERENT address is another wallet's business; never overwrite.
+      return;
+    }
+
     this.setChainState('evm', { address, chainId });
   }
 
