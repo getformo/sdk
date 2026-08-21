@@ -3912,6 +3912,157 @@ describe("WagmiEventHandler", () => {
       expect(mockFormo.connect.called, "nothing to adopt").to.be.false;
     });
 
+    it("should still emit chain events when connect autocapture is disabled", async () => {
+      // With connect autocapture off nothing is ever announced, so gating the
+      // retry-and-return on "is it announced yet" made every chain change
+      // return early - dropping chain analytics for the whole page load in a
+      // perfectly valid configuration.
+      (mockFormo as any).isAutocaptureEnabled = sandbox.stub().callsFake(
+        (t: string) => t !== "connect"
+      );
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      expect(mockFormo.connect.called, "no connect, as configured").to.be.false;
+
+      const NEW_CHAIN = 137;
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, NEW_CHAIN)
+      );
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, mockChainId);
+      await settle();
+
+      expect(mockFormo.chain.calledOnce, "the chain change is reported").to.be.true;
+      expect(mockFormo.chain.firstCall.args[0]).to.deep.include({
+        chainId: NEW_CHAIN,
+        address: mockAddress,
+      });
+    });
+
+    it("should replay a chain change dropped while reconnecting", async () => {
+      // wagmi reports the chain while still `reconnecting`, so the chain
+      // callback drops it; the `connected` transition that follows can then be
+      // dropped by the processing guard, leaving both the tracked and the
+      // central chain on the chain the wallet has already left.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      const NEW_CHAIN = 137;
+      // Chain arrives while wagmi is reconnecting: the callback must drop it.
+      (mockWagmiConfig as any).setState({
+        ...createConnectedState(mockAddress, NEW_CHAIN),
+        status: "reconnecting" as const,
+      });
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, mockChainId);
+      await settle();
+      expect(mockFormo.chain.called, "dropped while reconnecting").to.be.false;
+
+      // Back to connected; the status callback runs and reconciles.
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, NEW_CHAIN)
+      );
+      await statusListener!("connected", "reconnecting");
+      await settle();
+
+      expect(mockFormo.chain.calledOnce, "replayed once connected").to.be.true;
+      expect(
+        (handler as any).trackingState.lastChainId,
+        "tracked chain caught up"
+      ).to.equal(NEW_CHAIN);
+    });
+
+    it("should replay a dropped chain from reconciliation when the lock swallowed the status change", async () => {
+      // The other half of the replay: here the `connected` transition is
+      // dropped by the processing guard rather than handled by the re-entry
+      // branch, so reconciliation is what has to apply the chain.
+      let releaseConnect: (() => void) | undefined;
+      (mockFormo as any).connect = sandbox.stub().returns(
+        new Promise<void>((resolve) => { releaseConnect = () => resolve(); })
+      );
+
+      (mockWagmiConfig as any).setState(createMockState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const pending = statusListener!("connected", "disconnected");
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      const NEW_CHAIN = 137;
+      // Chain arrives while wagmi is reconnecting: the callback drops it.
+      (mockWagmiConfig as any).setState({
+        ...createConnectedState(mockAddress, NEW_CHAIN),
+        status: "reconnecting" as const,
+      });
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, mockChainId);
+      expect(mockFormo.chain.called, "dropped while reconnecting").to.be.false;
+
+      // Back to connected, but the lock is still held so this is dropped too.
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, NEW_CHAIN)
+      );
+      await statusListener!("connected", "reconnecting");
+
+      releaseConnect!();
+      await pending;
+      await settle();
+
+      expect(mockFormo.chain.calledOnce, "reconciliation replayed it").to.be.true;
+      expect(
+        (handler as any).trackingState.lastChainId,
+        "tracked chain caught up"
+      ).to.equal(NEW_CHAIN);
+    });
+
+    it("should not replay a chain the subscription still owns", async () => {
+      // The ordinary flap: the chain callback was never prevented from
+      // running, so reconciliation must not emit a second event.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+      await settle();
+      mockFormo.chain.resetHistory();
+
+      const NEW_CHAIN = 137;
+      (mockWagmiConfig as any).setState(
+        createConnectedState(mockAddress, NEW_CHAIN)
+      );
+      await statusListener!("reconnecting", "connected");
+      await statusListener!("connected", "reconnecting");
+      if (chainIdListener) await chainIdListener(NEW_CHAIN, mockChainId);
+      await settle();
+
+      expect(mockFormo.chain.callCount, "exactly one chain event").to.equal(1);
+    });
+
+    it("should restore central state for an announced wallet on re-adoption", async () => {
+      // optOutTracking() calls reset(), which wipes central identity while the
+      // handler keeps its wallet and its marker. Left unreconciled, later
+      // events carry no wallet - and shouldTrack() sees no chain, so
+      // excludeChains stops excluding.
+      (mockWagmiConfig as any).setState(createConnectedState());
+      const handler = new WagmiEventHandler(
+        mockFormo as any, mockWagmiConfig, mockQueryClient
+      );
+      await settle();
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // reset() underneath the handler.
+      (mockFormo as any).currentAddress = undefined;
+      (mockFormo as any).currentChainId = undefined;
+
+      handler.retryAdoption();
+      await settle();
+
+      expect((mockFormo as any).currentAddress, "wallet restored").to.equal(mockAddress);
+      expect((mockFormo as any).currentChainId, "chain restored").to.equal(mockChainId);
+      expect(mockFormo.connect.calledOnce, "no duplicate connect").to.be.true;
+    });
+
     it("should announce a wallet once its chain stops being excluded", async () => {
       // Connected on an excluded chain: adopted so mutations can be
       // attributed, but deliberately not announced. When the user switches to
