@@ -113,8 +113,16 @@ export const MARKER_GRACE_MS = 3_000;
 const liveHandlers = new Map<string, number>();
 const markerExpiry = new Map<string, ReturnType<typeof setTimeout>>();
 
-function retainMarkers(writeKey: string): void {
+/**
+ * @param adoptsLiveConnection whether the arriving handler actually found the
+ *   announced connection still in place. Only then may it cancel the expiry:
+ *   a replacement that mounts over a DISCONNECTED store has observed nothing,
+ *   so cancelling would strand the markers for the rest of the page load and
+ *   suppress a genuine connect hours later.
+ */
+function retainMarkers(writeKey: string, adoptsLiveConnection: boolean): void {
   liveHandlers.set(writeKey, (liveHandlers.get(writeKey) ?? 0) + 1);
+  if (!adoptsLiveConnection) return;
   const pending = markerExpiry.get(writeKey);
   if (pending) {
     clearTimeout(pending);
@@ -122,10 +130,11 @@ function retainMarkers(writeKey: string): void {
   }
 }
 
-function releaseMarkers(writeKey: string): void {
+function releaseMarkers(writeKey: string): boolean {
   const remaining = Math.max(0, (liveHandlers.get(writeKey) ?? 0) - 1);
   liveHandlers.set(writeKey, remaining);
-  if (remaining > 0 || markerExpiry.has(writeKey)) return;
+  const wasLast = remaining === 0;
+  if (remaining > 0 || markerExpiry.has(writeKey)) return wasLast;
   const timer = setTimeout(() => {
     markerExpiry.delete(writeKey);
     const prefix = `${writeKey}:`;
@@ -136,6 +145,7 @@ function releaseMarkers(writeKey: string): void {
   // Never hold a Node process (or a test run) open for this.
   (timer as unknown as { unref?: () => void }).unref?.();
   markerExpiry.set(writeKey, timer);
+  return wasLast;
 }
 
 /**
@@ -199,6 +209,41 @@ function markAnnounced(key: string, connection?: object): void {
  */
 const emittingOwners = new Map<string, WagmiEventHandler>();
 
+/** Details of a broadcast we are waiting on a receipt for. */
+type PendingTransaction = {
+    address: string;
+    /**
+     * Chain the transaction was broadcast on. Stored because a mutation may
+     * name an explicit `chainId`, and the active chain can change between
+     * broadcast and receipt; the confirmation must not be relabelled.
+     */
+    chainId?: number;
+    /**
+     * Whether the caller named the chain. An explicit chain outranks the
+     * receipt query's; an inferred one only outranks the current chain.
+     */
+    chainIdWasExplicit?: boolean;
+    data?: string;
+    to?: string;
+    value?: string;
+    function_name?: string;
+    function_args?: Record<string, unknown>;
+    safeFunctionArgs?: Record<string, unknown>;
+  };
+
+/**
+ * Pending transactions, shared per destination rather than per handler.
+ *
+ * A broadcast observed by handler A, followed by a replacement B taking over
+ * before the receipt arrives, otherwise loses the confirmation entirely: A no
+ * longer emits because it is not the owner, and B has no record of the
+ * broadcast to match the receipt against.
+ */
+const pendingTransactionsByDestination = new Map<
+  string,
+  Map<string, PendingTransaction>
+>();
+
 /** Stable per-config id, so the owner key can span SDK instances. */
 const configIds = new WeakMap<object, string>();
 let nextConfigId = 0;
@@ -214,6 +259,7 @@ const ownerKey = (writeKey: string, config: WagmiConfig): string => {
 /** Test hook. Real page loads reset this naturally. */
 export function __resetSeededWallet(): void {
   emittingOwners.clear();
+  pendingTransactionsByDestination.clear();
   announcedConnections.clear();
   liveHandlers.clear();
   markerExpiry.forEach((timer) => clearTimeout(timer));
@@ -347,26 +393,23 @@ export class WagmiEventHandler {
    * Store transaction details from BROADCASTED events for use in CONFIRMED/REVERTED
    * Key: transactionHash, Value: transaction details including the original sender address
    */
-  private pendingTransactions = new Map<string, {
-    address: string;
-    /**
-     * Chain the transaction was broadcast on. Stored because a mutation may
-     * name an explicit `chainId`, and the active chain can change between
-     * broadcast and receipt; the confirmation must not be relabelled.
-     */
-    chainId?: number;
-    /**
-     * Whether the caller named the chain. An explicit chain outranks the
-     * receipt query's; an inferred one only outranks the current chain.
-     */
-    chainIdWasExplicit?: boolean;
-    data?: string;
-    to?: string;
-    value?: string;
-    function_name?: string;
-    function_args?: Record<string, unknown>;
-    safeFunctionArgs?: Record<string, unknown>;
-  }>();
+  /**
+   * Shared per destination, not per handler.
+   *
+   * A broadcast observed by handler A, followed by a replacement B taking
+   * over before the receipt arrives, used to lose the confirmation entirely:
+   * A no longer emits because it is not the owner, and B had no record of the
+   * broadcast to match the receipt against.
+   */
+  private get pendingTransactions(): Map<string, PendingTransaction> {
+    const key = this.ownerKey ?? "";
+    let map = pendingTransactionsByDestination.get(key);
+    if (!map) {
+      map = new Map();
+      pendingTransactionsByDestination.set(key, map);
+    }
+    return map;
+  }
 
   constructor(
     formoAnalytics: FormoAnalytics,
@@ -382,7 +425,16 @@ export class WagmiEventHandler {
     // Keep the page-load markers alive across an SDK rebuild. Must run before
     // the seed, so a handler created moments after its predecessor was torn
     // down still sees what that predecessor announced.
-    retainMarkers(this.formo.writeKey);
+    // Only a handler that finds the wallet still connected may hold the
+    // markers open. One mounting over a disconnected store has observed
+    // nothing and must let them expire.
+    let livesOverConnection = false;
+    try {
+      livesOverConnection = this.getState().status === "connected";
+    } catch {
+      /* unreadable store counts as no live connection */
+    }
+    retainMarkers(this.formo.writeKey, livesOverConnection);
 
     // Claim the right to emit for this destination. The NEWEST handler always
     // wins, deliberately: an app that rebuilds without calling `cleanup()`
@@ -1265,7 +1317,7 @@ export class WagmiEventHandler {
         const goneChainId = this.trackingState.lastChainId;
         this.releaseTrackedWallet();
 
-        if (this.formo.isAutocaptureEnabled("disconnect")) {
+        if (this.formo.isAutocaptureEnabled("disconnect") && this.isEmittingOwner) {
           try {
             // Emitted before central state is cleared, so excludeChains can
             // still gate it on the chain the wallet was actually on.
@@ -2171,7 +2223,12 @@ export class WagmiEventHandler {
       }
       // Start the grace period. If nothing re-mounts, the markers are dropped
       // so a reconnect that happens while unobserved still emits.
-      releaseMarkers(this.formo.writeKey);
+      const wasLastForDestination = releaseMarkers(this.formo.writeKey);
+      // Nothing is left to match a receipt against, so drop the shared
+      // broadcast records rather than leak them for the page's lifetime.
+      if (wasLastForDestination && this.ownerKey) {
+        pendingTransactionsByDestination.delete(this.ownerKey);
+      }
     }
 
     for (const unsubscribe of this.unsubscribers) {
@@ -2185,7 +2242,10 @@ export class WagmiEventHandler {
     this.unsubscribers = [];
     this.processedMutations.clear();
     this.processedQueries.clear();
-    this.pendingTransactions.clear();
+    // Deliberately NOT clearing `pendingTransactions`: it is shared per
+    // destination, and a replacement handler needs the broadcast records to
+    // match incoming receipts against. It is dropped when the last handler
+    // for the destination goes away (see below).
     logger.debug("WagmiEventHandler: Cleanup complete");
   }
 }
