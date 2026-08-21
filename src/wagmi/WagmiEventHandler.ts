@@ -1569,9 +1569,12 @@ export class WagmiEventHandler {
       // `autocapture.connect` disabled nothing is ever announced, so an
       // unconditional return here dropped every chain event for the whole
       // page load.
-      const adoptedNow = !hadAddress && !!this.trackingState.lastAddress;
+      // Suppress ONLY when the retry announced a connect, because that
+      // connect already carried the new chain. Adoption on its own reports
+      // nothing - with `autocapture.connect` disabled it never can - so
+      // returning on it swallowed the chain event the app did ask for.
       const announcedNow = !wasAnnounced && this.isCurrentWalletAnnounced();
-      if (adoptedNow || announcedNow) return;
+      if (announcedNow) return;
     }
 
     logger.info("WagmiEventHandler: Chain changed", {
