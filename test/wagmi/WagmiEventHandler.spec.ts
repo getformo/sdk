@@ -2791,7 +2791,11 @@ describe("WagmiEventHandler", () => {
       await settle();
 
       (mockWagmiConfig.getState as sinon.SinonStub).throws(new Error("store gone"));
-      // Falls back to the address-keyed marker instead of throwing.
+      // Both readers fall back rather than throwing: the announcement check
+      // drops to the address-keyed marker, and the liveness check treats an
+      // unreadable store as "not the live wallet".
+      expect(() => (handler as any).isCurrentWalletAnnounced()).to.not.throw();
+      expect((handler as any).isCurrentWalletAnnounced(), "marker still found").to.be.true;
       expect(() => handler.retryAdoption()).to.not.throw();
     });
 
