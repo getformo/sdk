@@ -83,6 +83,11 @@ export class EventQueue implements IEventQueue {
   private pendingFlush: Promise<any> | null;
   private payloadHashes: Set<string> = new Set();
   private canSend?: () => boolean;
+  // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
+  // the rest of this instance's life. See close().
+  private closed = false;
+  // Undoes the page-leave listeners installed in the constructor.
+  private disposePageLeave: (() => void) | null = null;
 
   constructor(writeKey: string, options: Options) {
     options = options || {};
@@ -121,7 +126,7 @@ export class EventQueue implements IEventQueue {
     this.pendingFlush = null;
     this.timer = null;
 
-    this.onPageLeave(async (isAccessible: boolean) => {
+    this.disposePageLeave = this.onPageLeave(async (isAccessible: boolean) => {
       if (isAccessible === false) {
         await this.flush(undefined, true);
       }
@@ -149,8 +154,39 @@ export class EventQueue implements IEventQueue {
     this.payloadHashes.clear();
   }
 
+  /**
+   * Terminal shutdown. Unlike clear(), which only empties the buffer and can
+   * be followed by more events (consent is re-granted, say), close() makes
+   * this queue permanently inert: every later enqueue() is a no-op and the
+   * page-leave listeners are removed. flush() needs no guard of its own,
+   * because a closed queue starts empty and can never be filled again.
+   *
+   * This is the guarantee a torn-down SDK instance needs. Emission decisions
+   * and the emission itself are separated by an await in many call paths
+   * (event creation is async), so guarding the *caller* cannot work: the
+   * instance may be destroyed while the continuation is in flight. Enforcing
+   * it here means no holder of a stale reference can ever send.
+   */
+  close(): void {
+    this.closed = true;
+    this.clear();
+    if (this.disposePageLeave) {
+      safeCall(this.disposePageLeave);
+      this.disposePageLeave = null;
+    }
+  }
+
+  /** True once close() has run. Exposed for teardown assertions. */
+  get isClosed(): boolean {
+    return this.closed;
+  }
+
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
+
+    // A torn-down instance must never buffer, however late the caller
+    // arrives. See close().
+    if (this.closed) return;
 
     // Refuse to buffer anything once consent is withdrawn.
     if (this.canSend && !this.canSend()) {
@@ -409,11 +445,20 @@ export class EventQueue implements IEventQueue {
     return false;
   }
 
-  private onPageLeave = (callback: (isAccessible: boolean) => void) => {
+  /**
+   * Installs the page-leave listeners and returns a disposer that removes
+   * every one of them. Without the disposer each SDK instance leaked five
+   * listeners (three on the global, two on the document) that kept the
+   * instance and its queue alive for the life of the page.
+   */
+  private onPageLeave = (
+    callback: (isAccessible: boolean) => void
+  ): (() => void) => {
     // To ensure the callback is only called once even if more than one events
     // are fired at once.
     let pageLeft = false;
     let isAccessible = false;
+    let resetTimer: null | NodeJS.Timeout = null;
 
     function handleOnLeave() {
       if (pageLeft) {
@@ -427,44 +472,63 @@ export class EventQueue implements IEventQueue {
       // Reset pageLeft on the next tick
       // to ensure callback executes for other listeners
       // when closing an inactive browser tab.
-      setTimeout(() => {
+      resetTimer = setTimeout(() => {
+        resetTimer = null;
         pageLeft = false;
       }, 0);
     }
 
-    // Catches the unloading of the page (e.g., closing the tab or navigating away).
-    // Includes user actions like clicking a link, entering a new URL,
-    // refreshing the page, or closing the browser tab
-    // Note that 'pagehide' is not supported in IE.
-    // So, this is a fallback.
-    (globalThis as typeof window).addEventListener("beforeunload", () => {
+    const onBeforeUnload = () => {
       isAccessible = false;
       handleOnLeave();
-    });
-
-    (globalThis as typeof window).addEventListener("blur", () => {
+    };
+    const onBlur = () => {
       isAccessible = true;
       handleOnLeave();
-    });
-
-    (globalThis as typeof window).addEventListener("focus", () => {
+    };
+    const onFocus = () => {
       pageLeft = false;
-    });
-
-    // Catches the page being hidden, including scenarios like closing the tab.
-    document.addEventListener("pagehide", () => {
+    };
+    const onPageHide = () => {
       isAccessible = document.visibilityState !== "hidden";
       handleOnLeave();
-    });
-
-    // Catches visibility changes, such as switching tabs or minimizing the browser.
-    document.addEventListener("visibilitychange", () => {
+    };
+    const onVisibilityChange = () => {
       isAccessible = document.visibilityState !== "hidden";
       if (document.visibilityState === "hidden") {
         handleOnLeave();
       } else {
         pageLeft = false;
       }
-    });
+    };
+
+    const globalTarget = globalThis as unknown as typeof window;
+
+    // Catches the unloading of the page (e.g., closing the tab or navigating away).
+    // Includes user actions like clicking a link, entering a new URL,
+    // refreshing the page, or closing the browser tab
+    // Note that 'pagehide' is not supported in IE.
+    // So, this is a fallback.
+    globalTarget.addEventListener("beforeunload", onBeforeUnload);
+    globalTarget.addEventListener("blur", onBlur);
+    globalTarget.addEventListener("focus", onFocus);
+
+    // Catches the page being hidden, including scenarios like closing the tab.
+    document.addEventListener("pagehide", onPageHide);
+
+    // Catches visibility changes, such as switching tabs or minimizing the browser.
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      if (resetTimer) {
+        clearTimeout(resetTimer);
+        resetTimer = null;
+      }
+      globalTarget.removeEventListener("beforeunload", onBeforeUnload);
+      globalTarget.removeEventListener("blur", onBlur);
+      globalTarget.removeEventListener("focus", onFocus);
+      document.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   };
 }

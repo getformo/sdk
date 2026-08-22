@@ -50,9 +50,14 @@ class EventManager implements IEventManager {
     });
   }
 
-  /** Drop any buffered events (consent withdrawal / teardown). */
+  /** Drop any buffered events (consent withdrawal). Recoverable. */
   clear(): void {
     this.eventQueue.clear();
+  }
+
+  /** Terminal shutdown on teardown: nothing can be sent after this. */
+  close(): void {
+    this.eventQueue.close();
   }
 }
 

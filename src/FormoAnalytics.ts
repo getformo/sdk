@@ -439,8 +439,13 @@ export class FormoAnalytics implements IFormoAnalytics {
   public cleanup(): void {
     logger.debug("FormoAnalytics: Cleaning up resources");
 
-    // Drop buffered events so a torn-down instance can't flush later.
-    this.eventManager.clear();
+    // Close the queue, don't just empty it. clear() only drops what is
+    // buffered at this instant; asynchronous work already in flight (event
+    // creation is async on every emit path) would still enqueue afterwards,
+    // and an empty queue flushes immediately. close() is terminal, so a
+    // continuation that outlives this instance cannot send with its stale
+    // options. See issue #339.
+    this.eventManager.close();
 
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {
