@@ -238,6 +238,13 @@ export class EventQueue implements IEventQueue {
 
     if (this.flushIntervalMs && !this.timer) {
       this.timer = setTimeout(this.flush.bind(this), this.flushIntervalMs);
+      // A batching timer must never be the reason a process stays alive.
+      // Browsers return a number here and have no unref, so this is a
+      // no-op there; under Node (SSR, scripts, this repo's own test run) it
+      // stops a pending batch from holding the event loop open for the full
+      // flush interval. Anything buffered is still sent by the next
+      // enqueue, an explicit flush(), or the page-leave handler.
+      if (typeof this.timer?.unref === "function") this.timer.unref();
     }
   }
 
