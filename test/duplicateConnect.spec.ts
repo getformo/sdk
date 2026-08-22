@@ -615,4 +615,113 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.equal(undefined);
     formo.cleanup?.();
   });
+
+  it("does not emit a false disconnect for a session that claimed the slot during the probe", async () => {
+    // Before issuing the old wallet's disconnect, the switch handler probes
+    // whether that wallet still has accounts. The probe is asynchronous, so a
+    // third provider can claim the namespace during it. Every branch below
+    // reads the CURRENT evm state, so a stale switch emitted a disconnect for
+    // the newcomer and cleared it.
+    const THIRD = "0x2F4bD6D2A5b7a19a49b6Cf2C0a0F1A5d33e8b7C1" as const;
+    const providerA = makeProvider([ADDRESS]);
+    const providerB = makeProvider([OTHER]);
+    const providerC = makeProvider([THIRD]);
+    (global as any).window.ethereum = providerA;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      autocapture: { chain: true, connect: true, disconnect: true },
+    } as any);
+
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { sent.push(e); });
+
+    for (const p of [providerA, providerB, providerC]) {
+      (formo as any).registerAccountsChangedListener(p);
+      (formo as any).registerConnectListener(p);
+      (formo as any).registerChainChangedListener(p);
+    }
+
+    providerA.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 40));
+
+    // Stall the "does A still have accounts?" probe.
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((r) => { releaseProbe = r; });
+    const realGetAccounts = (formo as any).getAccounts.bind(formo);
+    sandbox.stub(formo as any, "getAccounts").callsFake(async (p: any) => {
+      await probeGate;
+      return realGetAccounts(p);
+    });
+
+    providerB.emit("accountsChanged", [OTHER]);
+    await new Promise((r) => setTimeout(r, 20));
+
+    // C claims the namespace while the probe is stalled.
+    providerC.emit("chainChanged", "0x89");
+    await new Promise((r) => setTimeout(r, 20));
+    providerC.emit("connect", { chainId: "0x89" });
+    await new Promise((r) => setTimeout(r, 40));
+    const disconnectsBefore = sent.filter((e) => e.type === "disconnect").length;
+
+    releaseProbe();
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(
+      sent.filter((e) => e.type === "disconnect").length,
+      "the stale switch must not report a disconnect for the newer session"
+    ).to.equal(disconnectsBefore);
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "and must not clear it"
+    ).to.equal(THIRD.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("orders the provider `disconnect` event against a stalled connect too", async () => {
+    // The same ordering rule as the accountsChanged path, on the EIP-1193
+    // `disconnect` event. Only the accountsChanged path advanced the epoch,
+    // so a connect observation that predated this disconnect still claimed
+    // the namespace and made the disconnect look stale.
+    const provider = makeProvider([ADDRESS]);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let releaseAddress!: () => void;
+    const addressGate = new Promise<void>((r) => { releaseAddress = r; });
+    let releaseDisconnect!: () => void;
+    const disconnectGate = new Promise<void>((r) => { releaseDisconnect = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { if (e.type === "disconnect") await disconnectGate; });
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+    (formo as any).registerDisconnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
+
+    const realGetAddress = (formo as any).getAddress.bind(formo);
+    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+      await addressGate;
+      return realGetAddress(p);
+    });
+
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 10));
+    provider.emit("disconnect");
+    await new Promise((r) => setTimeout(r, 10));
+
+    releaseAddress();
+    await new Promise((r) => setTimeout(r, 30));
+    releaseDisconnect();
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(
+      formo.currentAddress,
+      "the wallet disconnected, so no address may survive"
+    ).to.equal(undefined);
+    formo.cleanup?.();
+  });
 });

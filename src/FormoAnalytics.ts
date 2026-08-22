@@ -1536,6 +1536,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Check if current active provider still has accounts
       try {
         const activeProviderAccounts = await this.getAccounts(this._provider);
+
+        // The probe is asynchronous too, so check before issuing anything.
+        // Every branch below reads `this._evmAddress` / `this._evmChainId`,
+        // so a switch that went stale during the probe would emit a false
+        // disconnect for whoever claimed the namespace, and clear them.
+        if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
+
         logger.info("OnAccountsChanged: Checking current provider accounts", {
           activeProvider: this.getProviderInfo(this._provider).name,
           accountsLength: activeProviderAccounts
@@ -1904,6 +1911,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Double-check disconnect tracking is enabled (defensive programming)
       // Note: This listener should only be registered if tracking is enabled
       if (this.isAutocaptureEnabled("disconnect")) {
+        // Same ordering rule as the accountsChanged disconnect path: a
+        // connect observation that began before this point must not claim
+        // the namespace and make this disconnect look stale.
+        this._disconnectEpoch.set(
+          provider,
+          (this._disconnectEpoch.get(provider) ?? 0) + 1
+        );
         try {
           // Pass current state explicitly to ensure we have the data for the disconnect event
           await this.disconnect({
