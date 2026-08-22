@@ -55,6 +55,7 @@ import {
   TrackingPolicy,
 } from "./tracking/TrackingPolicy";
 import { WalletStateStore } from "./wallet/WalletStateStore";
+import { EvmProviderRegistry } from "./evm/EvmProviderRegistry";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
@@ -99,8 +100,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     { address: string; chainId: number }
   >();
 
-  private _providerChainIds = new WeakMap<EIP1193Provider, number>();
-
   /**
    * How many disconnects a provider has begun. Ordering, not presence.
    *
@@ -117,51 +116,17 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private _disconnectEpoch = new WeakMap<EIP1193Provider, number>();
 
-  /**
-   * Bumped on every chain observation, PER PROVIDER. An `eth_chainId` answer
-   * that resolves after a newer observation for the same provider must not
-   * overwrite it.
-   *
-   * Deliberately per provider, not per SDK instance: a global counter meant
-   * any activity on wallet B discarded a perfectly valid in-flight answer for
-   * wallet A, leaving A at chain 0 - and, since an unresolved chain fails
-   * closed, dropping all of A's events whenever `excludeChains` is set.
-   */
-  private _providerChainGenerations = new WeakMap<EIP1193Provider, number>();
-
-  private _providerListenersMap: Map<
-    EIP1193Provider,
-    Record<string, (...args: unknown[]) => void>
-  > = new Map();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
+  /** Which EVM wallets exist, and what is known about each. */
+  private evm: EvmProviderRegistry;
   /** Every "may we track this?" rule. See src/tracking/TrackingPolicy.ts. */
   private trackingPolicy: ITrackingPolicy;
-  /**
-   * EIP-6963 provider details discovered through the browser
-   * This array contains all available providers with their metadata
-   */
-  private _providers: readonly EIP6963ProviderDetail[] = [];
-
-  /**
-   * Set of providers that have been tracked with event listeners
-   * This is separate from _providers because:
-   * - _providers contains all discovered providers (EIP-6963)
-   * - _trackedProviders contains only providers that have been set up with listeners
-   * - A provider can be discovered but not yet tracked (e.g., during initialization)
-   * - A provider can be tracked but later removed from discovery
-   */
-  private _trackedProviders: Set<EIP1193Provider> = new Set();
-
   // Cache for injected provider detection to avoid redundant operations
-  private _injectedProviderDetail?: EIP6963ProviderDetail;
-
   // Flag to prevent concurrent processing of accountsChanged events
   private _processingAccountsChanged: boolean = false;
 
   // Set to efficiently track seen providers for deduplication and O(1) lookup
-  private _seenProviders: Set<EIP1193Provider> = new Set();
-
   /**
    * Wagmi event handler for tracking wallet events via Wagmi v2
    * Only initialized when options.wagmi is provided
@@ -287,13 +252,36 @@ export class FormoAnalytics implements IFormoAnalytics {
       enabledLevels: options.logger?.levels || [],
     });
 
+    this.evm = new EvmProviderRegistry({
+      activeProvider: () => this.wallet.provider,
+      activeChainId: () => this.wallet.evmChainId,
+      knownEvmAddress: () => this.wallet.evmAddress,
+      // Whether central state should follow a provider's chain report is the
+      // SDK's call, not the registry's: it depends on which namespace is
+      // active. Recording it per provider is unconditional; syncing is not.
+      onChainObserved: (provider, chainId) => {
+        // Guarded on EVM already being active. `set()` makes whichever
+        // namespace it touches active, so syncing unconditionally let a
+        // background EVM wallet's chain report steal the slot from a live
+        // Solana wallet, and every later page or track event was attributed
+        // to the wrong wallet entirely.
+        if (
+          provider === this.wallet.provider &&
+          this.wallet.activeNamespace === "evm" &&
+          this.wallet.evmChainId !== chainId
+        ) {
+          this.wallet.set("evm", { chainId });
+        }
+      },
+    });
+
     this.wallet = new WalletStateStore({
       isPersistedIdentityPurgeRequired: () =>
         this.trackingPolicy.isPersistedIdentityPurgeRequired(),
       isPageExcluded: () => this.trackingPolicy.isPageExcluded(),
       isTrackingSuppressed: () => this.trackingPolicy.isTrackingSuppressed(),
       crossSubdomainCookies: () => this.crossSubdomainCookies,
-      providerChainId: (provider) => this._providerChainIds.get(provider),
+      providerChainId: (provider) => this.evm.chainIdOf(provider),
       // A provider that stops being active has, from this SDK's point of
       // view, ended its connection, so the connect it reported must stop
       // counting. Otherwise toggling between two installed wallets silently
@@ -385,9 +373,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info("FormoAnalytics: Skipping provider detection (EVM disabled)");
     } else if (!analytics.isWagmiMode) {
       // Auto-detect wallet provider
-      analytics._providers = await analytics.getProviders();
-      await analytics.detectWallets(analytics._providers);
-      analytics.trackProviders(analytics._providers);
+      const discovered = await analytics.getProviders();
+      await analytics.detectWallets(discovered);
+      analytics.trackProviders(discovered);
     } else {
       logger.info("FormoAnalytics: Skipping provider detection (Wagmi mode)");
     }
@@ -474,7 +462,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Clean up EIP-1193 providers if not in Wagmi mode
     if (!this.isWagmiMode) {
-      for (const provider of Array.from(this._trackedProviders)) {
+      for (const provider of this.evm.trackedProviders()) {
         this.untrackProvider(provider);
       }
     }
@@ -702,6 +690,63 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** @see WalletStateStore.clearStaleEvmWalletOnSwitchWhileSuppressed */
   private clearStaleEvmWalletOnSwitchWhileSuppressed(address: string): void {
     this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
+  }
+
+  /** @see EvmProviderRegistry.addListener */
+  private addProviderListener(
+    provider: EIP1193Provider,
+    event: string,
+    listener: (...args: unknown[]) => void
+  ): void {
+    this.evm.addListener(provider, event, listener);
+  }
+
+  /** @see EvmProviderRegistry.removeListeners */
+  private removeProviderListeners(provider: EIP1193Provider): void {
+    this.evm.removeListeners(provider);
+  }
+
+  /** @see EvmProviderRegistry.infoFor */
+  private getProviderInfo(provider: EIP1193Provider): {
+    name: string;
+    rdns: string;
+  } {
+    return this.evm.infoFor(provider);
+  }
+
+  /** @see EvmProviderRegistry.isWrapped */
+  private isProviderAlreadyWrapped(
+    provider: EIP1193Provider,
+    currentRequest: WrappedRequestFunction | undefined
+  ): boolean {
+    return this.evm.isWrapped(provider, currentRequest);
+  }
+
+  /** @see EvmProviderRegistry.resolveChainId */
+  private resolveChainIdForProvider(provider?: EIP1193Provider): number {
+    return this.evm.resolveChainId(provider);
+  }
+
+  /** @see EvmProviderRegistry.rememberChain */
+  private rememberProviderChain(
+    provider: EIP1193Provider | undefined,
+    chainId: number | undefined
+  ): void {
+    this.evm.rememberChain(provider, chainId);
+  }
+
+  /** @see EvmProviderRegistry.addressOf */
+  private async getAddress(
+    provider?: EIP1193Provider
+  ): Promise<Address | null> {
+    return this.evm.addressOf(provider);
+  }
+
+  /** @see EvmProviderRegistry.accountsOf */
+  private async getAccounts(
+    provider?: EIP1193Provider
+  ): Promise<Address[] | null> {
+    return this.evm.accountsOf(provider);
   }
 
   /**
@@ -988,9 +1033,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         // If no params provided, auto-identify
         logger.info(
           "Auto-identifying with providers:",
-          this._providers.map((p) => p.info.name)
+          this.evm.all.map((p) => p.info.name)
         );
-        for (const providerDetail of this._providers) {
+        for (const providerDetail of this.evm.all) {
           const provider = providerDetail.provider as EIP1193Provider;
           if (!provider) continue;
 
@@ -1362,7 +1407,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
       
-      if (this._trackedProviders.has(provider)) {
+      if (this.evm.isTracked(provider)) {
         logger.warn("trackEIP1193Provider: Provider already tracked");
         return;
       }
@@ -1414,7 +1459,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       // Only add to tracked providers after all listeners are successfully registered
-      this._trackedProviders.add(provider);
+      this.evm.markTracked(provider);
     } catch (error) {
       logger.error("Error tracking provider:", error);
     }
@@ -1426,7 +1471,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const provider = eip6963ProviderDetail?.provider as
           | EIP1193Provider
           | undefined;
-        if (provider && !this._trackedProviders.has(provider)) {
+        if (provider && !this.evm.isTracked(provider)) {
           this.trackEIP1193Provider(provider);
         }
       }
@@ -1438,15 +1483,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  private addProviderListener(
-    provider: EIP1193Provider,
-    event: string,
-    listener: (...args: unknown[]) => void
-  ): void {
-    const map = this._providerListenersMap.get(provider) || {};
-    map[event] = listener;
-    this._providerListenersMap.set(provider, map);
-  }
 
   private registerAccountsChangedListener(provider: EIP1193Provider): void {
     logger.info("registerAccountsChangedListener");
@@ -2153,13 +2189,13 @@ export class FormoAnalytics implements IFormoAnalytics {
         // one's perfectly good answer, leaving the provider unknown.
         // `rememberProviderChain()` advances it when an observation is
         // actually accepted.
-        const generation = this._providerChainGenerations.get(provider) ?? 0;
+        const generation = this.evm.chainGeneration(provider);
         return request({ method, params }).then((result) => {
           // A `chainChanged` for THIS provider may have landed while this was
           // in flight. It is newer by definition, so it must not be
           // overwritten by this answer.
           if (
-            generation === (this._providerChainGenerations.get(provider) ?? 0) &&
+            generation === (this.evm.chainGeneration(provider)) &&
             typeof result === "string"
           ) {
             this.rememberProviderChain(provider, parseChainId(result));
@@ -2524,33 +2560,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
-  /**
-   * Get provider information for a given provider
-   * @param provider The provider to get info for
-   * @returns Provider information
-   */
-  private getProviderInfo(provider: EIP1193Provider): {
-    name: string;
-    rdns: string;
-  } {
-    // First check if provider is in our EIP-6963 providers list
-    const eip6963Provider = this._providers.find(
-      (p) => p.provider === provider
-    );
-    if (eip6963Provider) {
-      return {
-        name: eip6963Provider.info.name,
-        rdns: eip6963Provider.info.rdns,
-      };
-    }
-
-    // Fallback to injected provider detection
-    const injectedInfo = detectInjectedProviderInfo(provider);
-    return {
-      name: injectedInfo.name,
-      rdns: injectedInfo.rdns,
-    };
-  }
 
   private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
@@ -2562,18 +2571,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Process newly added providers with proper deduplication
       const newlyAddedDetails = providerDetails.filter((detail) => {
         const provider = detail?.provider as EIP1193Provider | undefined;
-        return provider && !this._seenProviders.has(provider);
+        return provider && !this.evm.isSeen(provider);
       });
 
       // Add new providers to the array without overwriting existing ones
       for (const detail of newlyAddedDetails) {
-        this.safeAddProviderDetail(detail);
+        this.evm.add(detail);
       }
 
       // Track listeners for newly discovered providers only
       const newDetails = providerDetails.filter((detail) => {
         const p = detail?.provider as EIP1193Provider | undefined;
-        return !!p && !this._trackedProviders.has(p);
+        return !!p && !this.evm.isTracked(p);
       });
 
       if (newDetails.length > 0) {
@@ -2599,27 +2608,20 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (injected) {
         // If we have already detected and cached the injected provider, and it's the same instance, return the cached result
         if (
-          this._injectedProviderDetail &&
-          this._injectedProviderDetail.provider === injected
+          this.evm.injected &&
+          this.evm.injected.provider === injected
         ) {
           // Ensure it's tracked
-          if (!this._trackedProviders.has(injected)) {
+          if (!this.evm.isTracked(injected)) {
             this.trackEIP1193Provider(injected);
           }
           // Merge with existing providers instead of overwriting
-          if (
-            !this._providers.some((existing) => existing.provider === injected)
-          ) {
-            this._providers = [
-              ...this._providers,
-              this._injectedProviderDetail,
-            ];
-          }
-          return this._providers;
+          this.evm.add(this.evm.injected);
+          return this.evm.all;
         }
 
         // Re-check if the injected provider is already tracked just before tracking
-        if (!this._trackedProviders.has(injected)) {
+        if (!this.evm.isTracked(injected)) {
           this.trackEIP1193Provider(injected);
         }
 
@@ -2631,32 +2633,32 @@ export class FormoAnalytics implements IFormoAnalytics {
         };
 
         // Cache the detected injected provider detail
-        this._injectedProviderDetail = injectedDetail;
+        this.evm.injected = injectedDetail;
 
         // Merge with existing providers instead of overwriting
-        this.safeAddProviderDetail(injectedDetail);
+        this.evm.add(injectedDetail);
       }
-      return this._providers;
+      return this.evm.all;
     }
 
     // Initialize providers array with discovered providers, avoiding duplicates
     const uniqueProviders = providers.filter(
       (detail: EIP6963ProviderDetail) => {
         const provider = detail?.provider as EIP1193Provider | undefined;
-        return provider && !this._seenProviders.has(provider);
+        return provider && !this.evm.isSeen(provider);
       }
     );
 
     // Add to seen providers and instances, ensuring no duplicates in _providers
     for (const detail of uniqueProviders) {
-      this.safeAddProviderDetail(detail);
+      this.evm.add(detail);
     }
 
-    return this._providers;
+    return this.evm.all;
   }
 
   get providers(): readonly EIP6963ProviderDetail[] {
-    return this._providers;
+    return this.evm.all;
   }
 
   private async detectWallets(
@@ -2696,138 +2698,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.solanaManager;
   }
 
-  private async getAddress(
-    provider?: EIP1193Provider
-  ): Promise<Address | null> {
-    // Use EVM-specific state to avoid returning a Solana address in an EVM context
-    if (this.wallet.evmAddress) return this.wallet.evmAddress;
-    const p = provider || this.provider;
-    if (!p) {
-      logger.info("The provider is not set");
-      return null;
-    }
 
-    try {
-      const accounts = await this.getAccounts(p);
-      if (accounts && accounts.length > 0) {
-        return validateAndChecksumAddress(accounts[0]) || null;
-      }
-    } catch (err) {
-      const code = (err as RPCError)?.code;
-      if (code !== 4001) {
-        logger.error(
-          "FormoAnalytics::getAccounts: eth_accounts threw an error",
-          err
-        );
-      }
-      return null;
-    }
-    return null;
-  }
 
-  private async getAccounts(
-    provider?: EIP1193Provider
-  ): Promise<Address[] | null> {
-    const p = provider || this.provider;
-    try {
-      const res: string[] | null | undefined = await p?.request({
-        method: "eth_accounts",
-      });
-      if (!res || res.length === 0) return null;
-      return res
-        .map((e) => validateAndChecksumAddress(e))
-        .filter((e): e is Address => e !== undefined);
-    } catch (err) {
-      const code = (err as RPCError)?.code;
-      if (code !== 4001) {
-        logger.error(
-          "FormoAnalytics::getAccounts: eth_accounts threw an error",
-          err
-        );
-      }
-      return null;
-    }
-  }
 
-  /**
-   * Resolve the chain an autocaptured request actually ran on.
-   *
-   * `_evmChainId` is maintained by `chainChanged` from whichever provider is
-   * currently active. When a request arrives from a *different* tracked
-   * provider - which happens whenever a visitor has two wallets installed -
-   * that cached value describes the wrong wallet, and tagging the event with
-   * it silently mis-attributes the chain.
-   *
-   * Answered entirely from a per-provider snapshot. This is deliberately
-   * SYNCHRONOUS and never issues an RPC.
-   *
-   * An earlier version called `eth_chainId` on the signing provider and
-   * time-boxed it with `Promise.race`. That is not safe: the race abandons the
-   * SDK's promise but cannot cancel the provider's request. On a transport
-   * that serializes - WalletConnect's relay socket, the very case this path
-   * exists to serve - an abandoned lookup stays at the head of the wallet's
-   * queue, and every later RPC the dapp makes queues behind it until reload.
-   * Mislabelling a chain is a reporting defect; wedging the user's wallet is
-   * not acceptable to avoid one.
-   *
-   * When nothing is known, this reports 0 ("unknown") rather than guessing
-   * with the active provider's chain, which is known-wrong for another wallet.
-   */
-  private resolveChainIdForProvider(provider?: EIP1193Provider): number {
-    if (provider) {
-      const known = this._providerChainIds.get(provider);
-      if (known) return known;
-      // Only the active provider's chain is described by the central cache.
-      if (provider === this._provider && this._evmChainId) {
-        return this._evmChainId;
-      }
-      // A tracked provider we have never heard a chain from. Deliberately no
-      // fall back to `_evmChainId`: it belongs to a different wallet.
-      return 0;
-    }
 
-    return this._evmChainId || 0;
-  }
-
-  /**
-   * Record a provider's chain. Fed by `chainChanged` and `connect`, and by the
-   * one-off probe at tracking time - never from inside a user request.
-   */
-  private rememberProviderChain(
-    provider: EIP1193Provider | undefined,
-    chainId: number | undefined
-  ): void {
-    if (!provider || !chainId) return;
-    // Any observation is newer than an `eth_chainId` still in flight for this
-    // provider.
-    this.bumpProviderChainGeneration(provider);
-    this._providerChainIds.set(provider, chainId);
-
-    // If this IS the active provider, central state has to follow. Recording
-    // it only per provider left `currentChainId` on a chain restored from a
-    // previous session, and the unscoped events that fall back to it were sent
-    // despite an exclusion covering the chain the wallet was really on.
-    //
-    // Guarded on EVM already being the active namespace. `setChainState()`
-    // makes whichever namespace it touches active, so syncing here
-    // unconditionally let a background EVM wallet's chain report steal the
-    // active slot from a live Solana wallet, and every later page or track
-    // event was attributed to the wrong wallet entirely.
-    if (
-      provider === this._provider &&
-      this.wallet.activeNamespace === "evm" &&
-      this._evmChainId !== chainId
-    ) {
-      this.setChainState('evm', { chainId });
-    }
-  }
-
-  /** Advance and return this provider's chain-observation generation. */
-  private bumpProviderChainGeneration(provider: EIP1193Provider): number {
-    const next = (this._providerChainGenerations.get(provider) ?? 0) + 1;
-    this._providerChainGenerations.set(provider, next);
-    return next;
-  }
 
   /**
    * Seed a provider's chain from whatever it already exposes synchronously.
@@ -3020,25 +2894,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     poll();
   }
 
-  private removeProviderListeners(provider: EIP1193Provider): void {
-    const listeners = this._providerListenersMap.get(provider);
-    if (!listeners) return;
-    for (const [event, fn] of Object.entries(listeners)) {
-      try {
-        provider.removeListener(event, fn);
-      } catch (e) {
-        logger.warn(`Failed to remove listener for ${String(event)}`, e);
-      }
-    }
-    this._providerListenersMap.delete(provider);
-  }
 
   // Explicitly untrack a provider: remove listeners, clear wrapper flag
   // and tracking
   private untrackProvider(provider: EIP1193Provider): void {
     try {
       this.removeProviderListeners(provider);
-      this._trackedProviders.delete(provider);
+      this.evm.forgetTracked(provider);
 
       if (this._provider === provider) {
         this.clearActiveProvider();
@@ -3050,7 +2912,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   // Debug/monitoring helpers
   public getTrackedProvidersCount(): number {
-    return this._trackedProviders.size;
+    return this.evm.counts.trackedProviders;
   }
 
   /**
@@ -3063,12 +2925,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     seenProviders: number;
     activeProvider: boolean;
   } {
-    return {
-      totalProviders: this._providers.length,
-      trackedProviders: this._trackedProviders.size,
-      seenProviders: this._seenProviders.size,
-      activeProvider: !!this._provider,
-    };
+    return { ...this.evm.counts, activeProvider: !!this._provider };
   }
 
   /**
@@ -3078,10 +2935,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   private cleanupUnavailableProviders(): void {
     // Remove providers that are no longer in the current providers list
     const currentProviderInstances = new Set(
-      this._providers.map((detail) => detail.provider as EIP1193Provider)
+      this.evm.all.map((detail) => detail.provider as EIP1193Provider)
     );
 
-    for (const provider of Array.from(this._trackedProviders)) {
+    for (const provider of this.evm.trackedProviders()) {
       if (!currentProviderInstances.has(provider)) {
         logger.info(
           `Cleaning up unavailable provider: ${provider.constructor.name}`
@@ -3091,24 +2948,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  /**
-   * Helper method to check if a provider is already wrapped
-   * @param provider The provider to check
-   * @param currentRequest The current request function
-   * @returns true if the provider is already wrapped
-   */
-  private isProviderAlreadyWrapped(
-    provider: EIP1193Provider,
-    currentRequest: WrappedRequestFunction | undefined
-  ): boolean {
-    return !!(
-      currentRequest &&
-      typeof currentRequest === "function" &&
-      currentRequest[WRAPPED_REQUEST_SYMBOL] &&
-      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] ===
-        currentRequest
-    );
-  }
 
   /**
    * Handle provider mismatch by switching to the new provider and invalidating old tokens
@@ -3159,29 +2998,4 @@ export class FormoAnalytics implements IFormoAnalytics {
     return true;
   }
 
-  /**
-   * Helper method to safely add a provider detail to _providers array, ensuring no duplicates
-   * @param detail The provider detail to add
-   * @returns true if the provider was added, false if it was already present
-   */
-  private safeAddProviderDetail(detail: EIP6963ProviderDetail): boolean {
-    const provider = detail?.provider as EIP1193Provider | undefined;
-    if (!provider) return false;
-
-    // Check if provider already exists in _providers array
-    const alreadyExists = this._providers.some(
-      (existing) => existing.provider === provider
-    );
-
-    if (!alreadyExists) {
-      // Add to providers array and mark as seen
-      this._providers = [...this._providers, detail];
-      this._seenProviders.add(provider);
-      return true;
-    } else {
-      // Ensure provider is marked as seen even if it already exists in _providers
-      this._seenProviders.add(provider);
-      return false;
-    }
-  }
 }
