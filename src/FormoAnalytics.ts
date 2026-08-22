@@ -44,7 +44,6 @@ import {
   RequestArguments,
   RPCError,
   SignatureStatus,
-  TrackingOptions,
   TransactionStatus,
   ConnectInfo,
   WrappedEIP1193Provider,
@@ -53,8 +52,11 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
-import { getTimezone } from "./utils/timezone";
-import { isLocalhost } from "./validators";
+import {
+  AutocaptureEventType,
+  ITrackingPolicy,
+  TrackingPolicy,
+} from "./tracking/TrackingPolicy";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
@@ -201,6 +203,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   > = new Map();
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
+  /** Every "may we track this?" rule. See src/tracking/TrackingPolicy.ts. */
+  private trackingPolicy: ITrackingPolicy;
   /**
    * EIP-6963 provider details discovered through the browser
    * This array contains all available providers with their metadata
@@ -322,6 +326,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     Logger.init({
       enabled: options.logger?.enabled || false,
       enabledLevels: options.logger?.levels || [],
+    });
+
+    this.trackingPolicy = new TrackingPolicy({
+      // All three read lazily. `options` is public and mutable, and the
+      // central chain moves as wallets connect and switch, so the policy
+      // must see both at decision time rather than at construction.
+      options: () => this.options,
+      hasOptedOut: () => this.hasOptedOutTracking(),
+      currentChainId: () => this.currentChainId,
     });
 
     this.eventManager = new EventManager(
@@ -935,7 +948,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // valid (activating a Solana wallet while an excluded EVM chain id is
       // still current). By the time the Privy path reaches this guard it has
       // already reconciled, so each inner identify is judged on the right chain.
-      if (this.isTrackingSuppressed() || this.isCurrentChainExcluded()) {
+      if (this.isTrackingSuppressed() || this.trackingPolicy.isChainExcluded()) {
         logger.info(
           "identify() skipped: tracking is suppressed for this visitor, environment, or chain"
         );
@@ -2451,228 +2464,23 @@ export class FormoAnalytics implements IFormoAnalytics {
   /**
    * Visitor-level tracking suppression.
    *
-   * Returns true when the SDK must not persist any identity/session/chain
-   * state or send any events for this visitor - i.e. an explicit opt-out or a
-   * jurisdiction/timezone exclusion. Public entry points that write state
-   * before reaching the `shouldTrack()` event gate (identify/connect/detect)
-   * check this first so suppressed visitors leave no cookies or session state.
-   * @returns {boolean} True if all tracking and persistence must be suppressed
+   * True when the SDK must not persist identity/session/chain state or send
+   * events for this visitor. Public entry points that write state before
+   * reaching the `shouldTrack()` gate (identify / connect / detect) check this
+   * first, so a suppressed visitor leaves no cookies or session state.
+   *
+   * The rule lives in `TrackingPolicy`; this stays on the class because it is
+   * part of the surface integrations bind to.
    * @internal Also read by `identifyPrivyUser` (via a structural cast) so the
    * Privy sync skips chain reconciliation and emission for suppressed visitors.
    */
   isTrackingSuppressed(): boolean {
-    return this.hasOptedOutTracking() || this.isCurrentEnvironmentExcluded();
+    return this.trackingPolicy.isTrackingSuppressed();
   }
 
-  /**
-   * Whether the current chain id is in `tracking.excludeChains`.
-   *
-   * Split out from `shouldTrack()` so `identify()` can check it *before*
-   * mutating identity state. `trackEvent()` drops an excluded event silently
-   * and returns void, but `identify()` marks the wallet as identified first, so
-   * without this guard an identify on an excluded chain is dedup-marked and
-   * then discarded, and the wallet never re-emits for the rest of the session
-   * even after switching to an allowed chain. On the Privy path that loses the
-   * user's whole cluster at once rather than a single wallet.
-   *
-   * Mirrors the chain rule in `shouldTrack()`: only applies when `tracking` is
-   * an options object with `excludeChains` set, and only once a chain id is
-   * known.
-   */
-  private isCurrentChainExcluded(eventChainId?: ChainID): boolean {
-    if (
-      this.options.tracking === null ||
-      typeof this.options.tracking !== "object" ||
-      Array.isArray(this.options.tracking)
-    ) {
-      return false;
-    }
-    const { excludeChains = [] } = this.options.tracking as TrackingOptions;
-    if (excludeChains.length === 0) return false;
-    // Mirrors `shouldTrack()`: the event's own chain wins when it has one,
-    // and an unresolvable chain on a known wallet counts as excluded rather
-    // than allowed.
-    const chainToCheck = eventChainId ?? this.currentChainId;
-    if (chainToCheck === 0) return true;
-    if (chainToCheck === undefined) return false;
-    return excludeChains.includes(chainToCheck);
-  }
-
-  /**
-   * Whether the current environment is excluded from tracking - the visitor's
-   * timezone, the current hostname, or the current pathname matches a
-   * configured exclusion.
-   *
-   * Timezone is visitor/session-level (stable for the session); host/path are
-   * current-page-level and transient - if a SPA navigates to an allowed path,
-   * tracking resumes for future actions. Used as the "do not write identity or
-   * send events" gate at every entry point that would persist state before the
-   * `shouldTrack()` event gate.
-   * @returns {boolean} True if the current environment is excluded
-   */
-  private isCurrentEnvironmentExcluded(): boolean {
-    return (
-      this.isTimezoneExcluded() ||
-      this.isHostExcluded() ||
-      this.isPathExcluded()
-    );
-  }
-
-  /**
-   * Whether the current hostname matches a configured `tracking.excludeHosts`
-   * entry (exact match). Current-page-level - see isCurrentEnvironmentExcluded.
-   * @returns {boolean} True if the current hostname is excluded
-   */
-  private isHostExcluded(): boolean {
-    const tracking = this.options.tracking;
-    if (
-      tracking === null ||
-      typeof tracking !== "object" ||
-      Array.isArray(tracking)
-    ) {
-      return false;
-    }
-    if (typeof window === "undefined") {
-      return false;
-    }
-    const { excludeHosts = [] } = tracking as TrackingOptions;
-    return excludeHosts.includes(window.location.hostname);
-  }
-
-  /**
-   * Whether the current pathname matches a configured `tracking.excludePaths`
-   * entry (exact match). Current-page-level - see isCurrentEnvironmentExcluded.
-   * @returns {boolean} True if the current pathname is excluded
-   */
-  private isPathExcluded(): boolean {
-    const tracking = this.options.tracking;
-    if (
-      tracking === null ||
-      typeof tracking !== "object" ||
-      Array.isArray(tracking)
-    ) {
-      return false;
-    }
-    if (typeof window === "undefined") {
-      return false;
-    }
-    const { excludePaths = [] } = tracking as TrackingOptions;
-    return excludePaths.includes(window.location.pathname);
-  }
-
-  /**
-   * Whether the current call is in a visitor-level suppression state - opt-out
-   * or excluded timezone - for which any persisted identity cookie should be
-   * actively purged (not merely skipped). Host/path exclusions are
-   * deliberately excluded here: they are transient current-page states, so a
-   * cookie legitimately written on an allowed page must survive a visit to an
-   * excluded route.
-   * @returns {boolean} True if persisted identity must be purged
-   */
-  private isPersistedIdentityPurgeRequired(): boolean {
-    return this.hasOptedOutTracking() || this.isTimezoneExcluded();
-  }
-
-  /**
-   * Whether the visitor's browser-resolved timezone matches a configured
-   * `tracking.excludeTimezones` entry (case-insensitive). Client-side and
-   * best-effort - see TrackingOptions.excludeTimezones.
-   * @returns {boolean} True if the current timezone is excluded
-   */
-  private isTimezoneExcluded(): boolean {
-    const tracking = this.options.tracking;
-    if (
-      tracking === null ||
-      typeof tracking !== "object" ||
-      Array.isArray(tracking)
-    ) {
-      return false;
-    }
-    const { excludeTimezones = [] } = tracking as TrackingOptions;
-    if (excludeTimezones.length === 0) {
-      return false;
-    }
-    const timezone = getTimezone();
-    if (!timezone) {
-      return false;
-    }
-    const lowerTimezone = timezone.toLowerCase();
-    return excludeTimezones.some(
-      (tz) => typeof tz === "string" && tz.toLowerCase() === lowerTimezone
-    );
-  }
-
-  /**
-   * Determines if tracking should be enabled based on configuration and consent
-   * @returns {boolean} True if tracking should be enabled
-   */
+  /** @see TrackingPolicy.shouldTrack */
   private shouldTrack(eventChainId?: ChainID): boolean {
-    // First check if user has opted out of tracking
-    if (this.hasOptedOutTracking()) {
-      return false;
-    }
-
-    // Check if tracking is explicitly provided as a boolean
-    if (typeof this.options.tracking === "boolean") {
-      return this.options.tracking;
-    }
-
-    // Handle object configuration with exclusion rules
-    if (
-      this.options.tracking !== null &&
-      typeof this.options.tracking === "object" &&
-      !Array.isArray(this.options.tracking)
-    ) {
-      const { excludeChains = [] } = this.options.tracking as TrackingOptions;
-
-      // Environment exclusions (timezone / host / path) - no identify / connect
-      // / track events while excluded. Host/path are exact-match.
-      if (this.isCurrentEnvironmentExcluded()) {
-        return false;
-      }
-
-      // Check chainId exclusions.
-      //
-      // The event's OWN chain wins over `currentChainId`. They differ whenever
-      // the event did not come from the active provider: a second wallet
-      // signing through its own provider, or a wagmi mutation that names an
-      // explicit chain. Reading only the central field there would emit an
-      // event that is labelled with an excluded chain, which is precisely what
-      // the exclusion forbids - and would drop an allowed event whenever the
-      // active provider happened to sit on an excluded chain.
-      const chainToCheck = eventChainId ?? this.currentChainId;
-      if (excludeChains.length > 0) {
-        // Fail CLOSED on an unknown chain. `resolveChainIdForProvider` reports
-        // 0 when it has never heard a chain from the signing wallet, and 0 is
-        // in no exclusion list, so treating it as "not excluded" would let
-        // exactly the events an operator excluded through - the wallet on the
-        // excluded chain is often the one we know least about. An explicit
-        // exclusion is a directive, so an unresolvable chain is refused.
-        //
-        // This covers the central value too, not just an explicit event
-        // chain: `page`, `track` and `identify` carry no chain of their own
-        // and fall back to `currentChainId`, so an unknown chain there would
-        // otherwise send wallet-attributed events for a wallet that may well
-        // be sitting on an excluded chain.
-        // Deliberately keyed on 0 and NOT on `undefined`. 0 is the explicit
-        // "we asked and could not tell" marker. `undefined` means no chain
-        // state yet, which is a legitimate transient - the Privy path
-        // reconciles a Solana wallet through exactly that state - and
-        // refusing it would drop real events.
-        //
-        // `backfillActiveWallet()` never persists 0, so an unresolvable chain
-        // cannot leak into `currentChainId` and reach the unscoped events
-        // (page / track / identify) that fall back to it.
-        if (chainToCheck === 0) return false;
-        if (chainToCheck && excludeChains.includes(chainToCheck)) return false;
-      }
-
-      // If nothing is excluded, tracking is enabled
-      return true;
-    }
-
-    // Default behavior: track everywhere except localhost
-    return !isLocalhost();
+    return this.trackingPolicy.shouldTrack({ chainId: eventChainId });
   }
 
   /**
@@ -2680,36 +2488,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param eventType The wallet event type to check
    * @returns {boolean} True if the event type should be autocaptured
    */
-  public isAutocaptureEnabled(
-    eventType:
-      | "connect"
-      | "disconnect"
-      | "signature"
-      | "transaction"
-      | "chain"
-  ): boolean {
-    // If no configuration provided, default to enabled
-    if (this.options.autocapture === undefined) {
-      return true;
-    }
-
-    // If boolean, return that value for all events
-    if (typeof this.options.autocapture === "boolean") {
-      return this.options.autocapture;
-    }
-
-    // If it's an object, check the specific event configuration
-    if (
-      this.options.autocapture !== null &&
-      typeof this.options.autocapture === "object"
-    ) {
-      const eventConfig = this.options.autocapture[eventType];
-      // Default to true if not explicitly set to false
-      return eventConfig !== false;
-    }
-
-    // Default to enabled if no specific configuration
-    return true;
+  public isAutocaptureEnabled(eventType: AutocaptureEventType): boolean {
+    return this.trackingPolicy.isAutocaptureEnabled(eventType);
   }
 
   /*
@@ -3583,7 +3363,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // Visitor-level suppression (opt-out or excluded timezone): purge any
       // prior snapshot - these are stable for the session, so deletion is safe.
-      if (this.isPersistedIdentityPurgeRequired()) {
+      if (this.trackingPolicy.isPersistedIdentityPurgeRequired()) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
@@ -3592,7 +3372,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // on an excluded route, but leave any existing cookie intact. A cookie
         // written on an allowed page must survive a transient visit to an
         // excluded one (passive navigation does not call this method).
-        if (this.isHostExcluded() || this.isPathExcluded()) {
+        if (this.trackingPolicy.isPageExcluded()) {
           return;
         }
         const value = JSON.stringify({
@@ -3625,14 +3405,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // Visitor-level suppression (opt-out or excluded timezone): never restore
       // identity into memory; drop the stale snapshot.
-      if (this.isPersistedIdentityPurgeRequired()) {
+      if (this.trackingPolicy.isPersistedIdentityPurgeRequired()) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
       // Current-page exclusion (host/path): don't restore into memory while on
       // an excluded route, but keep the cookie so a later allowed-page load can
       // restore it.
-      if (this.isHostExcluded() || this.isPathExcluded()) {
+      if (this.trackingPolicy.isPageExcluded()) {
         return;
       }
       const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
