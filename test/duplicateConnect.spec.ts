@@ -478,4 +478,141 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.equal(SOL_B);
     formo.cleanup?.();
   });
+
+  it("does not let a stale disconnect erase a wallet adopted via syncWalletState", async () => {
+    // An integration (the wagmi handler is one) adopts a wallet through the
+    // public `syncWalletState()`, not through `connect()`. Bumping the
+    // namespace generation only in `connect()` left that path invisible, so a
+    // disconnect still in flight cleared the freshly adopted wallet.
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { if (e.type === "disconnect") await gate; });
+
+    await formo.connect({ chainId: 1, address: ADDRESS });
+    const disconnecting = formo.disconnect({ chainId: 1, address: ADDRESS });
+    await new Promise((r) => setTimeout(r, 10));
+
+    formo.syncWalletState({ chainId: 1, address: OTHER });
+    expect(formo.currentAddress).to.equal(OTHER);
+
+    release();
+    await disconnecting;
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(
+      formo.currentAddress,
+      "a wallet adopted through syncWalletState must survive the stale cleanup"
+    ).to.equal(OTHER);
+    formo.cleanup?.();
+  });
+
+  it("abandons a wallet switch that a third provider overtook mid-disconnect", async () => {
+    // A is active. B signals a switch and stalls awaiting A's disconnect
+    // event. While it stalls, C changes network - which counts as a wallet
+    // switch and makes C active - and then reports its own connect. A's
+    // disconnect correctly leaves C alone, but B's continuation used to clear
+    // C anyway and install itself, unreporting a live connection.
+    const THIRD = "0x2F4bD6D2A5b7a19a49b6Cf2C0a0F1A5d33e8b7C1" as const;
+    const providerA = makeProvider([ADDRESS]);
+    const providerB = makeProvider([OTHER]);
+    const providerC = makeProvider([THIRD]);
+    (global as any).window.ethereum = providerA;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      autocapture: { chain: true, connect: true, disconnect: true },
+    } as any);
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { if (e.type === "disconnect") await gate; });
+
+    for (const p of [providerA, providerB, providerC]) {
+      (formo as any).registerAccountsChangedListener(p);
+      (formo as any).registerConnectListener(p);
+      (formo as any).registerChainChangedListener(p);
+    }
+
+    providerA.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
+
+    // B signals a switch; its handler stalls on A's disconnect event.
+    providerB.emit("accountsChanged", [OTHER]);
+    await new Promise((r) => setTimeout(r, 20));
+
+    // C overtakes: a chain change claims the active slot, then C connects.
+    providerC.emit("chainChanged", "0x89");
+    await new Promise((r) => setTimeout(r, 20));
+    providerC.emit("connect", { chainId: "0x89" });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "C should own the slot before the stalled handler resumes"
+    ).to.equal(THIRD.toLowerCase());
+
+    release();
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "the overtaken switch must not install itself over the newer session"
+    ).to.equal(THIRD.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let a stale connect observation cancel a newer disconnect", async () => {
+    // The provider emits `connect` and then `accountsChanged([])`. The connect
+    // handler is still resolving the address when the disconnect starts. If
+    // that late continuation is allowed to claim the namespace, the disconnect
+    // reads it as a reconnect and skips its cleanup, leaving a wallet that has
+    // already gone away attached to every later event.
+    const provider = makeProvider([ADDRESS]);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let releaseAddress!: () => void;
+    const addressGate = new Promise<void>((r) => { releaseAddress = r; });
+    let releaseDisconnect!: () => void;
+    const disconnectGate = new Promise<void>((r) => { releaseDisconnect = r; });
+
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { if (e.type === "disconnect") await disconnectGate; });
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    // Establish the session, then make the NEXT address read slow.
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
+
+    const realGetAddress = (formo as any).getAddress.bind(formo);
+    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+      await addressGate;
+      return realGetAddress(p);
+    });
+
+    // A second connect signal starts resolving its address...
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // ...and the wallet goes away while it is still resolving.
+    provider.emit("accountsChanged", []);
+    await new Promise((r) => setTimeout(r, 10));
+
+    releaseAddress();
+    await new Promise((r) => setTimeout(r, 30));
+    releaseDisconnect();
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(
+      formo.currentAddress,
+      "the wallet disconnected, so no address may survive"
+    ).to.equal(undefined);
+    formo.cleanup?.();
+  });
 });

@@ -168,6 +168,22 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
   /**
+   * How many disconnects a provider has begun. Ordering, not presence.
+   *
+   * A wallet can emit `connect` and then `accountsChanged([])` back to back.
+   * The connect handler is still resolving the address when the disconnect
+   * starts, and its late continuation would otherwise claim the namespace -
+   * which the disconnect then reads as a reconnect, so it skips its cleanup
+   * and the departed wallet stays attached to every later event.
+   *
+   * A plain "is disconnecting" flag cannot express this: a genuine reconnect
+   * that arrives DURING the disconnect must still be reported. What separates
+   * the two is whether the connect observation began before the disconnect
+   * did, which is exactly what comparing this count across the await tells us.
+   */
+  private _disconnectEpoch = new WeakMap<EIP1193Provider, number>();
+
+  /**
    * Bumped on every chain observation, PER PROVIDER. An `eth_chainId` answer
    * that resolves after a newer observation for the same provider must not
    * overwrite it.
@@ -1456,6 +1472,10 @@ export class FormoAnalytics implements IFormoAnalytics {
 
         // Check if disconnect tracking is enabled before emitting event
         if (this.isAutocaptureEnabled("disconnect")) {
+          this._disconnectEpoch.set(
+            provider,
+            (this._disconnectEpoch.get(provider) ?? 0) + 1
+          );
           try {
             // Pass EVM state explicitly to ensure we have the data for the disconnect event
             await this.disconnect({
@@ -1493,6 +1513,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Handle provider switching: if we have an active provider but a different provider
     // is connecting with accounts, check if the current provider is still connected
     if (this._provider && this._provider !== provider) {
+      // Emitting the old wallet's disconnect is asynchronous, and a third
+      // provider can claim the namespace during it (a `chainChanged` counts
+      // as a wallet switch, so it does not need this handler at all). This
+      // transition is then stale: installing it would overwrite a newer,
+      // already-reported session. See issue #344.
+      const seqBeforeSwitch = this._sessionSeq.evm;
       // Capture current EVM state BEFORE any changes
       const currentStoredAddress = this._evmAddress;
       const newProviderAddress = validateAndChecksumAddress(address);
@@ -1548,6 +1574,8 @@ export class FormoAnalytics implements IFormoAnalytics {
               this.clearChainState('evm');
             }
 
+            if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
+
             // Clear state and let the new provider become active
             this.clearActiveProvider();
           } else {
@@ -1585,6 +1613,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             this.clearChainState('evm');
           }
 
+          if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
         }
       } catch (error) {
         logger.warn(
@@ -1613,6 +1642,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           this.clearChainState('evm');
         }
 
+        if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
       }
     }
 
@@ -1901,6 +1931,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     logger.info("onConnected", connection);
 
+    // Taken before any await, so it reflects the state this observation
+    // actually saw.
+    const disconnectEpoch = this._disconnectEpoch.get(provider) ?? 0;
+
     try {
       if (!connection?.chainId || typeof connection.chainId !== "string")
         return;
@@ -1909,6 +1943,17 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Record it for this provider before anything can bail out below.
       this.rememberProviderChain(provider, chainId);
       const address = await this.getAddress(provider);
+
+      // The wallet went away after this observation began. Claiming the
+      // namespace now would make the disconnect still in flight look stale,
+      // so it would skip its cleanup. A reconnect that started AFTER the
+      // disconnect sees an unchanged count here and is reported normally.
+      if ((this._disconnectEpoch.get(provider) ?? 0) !== disconnectEpoch) {
+        logger.info(
+          "onConnected: This provider is disconnecting; dropping a connect observation that the disconnect has overtaken"
+        );
+        return;
+      }
 
       if (chainId && address) {
         // Check if this is a connection event (transition from no address to having an address)
@@ -3360,7 +3405,21 @@ export class FormoAnalytics implements IFormoAnalytics {
       ? namespaceOrChainId
       : this.getNamespace(namespaceOrChainId);
     const ns = this._chainState[namespace];
-    if ('address' in update) ns.address = update.address;
+    if ('address' in update) {
+      // A namespace changing hands is what the generation tracks. Doing it
+      // here rather than at each caller means every claiming path is
+      // covered: connect(), the public syncWalletState() an integration
+      // calls, and the EIP-1193 listeners alike.
+      //
+      // Only a CHANGE counts. Re-writing the same wallet (a chain switch,
+      // a re-confirmation) must not bump, or a legitimate disconnect that
+      // raced one would decide it was stale and leave the state behind.
+      const claimed =
+        !!update.address &&
+        update.address.toLowerCase() !== (ns.address ?? "").toLowerCase();
+      if (claimed) this._sessionSeq[namespace]++;
+      ns.address = update.address;
+    }
     if ('chainId' in update) {
       ns.chainId = update.chainId;
     } else if (typeof namespaceOrChainId === 'number') {
@@ -3596,6 +3655,18 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private clearActiveProvider(): void {
     this._provider = undefined;
+  }
+
+  /**
+   * True when a newer session claimed the EVM namespace since `seq` was
+   * taken, so whatever transition took it is stale and must be abandoned.
+   */
+  private isStaleEvmTransition(seq: number): boolean {
+    if (this._sessionSeq.evm === seq) return false;
+    logger.info(
+      "OnAccountsChanged: A newer session claimed the wallet slot while this switch was in flight; abandoning it"
+    );
+    return true;
   }
 
   /**
