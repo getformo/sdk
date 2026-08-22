@@ -369,7 +369,7 @@ describe("WalletStateStore", () => {
       expect(s.hasNewSessionSince("evm", after)).to.be.false;
     });
 
-    it("refuses a non-numeric chain from the persisted cookie", () => {
+    it("rejects a snapshot whose chain is present but unusable", () => {
       // The cookie is attacker-writable and survives across SDK versions. A
       // string "137" restored as-is never matches a numeric exclusion list,
       // so an excluded chain would silently start reporting again.
@@ -379,16 +379,30 @@ describe("WalletStateStore", () => {
       );
       const s = store();
       s.load();
-      expect(s.chainId, "a string chain is not restored").to.equal(undefined);
+      expect(s.address, "the whole snapshot is refused").to.equal(undefined);
+      expect(s.chainId).to.equal(undefined);
     });
 
-    it("refuses a non-finite chain from the persisted cookie", () => {
+    it("does not file a Solana wallet under EVM when its chain is corrupt", () => {
+      // Downgrading an unusable chain to "chainless" looks harmless and is
+      // not: the namespace is derived from the chain, so the wallet lands in
+      // the wrong one and a later Solana disconnect falls through to a
+      // phantom EVM entry.
       cookie().set(
         ACTIVE_WALLET_KEY,
-        JSON.stringify({ address: EVM_A, chainId: null })
+        JSON.stringify({ address: SOL_A, chainId: "900001" })
       );
       const s = store();
       s.load();
+      expect(s.evmAddress, "no phantom EVM wallet").to.equal(undefined);
+      expect(s.address).to.equal(undefined);
+    });
+
+    it("still restores a snapshot that legitimately has no chain", () => {
+      cookie().set(ACTIVE_WALLET_KEY, JSON.stringify({ address: EVM_A }));
+      const s = store();
+      s.load();
+      expect(s.address).to.equal(EVM_A);
       expect(s.chainId).to.equal(undefined);
     });
 

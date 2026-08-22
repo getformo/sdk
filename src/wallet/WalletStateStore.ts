@@ -438,10 +438,23 @@ export class WalletStateStore {
       // the chain has to be a real number before anything trusts it. A string
       // "137" restored as-is would never match a numeric exclusion list, so
       // an excluded chain would silently start reporting again.
-      const chainId =
-        typeof parsed.chainId === "number" && Number.isFinite(parsed.chainId)
-          ? (parsed.chainId as ChainID)
-          : undefined;
+      //
+      // A present-but-unusable chain rejects the WHOLE snapshot rather than
+      // being downgraded to "chainless". Downgrading looks harmless and is
+      // not: the namespace is derived from the chain, so a Solana wallet with
+      // a corrupt chain would be filed under EVM, and a later Solana
+      // disconnect would fall through to that phantom entry and keep
+      // attributing events to a wallet that had gone.
+      const rawChain: unknown = parsed.chainId;
+      const chainMissing = rawChain === undefined || rawChain === null;
+      if (
+        !chainMissing &&
+        (typeof rawChain !== "number" || !Number.isFinite(rawChain))
+      ) {
+        cookie().remove(ACTIVE_WALLET_KEY);
+        return;
+      }
+      const chainId = chainMissing ? undefined : (rawChain as ChainID);
 
       const namespace = this.namespaceOf(chainId);
       const validated = validateAddress(parsed.address, chainId);
