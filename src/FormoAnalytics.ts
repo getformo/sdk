@@ -6,7 +6,6 @@ import {
   SESSION_USER_ID_KEY,
   SESSION_TRAFFIC_SOURCE_KEY,
   ACTIVE_WALLET_KEY,
-  ACTIVE_WALLET_TTL_MS,
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
@@ -33,10 +32,8 @@ import {
   Address,
   ChainID,
   ChainNamespace,
-  ChainState,
   Config,
   EIP1193Provider,
-  EvmChainState,
   IFormoAnalytics,
   IFormoEventContext,
   IFormoEventProperties,
@@ -57,6 +54,7 @@ import {
   ITrackingPolicy,
   TrackingPolicy,
 } from "./tracking/TrackingPolicy";
+import { WalletStateStore } from "./wallet/WalletStateStore";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
@@ -77,95 +75,29 @@ const PROVIDER_SWITCH_REASONS = {
 
 export class FormoAnalytics implements IFormoAnalytics {
   // Per-chain namespace state - isolates EVM and Solana connection state
-  private _chainState: { evm: EvmChainState; solana: ChainState } = {
-    evm: {},
-    solana: {},
-  };
-  private _activeNamespace?: ChainNamespace;
+  /** Wallet identity, chain state and the active-wallet cookie. */
+  private wallet: WalletStateStore;
 
-  // EVM state accessors - EVM listener paths must use these instead of
-  // currentAddress/currentChainId to avoid cross-namespace reads.
   private get _provider(): EIP1193Provider | undefined {
-    return this._chainState.evm.provider;
-  }
-  /**
-   * Drop a provider's reported-connect record when it stops being active.
-   *
-   * The active provider is displaced from several places, and not all of them
-   * go through the `_provider` setter: `setChainState()` writes
-   * `_chainState.evm.provider` directly and `clearChainState()` replaces the
-   * whole namespace. Guarding only the setter left A's record alive across a
-   * real A-to-B switch, so returning to A was suppressed.
-   */
-  private forgetConnectRecord(
-    previous: EIP1193Provider | undefined,
-    next: EIP1193Provider | undefined
-  ): void {
-    if (previous && previous !== next) {
-      this._announcedConnect.delete(previous);
-    }
+    return this.wallet.provider;
   }
 
   private set _provider(value: EIP1193Provider | undefined) {
-    const previous = this._chainState.evm.provider;
-    // A provider that stops being the active one has, from this SDK's point of
-    // view, ended its connection - so the connect it reported must stop
-    // counting. Otherwise toggling between two installed wallets silently
-    // loses every connect after the first: A's stale record suppresses the
-    // connect when the user comes back to it.
-    //
-    // Done in the setter rather than at each switch site because the active
-    // provider is reassigned from several paths - `accountsChanged`,
-    // `chainChanged`, `connect`, `handleProviderMismatch`, `untrackProvider` -
-    // and any one of them missed would reopen the same hole.
-    this.forgetConnectRecord(previous, value);
-    this._chainState.evm.provider = value;
-  }
-  private get _evmAddress(): Address | undefined {
-    return this._chainState.evm.address;
-  }
-  private get _evmChainId(): ChainID | undefined {
-    return this._chainState.evm.chainId;
+    this.wallet.provider = value;
   }
 
-  /**
-   * Last known chain per tracked provider, fed by `chainChanged` / `connect`
-   * and by a one-off probe at tracking time. Read synchronously when labelling
-   * an autocaptured event, so the wallet's request transport is never used for
-   * analytics. Weak so an untracked provider can be collected.
-   */
-  /**
-   * The connect this SDK has actually REPORTED for a provider.
-   *
-   * Deduplicating on "is an address known" was wrong in both directions.
-   * `onConnected` and `onAccountsChanged` both observe one connection, so
-   * something has to stop them double-reporting - but an address can be
-   * present without a connect ever having been sent: restored from the
-   * active-wallet cookie, or reported with an unresolved chain and then
-   * refused by `tracking.excludeChains`. Suppressing on address presence lost
-   * the connect entirely in those cases.
-   *
-   * Records what was reported, so a later event can be recognised as a
-   * genuine improvement on it rather than a duplicate.
-   */
+  private get _evmAddress(): Address | undefined {
+    return this.wallet.evmAddress;
+  }
+
+  private get _evmChainId(): ChainID | undefined {
+    return this.wallet.evmChainId;
+  }
+
   private _announcedConnect = new WeakMap<
     EIP1193Provider,
     { address: string; chainId: number }
   >();
-
-  /**
-   * Monotonic generation per namespace, bumped whenever a wallet claims it.
-   *
-   * Address and provider alone cannot tell "this session never changed"
-   * apart from "the same wallet disconnected and reconnected", because both
-   * leave identical state. The generation can, which is what lets a slow
-   * disconnect know it is stale.
-   *
-   * Kept per namespace rather than per provider so it also covers Solana,
-   * which has no EIP-1193 provider to hang a stamp on, and so that a wallet
-   * arriving on a different provider still moves it.
-   */
-  private _sessionSeq: Record<ChainNamespace, number> = { evm: 0, solana: 0 };
 
   private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
@@ -266,8 +198,18 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _pageHooksDisposed = false;
 
   config: Config;
-  currentChainId?: ChainID;
-  currentAddress?: Address;
+  /**
+   * The wallet later events are attributed to, derived from whichever
+   * namespace last claimed the slot. Read by the wagmi and Privy
+   * integrations; the store is the only writer.
+   */
+  get currentAddress(): Address | undefined {
+    return this.wallet.address;
+  }
+
+  get currentChainId(): ChainID | undefined {
+    return this.wallet.chainId;
+  }
   currentUserId?: string = "";
 
   /**
@@ -326,6 +268,21 @@ export class FormoAnalytics implements IFormoAnalytics {
     Logger.init({
       enabled: options.logger?.enabled || false,
       enabledLevels: options.logger?.levels || [],
+    });
+
+    this.wallet = new WalletStateStore({
+      isPersistedIdentityPurgeRequired: () =>
+        this.trackingPolicy.isPersistedIdentityPurgeRequired(),
+      isPageExcluded: () => this.trackingPolicy.isPageExcluded(),
+      isTrackingSuppressed: () => this.trackingPolicy.isTrackingSuppressed(),
+      crossSubdomainCookies: () => this.crossSubdomainCookies,
+      providerChainId: (provider) => this._providerChainIds.get(provider),
+      // A provider that stops being active has, from this SDK's point of
+      // view, ended its connection, so the connect it reported must stop
+      // counting. Otherwise toggling between two installed wallets silently
+      // loses every connect after the first.
+      onProviderDisplaced: (previous) =>
+        this._announcedConnect.delete(previous),
     });
 
     this.trackingPolicy = new TrackingPolicy({
@@ -393,7 +350,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Seed currentAddress/currentChainId from the persisted snapshot before
     // the first page hit queues so reload-time track()/page() carry the
     // wallet even before wagmi/EIP-1193 reconnection completes.
-    this.loadActiveWallet();
+    this.wallet.load();
 
     this.trackPageHit();
     this.trackPageHits();
@@ -456,11 +413,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // address on subsequent track()/page() events for the rest of the
     // page lifetime, because they fall back to currentAddress. Keep the
     // EVM provider reference so tracking can resume on the next connect.
-    this.currentAddress = undefined;
-    this.currentChainId = undefined;
-    const evmProvider = this._chainState.evm.provider;
-    this._chainState = { evm: { provider: evmProvider }, solana: {} };
-    this._activeNamespace = undefined;
+    this.wallet.reset();
 
     cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
     cookie().remove(SESSION_USER_ID_KEY);
@@ -577,7 +530,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // A new wallet now owns this namespace. Anything that was already
     // tearing down the previous session must not undo this.
-    this._sessionSeq[this.getNamespace(chainId)]++;
+    this.wallet.claim(chainId);
 
     this.setChainState(chainId, { address: validAddress });
 
@@ -640,8 +593,8 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Snapshot the session being torn down. Emitting is asynchronous, so a
     // reconnect can land while the disconnect event is still being built.
-    const namespace = this.getNamespace(chainId);
-    const beforeSeq = this._sessionSeq[namespace];
+    const namespace = this.wallet.namespaceOf(chainId);
+    const beforeSeq = this.wallet.generation(namespace);
 
     await this.trackEvent(
       EventType.DISCONNECT,
@@ -659,7 +612,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // wipe that session's state AND its reported-connect record, so a later
     // wallet signal would emit a second connect for a connection that is
     // already reported. See issue #344.
-    if (this._sessionSeq[namespace] !== beforeSeq) {
+    if (this.wallet.hasNewSessionSince(namespace, beforeSeq)) {
       logger.info(
         "Disconnect: A new session claimed this namespace while the event was in flight; leaving its state intact"
       );
@@ -672,6 +625,66 @@ export class FormoAnalytics implements IFormoAnalytics {
     logger.info(
       "Wallet disconnected: Cleared currentAddress, currentChainId, and provider"
     );
+  }
+
+  /** @see WalletStateStore.namespaceOf */
+  private getNamespace(chainId?: ChainID): ChainNamespace {
+    return this.wallet.namespaceOf(chainId);
+  }
+
+  /** @see WalletStateStore.set */
+  private setChainState(
+    namespaceOrChainId: ChainNamespace | ChainID | undefined,
+    update: { address?: Address; chainId?: ChainID; provider?: EIP1193Provider }
+  ): void {
+    this.wallet.set(namespaceOrChainId, update);
+  }
+
+  /** @see WalletStateStore.clear */
+  private clearChainState(
+    namespaceOrChainId: ChainNamespace | ChainID | undefined
+  ): void {
+    this.wallet.clear(namespaceOrChainId);
+  }
+
+  /**
+   * Record validated wallet/chain state WITHOUT emitting an event.
+   *
+   * Integrations must call this on every connect / chain change / disconnect,
+   * even when the matching autocapture event is disabled, or the exclusion
+   * gate (which keys off the central chain, not the event payload) can be
+   * bypassed. Stays on the class because integrations bind to it.
+   * @see WalletStateStore.syncWalletState
+   */
+  public syncWalletState(params: {
+    chainId?: ChainID;
+    address?: Address;
+  }): void {
+    this.wallet.syncWalletState(params);
+  }
+
+  /** @see WalletStateStore.persist */
+  private persistActiveWallet(): void {
+    this.wallet.persist();
+  }
+
+  /** @see WalletStateStore.clearProvider */
+  private clearActiveProvider(): void {
+    this.wallet.clearProvider();
+  }
+
+  /** @see WalletStateStore.backfill */
+  private backfillActiveWallet(
+    address: Address,
+    chainId?: ChainID,
+    provider?: EIP1193Provider
+  ): void {
+    this.wallet.backfill(address, chainId, provider);
+  }
+
+  /** @see WalletStateStore.clearStaleEvmWalletOnSwitchWhileSuppressed */
+  private clearStaleEvmWalletOnSwitchWhileSuppressed(address: string): void {
+    this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
   }
 
   /**
@@ -1053,8 +1066,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // attribution. Gating address and userId together prevents leaving the
       // active address paired with a different wallet's user id.
       if (setActive !== false) {
-        this.currentAddress = validAddress;
-        this.persistActiveWallet();
+        this.wallet.setActiveAddress(validAddress);
         if (userId) {
           this.currentUserId = userId;
           const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
@@ -1169,8 +1181,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const currentIsSolana = isSolanaChainId(this.currentChainId);
     if (walletIsSolana !== currentIsSolana) {
-      this.currentChainId = undefined;
-      this.persistActiveWallet();
+      this.wallet.clearActiveChainId();
     }
   }
 
@@ -1528,7 +1539,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // as a wallet switch, so it does not need this handler at all). This
       // transition is then stale: installing it would overwrite a newer,
       // already-reported session. See issue #344.
-      const seqBeforeSwitch = this._sessionSeq.evm;
+      const seqBeforeSwitch = this.wallet.generation("evm");
       // Every branch below tears down whichever provider is active now, so
       // its in-flight connect observations must stop counting from here.
       this.beginProviderDisconnect(this._provider);
@@ -2672,7 +2683,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     provider?: EIP1193Provider
   ): Promise<Address | null> {
     // Use EVM-specific state to avoid returning a Solana address in an EVM context
-    if (this._chainState.evm.address) return this._chainState.evm.address;
+    if (this.wallet.evmAddress) return this.wallet.evmAddress;
     const p = provider || this.provider;
     if (!p) {
       logger.info("The provider is not set");
@@ -2787,7 +2798,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // event was attributed to the wrong wallet entirely.
     if (
       provider === this._provider &&
-      this._activeNamespace === "evm" &&
+      this.wallet.activeNamespace === "evm" &&
       this._evmChainId !== chainId
     ) {
       this.setChainState('evm', { chainId });
@@ -2942,83 +2953,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     };
   }
 
-  /**
-   * Persist an EVM address discovered through autocapture (signature / transaction)
-   * as the current EVM address when none is currently set. This lets subsequent
-   * track()/page() calls carry the address even when the underlying wallet never
-   * fires an EIP-1193 `accountsChanged` event (embedded wallets, smart accounts,
-   * social-login wrappers). If `accountsChanged` later fires it overwrites this
-   * value in the normal way; existing connections are never clobbered.
-   */
-  private backfillActiveWallet(
-    address: Address,
-    chainId?: ChainID,
-    provider?: EIP1193Provider
-  ): void {
-    // Refuse a chain the provider has since moved off.
-    //
-    // A request captures its chain once and reuses that snapshot for every
-    // status it emits, which is right for the event payload - a confirmation
-    // must not be relabelled mid-flight. But writing that captured value back
-    // into central state on the LATER statuses restored a chain the wallet had
-    // already left, and the unscoped events that fall back to it then bypassed
-    // an exclusion that should have caught them.
-    if (provider && chainId !== undefined && chainId !== 0) {
-      const current = this._providerChainIds.get(provider);
-      if (current !== undefined && current !== chainId) {
-        chainId = current;
-      }
-    }
-    // `0` is kept deliberately. It means "could not resolve", and persisting
-    // it is what lets the exclusion gate refuse the unscoped events - `page`,
-    // `track`, `identify` - that carry no chain of their own and fall back to
-    // `currentChainId`. Erasing it to `undefined` looked tidier but removed
-    // the only marker distinguishing "unknown" from "no wallet yet", and those
-    // events then went out attributed to a wallet that might be sitting on an
-    // excluded chain.
-    // Never learn identity while suppressed (opt-out / timezone / excluded host
-    // or path). A signature/transaction observed on an excluded route must not
-    // populate currentAddress for later allowed-page events.
-    if (this.isTrackingSuppressed()) return;
 
-    const known = this._evmAddress;
-    if (known) {
-      // Same wallet, newer chain: correct it rather than returning.
-      //
-      // A persisted wallet restores a chain from a previous session. If the
-      // provider has since moved - to an excluded chain, or to one we cannot
-      // resolve - the autocaptured event is gated correctly, but the stale
-      // restored chain stayed in `currentChainId` and the unscoped events
-      // that fall back to it went out under an exclusion that should have
-      // caught them.
-      if (
-        chainId !== undefined &&
-        known.toLowerCase() === address.toLowerCase() &&
-        this._evmChainId !== chainId
-      ) {
-        this.setChainState('evm', { address: known, chainId });
-      }
-      // A DIFFERENT address is another wallet's business; never overwrite.
-      return;
-    }
-
-    this.setChainState('evm', { address, chainId });
-  }
-
-  /**
-   * Apply an EVM autocapture connect/switch while tracking is suppressed
-   * (opt-out / timezone / excluded host or path): never LEARN the wallet, but
-   * if it is a switch away from an already-learned EVM wallet, drop the stale
-   * one (which also clears the active-wallet cookie) so it can't attach to a
-   * later allowed-page event.
-   */
-  private clearStaleEvmWalletOnSwitchWhileSuppressed(address: string): void {
-    const evmAddress = this._chainState.evm.address;
-    const incoming = validateAndChecksumAddress(address);
-    if (evmAddress && incoming && incoming !== evmAddress) {
-      this.clearChainState('evm');
-    }
-  }
 
   /**
    * Polls for transaction receipt and emits tx.status = CONFIRMED or REVERTED.
@@ -3172,279 +3107,13 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
-  /**
-   * Determine which namespace a chainId belongs to.
-   */
-  private getNamespace(chainId?: ChainID): ChainNamespace {
-    return isSolanaChainId(chainId) ? 'solana' : 'evm';
-  }
 
-  /**
-   * Update per-chain state and sync the derived currentAddress/currentChainId.
-   * Accepts either a namespace string ('evm'/'solana') or a chainId number
-   * to resolve the namespace automatically. When a chainId number is passed,
-   * it is also stored as the namespace's chainId (unless explicitly overridden
-   * in the update object).
-   */
-  private setChainState(
-    namespaceOrChainId: ChainNamespace | ChainID | undefined,
-    update: { address?: Address; chainId?: ChainID; provider?: EIP1193Provider }
-  ): void {
-    const namespace = typeof namespaceOrChainId === 'string'
-      ? namespaceOrChainId
-      : this.getNamespace(namespaceOrChainId);
-    const ns = this._chainState[namespace];
-    if ('address' in update) {
-      // A namespace changing hands is what the generation tracks. Doing it
-      // here rather than at each caller means every claiming path is
-      // covered: connect(), the public syncWalletState() an integration
-      // calls, and the EIP-1193 listeners alike.
-      //
-      // Only a CHANGE counts. Re-writing the same wallet (a chain switch,
-      // a re-confirmation) must not bump, or a legitimate disconnect that
-      // raced one would decide it was stale and leave the state behind.
-      const claimed =
-        !!update.address &&
-        update.address.toLowerCase() !== (ns.address ?? "").toLowerCase();
-      if (claimed) this._sessionSeq[namespace]++;
-      ns.address = update.address;
-    }
-    if ('chainId' in update) {
-      ns.chainId = update.chainId;
-    } else if (typeof namespaceOrChainId === 'number') {
-      ns.chainId = namespaceOrChainId;
-    }
-    if (namespace === 'evm' && 'provider' in update) {
-      // Displacing the active provider ends its connection as far as this SDK
-      // is concerned, so the connect it reported stops counting.
-      this.forgetConnectRecord(
-        (ns as EvmChainState).provider,
-        update.provider
-      );
-      (ns as EvmChainState).provider = update.provider;
-    }
-    this._activeNamespace = namespace;
-    this.syncDerivedState();
-  }
 
-  /**
-   * Clear per-chain state for a given namespace (or chainId) and sync derived state.
-   */
-  private clearChainState(namespaceOrChainId: ChainNamespace | ChainID | undefined): void {
-    const namespace = typeof namespaceOrChainId === 'string'
-      ? namespaceOrChainId
-      : this.getNamespace(namespaceOrChainId);
-    if (namespace === 'evm') {
-      // Same rule: wiping the namespace drops the active provider.
-      this.forgetConnectRecord(this._chainState.evm.provider, undefined);
-      this._chainState.evm = {};
-    } else {
-      this._chainState.solana = {};
-    }
-    this.syncDerivedState();
-  }
 
-  /**
-   * Sync validated wallet/chain state into the SDK's central state
-   * WITHOUT emitting an event.
-   *
-   * Integrations (e.g. the wagmi handler) must call this on every
-   * connect / chain-change / disconnect - even when the corresponding
-   * autocapture event is disabled. Otherwise `currentChainId` stays
-   * stale/undefined and `shouldTrack()`'s `tracking.excludeChains`
-   * check (which keys off `currentChainId`, not the event payload) can
-   * be bypassed, letting wallet activity on an excluded chain still be
-   * collected.
-   *
-   * - valid `address` present → record per-chain + derived state
-   * - `address` absent → clear chain state (disconnect)
-   */
-  public syncWalletState(params: {
-    chainId?: ChainID;
-    address?: Address;
-  }): void {
-    const { chainId, address } = params;
 
-    if (this.isTrackingSuppressed()) {
-      // While suppressed (opt-out / timezone / excluded host or path) we must
-      // never LEARN a new wallet - but we must still CLEAR stale identity.
-      // Otherwise a disconnect or wallet switch observed on a suppressed route
-      // would leave the previously-learned address in memory and in the
-      // active-wallet cookie, attaching it to later allowed-page events.
-      if (!address) {
-        // Disconnect: drop the affected namespace(s).
-        if (chainId !== undefined && chainId !== null) {
-          this.clearChainState(chainId);
-        } else {
-          this.clearChainState("evm");
-          this.clearChainState("solana");
-        }
-        return;
-      }
-      // Address present: a switch away from the wallet already learned in this
-      // namespace invalidates it. Drop the stale one without learning the new
-      // address; a fresh connect (nothing learned yet) or a re-confirmation of
-      // the same address is a no-op.
-      if (chainId === null || chainId === undefined) return;
-      const namespace = this.getNamespace(chainId);
-      const namespaceAddress = this._chainState[namespace].address;
-      const validIncoming = validateAddress(address, chainId);
-      if (
-        namespaceAddress &&
-        validIncoming &&
-        validIncoming !== namespaceAddress
-      ) {
-        this.clearChainState(chainId);
-      }
-      return;
-    }
 
-    if (!address) {
-      if (chainId !== undefined && chainId !== null) {
-        this.clearChainState(chainId);
-      } else {
-        this.clearChainState("evm");
-        this.clearChainState("solana");
-      }
-      return;
-    }
 
-    if (chainId === null || chainId === undefined) return;
 
-    const validAddress = validateAddress(address, chainId);
-    if (!validAddress) {
-      logger.warn(
-        `syncWalletState: invalid address ("${address}") for chain ${chainId}`
-      );
-      return;
-    }
-
-    this.setChainState(chainId, { address: validAddress });
-  }
-
-  /**
-   * Synchronize currentAddress/currentChainId from the active namespace.
-   * Last-connected-chain-wins: _activeNamespace takes precedence.
-   */
-  private syncDerivedState(): void {
-    const active = this._activeNamespace;
-    if (active) {
-      const state = this._chainState[active];
-      if (state.address || state.chainId) {
-        this.currentAddress = state.address;
-        this.currentChainId = state.chainId;
-        this.persistActiveWallet();
-        return;
-      }
-    }
-    // Fall through to the other namespace
-    const other: ChainNamespace = active === 'evm' ? 'solana' : 'evm';
-    const otherState = this._chainState[other];
-    if (otherState.address || otherState.chainId) {
-      this.currentAddress = otherState.address;
-      this.currentChainId = otherState.chainId;
-      this._activeNamespace = other;
-      this.persistActiveWallet();
-      return;
-    }
-    this.currentAddress = undefined;
-    this.currentChainId = undefined;
-    this.persistActiveWallet();
-  }
-
-  /**
-   * Persist (or clear) the current wallet snapshot in a cookie so that the
-   * SDK can repopulate `currentAddress`/`currentChainId` at init on the next
-   * page load - closing the gap between page-show and wagmi/EIP-1193
-   * reconnection during which track()/page() events would otherwise ship
-   * with an empty address.
-   */
-  private persistActiveWallet(): void {
-    try {
-      // Visitor-level suppression (opt-out or excluded timezone): purge any
-      // prior snapshot - these are stable for the session, so deletion is safe.
-      if (this.trackingPolicy.isPersistedIdentityPurgeRequired()) {
-        cookie().remove(ACTIVE_WALLET_KEY);
-        return;
-      }
-      if (this.currentAddress) {
-        // Current-page exclusion (host/path): do not write a new snapshot while
-        // on an excluded route, but leave any existing cookie intact. A cookie
-        // written on an allowed page must survive a transient visit to an
-        // excluded one (passive navigation does not call this method).
-        if (this.trackingPolicy.isPageExcluded()) {
-          return;
-        }
-        const value = JSON.stringify({
-          address: this.currentAddress,
-          ...(this.currentChainId !== undefined && { chainId: this.currentChainId }),
-        });
-        const domain = getIdentityCookieDomain(this.crossSubdomainCookies);
-        cookie().set(ACTIVE_WALLET_KEY, value, {
-          path: "/",
-          expires: new Date(Date.now() + ACTIVE_WALLET_TTL_MS).toUTCString(),
-          ...getIdentityCookieSecurity(),
-          ...(domain ? { domain } : {}),
-        });
-      } else {
-        // No active wallet → clear the snapshot. This runs even on an excluded
-        // route, so a disconnect/switch observed while suppressed actively
-        // removes stale identity instead of leaving it for later allowed events.
-        cookie().remove(ACTIVE_WALLET_KEY);
-      }
-    } catch (err) {
-      logger.warn("Failed to persist current wallet snapshot", err);
-    }
-  }
-
-  /**
-   * Seed `currentAddress`/`currentChainId` from the persisted snapshot, if
-   * any. Called once during construction before the first page hit fires.
-   */
-  private loadActiveWallet(): void {
-    try {
-      // Visitor-level suppression (opt-out or excluded timezone): never restore
-      // identity into memory; drop the stale snapshot.
-      if (this.trackingPolicy.isPersistedIdentityPurgeRequired()) {
-        cookie().remove(ACTIVE_WALLET_KEY);
-        return;
-      }
-      // Current-page exclusion (host/path): don't restore into memory while on
-      // an excluded route, but keep the cookie so a later allowed-page load can
-      // restore it.
-      if (this.trackingPolicy.isPageExcluded()) {
-        return;
-      }
-      const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as { address?: string; chainId?: ChainID };
-      if (!parsed?.address) return;
-
-      const namespace = isSolanaChainId(parsed.chainId) ? "solana" : "evm";
-      const validated = validateAddress(parsed.address, parsed.chainId);
-      if (!validated) {
-        cookie().remove(ACTIVE_WALLET_KEY);
-        return;
-      }
-      const ns = this._chainState[namespace];
-      ns.address = validated;
-      if (parsed.chainId !== undefined) ns.chainId = parsed.chainId;
-      this._activeNamespace = namespace;
-      this.currentAddress = validated;
-      this.currentChainId = parsed.chainId;
-    } catch (err) {
-      logger.warn("Failed to restore persisted wallet snapshot", err);
-      cookie().remove(ACTIVE_WALLET_KEY);
-    }
-  }
-
-  /**
-   * Helper method to clear the active provider state
-   * Centralizes provider clearing logic for consistency
-   */
-  private clearActiveProvider(): void {
-    this._provider = undefined;
-  }
 
   /**
    * Record that this provider's connection is being torn down.
@@ -3466,7 +3135,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * taken, so whatever transition took it is stale and must be abandoned.
    */
   private isStaleEvmTransition(seq: number): boolean {
-    if (this._sessionSeq.evm === seq) return false;
+    if (!this.wallet.hasNewSessionSince("evm", seq)) return false;
     logger.info(
       "OnAccountsChanged: A newer session claimed the wallet slot while this switch was in flight; abandoning it"
     );
