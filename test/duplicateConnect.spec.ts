@@ -382,4 +382,64 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     expect(connect.callCount, "and one for the switch").to.equal(2);
     formo.cleanup?.();
   });
+
+  it("does not let a stale disconnect erase a reconnect that raced it", async () => {
+    // Issue #344. `disconnect()` awaits event creation before it clears the
+    // namespace. If the wallet reconnects during that await, the old code
+    // cleared the NEW session's state and its reported-connect record, so the
+    // next wallet signal emitted a second connect for a live connection.
+    const accounts = [ADDRESS];
+    const provider = makeProvider(accounts);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    // Hold only the disconnect event open, so the reconnect lands squarely
+    // inside `disconnect()`'s await.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") await gate;
+        sent.push(e);
+      });
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(
+      sent.filter((e) => e.type === "connect").length,
+      "one connect for the first session"
+    ).to.equal(1);
+
+    // Wallet drops...
+    accounts.length = 0;
+    provider.emit("accountsChanged", []);
+    await new Promise((r) => setTimeout(r, 20));
+
+    // ...and comes straight back while the disconnect event is still building.
+    accounts.push(ADDRESS);
+    provider.emit("connect", { chainId: "0x1" });
+    await new Promise((r) => setTimeout(r, 40));
+
+    const beforeRelease = sent.filter((e) => e.type === "connect").length;
+    release();
+    await new Promise((r) => setTimeout(r, 40));
+
+    // A later wallet signal must see the reconnect as already reported.
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(
+      sent.filter((e) => e.type === "connect").length,
+      "the stale disconnect must not unreport the live session"
+    ).to.equal(beforeRelease);
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "and the live wallet must survive"
+    ).to.equal(ADDRESS.toLowerCase());
+    formo.cleanup?.();
+  });
 });

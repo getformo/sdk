@@ -148,8 +148,16 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private _announcedConnect = new WeakMap<
     EIP1193Provider,
-    { address: string; chainId: number }
+    { address: string; chainId: number; seq: number }
   >();
+
+  /**
+   * Monotonic stamp on each reported connect. Address and provider alone
+   * cannot tell "this session never changed" apart from "the same wallet
+   * disconnected and reconnected", because both leave identical state. The
+   * stamp does, which is what lets a slow disconnect know it is stale.
+   */
+  private _connectSeq = 0;
 
   private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
@@ -591,6 +599,13 @@ export class FormoAnalytics implements IFormoAnalytics {
       ...properties,
     };
 
+    // Snapshot the session being torn down. Emitting is asynchronous, so a
+    // reconnect can land while the disconnect event is still being built.
+    const beforeProvider = this._provider;
+    const beforeSeq = beforeProvider
+      ? this._announcedConnect.get(beforeProvider)?.seq
+      : undefined;
+
     await this.trackEvent(
       EventType.DISCONNECT,
       {
@@ -601,6 +616,25 @@ export class FormoAnalytics implements IFormoAnalytics {
       context,
       callback
     );
+
+    // If a connect was reported for this provider while the event was being
+    // built, a new session already owns the slot and this cleanup is stale.
+    // Running it anyway would wipe that session's state AND its
+    // reported-connect record, so a later wallet signal would emit a second
+    // connect for a connection that is already reported.
+    //
+    // A wallet that takes the slot on a DIFFERENT provider is caught by the
+    // same check: displacing the active provider drops its record, which
+    // moves the stamp too. See issue #344.
+    const afterSeq = beforeProvider
+      ? this._announcedConnect.get(beforeProvider)?.seq
+      : undefined;
+    if (afterSeq !== beforeSeq) {
+      logger.info(
+        "Disconnect: A new session claimed this namespace while the event was in flight; leaving its state intact"
+      );
+      return;
+    }
 
     // Clear the disconnecting chain's namespace state.
     // Per-chain isolation ensures a Solana disconnect never wipes EVM state (and vice versa).
@@ -1808,7 +1842,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     chainId: number
   ): void {
     if (!this.willTrackEvent(chainId)) return;
-    this._announcedConnect.set(provider, { address, chainId });
+    this._announcedConnect.set(provider, {
+      address,
+      chainId,
+      seq: ++this._connectSeq,
+    });
   }
 
   private registerConnectListener(provider: EIP1193Provider): void {
