@@ -141,14 +141,6 @@ export class TrackingPolicy implements ITrackingPolicy {
   }
 
   /**
-   * Whether a persisted identity cookie should be actively purged, not merely
-   * left unwritten.
-   *
-   * Host and path exclusions are deliberately absent: they are transient
-   * current-page states, so a cookie legitimately written on an allowed page
-   * must survive a visit to an excluded route.
-   */
-  /**
    * Whether the CURRENT PAGE is excluded, as opposed to the visitor.
    *
    * Host and path exclusions are transient: identity written on an allowed
@@ -159,6 +151,14 @@ export class TrackingPolicy implements ITrackingPolicy {
     return this.isHostExcluded() || this.isPathExcluded();
   }
 
+  /**
+   * Whether a persisted identity cookie should be actively purged, not merely
+   * left unwritten.
+   *
+   * Host and path exclusions are deliberately absent: they are transient
+   * current-page states, so a cookie legitimately written on an allowed page
+   * must survive a visit to an excluded route.
+   */
   isPersistedIdentityPurgeRequired(): boolean {
     return this.deps.hasOptedOut() || this.isTimezoneExcluded();
   }

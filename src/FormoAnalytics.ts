@@ -44,7 +44,6 @@ import {
   RequestArguments,
   RPCError,
   SignatureStatus,
-  TrackingOptions,
   TransactionStatus,
   ConnectInfo,
   WrappedEIP1193Provider,
@@ -53,8 +52,6 @@ import {
   WRAPPED_REQUEST_REF_SYMBOL,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
-import { getTimezone } from "./utils/timezone";
-import { isLocalhost } from "./validators";
 import {
   AutocaptureEventType,
   ITrackingPolicy,

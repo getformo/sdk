@@ -1,7 +1,9 @@
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
+import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { TrackingPolicy } from "../../src/tracking/TrackingPolicy";
+import * as timezoneModule from "../../src/utils/timezone";
 import { ChainID, Options } from "../../src/types";
 
 /**
@@ -38,9 +40,14 @@ describe("TrackingPolicy", () => {
   });
 
   afterEach(() => {
+    sinon.restore();
     for (const k of ["window", "document", "location"]) delete (global as any)[k];
     jsdom?.window.close();
   });
+
+  /** The visitor's resolved timezone is environment-dependent, so pin it. */
+  const inTimezone = (tz: string | undefined) =>
+    sinon.stub(timezoneModule, "getTimezone").returns(tz as string);
 
   describe("shouldTrack", () => {
     it("refuses everything once the visitor has opted out", () => {
@@ -108,10 +115,44 @@ describe("TrackingPolicy", () => {
   });
 
   describe("suppression and persistence", () => {
-    it("treats opt-out and an excluded timezone as visitor-level", () => {
+    it("treats an opt-out as visitor-level", () => {
       optedOut = true;
       expect(policy({}).isTrackingSuppressed()).to.be.true;
       expect(policy({}).isPersistedIdentityPurgeRequired()).to.be.true;
+    });
+
+    it("treats an excluded timezone as visitor-level", () => {
+      inTimezone("Europe/London");
+      const p = policy({ tracking: { excludeTimezones: ["Europe/London"] } });
+      expect(p.isTrackingSuppressed()).to.be.true;
+      expect(
+        p.isPersistedIdentityPurgeRequired(),
+        "stable for the session, so a stale cookie is purged rather than kept"
+      ).to.be.true;
+      expect(p.shouldTrack()).to.be.false;
+    });
+
+    it("matches the excluded timezone case-insensitively", () => {
+      inTimezone("Europe/London");
+      expect(
+        policy({ tracking: { excludeTimezones: ["europe/LONDON"] } }).isTrackingSuppressed()
+      ).to.be.true;
+    });
+
+    it("allows a timezone that does not match", () => {
+      inTimezone("America/New_York");
+      const p = policy({ tracking: { excludeTimezones: ["Europe/London"] } });
+      expect(p.isTrackingSuppressed()).to.be.false;
+      expect(p.shouldTrack()).to.be.true;
+    });
+
+    it("allows tracking when the timezone cannot be resolved", () => {
+      // Best-effort by design: an unreadable timezone must not silently
+      // suppress a visitor who was never excluded.
+      inTimezone(undefined);
+      expect(
+        policy({ tracking: { excludeTimezones: ["Europe/London"] } }).isTrackingSuppressed()
+      ).to.be.false;
     });
 
     it("treats host and path as page-level, so identity is kept but not written", () => {
