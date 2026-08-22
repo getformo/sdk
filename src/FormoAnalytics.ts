@@ -1469,13 +1469,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         // reconnect later reports again rather than being taken for a
         // duplicate.
         this._announcedConnect.delete(provider);
+        this.beginProviderDisconnect(provider);
 
         // Check if disconnect tracking is enabled before emitting event
         if (this.isAutocaptureEnabled("disconnect")) {
-          this._disconnectEpoch.set(
-            provider,
-            (this._disconnectEpoch.get(provider) ?? 0) + 1
-          );
           try {
             // Pass EVM state explicitly to ensure we have the data for the disconnect event
             await this.disconnect({
@@ -1519,6 +1516,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       // transition is then stale: installing it would overwrite a newer,
       // already-reported session. See issue #344.
       const seqBeforeSwitch = this._sessionSeq.evm;
+      // Every branch below tears down whichever provider is active now, so
+      // its in-flight connect observations must stop counting from here.
+      this.beginProviderDisconnect(this._provider);
       // Capture current EVM state BEFORE any changes
       const currentStoredAddress = this._evmAddress;
       const newProviderAddress = validateAndChecksumAddress(address);
@@ -1908,16 +1908,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       );
 
+      this.beginProviderDisconnect(provider);
+
       // Double-check disconnect tracking is enabled (defensive programming)
       // Note: This listener should only be registered if tracking is enabled
       if (this.isAutocaptureEnabled("disconnect")) {
-        // Same ordering rule as the accountsChanged disconnect path: a
-        // connect observation that began before this point must not claim
-        // the namespace and make this disconnect look stale.
-        this._disconnectEpoch.set(
-          provider,
-          (this._disconnectEpoch.get(provider) ?? 0) + 1
-        );
         try {
           // Pass current state explicitly to ensure we have the data for the disconnect event
           await this.disconnect({
@@ -3669,6 +3664,21 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private clearActiveProvider(): void {
     this._provider = undefined;
+  }
+
+  /**
+   * Record that this provider's connection is being torn down.
+   *
+   * Must run at EVERY teardown site, before anything is awaited, and whether
+   * or not a disconnect event will be emitted. A connect observation that
+   * began earlier must not claim the namespace afterwards, and whether the
+   * app opted into disconnect autocapture has no bearing on that ordering.
+   */
+  private beginProviderDisconnect(provider: EIP1193Provider): void {
+    this._disconnectEpoch.set(
+      provider,
+      (this._disconnectEpoch.get(provider) ?? 0) + 1
+    );
   }
 
   /**

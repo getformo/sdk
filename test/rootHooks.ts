@@ -11,6 +11,12 @@ import { FormoAnalytics } from "../src/FormoAnalytics";
  *
  * Doing this here rather than in each spec means a new spec cannot forget.
  * Specs that call `cleanup()` themselves stay correct: cleanup is idempotent.
+ *
+ * One ordering caveat: this runs AFTER the spec's own `afterEach`, so by the
+ * time it fires a spec may already have deleted `window` / `document` or
+ * closed its jsdom. Clearing timers and closing the queue do not care. Removing
+ * DOM listeners would, which is why `EventQueue.onPageLeave()` captures its
+ * targets at install time rather than reading the globals again here.
  */
 type Init = typeof FormoAnalytics.init;
 

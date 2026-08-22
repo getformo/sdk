@@ -79,6 +79,29 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     return p;
   };
 
+  /**
+   * Poll for a condition instead of sleeping a fixed number of milliseconds.
+   *
+   * These races are orchestrated by parking a continuation inside a gated
+   * `addEvent`, so a fixed sleep encodes an assumption about how fast a
+   * loaded CI runner resumes it. Waiting on the observable signal instead
+   * tests the same ordering without the flake.
+   */
+  async function waitFor(
+    condition: () => boolean,
+    what: string,
+    timeoutMs = 2_000
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  /** Lets every already-queued microtask and timer callback drain. */
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
   async function connectAndCount(order: "connectFirst" | "accountsFirst") {
     const provider = makeProvider();
     (global as any).window.ethereum = provider;
@@ -398,42 +421,41 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     const sent: any[] = [];
+    let disconnectParked = false;
     sandbox.stub((formo as any).eventManager, "addEvent")
       .callsFake(async (e: any) => {
-        if (e.type === "disconnect") await gate;
+        if (e.type === "disconnect") { disconnectParked = true; await gate; }
         sent.push(e);
       });
 
     (formo as any).registerAccountsChangedListener(provider);
     (formo as any).registerConnectListener(provider);
 
+    const connects = () => sent.filter((e) => e.type === "connect").length;
+
     provider.emit("connect", { chainId: "0x1" });
-    await new Promise((r) => setTimeout(r, 40));
-    expect(
-      sent.filter((e) => e.type === "connect").length,
-      "one connect for the first session"
-    ).to.equal(1);
+    await waitFor(() => connects() === 1, "the first connect");
 
     // Wallet drops...
     accounts.length = 0;
     provider.emit("accountsChanged", []);
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => disconnectParked, "the disconnect to park on its gate");
 
     // ...and comes straight back while the disconnect event is still building.
     accounts.push(ADDRESS);
     provider.emit("connect", { chainId: "0x1" });
-    await new Promise((r) => setTimeout(r, 40));
+    await waitFor(() => connects() === 2, "the reconnect to be reported");
 
-    const beforeRelease = sent.filter((e) => e.type === "connect").length;
+    const beforeRelease = connects();
     release();
-    await new Promise((r) => setTimeout(r, 40));
+    await settle();
 
     // A later wallet signal must see the reconnect as already reported.
     provider.emit("accountsChanged", [ADDRESS]);
-    await new Promise((r) => setTimeout(r, 40));
+    await settle();
 
     expect(
-      sent.filter((e) => e.type === "connect").length,
+      connects(),
       "the stale disconnect must not unreport the live session"
     ).to.equal(beforeRelease);
     expect(
@@ -454,9 +476,10 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     const sent: any[] = [];
+    let parked = false;
     sandbox.stub((formo as any).eventManager, "addEvent")
       .callsFake(async (e: any) => {
-        if (e.type === "disconnect") await gate;
+        if (e.type === "disconnect") { parked = true; await gate; }
         sent.push(e);
       });
 
@@ -465,12 +488,12 @@ describe("Duplicate connect on the EIP-1193 path", () => {
 
     // Wallet A disconnects; the event stalls while B takes the namespace.
     const disconnecting = formo.disconnect({ chainId: SOL_CHAIN, address: SOL_A as any });
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => parked, "the Solana disconnect to park on its gate");
     await formo.connect({ chainId: SOL_CHAIN, address: SOL_B as any });
 
     release();
     await disconnecting;
-    await new Promise((r) => setTimeout(r, 20));
+    await settle();
 
     expect(
       formo.currentAddress,
@@ -488,19 +511,22 @@ describe("Duplicate connect on the EIP-1193 path", () => {
 
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
+    let parked = false;
     sandbox.stub((formo as any).eventManager, "addEvent")
-      .callsFake(async (e: any) => { if (e.type === "disconnect") await gate; });
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { parked = true; await gate; }
+      });
 
     await formo.connect({ chainId: 1, address: ADDRESS });
     const disconnecting = formo.disconnect({ chainId: 1, address: ADDRESS });
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => parked, "the disconnect to park on its gate");
 
     formo.syncWalletState({ chainId: 1, address: OTHER });
     expect(formo.currentAddress).to.equal(OTHER);
 
     release();
     await disconnecting;
-    await new Promise((r) => setTimeout(r, 20));
+    await settle();
 
     expect(
       formo.currentAddress,
@@ -526,9 +552,12 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     } as any);
 
     let release!: () => void;
+    let parked = false;
     const gate = new Promise<void>((r) => { release = r; });
     sandbox.stub((formo as any).eventManager, "addEvent")
-      .callsFake(async (e: any) => { if (e.type === "disconnect") await gate; });
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { parked = true; await gate; }
+      });
 
     for (const p of [providerA, providerB, providerC]) {
       (formo as any).registerAccountsChangedListener(p);
@@ -537,25 +566,26 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     }
 
     providerA.emit("connect", { chainId: "0x1" });
-    await new Promise((r) => setTimeout(r, 40));
-    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(),
+      "A to become active"
+    );
 
     // B signals a switch; its handler stalls on A's disconnect event.
     providerB.emit("accountsChanged", [OTHER]);
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => parked, "the switch to park on A's disconnect event");
 
     // C overtakes: a chain change claims the active slot, then C connects.
     providerC.emit("chainChanged", "0x89");
-    await new Promise((r) => setTimeout(r, 20));
+    await settle();
     providerC.emit("connect", { chainId: "0x89" });
-    await new Promise((r) => setTimeout(r, 40));
-    expect(
-      formo.currentAddress?.toLowerCase(),
-      "C should own the slot before the stalled handler resumes"
-    ).to.equal(THIRD.toLowerCase());
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === THIRD.toLowerCase(),
+      "C to claim the slot before the stalled handler resumes"
+    );
 
     release();
-    await new Promise((r) => setTimeout(r, 60));
+    await settle();
 
     expect(
       formo.currentAddress?.toLowerCase(),
@@ -579,8 +609,11 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     let releaseDisconnect!: () => void;
     const disconnectGate = new Promise<void>((r) => { releaseDisconnect = r; });
 
+    let disconnectParked = false;
     sandbox.stub((formo as any).eventManager, "addEvent")
-      .callsFake(async (e: any) => { if (e.type === "disconnect") await disconnectGate; });
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { disconnectParked = true; await disconnectGate; }
+      });
 
     (formo as any).registerAccountsChangedListener(provider);
     (formo as any).registerConnectListener(provider);
@@ -590,24 +623,26 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
 
+    let addressParked = false;
     const realGetAddress = (formo as any).getAddress.bind(formo);
     sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+      addressParked = true;
       await addressGate;
       return realGetAddress(p);
     });
 
     // A second connect signal starts resolving its address...
     provider.emit("connect", { chainId: "0x1" });
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => addressParked, "the connect to park resolving its address");
 
     // ...and the wallet goes away while it is still resolving.
     provider.emit("accountsChanged", []);
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => disconnectParked, "the disconnect to park on its gate");
 
     releaseAddress();
-    await new Promise((r) => setTimeout(r, 30));
+    await settle();
     releaseDisconnect();
-    await new Promise((r) => setTimeout(r, 40));
+    await settle();
 
     expect(
       formo.currentAddress,
@@ -647,25 +682,35 @@ describe("Duplicate connect on the EIP-1193 path", () => {
 
     // Stall the "does A still have accounts?" probe.
     let releaseProbe!: () => void;
+    let probeParked = false;
     const probeGate = new Promise<void>((r) => { releaseProbe = r; });
     const realGetAccounts = (formo as any).getAccounts.bind(formo);
     sandbox.stub(formo as any, "getAccounts").callsFake(async (p: any) => {
-      await probeGate;
+      // Stall only the probe of the outgoing wallet. `getAddress()` routes
+      // through here too, so stalling every provider would also block C and
+      // the race under test could never be set up.
+      if (p === providerA) {
+        probeParked = true;
+        await probeGate;
+      }
       return realGetAccounts(p);
     });
 
     providerB.emit("accountsChanged", [OTHER]);
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => probeParked, "the switch to park on its accounts probe");
 
     // C claims the namespace while the probe is stalled.
     providerC.emit("chainChanged", "0x89");
-    await new Promise((r) => setTimeout(r, 20));
+    await settle();
     providerC.emit("connect", { chainId: "0x89" });
-    await new Promise((r) => setTimeout(r, 40));
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === THIRD.toLowerCase(),
+      "C to claim the namespace during the probe"
+    );
     const disconnectsBefore = sent.filter((e) => e.type === "disconnect").length;
 
     releaseProbe();
-    await new Promise((r) => setTimeout(r, 60));
+    await settle();
 
     expect(
       sent.filter((e) => e.type === "disconnect").length,
@@ -691,8 +736,11 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     const addressGate = new Promise<void>((r) => { releaseAddress = r; });
     let releaseDisconnect!: () => void;
     const disconnectGate = new Promise<void>((r) => { releaseDisconnect = r; });
+    let disconnectParked = false;
     sandbox.stub((formo as any).eventManager, "addEvent")
-      .callsFake(async (e: any) => { if (e.type === "disconnect") await disconnectGate; });
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { disconnectParked = true; await disconnectGate; }
+      });
 
     (formo as any).registerAccountsChangedListener(provider);
     (formo as any).registerConnectListener(provider);
@@ -702,25 +750,79 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
 
+    let addressParked = false;
     const realGetAddress = (formo as any).getAddress.bind(formo);
     sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+      addressParked = true;
       await addressGate;
       return realGetAddress(p);
     });
 
     provider.emit("connect", { chainId: "0x1" });
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => addressParked, "the connect to park resolving its address");
     provider.emit("disconnect");
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => disconnectParked, "the disconnect to park on its gate");
 
     releaseAddress();
-    await new Promise((r) => setTimeout(r, 30));
+    await settle();
     releaseDisconnect();
-    await new Promise((r) => setTimeout(r, 40));
+    await settle();
 
     expect(
       formo.currentAddress,
       "the wallet disconnected, so no address may survive"
+    ).to.equal(undefined);
+    formo.cleanup?.();
+  });
+
+  it("orders a disconnect against a stalled connect even when the event is not captured", async () => {
+    // Whether the app opted into disconnect autocapture has no bearing on
+    // ordering. The epoch used to advance only inside the capturing branch,
+    // so with `disconnect: false` a connect observation that predated the
+    // disconnect still resurrected a wallet that had gone.
+    const provider = makeProvider([ADDRESS]);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      autocapture: { connect: true, chain: true, disconnect: false },
+    } as any);
+
+    let releaseAddress!: () => void;
+    let addressParked = false;
+    const addressGate = new Promise<void>((r) => { releaseAddress = r; });
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+    (formo as any).registerDisconnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(),
+      "the first connect"
+    );
+
+    const realGetAddress = (formo as any).getAddress.bind(formo);
+    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+      addressParked = true;
+      await addressGate;
+      return realGetAddress(p);
+    });
+
+    // A connect observation begins...
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(() => addressParked, "the connect to park resolving its address");
+
+    // ...and the wallet goes away. No disconnect event is emitted, and the
+    // state is cleared synchronously.
+    provider.emit("disconnect");
+    await waitFor(() => formo.currentAddress === undefined, "state to be cleared");
+
+    releaseAddress();
+    await settle();
+
+    expect(
+      formo.currentAddress,
+      "the stale connect must not resurrect a wallet that disconnected"
     ).to.equal(undefined);
     formo.cleanup?.();
   });

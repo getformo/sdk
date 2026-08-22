@@ -513,7 +513,12 @@ export class EventQueue implements IEventQueue {
       }
     };
 
+    // Captured at install time, not read again at removal time. Teardown can
+    // run after the host has swapped or removed these globals (a test harness
+    // replacing jsdom between specs, for one), and removing a listener from a
+    // different object than it was added to silently leaves it attached.
     const globalTarget = globalThis as unknown as typeof window;
+    const documentTarget = document;
 
     // Catches the unloading of the page (e.g., closing the tab or navigating away).
     // Includes user actions like clicking a link, entering a new URL,
@@ -525,10 +530,10 @@ export class EventQueue implements IEventQueue {
     globalTarget.addEventListener("focus", onFocus);
 
     // Catches the page being hidden, including scenarios like closing the tab.
-    document.addEventListener("pagehide", onPageHide);
+    documentTarget.addEventListener("pagehide", onPageHide);
 
     // Catches visibility changes, such as switching tabs or minimizing the browser.
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    documentTarget.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       if (resetTimer) {
@@ -538,8 +543,8 @@ export class EventQueue implements IEventQueue {
       globalTarget.removeEventListener("beforeunload", onBeforeUnload);
       globalTarget.removeEventListener("blur", onBlur);
       globalTarget.removeEventListener("focus", onFocus);
-      document.removeEventListener("pagehide", onPageHide);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      documentTarget.removeEventListener("pagehide", onPageHide);
+      documentTarget.removeEventListener("visibilitychange", onVisibilityChange);
     };
   };
 }

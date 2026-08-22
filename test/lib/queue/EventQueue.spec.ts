@@ -851,6 +851,35 @@ describe("EventQueue", () => {
       expect(flushSpy.callCount, "listener should be gone after close").to.equal(2);
     });
 
+    it("should still remove its listeners when the globals have moved on", async () => {
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+      const flushSpy = sinon.spy(eventQueue, "flush");
+      const installedDocument = jsdom.window.document;
+
+      // Teardown can run after the host swapped these out. Removal must still
+      // target the objects the listeners were added to.
+      const other = new JSDOM("<!DOCTYPE html><html><body></body></html>");
+      Object.defineProperty(global, "document", {
+        value: other.window.document, writable: true, configurable: true,
+      });
+
+      eventQueue.close();
+
+      Object.defineProperty(global, "document", {
+        value: installedDocument, writable: true, configurable: true,
+      });
+      // The page-leave callback only flushes when the page became
+      // inaccessible, so the document has to actually report hidden.
+      Object.defineProperty(installedDocument, "visibilityState", {
+        value: "hidden", configurable: true,
+      });
+      installedDocument.dispatchEvent(new jsdom.window.Event("visibilitychange"));
+      await clock.tickAsync(1);
+
+      expect(flushSpy.called, "the document listener should be gone").to.be.false;
+      other.window.close();
+    });
+
     it("should report closed state and tolerate repeat calls", () => {
       eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
       expect(eventQueue.isClosed).to.be.false;
