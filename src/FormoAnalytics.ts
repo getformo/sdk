@@ -54,7 +54,7 @@ import {
   ITrackingPolicy,
   TrackingPolicy,
 } from "./tracking/TrackingPolicy";
-import { WalletStateStore } from "./wallet/WalletStateStore";
+import { Observation, WalletStateStore } from "./wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./evm/EvmProviderRegistry";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
@@ -100,22 +100,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     { address: string; chainId: number }
   >();
 
-  /**
-   * How many disconnects a provider has begun. Ordering, not presence.
-   *
-   * A wallet can emit `connect` and then `accountsChanged([])` back to back.
-   * The connect handler is still resolving the address when the disconnect
-   * starts, and its late continuation would otherwise claim the namespace -
-   * which the disconnect then reads as a reconnect, so it skips its cleanup
-   * and the departed wallet stays attached to every later event.
-   *
-   * A plain "is disconnecting" flag cannot express this: a genuine reconnect
-   * that arrives DURING the disconnect must still be reported. What separates
-   * the two is whether the connect observation began before the disconnect
-   * did, which is exactly what comparing this count across the await tells us.
-   */
-  private _disconnectEpoch = new WeakMap<EIP1193Provider, number>();
-
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
   /** Which EVM wallets exist, and what is known about each. */
@@ -124,8 +108,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   private trackingPolicy: ITrackingPolicy;
   // Cache for injected provider detection to avoid redundant operations
   // Flag to prevent concurrent processing of accountsChanged events
-  private _processingAccountsChanged: boolean = false;
-
   // Set to efficiently track seen providers for deduplication and O(1) lookup
   /**
    * Wagmi event handler for tracking wallet events via Wagmi v2
@@ -533,9 +515,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
-    // A new wallet now owns this namespace. Anything that was already
-    // tearing down the previous session must not undo this.
-    this.wallet.claim(chainId);
+    // A new wallet now owns this namespace. Anything already tearing down
+    // the previous session must not undo this. An emitted connect always
+    // counts, even when the address is the one already there: a wallet that
+    // disconnects and reconnects leaves identical state.
+    this.wallet.observe(this.wallet.namespaceOf(chainId));
 
     this.setChainState(chainId, { address: validAddress });
 
@@ -599,7 +583,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Snapshot the session being torn down. Emitting is asynchronous, so a
     // reconnect can land while the disconnect event is still being built.
     const namespace = this.wallet.namespaceOf(chainId);
-    const beforeSeq = this.wallet.generation(namespace);
+    const before = this.wallet.snapshot(namespace);
 
     await this.trackEvent(
       EventType.DISCONNECT,
@@ -617,7 +601,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // wipe that session's state AND its reported-connect record, so a later
     // wallet signal would emit a second connect for a connection that is
     // already reported. See issue #344.
-    if (this.wallet.hasNewSessionSince(namespace, beforeSeq)) {
+    if (!this.wallet.isUnchangedSince(namespace, before)) {
       logger.info(
         "Disconnect: A new session claimed this namespace while the event was in flight; leaving its state intact"
       );
@@ -1499,24 +1483,17 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     logger.info("onAccountsChanged", accounts);
 
-    // Prevent concurrent processing of accountsChanged events to avoid race conditions
-    if (this._processingAccountsChanged) {
-      logger.debug(
-        "OnAccountsChanged: Already processing accountsChanged, skipping",
-        {
-          provider: this.getProviderInfo(provider).name,
-        }
-      );
-      return;
-    }
-
-    this._processingAccountsChanged = true;
-
-    try {
-      await this._handleAccountsChanged(provider, accounts);
-    } finally {
-      this._processingAccountsChanged = false;
-    }
+    // Take the ticket BEFORE any async work, so the order recorded is the
+    // order the wallet's signals arrived in.
+    //
+    // This used to drop a second `accountsChanged` outright while the first
+    // was still being processed. Dropping is not ordering: a wallet that
+    // disconnected and immediately reconnected had its reconnect thrown
+    // away, and the disconnect then cleared a namespace that was live again.
+    // Superseding keeps both signals, and lets the older handler abandon its
+    // captured state when it resumes.
+    const observation = this.wallet.observe("evm");
+    await this._handleAccountsChanged(provider, accounts, observation);
   }
 
   /**
@@ -1531,7 +1508,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private async _handleAccountsChanged(
     provider: EIP1193Provider,
-    accounts: string[]
+    accounts: string[],
+    observation: Observation
   ): Promise<void> {
     if (accounts.length === 0) {
       // Handle wallet disconnect for active provider only
@@ -1546,7 +1524,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // reconnect later reports again rather than being taken for a
         // duplicate.
         this._announcedConnect.delete(provider);
-        this.beginProviderDisconnect(provider);
+        this.wallet.beginDisconnect("evm");
 
         // Check if disconnect tracking is enabled before emitting event
         if (this.isAutocaptureEnabled("disconnect")) {
@@ -1592,10 +1570,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       // as a wallet switch, so it does not need this handler at all). This
       // transition is then stale: installing it would overwrite a newer,
       // already-reported session. See issue #344.
-      const seqBeforeSwitch = this.wallet.generation("evm");
-      // Every branch below tears down whichever provider is active now, so
-      // its in-flight connect observations must stop counting from here.
-      this.beginProviderDisconnect(this._provider);
       // Capture current EVM state BEFORE any changes
       const currentStoredAddress = this._evmAddress;
       const newProviderAddress = validateAndChecksumAddress(address);
@@ -1615,10 +1589,10 @@ export class FormoAnalytics implements IFormoAnalytics {
         const activeProviderAccounts = await this.getAccounts(this._provider);
 
         // The probe is asynchronous too, so check before issuing anything.
-        // Every branch below reads `this._evmAddress` / `this._evmChainId`,
-        // so a switch that went stale during the probe would emit a false
-        // disconnect for whoever claimed the namespace, and clear them.
-        if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
+        // Every branch below reads the CURRENT evm state, so a switch that
+        // went stale during the probe would emit a false disconnect for
+        // whoever claimed the namespace, and clear them.
+        if (!this.wallet.isCurrent(observation)) return;
 
         logger.info("OnAccountsChanged: Checking current provider accounts", {
           activeProvider: this.getProviderInfo(this._provider).name,
@@ -1658,7 +1632,7 @@ export class FormoAnalytics implements IFormoAnalytics {
               this.clearChainState('evm');
             }
 
-            if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
+            if (!this.wallet.isCurrent(observation)) return;
 
             // Clear state and let the new provider become active
             this.clearActiveProvider();
@@ -1697,7 +1671,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             this.clearChainState('evm');
           }
 
-          if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
+          if (!this.wallet.isCurrent(observation)) return;
         }
       } catch (error) {
         logger.warn(
@@ -1726,7 +1700,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           this.clearChainState('evm');
         }
 
-        if (this.isStaleEvmTransition(seqBeforeSwitch)) return;
+        if (!this.wallet.isCurrent(observation)) return;
       }
     }
 
@@ -1985,7 +1959,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       );
 
-      this.beginProviderDisconnect(provider);
+      this.wallet.beginDisconnect("evm");
 
       // Double-check disconnect tracking is enabled (defensive programming)
       // Note: This listener should only be registered if tracking is enabled
@@ -2017,9 +1991,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     logger.info("onConnected", connection);
 
-    // Taken before any await, so it reflects the state this observation
-    // actually saw.
-    const disconnectEpoch = this._disconnectEpoch.get(provider) ?? 0;
+    // Taken before any await. A connect handler asks a narrower question
+    // than a switch does: not "am I still the newest signal?" but "did the
+    // wallet go away after I started?". A newer CONNECT must not silence
+    // this one, because the two handlers negotiate which of them reports via
+    // the announced-connect record, and suppressing both loses the event.
+    const disconnectsBefore = this.wallet.disconnectsSoFar("evm");
 
     try {
       if (!connection?.chainId || typeof connection.chainId !== "string")
@@ -2030,13 +2007,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.rememberProviderChain(provider, chainId);
       const address = await this.getAddress(provider);
 
-      // The wallet went away after this observation began. Claiming the
-      // namespace now would make the disconnect still in flight look stale,
-      // so it would skip its cleanup. A reconnect that started AFTER the
-      // disconnect sees an unchanged count here and is reported normally.
-      if ((this._disconnectEpoch.get(provider) ?? 0) !== disconnectEpoch) {
+      // A newer signal arrived while we were resolving the address. Claiming
+      // the namespace now would write this stale view over it, and would make
+      // a disconnect still in flight look stale so it skipped its cleanup. A
+      // reconnect that started AFTER the disconnect holds a newer ticket and
+      // is reported normally.
+      if (this.wallet.disconnectsSoFar("evm") !== disconnectsBefore) {
         logger.info(
-          "onConnected: This provider is disconnecting; dropping a connect observation that the disconnect has overtaken"
+          "onConnected: The wallet disconnected after this observation began; dropping it"
         );
         return;
       }
@@ -2971,31 +2949,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
 
 
-  /**
-   * Record that this provider's connection is being torn down.
-   *
-   * Must run at EVERY teardown site, before anything is awaited, and whether
-   * or not a disconnect event will be emitted. A connect observation that
-   * began earlier must not claim the namespace afterwards, and whether the
-   * app opted into disconnect autocapture has no bearing on that ordering.
-   */
-  private beginProviderDisconnect(provider: EIP1193Provider): void {
-    this._disconnectEpoch.set(
-      provider,
-      (this._disconnectEpoch.get(provider) ?? 0) + 1
-    );
-  }
 
-  /**
-   * True when a newer session claimed the EVM namespace since `seq` was
-   * taken, so whatever transition took it is stale and must be abandoned.
-   */
-  private isStaleEvmTransition(seq: number): boolean {
-    if (!this.wallet.hasNewSessionSince("evm", seq)) return false;
-    logger.info(
-      "OnAccountsChanged: A newer session claimed the wallet slot while this switch was in flight; abandoning it"
-    );
-    return true;
-  }
 
 }

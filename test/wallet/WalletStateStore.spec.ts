@@ -94,49 +94,67 @@ describe("WalletStateStore", () => {
     });
   });
 
-  describe("session generation", () => {
-    it("bumps when a namespace changes hands", () => {
+  describe("ordering", () => {
+    it("supersedes an older observation with a newer one", () => {
       const s = store();
-      const before = s.generation("evm");
-      s.set(1, { address: EVM_A });
-      expect(s.hasNewSessionSince("evm", before)).to.be.true;
+      const first = s.observe("evm");
+      const second = s.observe("evm");
+      expect(s.isCurrent(second)).to.be.true;
+      expect(
+        s.isCurrent(first),
+        "an older handler must not write over a newer one"
+      ).to.be.false;
     });
 
-    it("does not bump when the same wallet is re-written", () => {
-      // A chain switch re-writes the same address. Bumping there would make a
-      // legitimate disconnect that raced it decide it was stale, and the
-      // wallet state would be left behind.
+    it("orders each namespace separately", () => {
       const s = store();
-      s.set(1, { address: EVM_A });
-      const after = s.generation("evm");
-      s.set(137, { address: EVM_A });
-      expect(s.hasNewSessionSince("evm", after)).to.be.false;
+      const evm = s.observe("evm");
+      s.observe("solana");
+      expect(s.isCurrent(evm), "Solana activity must not supersede EVM").to.be.true;
     });
 
-    it("ignores address casing when deciding whether a wallet changed", () => {
+    it("lets a snapshot ask the same question without taking a ticket", () => {
+      // `disconnect()` is reached both directly and from a handler that
+      // already holds a ticket. Taking a fresh one there would invalidate its
+      // own caller.
       const s = store();
-      s.set(1, { address: EVM_A });
-      const after = s.generation("evm");
-      s.set(1, { address: EVM_A.toLowerCase() as Address });
-      expect(s.hasNewSessionSince("evm", after)).to.be.false;
+      const held = s.observe("evm");
+      const snap = s.snapshot("evm");
+      expect(s.isUnchangedSince("evm", snap)).to.be.true;
+      expect(s.isCurrent(held), "the caller's ticket survives").to.be.true;
+      s.observe("evm");
+      expect(s.isUnchangedSince("evm", snap)).to.be.false;
     });
 
-    it("bumps on claim() even when the address is unchanged", () => {
-      // A disconnect and reconnect of the same wallet leaves identical state,
-      // so an emitted connect has to say so explicitly.
+    it("counts disconnects separately from observations", () => {
+      // A connect handler asks "did the wallet go away after I started?".
+      // A newer CONNECT must not answer yes, or both handlers suppress and
+      // the connect is lost entirely.
       const s = store();
-      s.set(1, { address: EVM_A });
-      const after = s.generation("evm");
-      s.claim(1);
-      expect(s.hasNewSessionSince("evm", after)).to.be.true;
+      const before = s.disconnectsSoFar("evm");
+      s.observe("evm");
+      expect(
+        s.disconnectsSoFar("evm"),
+        "an ordinary observation is not a disconnect"
+      ).to.equal(before);
+      s.beginDisconnect("evm");
+      expect(s.disconnectsSoFar("evm")).to.equal(before + 1);
     });
 
-    it("tracks each namespace separately", () => {
+    it("counts disconnects per namespace", () => {
       const s = store();
-      const evmBefore = s.generation("evm");
-      s.set(SOL_CHAIN, { address: SOL_A });
-      expect(s.hasNewSessionSince("evm", evmBefore), "Solana must not move EVM")
-        .to.be.false;
+      s.beginDisconnect("solana");
+      expect(s.disconnectsSoFar("evm")).to.equal(0);
+    });
+
+    it("treats an integration's syncWalletState as a signal in the order", () => {
+      const s = store();
+      const held = s.observe("evm");
+      s.syncWalletState({ chainId: 1, address: EVM_A });
+      expect(
+        s.isCurrent(held),
+        "a wallet adopted by an integration supersedes an older handler"
+      ).to.be.false;
     });
   });
 
@@ -343,30 +361,16 @@ describe("WalletStateStore", () => {
   });
 
   describe("review follow-ups", () => {
-    it("treats two Solana addresses differing only in case as different wallets", () => {
-      // Base58 is case-sensitive. Folding case here would let a stale
-      // disconnect decide the new session was the same one and clear it.
+    it("orders a Solana wallet swap even when only the case differs", () => {
+      // Base58 is case-sensitive, so these are different wallets. The old
+      // guard compared addresses to decide whether a session had changed
+      // hands, and lowercased every namespace, folding them into one. The
+      // ordering model does not compare addresses at all: any wallet signal
+      // supersedes an older handler, whatever the addresses look like.
       const s = store();
-      s.set(SOL_CHAIN, { address: SOL_A });
-      const after = s.generation("solana");
-      const cased = (SOL_A.slice(0, -1) +
-        (SOL_A.slice(-1) === SOL_A.slice(-1).toUpperCase()
-          ? SOL_A.slice(-1).toLowerCase()
-          : SOL_A.slice(-1).toUpperCase())) as Address;
-      s.set(SOL_CHAIN, { address: cased });
-      expect(cased).to.not.equal(SOL_A);
-      expect(
-        s.hasNewSessionSince("solana", after),
-        "a different Base58 address is a different wallet"
-      ).to.be.true;
-    });
-
-    it("still folds case for EVM, where hex is case-insensitive", () => {
-      const s = store();
-      s.set(1, { address: EVM_A });
-      const after = s.generation("evm");
-      s.set(1, { address: EVM_A.toLowerCase() as Address });
-      expect(s.hasNewSessionSince("evm", after)).to.be.false;
+      const held = s.observe("solana");
+      s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+      expect(s.isCurrent(held)).to.be.false;
     });
 
     it("rejects a snapshot whose chain is present but unusable", () => {
@@ -417,4 +421,5 @@ describe("WalletStateStore", () => {
       expect(s.address, "the connected wallet wins").to.equal(EVM_B);
     });
   });
+
 });

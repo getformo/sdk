@@ -826,4 +826,83 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.equal(undefined);
     formo.cleanup?.();
   });
+
+  it("does not lose a reconnect that arrives while a disconnect is still building", async () => {
+    // Issue #341, finding 1. A second `accountsChanged` used to be DROPPED
+    // outright while the first was still being processed, so a wallet that
+    // dropped and came straight back had its reconnect thrown away, and the
+    // disconnect then cleared a namespace that was live again.
+    const accounts = [ADDRESS];
+    const provider = makeProvider(accounts);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    let parked = false;
+    const gate = new Promise<void>((r) => { release = r; });
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { parked = true; await gate; }
+        sent.push(e);
+      });
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(() => sent.some((e) => e.type === "connect"), "the first connect");
+
+    // Wallet drops, and the disconnect event stalls...
+    accounts.length = 0;
+    provider.emit("accountsChanged", []);
+    await waitFor(() => parked, "the disconnect to park on its gate");
+
+    // ...and the wallet comes back through the SAME handler, which used to
+    // refuse to run at all while one was in flight.
+    accounts.push(OTHER);
+    provider.emit("accountsChanged", [OTHER]);
+    await settle();
+
+    release();
+    await settle();
+
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "the reconnected wallet must survive the superseded disconnect"
+    ).to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let an integration's adoption be undone by a stale disconnect", async () => {
+    // Issue #341, finding 5. The wagmi handler adopts a wallet through
+    // `syncWalletState()`. When it re-adopts the SAME address, an
+    // address-comparison guard saw no change and let the stale cleanup run.
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    let parked = false;
+    const gate = new Promise<void>((r) => { release = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { parked = true; await gate; }
+      });
+
+    await formo.connect({ chainId: 1, address: ADDRESS });
+    const disconnecting = formo.disconnect({ chainId: 1, address: ADDRESS });
+    await waitFor(() => parked, "the disconnect to park on its gate");
+
+    // Re-adopting the SAME wallet, which is what a wagmi reconnect looks like.
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+
+    release();
+    await disconnecting;
+    await settle();
+
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "a re-adopted wallet is still a live session"
+    ).to.equal(ADDRESS.toLowerCase());
+    formo.cleanup?.();
+  });
 });
