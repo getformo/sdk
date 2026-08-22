@@ -36,6 +36,13 @@ jobs:
       - name: Build SDK
         run: pnpm build
 
+      # The CDN build is what a site pays for on every page load, so the
+      # budget only means something if something checks it. Nothing did:
+      # `size-limit` exits 1 when over, but no job ran it, so main sat over
+      # the limit unnoticed (see #332, where it had drifted 9 kB past).
+      - name: Check bundle size
+        run: pnpm size
+
   version-sync:
     runs-on: ubuntu-latest
     steps:
