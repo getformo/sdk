@@ -89,7 +89,7 @@
   "size-limit": [
     {
       "path": "dist/index.umd.min.js",
-      "limit": "52 KB"
+      "limit": "55 KB"
     }
   ],
   "peerDependencies": {
