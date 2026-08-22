@@ -86,6 +86,24 @@ export class FormoAnalytics implements IFormoAnalytics {
   private get _provider(): EIP1193Provider | undefined {
     return this._chainState.evm.provider;
   }
+  /**
+   * Drop a provider's reported-connect record when it stops being active.
+   *
+   * The active provider is displaced from several places, and not all of them
+   * go through the `_provider` setter: `setChainState()` writes
+   * `_chainState.evm.provider` directly and `clearChainState()` replaces the
+   * whole namespace. Guarding only the setter left A's record alive across a
+   * real A-to-B switch, so returning to A was suppressed.
+   */
+  private forgetConnectRecord(
+    previous: EIP1193Provider | undefined,
+    next: EIP1193Provider | undefined
+  ): void {
+    if (previous && previous !== next) {
+      this._announcedConnect.delete(previous);
+    }
+  }
+
   private set _provider(value: EIP1193Provider | undefined) {
     const previous = this._chainState.evm.provider;
     // A provider that stops being the active one has, from this SDK's point of
@@ -98,9 +116,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // provider is reassigned from several paths - `accountsChanged`,
     // `chainChanged`, `connect`, `handleProviderMismatch`, `untrackProvider` -
     // and any one of them missed would reopen the same hole.
-    if (previous && previous !== value) {
-      this._announcedConnect.delete(previous);
-    }
+    this.forgetConnectRecord(previous, value);
     this._chainState.evm.provider = value;
   }
   private get _evmAddress(): Address | undefined {
@@ -1291,7 +1307,12 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.debug("TrackProvider: Skipping request wrapping (both signature and transaction autocapture disabled)");
       }
 
-      if (this.isAutocaptureEnabled("disconnect")) {
+      // Registered UNCONDITIONALLY: this listener also ends the provider's
+      // reported-connect record, and with `{ connect: true, disconnect: false }`
+      // a wallet that disconnected and reconnected would otherwise find its
+      // old record still standing and have the new connect suppressed. Whether
+      // a disconnect EVENT is emitted is decided inside the handler.
+      {
         this.registerDisconnectListener(provider);
       }
 
@@ -3306,6 +3327,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       ns.chainId = namespaceOrChainId;
     }
     if (namespace === 'evm' && 'provider' in update) {
+      // Displacing the active provider ends its connection as far as this SDK
+      // is concerned, so the connect it reported stops counting.
+      this.forgetConnectRecord(
+        (ns as EvmChainState).provider,
+        update.provider
+      );
       (ns as EvmChainState).provider = update.provider;
     }
     this._activeNamespace = namespace;
@@ -3320,6 +3347,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       ? namespaceOrChainId
       : this.getNamespace(namespaceOrChainId);
     if (namespace === 'evm') {
+      // Same rule: wiping the namespace drops the active provider.
+      this.forgetConnectRecord(this._chainState.evm.provider, undefined);
       this._chainState.evm = {};
     } else {
       this._chainState.solana = {};

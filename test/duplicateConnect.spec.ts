@@ -62,6 +62,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
   });
 
   const makeProvider = (accounts: string[] = [ADDRESS]) => {
+    // `accounts` is captured by reference so a test can empty it, which is how
+    // a wallet stops holding the active slot.
     const handlers: Record<string, ((...a: unknown[]) => void)[]> = {};
     const p: any = {
       chainId: "0x1",
@@ -247,8 +249,13 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     const b = makeProvider([OTHER]);
     (global as any).window.ethereum = a;
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
-    const connect = sandbox.stub(formo, "connect").resolves();
-    sandbox.stub(formo, "disconnect").resolves();
+    // `disconnect()` is deliberately NOT stubbed: it is what clears the active
+    // provider on a real switch, and stubbing it hid the fact that the record
+    // survived that path. Sends are counted at the queue instead.
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { sent.push(e); });
+    const connect = { get callCount() { return sent.filter((e) => e.type === "connect").length; } };
     for (const p of [a, b]) {
       (formo as any).registerAccountsChangedListener(p);
       (formo as any).registerConnectListener(p);
@@ -273,6 +280,83 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       connect.callCount,
       "returning to A is reported, not suppressed by a stale record"
     ).to.be.greaterThan(afterB);
+    formo.cleanup?.();
+  });
+
+  it("reports a reconnect even when disconnect autocapture is off", async () => {
+    // The record is cleared by the `disconnect` listener, which used to be
+    // registered only when disconnect autocapture was enabled - so with
+    // `{ connect: true, disconnect: false }` a reconnect found the old record
+    // still standing and was suppressed.
+    const provider = makeProvider();
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      autocapture: { connect: true, disconnect: false },
+    });
+    const connect = sandbox.stub(formo, "connect").resolves();
+    // Registered through the real tracking path, so the registration gate
+    // itself is exercised. Wiring the listeners by hand would bypass the very
+    // condition this test is about.
+    (formo as any).isWagmiMode = false;
+    (formo as any).trackEIP1193Provider(provider);
+    await new Promise((r) => setTimeout(r, 40));
+
+    provider.emit("connect", { chainId: "0x1" });
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(connect.callCount, "first connection reported").to.equal(1);
+
+    // The wallet drops via the provider's own `disconnect` event.
+    provider.emit("disconnect");
+    await new Promise((r) => setTimeout(r, 60));
+
+    provider.emit("connect", { chainId: "0x1" });
+    provider.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(connect.callCount, "and so is the reconnect").to.equal(2);
+    formo.cleanup?.();
+  });
+
+  it("drops a displaced provider's record on a chain-driven switch", async () => {
+    // `handleProviderMismatch()` replaces the active provider through
+    // `setChainState()`, which does not go via the `_provider` setter. A's
+    // record has to be cleared there too, or coming back to A is suppressed.
+    const a = makeProvider([ADDRESS]);
+    const bAccounts = [OTHER];
+    const b = makeProvider(bAccounts);
+    (global as any).window.ethereum = a;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const connect = sandbox.stub(formo, "connect").resolves();
+    for (const p of [a, b]) {
+      (formo as any).registerAccountsChangedListener(p);
+      (formo as any).registerConnectListener(p);
+      (formo as any).registerChainChangedListener(p);
+    }
+
+    a.emit("connect", { chainId: "0x1" });
+    a.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(connect.callCount, "A reported").to.equal(1);
+
+    // B takes the active slot via a chain event, not a disconnect. This goes
+    // through handleProviderMismatch -> setChainState, which never touches the
+    // `_provider` setter.
+    b.emit("chainChanged", "0x89");
+    await new Promise((r) => setTimeout(r, 60));
+    expect((formo as any)._provider, "B displaced A").to.equal(b);
+
+    // B then stops holding accounts, so A can take the slot back. Without
+    // this the SDK correctly refuses to let a background wallet steal it.
+    bAccounts.length = 0;
+
+    a.emit("accountsChanged", [ADDRESS]);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(
+      connect.callCount,
+      "A's return is reported after being displaced"
+    ).to.be.greaterThan(1);
     formo.cleanup?.();
   });
 
