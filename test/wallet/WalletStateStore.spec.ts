@@ -145,6 +145,8 @@ describe("WalletStateStore", () => {
       const s = store();
       const a = provider("a");
       const b = provider("b");
+      // Both writes matter: the transition from a to b is the behaviour under
+      // test, so the first assignment is not dead despite being overwritten.
       s.provider = a;
       s.provider = b;
       expect(displaced).to.deep.equal([a]);
@@ -153,6 +155,8 @@ describe("WalletStateStore", () => {
     it("does not report a re-assignment of the same provider", () => {
       const s = store();
       const a = provider("a");
+      // Assigning the same provider twice is the point: a no-op switch must
+      // not end its connection.
       s.provider = a;
       s.provider = a;
       expect(displaced).to.deep.equal([]);
@@ -335,6 +339,68 @@ describe("WalletStateStore", () => {
       s.reset();
       expect(s.address).to.equal(undefined);
       expect(s.provider, "the provider survives a reset").to.equal(p);
+    });
+  });
+
+  describe("review follow-ups", () => {
+    it("treats two Solana addresses differing only in case as different wallets", () => {
+      // Base58 is case-sensitive. Folding case here would let a stale
+      // disconnect decide the new session was the same one and clear it.
+      const s = store();
+      s.set(SOL_CHAIN, { address: SOL_A });
+      const after = s.generation("solana");
+      const cased = (SOL_A.slice(0, -1) +
+        (SOL_A.slice(-1) === SOL_A.slice(-1).toUpperCase()
+          ? SOL_A.slice(-1).toLowerCase()
+          : SOL_A.slice(-1).toUpperCase())) as Address;
+      s.set(SOL_CHAIN, { address: cased });
+      expect(cased).to.not.equal(SOL_A);
+      expect(
+        s.hasNewSessionSince("solana", after),
+        "a different Base58 address is a different wallet"
+      ).to.be.true;
+    });
+
+    it("still folds case for EVM, where hex is case-insensitive", () => {
+      const s = store();
+      s.set(1, { address: EVM_A });
+      const after = s.generation("evm");
+      s.set(1, { address: EVM_A.toLowerCase() as Address });
+      expect(s.hasNewSessionSince("evm", after)).to.be.false;
+    });
+
+    it("refuses a non-numeric chain from the persisted cookie", () => {
+      // The cookie is attacker-writable and survives across SDK versions. A
+      // string "137" restored as-is never matches a numeric exclusion list,
+      // so an excluded chain would silently start reporting again.
+      cookie().set(
+        ACTIVE_WALLET_KEY,
+        JSON.stringify({ address: EVM_A, chainId: "137" })
+      );
+      const s = store();
+      s.load();
+      expect(s.chainId, "a string chain is not restored").to.equal(undefined);
+    });
+
+    it("refuses a non-finite chain from the persisted cookie", () => {
+      cookie().set(
+        ACTIVE_WALLET_KEY,
+        JSON.stringify({ address: EVM_A, chainId: null })
+      );
+      const s = store();
+      s.load();
+      expect(s.chainId).to.equal(undefined);
+    });
+
+    it("lets a wallet that actually connects outrank one named by identify", () => {
+      // `setActiveAddress()` is deliberately transient. Making an identify
+      // sticky until the next identify would mis-attribute every event after
+      // a connect. Pinning the order so it cannot drift unnoticed.
+      const s = store();
+      s.setActiveAddress(EVM_A);
+      expect(s.address).to.equal(EVM_A);
+      s.set(1, { address: EVM_B });
+      expect(s.address, "the connected wallet wins").to.equal(EVM_B);
     });
   });
 });

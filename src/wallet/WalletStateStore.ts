@@ -162,8 +162,7 @@ export class WalletStateStore {
       // re-confirmation) must not bump, or a legitimate disconnect that raced
       // one would decide it was stale and leave the state behind.
       const claimed =
-        !!update.address &&
-        update.address.toLowerCase() !== (ns.address ?? "").toLowerCase();
+        !!update.address && !this.isSameWallet(namespace, ns.address, update.address);
       if (claimed) this.seq[namespace]++;
       ns.address = update.address;
     }
@@ -184,6 +183,24 @@ export class WalletStateStore {
 
     this._activeNamespace = namespace;
     this.syncDerived();
+  }
+
+  /**
+   * Whether two addresses are the same wallet, per namespace.
+   *
+   * EVM addresses are hex and compare case-insensitively, so a checksummed
+   * and a lowercase form are one wallet. Solana addresses are Base58, where
+   * case is significant: two addresses differing only in case are DIFFERENT
+   * wallets, and folding them together would let a stale disconnect target a
+   * live session.
+   */
+  private isSameWallet(
+    namespace: ChainNamespace,
+    a: Address | undefined,
+    b: Address
+  ): boolean {
+    if (!a) return false;
+    return namespace === "evm" ? a.toLowerCase() === b.toLowerCase() : a === b;
   }
 
   /** Wipe a namespace. Per-namespace so a Solana disconnect spares EVM. */
@@ -219,16 +236,27 @@ export class WalletStateStore {
   /**
    * Repoint the active identity at a wallet, as `identify(setActive)` does,
    * without disturbing per-namespace chain state.
+   *
+   * Deliberately transient. The next wallet event for either namespace
+   * re-derives from namespace state and replaces this, which is the intended
+   * order: a wallet that actually connects outranks one merely named by
+   * `identify()`. The alternative, making an identify sticky until another
+   * identify, would silently mis-attribute every event after a connect.
    */
-  setActiveAddress(address: Address): void {
+  setActiveAddress(address: Address | undefined): void {
     this.address = address;
+    this.persist();
+  }
+
+  /** Repoint (or forget) the derived chain while keeping the wallet. */
+  setActiveChainId(chainId: ChainID | undefined): void {
+    this.chainId = chainId;
     this.persist();
   }
 
   /** Forget the derived chain while keeping the wallet. */
   clearActiveChainId(): void {
-    this.chainId = undefined;
-    this.persist();
+    this.setActiveChainId(undefined);
   }
 
   // ── higher-level operations ──────────────────────────────────────────────
@@ -403,21 +431,30 @@ export class WalletStateStore {
 
       const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { address?: string; chainId?: ChainID };
+      const parsed = JSON.parse(raw) as { address?: string; chainId?: unknown };
       if (!parsed?.address) return;
 
-      const namespace = this.namespaceOf(parsed.chainId);
-      const validated = validateAddress(parsed.address, parsed.chainId);
+      // A cookie is attacker-writable and survives across SDK versions, so
+      // the chain has to be a real number before anything trusts it. A string
+      // "137" restored as-is would never match a numeric exclusion list, so
+      // an excluded chain would silently start reporting again.
+      const chainId =
+        typeof parsed.chainId === "number" && Number.isFinite(parsed.chainId)
+          ? (parsed.chainId as ChainID)
+          : undefined;
+
+      const namespace = this.namespaceOf(chainId);
+      const validated = validateAddress(parsed.address, chainId);
       if (!validated) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
       const ns = this.state[namespace];
       ns.address = validated;
-      if (parsed.chainId !== undefined) ns.chainId = parsed.chainId;
+      if (chainId !== undefined) ns.chainId = chainId;
       this._activeNamespace = namespace;
       this.address = validated;
-      this.chainId = parsed.chainId;
+      this.chainId = chainId;
     } catch (err) {
       logger.warn("Failed to restore persisted wallet snapshot", err);
       cookie().remove(ACTIVE_WALLET_KEY);

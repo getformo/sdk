@@ -210,6 +210,23 @@ export class FormoAnalytics implements IFormoAnalytics {
   get currentChainId(): ChainID | undefined {
     return this.wallet.chainId;
   }
+
+  /**
+   * These stay writable.
+   *
+   * Both were public mutable fields, so a consumer assigning one is using a
+   * documented public API. Getter-only replacements would break that
+   * silently: TypeScript rejects the assignment, and plain JavaScript throws
+   * on an accessor with no setter. The writes forward into the store, which
+   * keeps a single owner without turning a refactor into a breaking change.
+   */
+  set currentAddress(value: Address | undefined) {
+    this.wallet.setActiveAddress(value);
+  }
+
+  set currentChainId(value: ChainID | undefined) {
+    this.wallet.setActiveChainId(value);
+  }
   currentUserId?: string = "";
 
   /**
@@ -1181,7 +1198,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     const currentIsSolana = isSolanaChainId(this.currentChainId);
     if (walletIsSolana !== currentIsSolana) {
-      this.wallet.clearActiveChainId();
+      this.wallet.setActiveChainId(undefined);
     }
   }
 
