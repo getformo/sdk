@@ -56,7 +56,7 @@ import {
   AutocaptureEventType,
   ITrackingPolicy,
   TrackingPolicy,
-} from "./tracking";
+} from "./tracking/TrackingPolicy";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
@@ -946,7 +946,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // valid (activating a Solana wallet while an excluded EVM chain id is
       // still current). By the time the Privy path reaches this guard it has
       // already reconciled, so each inner identify is judged on the right chain.
-      if (this.isTrackingSuppressed() || this.isCurrentChainExcluded()) {
+      if (this.isTrackingSuppressed() || this.trackingPolicy.isChainExcluded()) {
         logger.info(
           "identify() skipped: tracking is suppressed for this visitor, environment, or chain"
         );
@@ -2476,21 +2476,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.trackingPolicy.isTrackingSuppressed();
   }
 
-  /** @see TrackingPolicy.isChainExcluded */
-  private isCurrentChainExcluded(eventChainId?: ChainID): boolean {
-    return this.trackingPolicy.isChainExcluded({ chainId: eventChainId });
-  }
-
-  /** @see TrackingPolicy.isPageExcluded */
-  private isPageExcluded(): boolean {
-    return this.trackingPolicy.isPageExcluded();
-  }
-
-  /** @see TrackingPolicy.isPersistedIdentityPurgeRequired */
-  private isPersistedIdentityPurgeRequired(): boolean {
-    return this.trackingPolicy.isPersistedIdentityPurgeRequired();
-  }
-
   /** @see TrackingPolicy.shouldTrack */
   private shouldTrack(eventChainId?: ChainID): boolean {
     return this.trackingPolicy.shouldTrack({ chainId: eventChainId });
@@ -3376,7 +3361,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // Visitor-level suppression (opt-out or excluded timezone): purge any
       // prior snapshot - these are stable for the session, so deletion is safe.
-      if (this.isPersistedIdentityPurgeRequired()) {
+      if (this.trackingPolicy.isPersistedIdentityPurgeRequired()) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
@@ -3385,7 +3370,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         // on an excluded route, but leave any existing cookie intact. A cookie
         // written on an allowed page must survive a transient visit to an
         // excluded one (passive navigation does not call this method).
-        if (this.isPageExcluded()) {
+        if (this.trackingPolicy.isPageExcluded()) {
           return;
         }
         const value = JSON.stringify({
@@ -3418,14 +3403,14 @@ export class FormoAnalytics implements IFormoAnalytics {
     try {
       // Visitor-level suppression (opt-out or excluded timezone): never restore
       // identity into memory; drop the stale snapshot.
-      if (this.isPersistedIdentityPurgeRequired()) {
+      if (this.trackingPolicy.isPersistedIdentityPurgeRequired()) {
         cookie().remove(ACTIVE_WALLET_KEY);
         return;
       }
       // Current-page exclusion (host/path): don't restore into memory while on
       // an excluded route, but keep the cookie so a later allowed-page load can
       // restore it.
-      if (this.isPageExcluded()) {
+      if (this.trackingPolicy.isPageExcluded()) {
         return;
       }
       const raw = cookie().get(ACTIVE_WALLET_KEY) as string | undefined;
