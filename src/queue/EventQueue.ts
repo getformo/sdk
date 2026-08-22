@@ -166,6 +166,10 @@ export class EventQueue implements IEventQueue {
    * (event creation is async), so guarding the *caller* cannot work: the
    * instance may be destroyed while the continuation is in flight. Enforcing
    * it here means no holder of a stale reference can ever send.
+   *
+   * What close() deliberately does NOT stop is a flush already in flight.
+   * Those events were accepted while the instance was alive, so they are
+   * real data; abandoning them would turn every unmount into silent loss.
    */
   close(): void {
     this.closed = true;
@@ -195,6 +199,13 @@ export class EventQueue implements IEventQueue {
     }
 
     const message_id = await this.generateMessageId(event);
+
+    // Re-check after the await. A caller that entered before close() is
+    // suspended here, and on a queue that has not flushed yet its event
+    // would push and flush immediately - the exact shape of the bug close()
+    // exists to stop.
+    if (this.closed) return;
+
     // check if the message already exists
     if (this.isDuplicate(message_id)) {
       logger.warn(
@@ -238,13 +249,6 @@ export class EventQueue implements IEventQueue {
 
     if (this.flushIntervalMs && !this.timer) {
       this.timer = setTimeout(this.flush.bind(this), this.flushIntervalMs);
-      // A batching timer must never be the reason a process stays alive.
-      // Browsers return a number here and have no unref, so this is a
-      // no-op there; under Node (SSR, scripts, this repo's own test run) it
-      // stops a pending batch from holding the event loop open for the full
-      // flush interval. Anything buffered is still sent by the next
-      // enqueue, an explicit flush(), or the page-leave handler.
-      if (typeof this.timer?.unref === "function") this.timer.unref();
     }
   }
 

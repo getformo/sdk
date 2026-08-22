@@ -442,4 +442,40 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.equal(ADDRESS.toLowerCase());
     formo.cleanup?.();
   });
+
+  it("does not let a stale Solana disconnect erase a reconnect that raced it", async () => {
+    // Solana has no EIP-1193 provider, so a per-provider stamp could not see
+    // this at all. The namespace generation can.
+    const SOL_CHAIN = 900001;
+    const SOL_A = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+    const SOL_B = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") await gate;
+        sent.push(e);
+      });
+
+    await formo.connect({ chainId: SOL_CHAIN, address: SOL_A as any });
+    expect(formo.currentAddress).to.equal(SOL_A);
+
+    // Wallet A disconnects; the event stalls while B takes the namespace.
+    const disconnecting = formo.disconnect({ chainId: SOL_CHAIN, address: SOL_A as any });
+    await new Promise((r) => setTimeout(r, 10));
+    await formo.connect({ chainId: SOL_CHAIN, address: SOL_B as any });
+
+    release();
+    await disconnecting;
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(
+      formo.currentAddress,
+      "the stale Solana disconnect must not clear the new session"
+    ).to.equal(SOL_B);
+    formo.cleanup?.();
+  });
 });

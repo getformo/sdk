@@ -777,6 +777,21 @@ describe("EventQueue", () => {
       expect(fetchStub.called).to.be.false;
     });
 
+    it("should drop an event that was already inside enqueue when close ran", async () => {
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+
+      // Start enqueue, so it is suspended on its message-hash await, THEN
+      // close. The entry guard has already been passed at this point, so
+      // only a re-check after the await can stop it.
+      const pending = eventQueue.enqueue(createMockEvent());
+      eventQueue.close();
+      await pending;
+      await clock.tickAsync(60_000);
+
+      expect(fetchStub.called).to.be.false;
+    });
+
     it("should drop an event that arrives after close but was built before it", async () => {
       const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
       eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });

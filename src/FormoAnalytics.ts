@@ -148,16 +148,22 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   private _announcedConnect = new WeakMap<
     EIP1193Provider,
-    { address: string; chainId: number; seq: number }
+    { address: string; chainId: number }
   >();
 
   /**
-   * Monotonic stamp on each reported connect. Address and provider alone
-   * cannot tell "this session never changed" apart from "the same wallet
-   * disconnected and reconnected", because both leave identical state. The
-   * stamp does, which is what lets a slow disconnect know it is stale.
+   * Monotonic generation per namespace, bumped whenever a wallet claims it.
+   *
+   * Address and provider alone cannot tell "this session never changed"
+   * apart from "the same wallet disconnected and reconnected", because both
+   * leave identical state. The generation can, which is what lets a slow
+   * disconnect know it is stale.
+   *
+   * Kept per namespace rather than per provider so it also covers Solana,
+   * which has no EIP-1193 provider to hang a stamp on, and so that a wallet
+   * arriving on a different provider still moves it.
    */
-  private _connectSeq = 0;
+  private _sessionSeq: Record<ChainNamespace, number> = { evm: 0, solana: 0 };
 
   private _providerChainIds = new WeakMap<EIP1193Provider, number>();
 
@@ -540,6 +546,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       return;
     }
 
+    // A new wallet now owns this namespace. Anything that was already
+    // tearing down the previous session must not undo this.
+    this._sessionSeq[this.getNamespace(chainId)]++;
+
     this.setChainState(chainId, { address: validAddress });
 
     await this.trackEvent(
@@ -601,10 +611,8 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Snapshot the session being torn down. Emitting is asynchronous, so a
     // reconnect can land while the disconnect event is still being built.
-    const beforeProvider = this._provider;
-    const beforeSeq = beforeProvider
-      ? this._announcedConnect.get(beforeProvider)?.seq
-      : undefined;
+    const namespace = this.getNamespace(chainId);
+    const beforeSeq = this._sessionSeq[namespace];
 
     await this.trackEvent(
       EventType.DISCONNECT,
@@ -617,19 +625,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       callback
     );
 
-    // If a connect was reported for this provider while the event was being
-    // built, a new session already owns the slot and this cleanup is stale.
-    // Running it anyway would wipe that session's state AND its
-    // reported-connect record, so a later wallet signal would emit a second
-    // connect for a connection that is already reported.
-    //
-    // A wallet that takes the slot on a DIFFERENT provider is caught by the
-    // same check: displacing the active provider drops its record, which
-    // moves the stamp too. See issue #344.
-    const afterSeq = beforeProvider
-      ? this._announcedConnect.get(beforeProvider)?.seq
-      : undefined;
-    if (afterSeq !== beforeSeq) {
+    // If a wallet claimed this namespace while the event was being built, a
+    // new session owns it and this cleanup is stale. Running it anyway would
+    // wipe that session's state AND its reported-connect record, so a later
+    // wallet signal would emit a second connect for a connection that is
+    // already reported. See issue #344.
+    if (this._sessionSeq[namespace] !== beforeSeq) {
       logger.info(
         "Disconnect: A new session claimed this namespace while the event was in flight; leaving its state intact"
       );
@@ -1842,11 +1843,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     chainId: number
   ): void {
     if (!this.willTrackEvent(chainId)) return;
-    this._announcedConnect.set(provider, {
-      address,
-      chainId,
-      seq: ++this._connectSeq,
-    });
+    this._announcedConnect.set(provider, { address, chainId });
   }
 
   private registerConnectListener(provider: EIP1193Provider): void {
