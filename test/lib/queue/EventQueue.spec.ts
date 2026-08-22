@@ -762,4 +762,144 @@ describe("EventQueue", () => {
         .true;
     });
   });
+
+  describe("close", () => {
+    it("should refuse to enqueue after close, even on a queue that never flushed", async () => {
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+
+      eventQueue.close();
+      // A fresh queue flushes its very first event immediately, so if the
+      // enqueue guard were missing this would reach the wire at once.
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(60_000);
+
+      expect(fetchStub.called).to.be.false;
+    });
+
+    it("should drop an event that was already inside enqueue when close ran", async () => {
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+
+      // Start enqueue, so it is suspended on its message-hash await, THEN
+      // close. The entry guard has already been passed at this point, so
+      // only a re-check after the await can stop it.
+      const pending = eventQueue.enqueue(createMockEvent());
+      eventQueue.close();
+      await pending;
+      await clock.tickAsync(60_000);
+
+      expect(fetchStub.called).to.be.false;
+    });
+
+    it("should drop an event that arrives after close but was built before it", async () => {
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+
+      // Mirrors the real teardown race: the caller started building this
+      // event before cleanup and only reaches the queue afterwards.
+      const inFlight = Promise.resolve().then(() => eventQueue.enqueue(createMockEvent()));
+      eventQueue.close();
+      await inFlight;
+      await clock.tickAsync(60_000);
+
+      expect(fetchStub.called).to.be.false;
+    });
+
+    it("should stop a flush already scheduled on the batch timer", async () => {
+      useUniqueCryptoHashes();
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushInterval: 10_000,
+      });
+
+      // First event flushes immediately; the second only arms the timer.
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(0);
+      const afterFirst = fetchStub.callCount;
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+
+      eventQueue.close();
+      await clock.tickAsync(30_000);
+
+      expect(afterFirst).to.equal(1);
+      expect(fetchStub.callCount).to.equal(afterFirst);
+    });
+
+    it("should remove the page-leave listeners", async () => {
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+      const flushSpy = sinon.spy(eventQueue, "flush");
+
+      const leave = async () => {
+        jsdom.window.dispatchEvent(new jsdom.window.Event("beforeunload"));
+        // handleOnLeave latches on the first event of a burst and releases
+        // the latch on a 0ms timer. Without this tick every later dispatch
+        // is swallowed by the latch, and the assertion after close would
+        // hold whether or not the listener was ever removed.
+        await clock.tickAsync(1);
+      };
+
+      await leave();
+      expect(flushSpy.callCount, "listener should be live on the first leave").to.equal(1);
+      await leave();
+      expect(flushSpy.callCount, "listener should fire again once the latch releases").to.equal(2);
+
+      eventQueue.close();
+
+      await leave();
+      expect(flushSpy.callCount, "listener should be gone after close").to.equal(2);
+    });
+
+    it("should still remove its listeners when the globals have moved on", async () => {
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+      const flushSpy = sinon.spy(eventQueue, "flush");
+      const installedDocument = jsdom.window.document;
+
+      // Teardown can run after the host swapped these out. Removal must still
+      // target the objects the listeners were added to.
+      const other = new JSDOM("<!DOCTYPE html><html><body></body></html>");
+      Object.defineProperty(global, "document", {
+        value: other.window.document, writable: true, configurable: true,
+      });
+
+      eventQueue.close();
+
+      Object.defineProperty(global, "document", {
+        value: installedDocument, writable: true, configurable: true,
+      });
+      // The page-leave callback only flushes when the page became
+      // inaccessible, so the document has to actually report hidden.
+      Object.defineProperty(installedDocument, "visibilityState", {
+        value: "hidden", configurable: true,
+      });
+      installedDocument.dispatchEvent(new jsdom.window.Event("visibilitychange"));
+      await clock.tickAsync(1);
+
+      expect(flushSpy.called, "the document listener should be gone").to.be.false;
+      other.window.close();
+    });
+
+    it("should report closed state and tolerate repeat calls", () => {
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+      expect(eventQueue.isClosed).to.be.false;
+      eventQueue.close();
+      eventQueue.close();
+      expect(eventQueue.isClosed).to.be.true;
+    });
+
+    it("should keep clear() recoverable, unlike close()", async () => {
+      useUniqueCryptoHashes();
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+
+      // clear() is consent withdrawal, which the user can reverse.
+      eventQueue.clear();
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(0);
+
+      expect(fetchStub.callCount).to.equal(1);
+      expect(eventQueue.isClosed).to.be.false;
+    });
+  });
 });

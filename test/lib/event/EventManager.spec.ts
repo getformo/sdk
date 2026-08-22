@@ -99,6 +99,7 @@ describe("EventManager", () => {
       enqueue: enqueueSpy,
       flush: sinon.stub().resolves(),
       clear: sinon.spy(),
+      close: sinon.spy(),
     };
 
     eventManager = new EventManager(mockEventQueue);
