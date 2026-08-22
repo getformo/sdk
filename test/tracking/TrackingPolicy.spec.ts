@@ -17,12 +17,17 @@ describe("TrackingPolicy", () => {
   let jsdom: JSDOM;
   let optedOut = false;
   let chainId: ChainID | undefined;
+  let current: Options;
 
-  const policy = (options: Partial<Options> = {}) =>
-    new TrackingPolicy(options as Options, {
+  /** Builds a policy over `current`, which a test may replace afterwards. */
+  const policy = (options: Partial<Options> = {}) => {
+    current = options as Options;
+    return new TrackingPolicy({
+      options: () => current,
       hasOptedOut: () => optedOut,
       currentChainId: () => chainId,
     });
+  };
 
   beforeEach(() => {
     optedOut = false;
@@ -200,6 +205,33 @@ describe("TrackingPolicy", () => {
       const p = policy({ autocapture: { disconnect: false } });
       expect(p.isAutocaptureEnabled("disconnect")).to.be.false;
       expect(p.isAutocaptureEnabled("connect"), "unlisted kinds stay on").to.be.true;
+    });
+  });
+
+  describe("live configuration", () => {
+    it("sees options replaced after construction", () => {
+      // `FormoAnalytics.options` is public and mutable, and the gates used to
+      // read it on every call. Holding the constructor's object here would
+      // silently freeze configuration at init time.
+      const p = policy({ tracking: true });
+      expect(p.shouldTrack()).to.be.true;
+      expect(p.isAutocaptureEnabled("connect")).to.be.true;
+
+      current = { tracking: false, autocapture: { connect: false } } as Options;
+
+      expect(p.shouldTrack(), "a later tracking change must take effect").to.be.false;
+      expect(
+        p.isAutocaptureEnabled("connect"),
+        "and so must a later autocapture change"
+      ).to.be.false;
+    });
+
+    it("sees exclusion lists added after construction", () => {
+      const p = policy({ tracking: {} });
+      chainId = 137;
+      expect(p.shouldTrack()).to.be.true;
+      current = { tracking: { excludeChains: [137] } } as Options;
+      expect(p.shouldTrack()).to.be.false;
     });
   });
 });

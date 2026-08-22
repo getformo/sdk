@@ -328,10 +328,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       enabledLevels: options.logger?.levels || [],
     });
 
-    this.trackingPolicy = new TrackingPolicy(options, {
+    this.trackingPolicy = new TrackingPolicy({
+      // All three read lazily. `options` is public and mutable, and the
+      // central chain moves as wallets connect and switch, so the policy
+      // must see both at decision time rather than at construction.
+      options: () => this.options,
       hasOptedOut: () => this.hasOptedOutTracking(),
-      // Read lazily: the central chain moves as wallets connect and switch,
-      // so the policy must see it at decision time, not at construction.
       currentChainId: () => this.currentChainId,
     });
 

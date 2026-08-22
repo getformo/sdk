@@ -30,6 +30,17 @@ export interface TrackingContext {
 
 /** What the policy needs from the SDK it advises. */
 export interface TrackingPolicyDeps {
+  /**
+   * The CURRENT options.
+   *
+   * A getter, not a captured object: `FormoAnalytics.options` is public and
+   * mutable, so a consumer can replace it after init
+   * (`formo.options = { ...formo.options, tracking: false }`). The gates used
+   * to read `this.options` on every call, so that took effect immediately,
+   * and holding the constructor's object here would silently freeze
+   * configuration at init time.
+   */
+  options(): Options;
   /** Consent state. Separate from options because the visitor can change it. */
   hasOptedOut(): boolean;
   /** The SDK's central chain, used when an event carries none of its own. */
@@ -53,10 +64,7 @@ export interface ITrackingPolicy {
  * re-derived at each gate.
  */
 export class TrackingPolicy implements ITrackingPolicy {
-  constructor(
-    private readonly options: Options,
-    private readonly deps: TrackingPolicyDeps
-  ) {}
+  constructor(private readonly deps: TrackingPolicyDeps) {}
 
   /**
    * `tracking` as an options object, or null when it is absent, a boolean, or
@@ -64,7 +72,7 @@ export class TrackingPolicy implements ITrackingPolicy {
    * here means "no exclusions configured", not "excluded".
    */
   private trackingOptions(): TrackingOptions | null {
-    const tracking = this.options.tracking;
+    const tracking = this.deps.options().tracking;
     if (
       tracking === null ||
       typeof tracking !== "object" ||
@@ -216,15 +224,14 @@ export class TrackingPolicy implements ITrackingPolicy {
     if (this.deps.hasOptedOut()) return false;
 
     // An explicit boolean is the whole answer; no exclusions apply to it.
-    if (typeof this.options.tracking === "boolean") {
-      return this.options.tracking;
-    }
+    const tracking = this.deps.options().tracking;
+    if (typeof tracking === "boolean") return tracking;
 
-    const tracking = this.trackingOptions();
-    if (tracking) {
+    const configured = this.trackingOptions();
+    if (configured) {
       if (this.isEnvironmentExcluded()) return false;
 
-      const { excludeChains = [] } = tracking;
+      const { excludeChains = [] } = configured;
       if (excludeChains.length > 0 && this.isChainRefused(excludeChains, context)) {
         return false;
       }
@@ -237,7 +244,7 @@ export class TrackingPolicy implements ITrackingPolicy {
 
   /** Whether a wallet event kind is enabled for autocapture. Defaults to on. */
   isAutocaptureEnabled(eventType: AutocaptureEventType): boolean {
-    const { autocapture } = this.options;
+    const { autocapture } = this.deps.options();
     if (autocapture === undefined) return true;
     if (typeof autocapture === "boolean") return autocapture;
     if (autocapture !== null && typeof autocapture === "object") {
