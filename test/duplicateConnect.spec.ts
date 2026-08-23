@@ -107,8 +107,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     (global as any).window.ethereum = provider;
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
     const connect = sandbox.stub(formo, "connect").resolves();
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     if (order === "connectFirst") {
       provider.emit("connect", { chainId: "0x1" });
@@ -147,8 +147,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     const sent: any[] = [];
     sandbox.stub((formo as any).eventManager, "addEvent")
       .callsFake(async (e: any) => { sent.push(e); });
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("accountsChanged", [ADDRESS]);
     await new Promise((r) => setTimeout(r, 40));
@@ -173,7 +173,7 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     // Restored identity, exactly as loadActiveWallet() leaves it.
     (formo as any).setChainState("evm", { chainId: 1, address: ADDRESS });
     const connect = sandbox.stub(formo, "connect").resolves();
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     await new Promise((r) => setTimeout(r, 60));
@@ -188,8 +188,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
     const connect = sandbox.stub(formo, "connect").resolves();
     sandbox.stub(formo, "disconnect").resolves();
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     provider.emit("accountsChanged", [ADDRESS]);
@@ -217,8 +217,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     (global as any).window.ethereum = provider;
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
     const connect = sandbox.stub(formo, "connect").resolves();
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("accountsChanged", [ADDRESS]);
     await new Promise((r) => setTimeout(r, 40));
@@ -244,8 +244,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       tracking: { excludePaths: ["/"] },
     });
     const connect = sandbox.stub(formo, "connect").resolves();
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     provider.emit("accountsChanged", [ADDRESS]);
@@ -280,8 +280,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       .callsFake(async (e: any) => { sent.push(e); });
     const connect = { get callCount() { return sent.filter((e) => e.type === "connect").length; } };
     for (const p of [a, b]) {
-      (formo as any).registerAccountsChangedListener(p);
-      (formo as any).registerConnectListener(p);
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
     }
 
     a.emit("connect", { chainId: "0x1" });
@@ -322,7 +322,7 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     // itself is exercised. Wiring the listeners by hand would bypass the very
     // condition this test is about.
     (formo as any).isWagmiMode = false;
-    (formo as any).trackEIP1193Provider(provider);
+    (formo as any).evmEvents.trackEIP1193Provider(provider);
     await new Promise((r) => setTimeout(r, 40));
 
     provider.emit("connect", { chainId: "0x1" });
@@ -353,9 +353,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
     const connect = sandbox.stub(formo, "connect").resolves();
     for (const p of [a, b]) {
-      (formo as any).registerAccountsChangedListener(p);
-      (formo as any).registerConnectListener(p);
-      (formo as any).registerChainChangedListener(p);
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
+      (formo as any).evmEvents.registerChainChangedListener(p);
     }
 
     a.emit("connect", { chainId: "0x1" });
@@ -390,8 +390,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     (global as any).window.ethereum = provider;
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
     const connect = sandbox.stub(formo, "connect").resolves();
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     provider.emit("accountsChanged", [ADDRESS]);
@@ -428,8 +428,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
         sent.push(e);
       });
 
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     const connects = () => sent.filter((e) => e.type === "connect").length;
 
@@ -560,9 +560,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       });
 
     for (const p of [providerA, providerB, providerC]) {
-      (formo as any).registerAccountsChangedListener(p);
-      (formo as any).registerConnectListener(p);
-      (formo as any).registerChainChangedListener(p);
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
+      (formo as any).evmEvents.registerChainChangedListener(p);
     }
 
     providerA.emit("connect", { chainId: "0x1" });
@@ -615,8 +615,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
         if (e.type === "disconnect") { disconnectParked = true; await disconnectGate; }
       });
 
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     // Establish the session, then make the NEXT address read slow.
     provider.emit("connect", { chainId: "0x1" });
@@ -624,8 +624,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
 
     let addressParked = false;
-    const realGetAddress = (formo as any).getAddress.bind(formo);
-    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+    const registry = (formo as any).evm;
+    const realGetAddress = registry.addressOf.bind(registry);
+    sandbox.stub(registry, "addressOf").callsFake(async (p: any) => {
       addressParked = true;
       await addressGate;
       return realGetAddress(p);
@@ -672,9 +673,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       .callsFake(async (e: any) => { sent.push(e); });
 
     for (const p of [providerA, providerB, providerC]) {
-      (formo as any).registerAccountsChangedListener(p);
-      (formo as any).registerConnectListener(p);
-      (formo as any).registerChainChangedListener(p);
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
+      (formo as any).evmEvents.registerChainChangedListener(p);
     }
 
     providerA.emit("connect", { chainId: "0x1" });
@@ -684,9 +685,10 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     let releaseProbe!: () => void;
     let probeParked = false;
     const probeGate = new Promise<void>((r) => { releaseProbe = r; });
-    const realGetAccounts = (formo as any).getAccounts.bind(formo);
-    sandbox.stub(formo as any, "getAccounts").callsFake(async (p: any) => {
-      // Stall only the probe of the outgoing wallet. `getAddress()` routes
+    const registry = (formo as any).evm;
+    const realGetAccounts = registry.accountsOf.bind(registry);
+    sandbox.stub(registry, "accountsOf").callsFake(async (p: any) => {
+      // Stall only the probe of the outgoing wallet. `addressOf()` routes
       // through here too, so stalling every provider would also block C and
       // the race under test could never be set up.
       if (p === providerA) {
@@ -742,17 +744,18 @@ describe("Duplicate connect on the EIP-1193 path", () => {
         if (e.type === "disconnect") { disconnectParked = true; await disconnectGate; }
       });
 
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
-    (formo as any).registerDisconnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
+    (formo as any).evmEvents.registerDisconnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     await new Promise((r) => setTimeout(r, 40));
     expect(formo.currentAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
 
     let addressParked = false;
-    const realGetAddress = (formo as any).getAddress.bind(formo);
-    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+    const registry = (formo as any).evm;
+    const realGetAddress = registry.addressOf.bind(registry);
+    sandbox.stub(registry, "addressOf").callsFake(async (p: any) => {
       addressParked = true;
       await addressGate;
       return realGetAddress(p);
@@ -791,9 +794,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     let addressParked = false;
     const addressGate = new Promise<void>((r) => { releaseAddress = r; });
 
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
-    (formo as any).registerDisconnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
+    (formo as any).evmEvents.registerDisconnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     await waitFor(
@@ -801,8 +804,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       "the first connect"
     );
 
-    const realGetAddress = (formo as any).getAddress.bind(formo);
-    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+    const registry = (formo as any).evm;
+    const realGetAddress = registry.addressOf.bind(registry);
+    sandbox.stub(registry, "addressOf").callsFake(async (p: any) => {
       addressParked = true;
       await addressGate;
       return realGetAddress(p);
@@ -847,8 +851,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
         sent.push(e);
       });
 
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     await waitFor(() => sent.some((e) => e.type === "connect"), "the first connect");
@@ -924,8 +928,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       .callsFake(async (e: any) => { if (e.type === "disconnect") { parked = true; await gate; } });
 
     for (const p of [active, bystander]) {
-      (formo as any).registerAccountsChangedListener(p);
-      (formo as any).registerConnectListener(p);
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
     }
     active.emit("connect", { chainId: "0x1" });
     await waitFor(
@@ -963,8 +967,8 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     const addressGate = new Promise<void>((r) => { releaseAddress = r; });
     sandbox.stub((formo as any).eventManager, "addEvent").resolves();
 
-    (formo as any).registerAccountsChangedListener(provider);
-    (formo as any).registerConnectListener(provider);
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
 
     provider.emit("connect", { chainId: "0x1" });
     await waitFor(
@@ -972,8 +976,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
       "the first connect"
     );
 
-    const realGetAddress = (formo as any).getAddress.bind(formo);
-    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+    const registry = (formo as any).evm;
+    const realGetAddress = registry.addressOf.bind(registry);
+    sandbox.stub(registry, "addressOf").callsFake(async (p: any) => {
       addressParked = true;
       await addressGate;
       return realGetAddress(p);
@@ -1008,12 +1013,12 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     };
     (global as any).window.ethereum = provider;
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
-    (formo as any).trackEIP1193Provider(provider);
+    (formo as any).evmEvents.trackEIP1193Provider(provider);
 
     const registry = (formo as any).evm;
     expect(registry.isTracked(provider), "tracked once wired").to.be.true;
 
-    (formo as any).untrackProvider(provider);
+    (formo as any).evmEvents.untrackProvider(provider);
     expect(
       registry.attachedEvents(provider).length,
       "listeners are retained after a failed detach"
@@ -1024,7 +1029,7 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.be.true;
 
     failing = false;
-    (formo as any).untrackProvider(provider);
+    (formo as any).evmEvents.untrackProvider(provider);
     expect(removed.length, "the retry actually detaches them").to.be.greaterThan(0);
     expect(registry.attachedEvents(provider)).to.deep.equal([]);
     expect(registry.isTracked(provider)).to.be.false;

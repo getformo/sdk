@@ -114,7 +114,7 @@ describe("Chain id resolution for autocaptured requests", () => {
 
   /** Feed the per-provider chain cache the way a real `chainChanged` would. */
   const announceChain = (instance: any, provider: any, chainId: number) =>
-    instance.onChainChanged(provider, `0x${chainId.toString(16)}`);
+    instance.evmEvents.onChainChanged(provider, `0x${chainId.toString(16)}`);
 
   it("uses the signing provider's chain when it is not the active provider", async () => {
     const active = providerOnChain(ACTIVE_CHAIN);
@@ -228,7 +228,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves([ADDRESS]),
     };
-    await (formo as any).onConnected(signer, {
+    await (formo as any).evmEvents.onConnected(signer, {
       chainId: `0x${OTHER_CHAIN.toString(16)}`,
     });
 
@@ -372,7 +372,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     // Wagmi mode short-circuits provider tracking, so turn it off for this.
     (tracker as any).isWagmiMode = false;
 
-    (tracker as any).trackEIP1193Provider(provider);
+    (tracker as any).evmEvents.trackEIP1193Provider(provider);
     await new Promise((r) => setTimeout(r, 20));
 
     expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(OTHER_CHAIN);
@@ -393,7 +393,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     };
     (tracker as any).isWagmiMode = false;
 
-    (tracker as any).trackEIP1193Provider(provider);
+    (tracker as any).evmEvents.trackEIP1193Provider(provider);
     await new Promise((r) => setTimeout(r, 20));
 
     expect(rawRequest.called, "no RPC issued").to.be.false;
@@ -417,7 +417,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       request: rawRequest,
     };
     (tracker as any).isWagmiMode = false;
-    (tracker as any).trackEIP1193Provider(provider);
+    (tracker as any).evmEvents.trackEIP1193Provider(provider);
 
     listeners["connect"]?.({ chainId: `0x${OTHER_CHAIN.toString(16)}` });
     await new Promise((r) => setTimeout(r, 20));
@@ -440,7 +440,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     (tracker as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
 
     const other = providerOnChain(OTHER_CHAIN);
-    await (tracker as any).onChainChanged(other, `0x${OTHER_CHAIN.toString(16)}`);
+    await (tracker as any).evmEvents.onChainChanged(other, `0x${OTHER_CHAIN.toString(16)}`);
 
     expect((tracker as any)._provider, "active provider unchanged").to.equal(active);
     expect((tracker as any)._evmAddress, "active address unchanged").to.equal(ADDRESS);
@@ -458,7 +458,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves([ADDRESS]),
     };
-    await (formo as any).onChainChanged(first, `0x${OTHER_CHAIN.toString(16)}`);
+    await (formo as any).evmEvents.onChainChanged(first, `0x${OTHER_CHAIN.toString(16)}`);
 
     const second = providerOnChain(ACTIVE_CHAIN);
     (formo as any)._provider = second;
@@ -656,7 +656,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       request: raw,
     };
 
-    await (formo as any).onAccountsChanged(provider, [ADDRESS]);
+    await (formo as any).evmEvents.onAccountsChanged(provider, [ADDRESS]);
 
     const methods = raw.getCalls().map((c: any) => c.args?.[0]?.method);
     expect(methods, "no chain lookup on this path").to.not.include("eth_chainId");
@@ -668,7 +668,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves([ADDRESS]),
     };
-    await (formo as any).onAccountsChanged(provider, [ADDRESS]);
+    await (formo as any).evmEvents.onAccountsChanged(provider, [ADDRESS]);
 
     expect(
       (formo as any).resolveChainIdForProvider(provider),
@@ -717,7 +717,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       request: sandbox.stub().resolves("0xsigned"),
     };
     (tracker as any).isWagmiMode = false;
-    (tracker as any).trackEIP1193Provider(provider);
+    (tracker as any).evmEvents.trackEIP1193Provider(provider);
     await new Promise((r) => setTimeout(r, 20));
     expect((tracker as any).resolveChainIdForProvider(provider)).to.equal(ACTIVE_CHAIN);
 
@@ -727,7 +727,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       .map((c: any) => c.args[0]);
     expect(registered, "chainChanged observed").to.include("chainChanged");
 
-    await (tracker as any).onChainChanged(
+    await (tracker as any).evmEvents.onChainChanged(
       provider,
       `0x${OTHER_CHAIN.toString(16)}`
     );
@@ -892,7 +892,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     sandbox.stub(formo, "chain").rejects(new Error("queue is gone"));
 
     // Must not reject out of the listener; the error is logged and swallowed.
-    await (formo as any).onChainChanged(
+    await (formo as any).evmEvents.onChainChanged(
       provider,
       `0x${OTHER_CHAIN.toString(16)}`
     );
@@ -1030,7 +1030,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       request: sandbox.stub().resolves([ADDRESS]),
     };
     (tracker as any).isWagmiMode = false;
-    (tracker as any).trackEIP1193Provider(provider);
+    (tracker as any).evmEvents.trackEIP1193Provider(provider);
 
     expect(Object.keys(listeners), "connect is observed").to.include("connect");
     listeners["connect"]?.({ chainId: `0x${OTHER_CHAIN.toString(16)}` });

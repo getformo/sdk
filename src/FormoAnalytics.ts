@@ -1,4 +1,4 @@
-import { createStore, EIP6963ProviderDetail } from "mipd";
+import { EIP6963ProviderDetail } from "mipd";
 import {
   EVENTS_API_HOST,
   EventType,
@@ -22,7 +22,6 @@ import {
   getConsentFlag,
   removeConsentFlag,
 } from "./consent";
-import { detectInjectedProviderInfo, isValidProvider } from "./provider";
 import {
   FormoAnalyticsSession,
   SESSION_WALLET_DETECTED_KEY,
@@ -42,7 +41,6 @@ import {
   RPCError,
   SignatureStatus,
   TransactionStatus,
-  ConnectInfo,
   WrappedEIP1193Provider,
   WrappedRequestFunction,
   WRAPPED_REQUEST_SYMBOL,
@@ -54,8 +52,9 @@ import {
   ITrackingPolicy,
   TrackingPolicy,
 } from "./tracking/TrackingPolicy";
-import { Observation, WalletStateStore } from "./wallet/WalletStateStore";
+import { WalletStateStore } from "./wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./evm/EvmProviderRegistry";
+import { EvmEventTracker } from "./evm/EvmEventTracker";
 import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
@@ -68,12 +67,6 @@ import type { PrivyUser } from "./privy";
 /**
  * Constants for provider switching reasons
  */
-const PROVIDER_SWITCH_REASONS = {
-  ADDRESS_MISMATCH: "Address mismatch indicates wallet switch",
-  NO_ACCOUNTS: "Current provider has no accounts",
-  CHECK_FAILED: "Could not check current provider accounts",
-} as const;
-
 export class FormoAnalytics implements IFormoAnalytics {
   // Per-chain namespace state - isolates EVM and Solana connection state
   /** Wallet identity, chain state and the active-wallet cookie. */
@@ -104,6 +97,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   private eventManager: IEventManager;
   /** Which EVM wallets exist, and what is known about each. */
   private evm: EvmProviderRegistry;
+  /** Which providers to watch, and what their events mean. */
+  private evmEvents: EvmEventTracker;
   /** Every "may we track this?" rule. See src/tracking/TrackingPolicy.ts. */
   private trackingPolicy: ITrackingPolicy;
   // Cache for injected provider detection to avoid redundant operations
@@ -176,16 +171,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
   currentUserId?: string = "";
 
-  /**
-   * Helper method to check if a provider is different from the currently active one
-   * @param provider The provider to check
-   * @returns true if there's a provider mismatch, false otherwise
-   */
-  private isProviderMismatch(provider: EIP1193Provider): boolean {
-    // Only consider it a mismatch if we have an active provider AND the provider is different
-    // This allows legitimate provider switching while preventing race conditions
-    return this._provider != null && this._provider !== provider;
-  }
 
   private constructor(
     public readonly writeKey: string,
@@ -269,7 +254,21 @@ export class FormoAnalytics implements IFormoAnalytics {
       // counting. Otherwise toggling between two installed wallets silently
       // loses every connect after the first.
       onProviderDisplaced: (previous) =>
-        this._announcedConnect.delete(previous),
+        this.evmEvents.forgetAnnouncedConnect(previous),
+    });
+
+    this.evmEvents = new EvmEventTracker(this.wallet, this.evm, {
+      isAutocaptureEnabled: (t) => this.isAutocaptureEnabled(t),
+      isTrackingSuppressed: () => this.isTrackingSuppressed(),
+      willTrackEvent: (chainId) => this.willTrackEvent(chainId),
+      isWagmiMode: () => this.isWagmiMode,
+      connect: (params, properties) => this.connect(params, properties),
+      disconnect: (params) => this.disconnect(params),
+      chain: (params, properties) => this.chain(params, properties),
+      detect: ({ providerName, rdns }) =>
+        this.detect({ providerName: providerName ?? "", rdns: rdns ?? "" }),
+      registerRequestListeners: (provider) =>
+        this.registerRequestListeners(provider),
     });
 
     this.trackingPolicy = new TrackingPolicy({
@@ -323,7 +322,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
 
       if (provider) {
-        this.trackEIP1193Provider(provider);
+        this.evmEvents.trackEIP1193Provider(provider);
       }
     }
 
@@ -355,9 +354,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.info("FormoAnalytics: Skipping provider detection (EVM disabled)");
     } else if (!analytics.isWagmiMode) {
       // Auto-detect wallet provider
-      const discovered = await analytics.getProviders();
-      await analytics.detectWallets(discovered);
-      analytics.trackProviders(discovered);
+      const discovered = await analytics.evmEvents.getProviders();
+      await analytics.evmEvents.detectWallets(discovered);
+      analytics.evmEvents.trackProviders(discovered);
     } else {
       logger.info("FormoAnalytics: Skipping provider detection (Wagmi mode)");
     }
@@ -445,7 +444,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Clean up EIP-1193 providers if not in Wagmi mode
     if (!this.isWagmiMode) {
       for (const provider of this.evm.trackedProviders()) {
-        this.untrackProvider(provider);
+        this.evmEvents.untrackProvider(provider);
       }
     }
 
@@ -1364,777 +1363,19 @@ export class FormoAnalytics implements IFormoAnalytics {
     SDK tracking and event listener functions
   */
 
-  /**
-   * Track an EIP-1193 provider by wrapping its request method and adding event listeners
-   * Note: This is only used in non-Wagmi mode. When Wagmi is enabled, all tracking
-   * happens through Wagmi's connector system instead of EIP-1193/EIP-6963.
-   * @param provider The EIP-1193 provider to track
-   */
-  private trackEIP1193Provider(provider: EIP1193Provider): void {
-    logger.info("trackEIP1193Provider", provider);
-    
-    // Defensive check: Skip provider tracking in Wagmi mode
-    // This should never be called in Wagmi mode due to guards in init(),
-    // but we check here for safety in case of future code changes
-    if (this.isWagmiMode) {
-      logger.debug("trackEIP1193Provider: Skipping EIP-1193 provider tracking (Wagmi mode - using connector system instead)");
-      return;
-    }
-    
-    try {
-      // Validate provider exists and has required methods
-      if (!isValidProvider(provider)) {
-        logger.warn("trackEIP1193Provider: Invalid provider - missing required methods");
-        return;
-      }
-      
-      if (this.evm.isTracked(provider)) {
-        logger.warn("trackEIP1193Provider: Provider already tracked");
-        return;
-      }
 
-      // CRITICAL: Always register accountsChanged for state management
-      // This ensures currentAddress, currentChainId, and _provider are always up-to-date
-      // Event emission is controlled conditionally inside the handlers
-      this.registerAccountsChangedListener(provider);
 
-      // `chainChanged` and `connect` are registered UNCONDITIONALLY: they are
-      // how this provider's chain is observed, and every signature and
-      // transaction has to be labelled with it. Gating registration on
-      // `autocapture.chain` conflated observing a chain with reporting one, so
-      // `{ chain: false, signature: true }` left the chain frozen at whatever
-      // was first seen - a switch to an excluded chain went unnoticed and its
-      // signatures were emitted under the old, allowed chain. Whether an
-      // event is emitted is decided inside each handler.
-      this.registerChainChangedListener(provider);
-      if (this.isAutocaptureEnabled("connect")) {
-        this.registerConnectListener(provider);
-      } else {
-        // Observation only. The full connect handler calls `getAddress()`,
-        // which issues `eth_accounts`, and nothing analytics-only may go on
-        // the wallet's transport - a stalled request there sits in front of
-        // the next signature the dapp makes. The chain rides along on the
-        // event itself, so it costs nothing to record.
-        this.registerConnectChainObserver(provider);
-      }
 
-      // Seed the chain from the provider's own synchronous state if it exposes
-      // one. Deliberately a property read and never an RPC: see
-      // resolveChainIdForProvider for why nothing analytics-only may go on the
-      // wallet's transport.
-      this.seedProviderChainFromState(provider);
 
-      if (this.isAutocaptureEnabled("signature") || this.isAutocaptureEnabled("transaction")) {
-        this.registerRequestListeners(provider);
-      } else {
-        logger.debug("TrackProvider: Skipping request wrapping (both signature and transaction autocapture disabled)");
-      }
 
-      // Registered UNCONDITIONALLY: this listener also ends the provider's
-      // reported-connect record, and with `{ connect: true, disconnect: false }`
-      // a wallet that disconnected and reconnected would otherwise find its
-      // old record still standing and have the new connect suppressed. Whether
-      // a disconnect EVENT is emitted is decided inside the handler.
-      {
-        this.registerDisconnectListener(provider);
-      }
 
-      // Only add to tracked providers after all listeners are successfully registered
-      this.evm.markTracked(provider);
-    } catch (error) {
-      logger.error("Error tracking provider:", error);
-    }
-  }
 
-  private trackProviders(providers: readonly EIP6963ProviderDetail[]): void {
-    try {
-      for (const eip6963ProviderDetail of providers) {
-        const provider = eip6963ProviderDetail?.provider as
-          | EIP1193Provider
-          | undefined;
-        if (provider && !this.evm.isTracked(provider)) {
-          this.trackEIP1193Provider(provider);
-        }
-      }
-    } catch (error) {
-      logger.error(
-        "Failed to track EIP-6963 providers during initialization:",
-        error
-      );
-    }
-  }
 
 
-  private registerAccountsChangedListener(provider: EIP1193Provider): void {
-    logger.info("registerAccountsChangedListener");
-    const listener = (...args: unknown[]) =>
-      this.onAccountsChanged(provider, args[0] as string[]);
 
-    provider.on("accountsChanged", listener);
-    this.addProviderListener(provider, "accountsChanged", listener);
-  }
 
-  private async onAccountsChanged(
-    provider: EIP1193Provider,
-    accounts: string[]
-  ): Promise<void> {
-    logger.info("onAccountsChanged", accounts);
 
-    // Only a signal that can actually CLAIM the namespace takes a ticket.
-    //
-    // An empty `accountsChanged` from a provider that is not the active one
-    // is ignored below, so letting it take a ticket would supersede a real
-    // transition - including an active wallet's disconnect - on the strength
-    // of an event we are about to discard. Accounts arriving always claim:
-    // from the active provider it is a connect or switch, and from another it
-    // is a wallet switch.
-    const claims = accounts.length > 0 || this._provider === provider;
-    const observation = claims
-      ? this.wallet.observe("evm")
-      : this.wallet.currentObservation("evm");
 
-    // Take the ticket BEFORE any async work, so the order recorded is the
-    // order the wallet's signals arrived in. This path used to DROP a second
-    // `accountsChanged` while the first was in flight; dropping is not
-    // ordering, and a wallet that disconnected and came straight back had its
-    // reconnect thrown away.
-
-    await this._handleAccountsChanged(provider, accounts, observation);
-  }
-
-  /**
-   * Handles changes to the accounts of a given EIP-1193 provider.
-   *
-   * @param provider - The EIP-1193 provider whose accounts have changed.
-   * @param accounts - The new array of account addresses. An empty array indicates a disconnect.
-   * @returns A promise that resolves when the account change has been processed.
-   *
-   * If the accounts array is empty and the provider is the active provider, this method triggers
-   * a disconnect flow. Otherwise, it updates the state to reflect the new accounts as needed.
-   */
-  private async _handleAccountsChanged(
-    provider: EIP1193Provider,
-    accounts: string[],
-    observation: Observation
-  ): Promise<void> {
-    if (accounts.length === 0) {
-      // Handle wallet disconnect for active provider only
-      if (this._provider === provider) {
-        logger.info("OnAccountsChanged: Detecting disconnect, current state:", {
-          evmAddress: this._evmAddress,
-          evmChainId: this._evmChainId,
-          providerMatch: this._provider === provider,
-        });
-
-        // The reported connect ends with the connection, so a genuine
-        // reconnect later reports again rather than being taken for a
-        // duplicate.
-        this._announcedConnect.delete(provider);
-
-        // Check if disconnect tracking is enabled before emitting event
-        if (this.isAutocaptureEnabled("disconnect")) {
-          try {
-            // Pass EVM state explicitly to ensure we have the data for the disconnect event
-            await this.disconnect({
-              chainId: this._evmChainId,
-              address: this._evmAddress,
-            });
-            // Provider remains tracked to allow for reconnection scenarios
-          } catch (error) {
-            logger.error(
-              "Failed to disconnect provider on accountsChanged",
-              error
-            );
-            // Don't untrack if disconnect failed to maintain state consistency
-          }
-        } else {
-          logger.debug("OnAccountsChanged: Disconnect event skipped (autocapture.disconnect: false)");
-          // Whether the app opted into the EVENT has no bearing on ordering.
-          this.wallet.beginDisconnect("evm");
-          // Still clear state even if not tracking the event
-          this.clearChainState('evm');
-        }
-      } else {
-        logger.info(
-          "OnAccountsChanged: Ignoring disconnect for non-active provider"
-        );
-      }
-      return;
-    }
-
-    // Validate and checksum the first account address
-    const address = validateAndChecksumAddress(accounts[0]);
-    if (!address) {
-      logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
-      return;
-    }
-
-    // Handle provider switching: if we have an active provider but a different provider
-    // is connecting with accounts, check if the current provider is still connected
-    if (this._provider && this._provider !== provider) {
-      // Emitting the old wallet's disconnect is asynchronous, and a third
-      // provider can claim the namespace during it (a `chainChanged` counts
-      // as a wallet switch, so it does not need this handler at all). This
-      // transition is then stale: installing it would overwrite a newer,
-      // already-reported session. See issue #344.
-      // Capture current EVM state BEFORE any changes
-      const currentStoredAddress = this._evmAddress;
-      const newProviderAddress = validateAndChecksumAddress(address);
-
-      logger.info(
-        "OnAccountsChanged: Different provider attempting to connect",
-        {
-          activeProvider: this.getProviderInfo(this._provider).name,
-          eventProvider: this.getProviderInfo(provider).name,
-          currentStoredAddress: currentStoredAddress,
-          newProviderAddress: newProviderAddress,
-        }
-      );
-
-      // Check if current active provider still has accounts
-      try {
-        const activeProviderAccounts = await this.getAccounts(this._provider);
-
-        // The probe is asynchronous too, so check before issuing anything.
-        // Every branch below reads the CURRENT evm state, so a switch that
-        // went stale during the probe would emit a false disconnect for
-        // whoever claimed the namespace, and clear them.
-        if (!this.wallet.isCurrent(observation)) return;
-
-        logger.info("OnAccountsChanged: Checking current provider accounts", {
-          activeProvider: this.getProviderInfo(this._provider).name,
-          accountsLength: activeProviderAccounts
-            ? activeProviderAccounts.length
-            : 0,
-          accounts: activeProviderAccounts,
-        });
-
-        if (activeProviderAccounts && activeProviderAccounts.length > 0) {
-          // Check if the new provider has a different address - this indicates a real wallet switch
-          if (
-            newProviderAddress &&
-            currentStoredAddress &&
-            newProviderAddress !== currentStoredAddress
-          ) {
-            logger.info(
-              "OnAccountsChanged: Different address detected, switching providers despite current provider having accounts",
-              {
-                activeProvider: this.getProviderInfo(this._provider).name,
-                eventProvider: this.getProviderInfo(provider).name,
-                currentAddress: currentStoredAddress,
-                newAddress: newProviderAddress,
-                reason: PROVIDER_SWITCH_REASONS.ADDRESS_MISMATCH,
-              }
-            );
-
-            // Emit disconnect for the old provider if tracking is enabled
-            if (this.isAutocaptureEnabled("disconnect")) {
-              await this.disconnect({
-                chainId: this._evmChainId,
-                address: this._evmAddress,
-              });
-            } else {
-              logger.debug("OnAccountsChanged: Disconnect event skipped during provider switch (autocapture.disconnect: false)");
-              // Still clear state even if not tracking the event
-              this.clearChainState('evm');
-            }
-
-            if (!this.wallet.isCurrent(observation)) return;
-
-            // Clear state and let the new provider become active
-            this.clearActiveProvider();
-          } else {
-            logger.info(
-              "OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider",
-              {
-                activeProvider: this.getProviderInfo(this._provider).name,
-                eventProvider: this.getProviderInfo(provider).name,
-                activeProviderAccountsCount: activeProviderAccounts.length,
-                currentAddress: currentStoredAddress,
-                newAddress: newProviderAddress,
-              }
-            );
-            return;
-          }
-        } else {
-          logger.info(
-            "OnAccountsChanged: Current provider has no accounts, switching to new provider",
-            {
-              oldProvider: this.getProviderInfo(this._provider).name,
-              newProvider: this.getProviderInfo(provider).name,
-              reason: PROVIDER_SWITCH_REASONS.NO_ACCOUNTS,
-            }
-          );
-
-          // Emit disconnect for the old provider that didn't signal properly if tracking is enabled
-          if (this.isAutocaptureEnabled("disconnect")) {
-            await this.disconnect({
-              chainId: this._evmChainId,
-              address: this._evmAddress,
-            });
-          } else {
-            logger.debug("OnAccountsChanged: Disconnect event skipped for old provider (autocapture.disconnect: false)");
-            // Still clear state even if not tracking the event
-            this.clearChainState('evm');
-          }
-
-          if (!this.wallet.isCurrent(observation)) return;
-        }
-      } catch (error) {
-        logger.warn(
-          "OnAccountsChanged: Could not check current provider accounts, switching to new provider",
-          {
-            error: error instanceof Error ? error.message : String(error),
-            errorType:
-              error instanceof Error ? error.constructor.name : typeof error,
-            oldProvider: this._provider
-              ? this.getProviderInfo(this._provider).name
-              : "unknown",
-            newProvider: this.getProviderInfo(provider).name,
-            reason: PROVIDER_SWITCH_REASONS.CHECK_FAILED,
-          }
-        );
-
-        // If we can't check the current provider, assume it's disconnected
-        if (this.isAutocaptureEnabled("disconnect")) {
-          await this.disconnect({
-            chainId: this._evmChainId,
-            address: this._evmAddress,
-          });
-        } else {
-          logger.debug("OnAccountsChanged: Disconnect event skipped for failed provider check (autocapture.disconnect: false)");
-          // Still clear state even if not tracking the event
-          this.clearChainState('evm');
-        }
-
-        if (!this.wallet.isCurrent(observation)) return;
-      }
-    }
-
-    // Set provider if none exists (first connection)
-    if (!this._provider) {
-      this._provider = provider;
-    }
-
-    // If both the provider and address are the same, no-op
-    if (this._provider === provider && address === this._evmAddress) {
-      return;
-    }
-
-    // Read the chain from what has already been observed. NO RPC.
-    //
-    // This path used to call `eth_chainId`, which is the same hazard the
-    // request paths had removed: on a transport that serializes - a
-    // WalletConnect relay socket - a stalled analytics lookup sits in the
-    // wallet's queue ahead of the dapp's next signature. `accountsChanged`
-    // fires exactly when a user is about to transact, so it is the worst
-    // moment to occupy that queue.
-    //
-    // A provider that has announced nothing yet reports 0 ("unknown"), which
-    // the exclusion gate refuses rather than guessing at.
-    const nextChainId = this.resolveChainIdForProvider(provider);
-    const wasDisconnected = !this._evmAddress;
-
-    // Update state regardless of whether connect *event* tracking is enabled,
-    // so disconnect events keep valid address/chainId values. (excludeChains is
-    // NOT suppression - it still updates state so currentChainId can gate
-    // events.)
-    if (this.isTrackingSuppressed()) {
-      this.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
-    } else {
-      this.setChainState('evm', { address, chainId: nextChainId });
-    }
-
-    // Conditionally emit connect event based on tracking configuration
-    const providerInfo = this.getProviderInfo(provider);
-    const effectiveChainId = nextChainId || 0;
-    
-    if (
-      this.isAutocaptureEnabled("connect") &&
-      this.shouldReportConnect(provider, address)
-    ) {
-      logger.info(
-        "OnAccountsChanged: Detected wallet connection, emitting connect event",
-        {
-          chainId: nextChainId,
-          address,
-          wasDisconnected,
-          providerName: providerInfo.name,
-          rdns: providerInfo.rdns,
-          hasChainId: !!nextChainId,
-        }
-      );
-
-      if (effectiveChainId === 0) {
-        logger.info(
-          "OnAccountsChanged: Using fallback chainId 0 for connect event"
-        );
-      }
-
-      this.markConnectReported(provider, address, effectiveChainId);
-      this.connect(
-        {
-          chainId: effectiveChainId,
-          address,
-        },
-        {
-          providerName: providerInfo.name,
-          rdns: providerInfo.rdns,
-        }
-      ).catch((error) => {
-        logger.error(
-          "Failed to track connect event during account change:",
-          error
-        );
-      });
-    } else {
-      logger.debug(
-        "OnAccountsChanged: Connect event skipped (autocapture.connect: false)",
-        {
-          chainId: nextChainId,
-          address,
-          providerName: providerInfo.name,
-        }
-      );
-    }
-  }
-
-  private registerChainChangedListener(provider: EIP1193Provider): void {
-    logger.info("registerChainChangedListener");
-    const listener = (...args: unknown[]) =>
-      this.onChainChanged(provider, args[0] as string);
-    provider.on("chainChanged", listener);
-    this.addProviderListener(provider, "chainChanged", listener);
-  }
-
-  private async onChainChanged(
-    provider: EIP1193Provider,
-    chainIdHex: string
-  ): Promise<void> {
-    logger.info("onChainChanged", chainIdHex);
-
-    const nextChainId = parseChainId(chainIdHex);
-
-    // Record it for THIS provider regardless of which one is active. This is
-    // the only way an autocaptured event from a non-active wallet can learn
-    // its chain without putting an RPC on that wallet's transport.
-    this.rememberProviderChain(provider, nextChainId);
-
-    // Beyond that, a chain event from a NON-active provider is observation
-    // only when chain autocapture is off.
-    //
-    // This listener is now registered unconditionally, so that a signature can
-    // be labelled with its signer's chain. `handleProviderMismatch()` treats a
-    // chain event from another wallet as a wallet switch and clears the active
-    // wallet's address and chain. That is the established behaviour of the
-    // chain feature and stays exactly as it was, but it must not start firing
-    // for apps that never asked for chain tracking: a second wallet switching
-    // network would silently erase the active wallet's attribution.
-    // Observation only when chain autocapture is off, whether or not an
-    // active provider has been established yet.
-    //
-    // `isProviderMismatch()` is false while `_provider` is undefined, which is
-    // exactly the state left by restoring a wallet from the active-wallet
-    // cookie. A background wallet's `chainChanged` could therefore claim the
-    // active slot and overwrite the restored wallet's chain - suppressing
-    // allowed events, or letting excluded ones through. The active provider is
-    // established by an actual account/connect/request association, not by
-    // another wallet changing network.
-    if (!this.isAutocaptureEnabled("chain") && provider !== this._provider) {
-      return;
-    }
-
-    // Only handle chain changes for the active provider (or if none is set yet)
-    if (this.isProviderMismatch(provider)) {
-      this.handleProviderMismatch(provider);
-    }
-
-    // Chain changes only matter for connected users
-    if (!this._evmAddress) {
-      logger.info(
-        "OnChainChanged: No current address, user appears disconnected"
-      );
-      return Promise.resolve();
-    }
-
-    // Set provider if none exists
-    if (!this._provider) {
-      this._provider = provider;
-    }
-
-    this.setChainState('evm', { chainId: nextChainId });
-
-    try {
-      // This is just a chain change since we already confirmed _evmAddress exists
-      if (this.isAutocaptureEnabled("chain")) {
-        // Awaited, so a failing emission is caught below rather than escaping
-        // as an unhandled rejection out of the provider's event listener.
-        // `return`ing the promise left the catch here unreachable.
-        await this.chain({
-          chainId: nextChainId,
-          address: this._evmAddress,
-        });
-      } else {
-        logger.debug("OnChainChanged: Chain event skipped (autocapture.chain: false)", {
-          chainId: this._evmChainId,
-          address: this._evmAddress,
-        });
-      }
-    } catch (error) {
-      logger.error("OnChainChanged: Failed to emit chain event:", error);
-    }
-  }
-
-  /**
-   * Record a provider's chain from its `connect` event, and nothing else.
-   *
-   * Used when connect autocapture is off. `connect` carries `chainId` in its
-   * payload, so this needs no RPC - unlike the full handler, which resolves
-   * the account.
-   */
-  private registerConnectChainObserver(provider: EIP1193Provider): void {
-    const listener = (...args: unknown[]) => {
-      const connection = args[0] as { chainId?: unknown } | undefined;
-      if (typeof connection?.chainId !== "string") return;
-      this.rememberProviderChain(provider, parseChainId(connection.chainId));
-    };
-    provider.on("connect", listener);
-    this.addProviderListener(provider, "connect", listener);
-  }
-
-  /**
-   * Whether a connect for this wallet still needs reporting.
-   *
-   * True when nothing has been reported for this provider, or when the account
-   * changed. A wallet already reported is not reported again.
-   *
-   * Deliberately does NOT re-report to correct a chain. When `accountsChanged`
-   * wins the race on a provider that exposes no synchronous `chainId`, the
-   * connect carries 0 - honestly, since the chain is unknown at that instant -
-   * and the `connect` payload that follows knows the real one. Emitting again
-   * to relabel would mean two connects for one connection, which is the bug
-   * this whole path exists to prevent. That payload still corrects
-   * `currentChainId`, so everything after it is attributed properly.
-   */
-  private shouldReportConnect(
-    provider: EIP1193Provider,
-    address: Address
-  ): boolean {
-    const reported = this._announcedConnect.get(provider);
-    if (!reported) return true;
-    return reported.address.toLowerCase() !== address.toLowerCase();
-  }
-
-  /**
-   * Record a connect as reported - but only if it will actually be sent.
-   *
-   * `connect()` passes through `shouldTrack()`, which refuses an unresolvable
-   * chain when `tracking.excludeChains` is configured. Marking a refused event
-   * as reported would suppress the authoritative one that follows.
-   */
-  private markConnectReported(
-    provider: EIP1193Provider,
-    address: Address,
-    chainId: number
-  ): void {
-    if (!this.willTrackEvent(chainId)) return;
-    this._announcedConnect.set(provider, { address, chainId });
-  }
-
-  private registerConnectListener(provider: EIP1193Provider): void {
-    logger.info("registerConnectListener");
-    const listener = (...args: unknown[]) => {
-      const connection: ConnectInfo = args[0] as ConnectInfo;
-      this.onConnected(provider, connection);
-    };
-    provider.on("connect", listener);
-    this.addProviderListener(provider, "connect", listener);
-  }
-
-  private registerDisconnectListener(provider: EIP1193Provider): void {
-    logger.info("registerDisconnectListener");
-    const listener = async (_error?: unknown) => {
-      if (this._provider !== provider) return;
-      // As in the accountsChanged disconnect path: the reported connect ends
-      // with the connection.
-      this._announcedConnect.delete(provider);
-      logger.info(
-        "OnDisconnect: Wallet disconnect event received, current state:",
-        {
-          currentAddress: this._evmAddress,
-          currentChainId: this._evmChainId,
-        }
-      );
-
-
-      // Double-check disconnect tracking is enabled (defensive programming)
-      // Note: This listener should only be registered if tracking is enabled
-      if (this.isAutocaptureEnabled("disconnect")) {
-        try {
-          // Pass current state explicitly to ensure we have the data for the disconnect event
-          await this.disconnect({
-            chainId: this._evmChainId,
-            address: this._evmAddress,
-          });
-          // Provider remains tracked to allow for reconnection scenarios
-        } catch (e) {
-          logger.error("Error during disconnect in disconnect listener", e);
-          // Don't untrack if disconnect failed to maintain state consistency
-        }
-      } else {
-        logger.debug("OnDisconnect: Disconnect event skipped (autocapture.disconnect: false)");
-        this.wallet.beginDisconnect("evm");
-        // Still clear state even if not tracking the event
-        this.clearChainState('evm');
-      }
-    };
-    provider.on("disconnect", listener);
-    this.addProviderListener(provider, "disconnect", listener);
-  }
-
-  private async onConnected(
-    provider: EIP1193Provider,
-    connection: ConnectInfo
-  ): Promise<void> {
-    logger.info("onConnected", connection);
-
-    // Taken before any await. A connect handler asks a narrower question
-    // than a switch does: not "am I still the newest signal?" but "did the
-    // wallet go away after I started?". A newer CONNECT must not silence
-    // this one, because the two handlers negotiate which of them reports via
-    // the announced-connect record, and suppressing both loses the event.
-    const disconnectsBefore = this.wallet.disconnectsSoFar("evm");
-
-    try {
-      if (!connection?.chainId || typeof connection.chainId !== "string")
-        return;
-
-      const chainId = parseChainId(connection.chainId);
-      // Record it for this provider before anything can bail out below.
-      this.rememberProviderChain(provider, chainId);
-      const address = await this.getAddress(provider);
-
-      // A newer signal arrived while we were resolving the address. Claiming
-      // the namespace now would write this stale view over it, and would make
-      // a disconnect still in flight look stale so it skipped its cleanup. A
-      // reconnect that started AFTER the disconnect holds a newer ticket and
-      // is reported normally.
-      if (this.wallet.disconnectsSoFar("evm") !== disconnectsBefore) {
-        logger.info(
-          "onConnected: The wallet disconnected after this observation began; dropping it"
-        );
-        return;
-      }
-
-      if (chainId && address) {
-        // Check if this is a connection event (transition from no address to having an address)
-        const wasDisconnected = !this._evmAddress;
-
-        // Set provider if none exists
-        if (!this._provider) {
-          this._provider = provider;
-        }
-
-        // Only emit connect event for the active provider to avoid duplicates
-        // Check if this provider is the currently active one
-        const isActiveProvider = this._provider === provider;
-
-        // Update state from active provider so disconnect events keep valid
-        // address/chainId values - except while suppressed, where we must not
-        // LEARN identity (only drop a stale EVM wallet on a switch).
-        if (isActiveProvider) {
-          if (this.isTrackingSuppressed()) {
-            this.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
-          } else {
-            this.setChainState('evm', {
-              chainId,
-              address: validateAndChecksumAddress(address) || undefined,
-            });
-          }
-        }
-
-        // Conditionally emit connect event based on tracking configuration.
-        //
-        // Both handlers observe one connection, so `shouldReportConnect()`
-        // decides which of them reports it. It keys on what was actually
-        // REPORTED, not on whether an address is known: an address can be
-        // present with no connect ever sent - restored from the active-wallet
-        // cookie, or reported with an unresolved chain and then refused by
-        // `excludeChains` - and this payload carries the authoritative chain,
-        // so it must be able to supersede such a report.
-        if (
-          isActiveProvider &&
-          this._evmAddress &&
-          this.shouldReportConnect(provider, address)
-        ) {
-          const providerInfo = this.getProviderInfo(provider);
-          const effectiveChainId = chainId || 0;
-
-          if (this.isAutocaptureEnabled("connect")) {
-            logger.info(
-              "OnConnected: Detected wallet connection, emitting connect event",
-              {
-                chainId,
-                wasDisconnected,
-                providerName: providerInfo.name,
-                rdns: providerInfo.rdns,
-                hasChainId: !!chainId,
-                isActiveProvider,
-              }
-            );
-
-            if (effectiveChainId === 0) {
-              logger.info(
-                "OnConnected: Using fallback chainId 0 for connect event"
-              );
-            }
-
-            this.markConnectReported(provider, address, effectiveChainId);
-            this.connect(
-              {
-                chainId: effectiveChainId,
-                address,
-              },
-              {
-                providerName: providerInfo.name,
-                rdns: providerInfo.rdns,
-              }
-            ).catch((error) => {
-              logger.error(
-                "Failed to track connect event during provider connection:",
-                error
-              );
-            });
-          } else {
-            logger.debug(
-              "OnConnected: Connect event skipped (autocapture.connect: false)",
-              {
-                chainId,
-                address,
-                providerName: providerInfo.name,
-              }
-            );
-          }
-        } else if (address && !isActiveProvider) {
-          const providerInfo = this.getProviderInfo(provider);
-          logger.debug(
-            "OnConnected: Skipping connect event for non-active provider",
-            {
-              chainId,
-              providerName: providerInfo.name,
-              rdns: providerInfo.rdns,
-              isActiveProvider,
-              activeProviderInfo: this._provider
-                ? this.getProviderInfo(this._provider)
-                : null,
-            }
-          );
-        }
-      }
-    } catch (e) {
-      logger.error("Error handling connect event", e);
-    }
-  }
 
   private registerRequestListeners(provider: EIP1193Provider): void {
     logger.info("registerRequestListeners");
@@ -2546,120 +1787,11 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
 
-  private async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
-    const store = createStore();
-    let providers = store.getProviders();
-
-    store.subscribe((providerDetails) => {
-      providers = providerDetails;
-
-      // Process newly added providers with proper deduplication
-      const newlyAddedDetails = providerDetails.filter((detail) => {
-        const provider = detail?.provider as EIP1193Provider | undefined;
-        return provider && !this.evm.isSeen(provider);
-      });
-
-      // Add new providers to the array without overwriting existing ones
-      for (const detail of newlyAddedDetails) {
-        this.evm.add(detail);
-      }
-
-      // Track listeners for newly discovered providers only
-      const newDetails = providerDetails.filter((detail) => {
-        const p = detail?.provider as EIP1193Provider | undefined;
-        return !!p && !this.evm.isTracked(p);
-      });
-
-      if (newDetails.length > 0) {
-        this.trackProviders(newDetails);
-        // Detect newly discovered wallets (session de-dupes) with error handling
-        (async () => {
-          try {
-            await this.detectWallets(newDetails);
-          } catch (e) {
-            logger.error("Formo: Failed to detect wallets", e);
-          }
-        })();
-      }
-
-      // Clean up providers that are no longer available
-      this.cleanupUnavailableProviders();
-    });
-
-    // Fallback to injected provider if no providers are found
-    if (providers.length === 0) {
-      const injected =
-        typeof window !== "undefined" ? window.ethereum : undefined;
-      if (injected) {
-        // If we have already detected and cached the injected provider, and it's the same instance, return the cached result
-        if (
-          this.evm.injected &&
-          this.evm.injected.provider === injected
-        ) {
-          // Ensure it's tracked
-          if (!this.evm.isTracked(injected)) {
-            this.trackEIP1193Provider(injected);
-          }
-          // Merge with existing providers instead of overwriting
-          this.evm.add(this.evm.injected);
-          return this.evm.all;
-        }
-
-        // Re-check if the injected provider is already tracked just before tracking
-        if (!this.evm.isTracked(injected)) {
-          this.trackEIP1193Provider(injected);
-        }
-
-        // Create a mock EIP6963ProviderDetail for the injected provider
-        const injectedProviderInfo = detectInjectedProviderInfo(injected);
-        const injectedDetail: EIP6963ProviderDetail = {
-          provider: injected,
-          info: injectedProviderInfo,
-        };
-
-        // Cache the detected injected provider detail
-        this.evm.injected = injectedDetail;
-
-        // Merge with existing providers instead of overwriting
-        this.evm.add(injectedDetail);
-      }
-      return this.evm.all;
-    }
-
-    // Initialize providers array with discovered providers, avoiding duplicates
-    const uniqueProviders = providers.filter(
-      (detail: EIP6963ProviderDetail) => {
-        const provider = detail?.provider as EIP1193Provider | undefined;
-        return provider && !this.evm.isSeen(provider);
-      }
-    );
-
-    // Add to seen providers and instances, ensuring no duplicates in _providers
-    for (const detail of uniqueProviders) {
-      this.evm.add(detail);
-    }
-
-    return this.evm.all;
-  }
 
   get providers(): readonly EIP6963ProviderDetail[] {
     return this.evm.all;
   }
 
-  private async detectWallets(
-    providers: readonly EIP6963ProviderDetail[]
-  ): Promise<void> {
-    try {
-      for (const eip6963ProviderDetail of providers) {
-        await this.detect({
-          providerName: eip6963ProviderDetail?.info.name,
-          rdns: eip6963ProviderDetail?.info.rdns,
-        });
-      }
-    } catch (err) {
-      logger.error("Error detect all wallets:", err);
-    }
-  }
 
   get provider(): EIP1193Provider | undefined {
     return this._provider;
@@ -2688,33 +1820,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
 
 
-  /**
-   * Seed a provider's chain from whatever it already exposes synchronously.
-   *
-   * Most EIP-1193 implementations carry a `chainId` property (MetaMask,
-   * WalletConnect, Coinbase). Reading it costs nothing and cannot block.
-   *
-   * There is deliberately no RPC fallback. An earlier version probed with
-   * `eth_chainId` when a provider was first tracked, on the theory that
-   * tracking time is off the user's critical path. It is not: a serialized
-   * transport has ONE queue, so a stalled probe sits in front of every later
-   * signature and transaction the dapp makes. It could also land out of order
-   * - a slow probe response overwriting a newer `chainChanged` - and relabel
-   * events onto a chain the wallet had already left.
-   *
-   * A provider that exposes nothing stays unknown until it emits
-   * `chainChanged` or `connect`, and unknown is reported honestly as 0.
-   */
-  private seedProviderChainFromState(provider: EIP1193Provider): void {
-    const raw = (provider as unknown as { chainId?: unknown }).chainId;
-    const chainId =
-      typeof raw === "string"
-        ? parseChainId(raw)
-        : typeof raw === "number"
-          ? raw
-          : undefined;
-    this.rememberProviderChain(provider, chainId);
-  }
 
   private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {
     const p = provider || this.provider;
@@ -2882,27 +1987,6 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   // Explicitly untrack a provider: remove listeners, clear wrapper flag
   // and tracking
-  private untrackProvider(provider: EIP1193Provider): void {
-    try {
-      this.removeProviderListeners(provider);
-
-      // Only stop tracking it if the listeners actually came off. "Tracked"
-      // means "has our listeners wired up", which is still true when removal
-      // threw, and `cleanup()` iterates the tracked set. Forgetting it here
-      // regardless is what made a retained listener unreachable: the entry
-      // survived but nothing ever looked at it again, so the retry that
-      // retention exists for could never happen.
-      if (this.evm.attachedEvents(provider).length === 0) {
-        this.evm.forgetTracked(provider);
-      }
-
-      if (this._provider === provider) {
-        this.clearActiveProvider();
-      }
-    } catch (e) {
-      logger.warn("Failed to untrack provider", e);
-    }
-  }
 
   // Debug/monitoring helpers
   public getTrackedProvidersCount(): number {
@@ -2922,40 +2006,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     return { ...this.evm.counts, activeProvider: !!this._provider };
   }
 
-  /**
-   * Clean up providers that are no longer available
-   * This helps maintain consistent state and prevents memory leaks
-   */
-  private cleanupUnavailableProviders(): void {
-    // Remove providers that are no longer in the current providers list
-    const currentProviderInstances = new Set(
-      this.evm.all.map((detail) => detail.provider as EIP1193Provider)
-    );
-
-    for (const provider of this.evm.trackedProviders()) {
-      if (!currentProviderInstances.has(provider)) {
-        logger.info(
-          `Cleaning up unavailable provider: ${provider.constructor.name}`
-        );
-        this.untrackProvider(provider);
-      }
-    }
-  }
 
 
-  /**
-   * Handle provider mismatch by switching to the new provider and invalidating old tokens
-   * @param provider The new provider to switch to
-   */
-  private handleProviderMismatch(provider: EIP1193Provider): void {
-    // If this is a different provider, allow the switch
-    if (this._provider) {
-      // Clear any provider-specific state when switching
-      this.setChainState('evm', { address: undefined, chainId: undefined, provider });
-    } else {
-      this._provider = provider;
-    }
-  }
 
 
 
