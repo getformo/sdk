@@ -19,6 +19,31 @@ import { WalletStateStore } from "../wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./EvmProviderRegistry";
 import { AutocaptureEventType } from "../tracking/TrackingPolicy";
 
+/**
+ * Decode a hex-encoded `personal_sign` message.
+ *
+ * Deliberately not `Buffer.from(hex, "hex")`. `Buffer` is a Node global with
+ * no polyfill in this bundle, so in a browser that line threw and the
+ * signature event was dropped with it - silently, which is the worst way for
+ * analytics to fail. `TextDecoder` is available everywhere this SDK runs, and
+ * `TextEncoder` is already used elsewhere in the queue.
+ *
+ * Malformed input decodes to as much as can be read rather than throwing: a
+ * message we cannot fully read is still worth reporting the signature for.
+ */
+function hexToUtf8(hex: string): string {
+  const clean = typeof hex === "string" && hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (typeof clean !== "string" || clean.length === 0) return "";
+  const byteCount = Math.floor(clean.length / 2);
+  const bytes = new Uint8Array(byteCount);
+  for (let i = 0; i < byteCount; i++) {
+    const byte = Number.parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(byte)) return new TextDecoder().decode(bytes.subarray(0, i));
+    bytes[i] = byte;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 /** What the request tracker needs from the SDK that owns it. */
 export interface EvmRequestTrackerDeps {
   isAutocaptureEnabled(eventType: AutocaptureEventType): boolean;
@@ -58,19 +83,53 @@ export interface EvmRequestTrackerDeps {
  * user's wallet, which is never an acceptable price for a label.
  */
 export class EvmRequestTracker {
+  /**
+   * Timers for receipt and batch-status polling.
+   *
+   * A poll re-arms for up to thirty seconds, so a torn-down instance would
+   * otherwise keep asking a wallet about transactions nobody is listening
+   * for, and hold the process open for the whole window. That is the same
+   * shape as the batch timer that hung the test suite in #338.
+   */
+  private polls = new Set<ReturnType<typeof setTimeout>>();
+  private disposed = false;
+
   constructor(
     private readonly wallet: WalletStateStore,
     private readonly registry: EvmProviderRegistry,
     private readonly deps: EvmRequestTrackerDeps
   ) {}
 
-  registerRequestListeners(provider: EIP1193Provider): void {
+  /** Stop every poll in flight. Terminal, like the event queue's close(). */
+  cleanup(): void {
+    this.disposed = true;
+    this.polls.forEach((timer) => clearTimeout(timer));
+    this.polls.clear();
+  }
+
+  /** Re-arm a poll, unless this tracker has been torn down. */
+  private schedulePoll(fn: () => void, delayMs: number): void {
+    if (this.disposed) return;
+    const timer = setTimeout(() => {
+      this.polls.delete(timer);
+      fn();
+    }, delayMs);
+    this.polls.add(timer);
+  }
+
+  /**
+   * Wrap a provider's `request`. Returns whether the wrapper is installed:
+   * a caller that marks the provider as tracked on a false return would
+   * never retry it, and every signature and transaction from that wallet
+   * would be missed for the rest of the session.
+   */
+  registerRequestListeners(provider: EIP1193Provider): boolean {
     logger.info("registerRequestListeners");
     if (!provider) {
       logger.error(
         "Provider not found for request (signature, transaction) tracking"
       );
-      return;
+      return false;
     }
 
     // Check if the provider is already wrapped with our SDK's wrapper
@@ -79,7 +138,7 @@ export class EvmRequestTracker {
       logger.info(
         "Provider already wrapped with our SDK; skipping request wrapping."
       );
-      return;
+      return true;
     }
 
     const request = provider.request.bind(provider);
@@ -211,8 +270,22 @@ export class EvmRequestTracker {
         }
       }
 
+      // Handle EIP-5792 batched calls.
+      //
+      // Smart accounts send through `wallet_sendCalls` rather than
+      // `eth_sendTransaction`, and until now the SDK understood only the
+      // latter: those transactions were not captured at all, silently. That
+      // is the same failure shape as the missing-connect bug that started
+      // this work - nothing errors, the data is simply absent.
+      if (method === "wallet_sendCalls" && Array.isArray(params) && params[0]) {
+        return this.trackBatchedCalls(
+          provider,
+          request,
+          params as unknown[]
+        ) as Promise<T>;
+      }
+
       // Handle Transactions
-      // TODO: Support eip5792.xyz calls
       if (
         Array.isArray(params) &&
         method === "eth_sendTransaction" &&
@@ -298,14 +371,19 @@ export class EvmRequestTracker {
     };
     // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
     wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
-    (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
-      wrappedRequest;
 
+    // Both writes go inside the try. A frozen or non-extensible provider
+    // throws on the symbol assignment just as readily as on `request`, and
+    // that one used to sit outside the guard, so an unwrappable provider
+    // aborted registration instead of being skipped.
     try {
-      // Attempt to assign the wrapped request function (rely on try-catch for mutability errors)
+      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
+        wrappedRequest;
       provider.request = wrappedRequest;
+      return true;
     } catch (e) {
       logger.warn("Failed to wrap provider.request; skipping", e);
+      return false;
     }
   }
 
@@ -340,13 +418,9 @@ export class EvmRequestTracker {
     };
 
     if (method === "personal_sign") {
-      const message = Buffer.from(
-        (params[0] as string).slice(2),
-        "hex"
-      ).toString("utf8");
       return {
         ...basePayload,
-        message,
+        message: hexToUtf8(params[0] as string),
       };
     }
 
@@ -413,6 +487,7 @@ export class EvmRequestTracker {
     if (!provider) return;
     type Receipt = { status: string | number } | null;
     const poll = async () => {
+      if (this.disposed) return;
       try {
         const receipt = (await provider.request({
           method: "eth_getTransactionReceipt",
@@ -421,18 +496,26 @@ export class EvmRequestTracker {
         if (receipt) {
           // status: 1 = success, 0 = reverted
           if (receipt.status === "0x1" || receipt.status === 1) {
-            this.deps.transaction({
-              status: TransactionStatus.CONFIRMED,
-              ...payload,
-              transactionHash,
-            });
+            this.deps
+              .transaction({
+                status: TransactionStatus.CONFIRMED,
+                ...payload,
+                transactionHash,
+              })
+              .catch((e) =>
+                logger.error("Formo: Failed to track transaction confirmation", e)
+              );
             return;
           } else if (receipt.status === "0x0" || receipt.status === 0) {
-            this.deps.transaction({
-              status: TransactionStatus.REVERTED,
-              ...payload,
-              transactionHash,
-            });
+            this.deps
+              .transaction({
+                status: TransactionStatus.REVERTED,
+                ...payload,
+                transactionHash,
+              })
+              .catch((e) =>
+                logger.error("Formo: Failed to track transaction revert", e)
+              );
             return;
           }
         }
@@ -440,9 +523,256 @@ export class EvmRequestTracker {
         logger.error("Error polling transaction receipt", e);
       }
       attempts++;
-      if (attempts < maxAttempts) {
-        setTimeout(poll, intervalMs);
-      }
+      if (attempts < maxAttempts) this.schedulePoll(poll, intervalMs);
     };
     poll();
-  }}
+  }
+  /**
+   * One `transaction` event per call in an EIP-5792 batch.
+   *
+   * A batch is not a transaction. It maps to several on-chain transactions,
+   * so reporting it as one event would understate volume and make revenue and
+   * per-contract attribution wrong for every app that adopts smart accounts.
+   * Each call is reported on its own, carrying the batch id so the calls can
+   * be reassembled downstream.
+   *
+   * Status is per BATCH, because that is what `wallet_getCallsStatus` reports.
+   * When it resolves, every call in the batch moves together, except where
+   * per-call receipts say otherwise on a non-atomic batch.
+   */
+  private async trackBatchedCalls(
+    provider: EIP1193Provider,
+    request: (args: RequestArguments) => Promise<unknown>,
+    params: unknown[]
+  ): Promise<unknown> {
+    if (!this.deps.isAutocaptureEnabled("transaction")) {
+      logger.debug("Transaction event skipped (autocapture.transaction: false)", {
+        method: "wallet_sendCalls",
+      });
+      return request({ method: "wallet_sendCalls", params });
+    }
+
+    // Issue the wallet call FIRST, for the same reason as every other path
+    // here: a provider that serialises RPC would otherwise queue the user's
+    // batch behind our own bookkeeping.
+    const sendPromise = request({ method: "wallet_sendCalls", params });
+    sendPromise.catch(() => undefined);
+
+    const batch = params[0] as {
+      from?: string;
+      chainId?: string;
+      calls?: Array<{ to?: string; data?: string; value?: string }>;
+    };
+    const calls = Array.isArray(batch?.calls) ? batch.calls : [];
+
+    // The request names its own chain. Prefer it over what we know about the
+    // provider: a batch can be sent to a chain the wallet is not sitting on.
+    const declared =
+      typeof batch?.chainId === "string" ? parseChainId(batch.chainId) : undefined;
+    const chainId = declared || this.registry.resolveChainId(provider);
+
+    const address = validateAndChecksumAddress(batch?.from ?? "");
+    if (!address) {
+      // Nothing can be attributed without a sender, and inventing one would
+      // be worse than reporting nothing. The user's call still goes through.
+      logger.warn("Formo: wallet_sendCalls has no valid `from`; not tracking", {
+        from: batch?.from,
+      });
+      return sendPromise;
+    }
+
+    if (calls.length === 0) {
+      logger.debug("Formo: wallet_sendCalls carried no calls");
+      return sendPromise;
+    }
+
+    // Only the ACTIVE provider may write central wallet state, for the same
+    // reason as the single-transaction path: a second wallet would otherwise
+    // overwrite the active provider's address and chain.
+    if (!provider || provider === this.wallet.provider || !this.wallet.provider) {
+      this.wallet.backfill(address, chainId, provider);
+    }
+
+    const payloads = calls.map((call, index) => ({
+      chainId,
+      address,
+      to: call?.to,
+      value: call?.value,
+      data: call?.data,
+      properties: {
+        batch_size: calls.length,
+        batch_index: index,
+      } as IFormoEventProperties,
+    }));
+
+    // STARTED carries no batch id: the wallet has not issued one yet, exactly
+    // as `eth_sendTransaction` has no hash at this point. Position within the
+    // batch is known, and is what groups these until the id arrives.
+    for (const p of payloads) {
+      const { properties, ...rest } = p;
+      this.deps
+        .transaction({ status: TransactionStatus.STARTED, ...rest }, properties)
+        .catch((e) => logger.error("Formo: Failed to track batch call start", e));
+    }
+
+    try {
+      const result = await sendPromise;
+      const batchId = this.readBatchId(result);
+
+      for (const p of payloads) {
+        const { properties, ...rest } = p;
+        this.deps
+          .transaction(
+            { status: TransactionStatus.BROADCASTED, ...rest },
+            { ...properties, ...(batchId ? { batch_id: batchId } : {}) }
+          )
+          .catch((e) =>
+            logger.error("Formo: Failed to track batch call broadcast", e)
+          );
+      }
+
+      if (batchId) this.pollBatchStatus(provider, batchId, payloads);
+      return result;
+    } catch (error) {
+      const rpcError = error as RPCError;
+      if (rpcError?.code === 4001) {
+        // One rejection dismisses the whole prompt, so every call in it is
+        // rejected. Reporting only the first would undercount.
+        for (const p of payloads) {
+          const { properties, ...rest } = p;
+          this.deps
+            .transaction({ status: TransactionStatus.REJECTED, ...rest }, properties)
+            .catch((e) =>
+              logger.error("Formo: Failed to track batch call rejection", e)
+            );
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * How one call in a settled batch ended.
+   *
+   * A per-call receipt is authoritative where it exists: that is what makes a
+   * partially reverted non-atomic batch report honestly rather than tarring
+   * every call with the batch's worst outcome. A receipt whose own status is
+   * unreadable falls back to the batch verdict rather than being assumed good.
+   *
+   * The codes are EIP-5792's: 200 confirmed, 400 failed BEFORE landing on
+   * chain, 500 reverted, 600 partially reverted. 400 is a rejection, not a
+   * revert - nothing was mined, so calling it reverted would misreport gas
+   * spent and on-chain activity that never happened.
+   *
+   * Returns undefined when the call cannot be decided, which happens on 600
+   * for a call the wallet gave no receipt for.
+   */
+  private batchCallOutcome(
+    code: number,
+    receipt?: { status?: string | number }
+  ): TransactionStatus | undefined {
+    const receiptStatus = receipt?.status;
+    if (receiptStatus !== undefined) {
+      return receiptStatus === "0x0" || receiptStatus === 0
+        ? TransactionStatus.REVERTED
+        : TransactionStatus.CONFIRMED;
+    }
+    if (code >= 600) return undefined;
+    if (code >= 500) return TransactionStatus.REVERTED;
+    if (code >= 400) return TransactionStatus.REJECTED;
+    return TransactionStatus.CONFIRMED;
+  }
+
+  /**
+   * The batch identifier from a `wallet_sendCalls` result.
+   *
+   * EIP-5792 settled on `{ id }`, but wallets shipped against the earlier
+   * draft return a bare string. Both are accepted so a wallet on either
+   * version is still grouped.
+   */
+  private readBatchId(result: unknown): string | undefined {
+    if (typeof result === "string" && result.length > 0) return result;
+    if (result && typeof result === "object") {
+      const id = (result as { id?: unknown }).id;
+      if (typeof id === "string" && id.length > 0) return id;
+    }
+    return undefined;
+  }
+
+  /**
+   * Resolve a batch through `wallet_getCallsStatus`.
+   *
+   * The status codes are EIP-5792's: 100 pending, 200 confirmed, 400 failed
+   * before landing, 500 reverted, 600 partially reverted. Anything below 200
+   * means keep waiting.
+   *
+   * A per-call receipt wins over the batch verdict where one exists, which is
+   * what makes a partially reverted non-atomic batch report honestly instead
+   * of marking every call with the batch's worst outcome.
+   */
+  private async pollBatchStatus(
+    provider: EIP1193Provider,
+    batchId: string,
+    payloads: Array<{
+      chainId: number;
+      address: Address;
+      to?: string;
+      value?: string;
+      data?: string;
+      properties: IFormoEventProperties;
+    }>,
+    maxAttempts = 10,
+    intervalMs = 3000
+  ): Promise<void> {
+    if (!provider) return;
+    type BatchStatus = {
+      status?: number;
+      receipts?: Array<{ status?: string | number; transactionHash?: string }>;
+    } | null;
+
+    let attempts = 0;
+    const poll = async () => {
+      if (this.disposed) return;
+      try {
+        const res = (await provider.request({
+          method: "wallet_getCallsStatus",
+          params: [batchId],
+        })) as BatchStatus;
+
+        const code = typeof res?.status === "number" ? res.status : undefined;
+        if (code !== undefined && code >= 200) {
+          const receipts = Array.isArray(res?.receipts) ? res.receipts : [];
+          payloads.forEach((p, index) => {
+            const receipt = receipts[index];
+            const outcome = this.batchCallOutcome(code, receipt);
+            // 600 means SOME calls reverted, so a call with no receipt of its
+            // own has not been decided. Reporting it either way would invent
+            // a result; leaving it unsettled is the honest answer.
+            if (outcome === undefined) return;
+            const { properties, ...rest } = p;
+            this.deps
+              .transaction(
+                {
+                  status: outcome,
+                  ...rest,
+                  ...(receipt?.transactionHash
+                    ? { transactionHash: receipt.transactionHash }
+                    : {}),
+                },
+                { ...properties, batch_id: batchId }
+              )
+              .catch((e) =>
+                logger.error("Formo: Failed to track batch call outcome", e)
+              );
+          });
+          return;
+        }
+      } catch (e) {
+        logger.error("Error polling batch call status", e);
+      }
+      attempts++;
+      if (attempts < maxAttempts) this.schedulePoll(poll, intervalMs);
+    };
+    poll();
+  }
+}
