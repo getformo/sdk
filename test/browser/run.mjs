@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 if (typeof WebSocket === "undefined") {
-  console.error("test:browser needs Node >= 20.10 (built-in WebSocket)");
+  // The global is on by default from Node 22.4. On 20.10 to 22.3 it exists
+  // only behind --experimental-websocket, which this check does not try.
+  console.error("test:browser needs Node >= 22.4 (built-in WebSocket)");
   process.exit(2);
 }
 const here = dirname(fileURLToPath(import.meta.url));
@@ -83,7 +85,8 @@ results.push(["discovered", await evaluate("window.__ready.then(f => f.evm.all.m
 results.push(await step("connect A",        "await window.__walletA.request({ method: 'eth_requestAccounts' })"));
 results.push(await step("sign (A)",         "await window.__walletA.request({ method: 'personal_sign', params: ['0x68656c6c6f', '" + A + "'] })"));
 results.push(await step("reject sign (A)",  "window.__rejectNext = true; await window.__walletA.request({ method: 'personal_sign', params: ['0x68', '" + A + "'] }).catch(() => {})"));
-results.push(await step("switch chain",     "await window.__walletA.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x7a69' }] })"));
+// Wallets start on 0x7a69, so switch AWAY and back: a switch to the current chain is a no-op in a real wallet and proves nothing.
+results.push(await step("switch chain",     "await window.__walletA.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x1' }] }); await window.__walletA.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x7a69' }] })"));
 results.push(await step("send tx (A)",      "await window.__walletA.request({ method: 'eth_sendTransaction', params: [{ from: '" + A + "', to: '" + B + "', value: '0x1' }] })", 4500));
 results.push(await step("batch 2 calls (A)","await window.__walletA.request({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', from: '" + A + "', chainId: '0x7a69', calls: [{ to: '" + B + "', value: '0x1' }, { to: '" + B + "', value: '0x2' }] }] })", 4500));
 results.push(await step("switch to B",      "window.__walletB.__setAccounts(['" + B + "'])"));
@@ -100,7 +103,7 @@ const expect = {
   "connect A":         ["connect@31337/0x5137", "page@-/0x5137"],
   "sign (A)":          ["signature:requested@31337/0x5137", "signature:confirmed@31337/0x5137"],
   "reject sign (A)":   ["signature:requested@31337/0x5137", "signature:rejected@31337/0x5137"],
-  "switch chain":      ["chain@31337/0x5137"],
+  "switch chain":      ["chain@1/0x5137", "chain@31337/0x5137"],
   "send tx (A)":       ["transaction:started@31337/0x5137", "transaction:broadcasted@31337/0x5137", "transaction:confirmed@31337/0x5137"],
   "batch 2 calls (A)": ["transaction:started@31337/0x5137", "transaction:started@31337/0x5137", "transaction:broadcasted@31337/0x5137", "transaction:broadcasted@31337/0x5137", "transaction:confirmed@31337/0x5137", "transaction:confirmed@31337/0x5137"],
   "switch to B":       ["disconnect@31337/0x5137", "connect@31337/0x88C0"],

@@ -58,7 +58,11 @@ function makeWallet({ name, rdns, uuid, account, chainId = "0x7a69", rpcUrl = "h
           return rpc("eth_sendTransaction", [tx]);
         }
         case "eth_getTransactionReceipt": return rpc("eth_getTransactionReceipt", params);
-        case "wallet_switchEthereumChain": chain = params[0].chainId; provider.chainId = chain; provider.emit("chainChanged", chain); return null;
+        case "wallet_switchEthereumChain": {
+          // A real wallet emits nothing for a switch to the current chain.
+          if (params[0].chainId === chain) return null;
+          chain = params[0].chainId; provider.chainId = chain; provider.emit("chainChanged", chain); return null;
+        }
         case "wallet_sendCalls": {
           const id = "0x" + (++nonce).toString(16).padStart(64, "0");
           (window.__batches ||= {})[id] = { calls: params[0].calls, hashes: [] };
@@ -82,7 +86,7 @@ function makeWallet({ name, rdns, uuid, account, chainId = "0x7a69", rpcUrl = "h
     __disconnect() { accounts = []; provider.emit("disconnect", { code: 4900 }); },
   };
   // EIP-6963: announce now and on every request, as the spec requires.
-  const detail = Object.freeze({ info: Object.freeze({ uuid, name, rdns, icon: "data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22/>" }), provider });
+  const detail = Object.freeze({ info: Object.freeze({ uuid, name, rdns, icon: "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%201%201%22%2F%3E" }), provider });
   const announce = () => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
   window.addEventListener("eip6963:requestProvider", announce);
   announce();
