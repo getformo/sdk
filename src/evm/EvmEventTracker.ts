@@ -55,7 +55,7 @@ export interface EvmEventTrackerDeps {
    * Still owned by the SDK: it is the next thing to move, and keeping it out
    * of this change keeps the diff reviewable.
    */
-  registerRequestListeners(provider: EIP1193Provider): void;
+  registerRequestListeners(provider: EIP1193Provider): boolean;
 }
 
 /**
@@ -81,11 +81,29 @@ export class EvmEventTracker {
     { address: string; chainId: number }
   >();
 
+  /**
+   * The EIP-6963 discovery subscription, so teardown can release it. Left
+   * live, a disposed SDK kept reacting to every later wallet announcement:
+   * wrapping providers and emitting detect events from an instance the host
+   * had already replaced.
+   */
+  private unsubscribeDiscovery?: () => void;
+
   constructor(
     private readonly wallet: WalletStateStore,
     private readonly registry: EvmProviderRegistry,
     private readonly deps: EvmEventTrackerDeps
   ) {}
+
+  /** Stop listening for wallet announcements. Called from SDK teardown. */
+  cleanup(): void {
+    try {
+      this.unsubscribeDiscovery?.();
+    } catch (e) {
+      logger.warn("Failed to unsubscribe from provider discovery", e);
+    }
+    this.unsubscribeDiscovery = undefined;
+  }
 
   /** Drop a provider's reported connect. Called when it stops being active. */
   forgetAnnouncedConnect(provider: EIP1193Provider): void {
@@ -163,10 +181,15 @@ export class EvmEventTracker {
       // wallet's transport.
       this.seedProviderChainFromState(provider);
 
-      if (this.deps.isAutocaptureEnabled("signature") || this.deps.isAutocaptureEnabled("transaction")) {
-        this.deps.registerRequestListeners(provider);
-      } else {
-        logger.debug("TrackProvider: Skipping request wrapping (both signature and transaction autocapture disabled)");
+      // Wrapped UNCONDITIONALLY. The wrapper checks the autocapture flags per
+      // request, so skipping it here bought nothing and cost a real case: an
+      // app that turned signature or transaction capture on after init had a
+      // provider that was never wrapped, and never would be.
+      if (!this.deps.registerRequestListeners(provider)) {
+        // Not tracked: discovery would otherwise never retry it, and every
+        // signature and transaction from this wallet would be missed.
+        logger.warn("TrackProvider: Could not wrap provider; leaving it untracked");
+        return;
       }
 
       // Registered UNCONDITIONALLY: this listener also ends the provider's
@@ -583,7 +606,15 @@ export class EvmEventTracker {
     }
 
     // Only handle chain changes for the active provider (or if none is set yet)
+    // A chain event from a non-active EVM provider is only a wallet switch
+    // on the EVM side. While Solana holds the active slot it is background
+    // noise: letting it through relabelled the session as EVM with no wallet
+    // and wiped the EVM wallet we were tracking, on the strength of a network
+    // change in a wallet nobody was using. The chain itself is still
+    // recorded above, so a later request through that provider is labelled
+    // correctly.
     if (this.isProviderMismatch(provider)) {
+      if (this.wallet.activeNamespace === "solana") return;
       this.handleProviderMismatch(provider);
     }
 
@@ -742,6 +773,11 @@ export class EvmEventTracker {
     // this one, because the two handlers negotiate which of them reports via
     // the announced-connect record, and suppressing both loses the event.
     const disconnectsBefore = this.wallet.disconnectsSoFar("evm");
+    // ...but the STATE write is a different matter. If any newer signal has
+    // claimed the namespace while we were resolving the address, the address
+    // we hold is stale and must not be written over the newer one. The
+    // report can still go ahead: the announced-connect record decides that.
+    const stateTicket = this.wallet.currentObservation("evm");
 
     try {
       if (!connection?.chainId || typeof connection.chainId !== "string")
@@ -760,6 +796,33 @@ export class EvmEventTracker {
       if (this.wallet.disconnectsSoFar("evm") !== disconnectsBefore) {
         logger.info(
           "onConnected: The wallet disconnected after this observation began; dropping it"
+        );
+        return;
+      }
+
+      // A newer signal on THIS provider has superseded what we captured. An
+      // account switch that committed while we were resolving the address is
+      // the case: writing A back over B, or reporting a connect for A, would
+      // both be wrong. A newer signal on a DIFFERENT provider is not this
+      // handler's concern - the announced-connect record still decides who
+      // reports - so the check is scoped to the provider whose event this is.
+      //
+      // Scoped further to a signal that actually MOVED the wallet. A reconnect
+      // fires `connect` and `accountsChanged` back to back for the same
+      // address; the second supersedes the first's ticket without changing
+      // anything, and dropping the connect for that would lose the event.
+      const committed = this.wallet.evmAddress;
+      const movedElsewhere =
+        !!committed &&
+        !!address &&
+        committed.toLowerCase() !== address.toLowerCase();
+      if (
+        provider === this.wallet.provider &&
+        !this.wallet.isCurrent(stateTicket) &&
+        movedElsewhere
+      ) {
+        logger.info(
+          "onConnected: A newer signal from this provider has overtaken this connect observation; dropping it"
         );
         return;
       }
@@ -878,7 +941,7 @@ export class EvmEventTracker {
     const store = createStore();
     let providers = store.getProviders();
 
-    store.subscribe((providerDetails) => {
+    this.unsubscribeDiscovery = store.subscribe((providerDetails) => {
       providers = providerDetails;
 
       // Process newly added providers with proper deduplication
@@ -910,8 +973,10 @@ export class EvmEventTracker {
         })();
       }
 
-      // Clean up providers that are no longer available
-      this.cleanupUnavailableProviders();
+      // Clean up providers that are no longer available. Compared against
+      // THIS announcement: the registry's list is historical and append-only,
+      // so comparing against it could never find anything missing.
+      this.cleanupUnavailableProviders(providerDetails);
     });
 
     // Fallback to injected provider if no providers are found
@@ -1039,10 +1104,12 @@ export class EvmEventTracker {
    * Clean up providers that are no longer available
    * This helps maintain consistent state and prevents memory leaks
    */
-  private cleanupUnavailableProviders(): void {
+  private cleanupUnavailableProviders(
+    current: readonly EIP6963ProviderDetail[]
+  ): void {
     // Remove providers that are no longer in the current providers list
     const currentProviderInstances = new Set(
-      this.registry.all.map((detail) => detail.provider as EIP1193Provider)
+      current.map((detail) => detail.provider as EIP1193Provider)
     );
 
     for (const provider of this.registry.trackedProviders()) {

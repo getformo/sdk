@@ -435,6 +435,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Stop any receipt or batch-status polling: a torn-down instance must
     // not keep asking a wallet about transactions nobody is listening for.
     this.evmRequests.cleanup();
+    // Stop reacting to wallet announcements: a disposed instance must not
+    // wrap new providers or emit detect events.
+    this.evmEvents.cleanup();
 
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {

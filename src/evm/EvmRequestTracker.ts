@@ -117,13 +117,19 @@ export class EvmRequestTracker {
     this.polls.add(timer);
   }
 
-  registerRequestListeners(provider: EIP1193Provider): void {
+  /**
+   * Wrap a provider's `request`. Returns whether the wrapper is installed:
+   * a caller that marks the provider as tracked on a false return would
+   * never retry it, and every signature and transaction from that wallet
+   * would be missed for the rest of the session.
+   */
+  registerRequestListeners(provider: EIP1193Provider): boolean {
     logger.info("registerRequestListeners");
     if (!provider) {
       logger.error(
         "Provider not found for request (signature, transaction) tracking"
       );
-      return;
+      return false;
     }
 
     // Check if the provider is already wrapped with our SDK's wrapper
@@ -132,7 +138,7 @@ export class EvmRequestTracker {
       logger.info(
         "Provider already wrapped with our SDK; skipping request wrapping."
       );
-      return;
+      return true;
     }
 
     const request = provider.request.bind(provider);
@@ -365,14 +371,19 @@ export class EvmRequestTracker {
     };
     // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
     wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
-    (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
-      wrappedRequest;
 
+    // Both writes go inside the try. A frozen or non-extensible provider
+    // throws on the symbol assignment just as readily as on `request`, and
+    // that one used to sit outside the guard, so an unwrappable provider
+    // aborted registration instead of being skipped.
     try {
-      // Attempt to assign the wrapped request function (rely on try-catch for mutability errors)
+      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
+        wrappedRequest;
       provider.request = wrappedRequest;
+      return true;
     } catch (e) {
       logger.warn("Failed to wrap provider.request; skipping", e);
+      return false;
     }
   }
 
@@ -485,18 +496,26 @@ export class EvmRequestTracker {
         if (receipt) {
           // status: 1 = success, 0 = reverted
           if (receipt.status === "0x1" || receipt.status === 1) {
-            this.deps.transaction({
-              status: TransactionStatus.CONFIRMED,
-              ...payload,
-              transactionHash,
-            });
+            this.deps
+              .transaction({
+                status: TransactionStatus.CONFIRMED,
+                ...payload,
+                transactionHash,
+              })
+              .catch((e) =>
+                logger.error("Formo: Failed to track transaction confirmation", e)
+              );
             return;
           } else if (receipt.status === "0x0" || receipt.status === 0) {
-            this.deps.transaction({
-              status: TransactionStatus.REVERTED,
-              ...payload,
-              transactionHash,
-            });
+            this.deps
+              .transaction({
+                status: TransactionStatus.REVERTED,
+                ...payload,
+                transactionHash,
+              })
+              .catch((e) =>
+                logger.error("Formo: Failed to track transaction revert", e)
+              );
             return;
           }
         }

@@ -1035,4 +1035,180 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     expect(registry.isTracked(provider)).to.be.false;
     formo.cleanup?.();
   });
+
+  it("does not let a background EVM chain change steal the slot from a live Solana wallet", async () => {
+    // A chain event from a non-active EVM provider counts as a wallet switch
+    // on the EVM side. While a Solana wallet holds the active slot, that
+    // switch must not relabel the session as EVM and clear the Solana wallet.
+    const SOL = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+    const evmA = makeProvider([ADDRESS]);
+    const evmB = makeProvider([OTHER]);
+    (global as any).window.ethereum = evmA;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      autocapture: { chain: true, connect: true },
+    } as any);
+    sandbox.stub((formo as any).eventManager, "addEvent").resolves();
+
+    for (const p of [evmA, evmB]) {
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
+      (formo as any).evmEvents.registerChainChangedListener(p);
+    }
+    evmA.emit("connect", { chainId: "0x1" });
+    await waitFor(() => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(), "EVM A");
+
+    // Solana takes the slot.
+    await formo.connect({ chainId: 900001, address: SOL as any });
+    expect(formo.currentAddress).to.equal(SOL);
+
+    // A second EVM wallet changes network in the background.
+    evmB.emit("chainChanged", "0x89");
+    await settle();
+
+    expect(
+      formo.currentAddress,
+      "the live Solana wallet must keep attribution"
+    ).to.equal(SOL);
+    expect(
+      (formo as any).wallet.activeNamespace,
+      "and Solana must still be the active namespace, not EVM with no wallet"
+    ).to.equal("solana");
+    expect(
+      (formo as any).wallet.evmAddress?.toLowerCase(),
+      "the tracked EVM wallet must not be wiped by a bystander's chain event"
+    ).to.equal(ADDRESS.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let a stalled connect restore an address that an account switch replaced", async () => {
+    // `connect` fires, then the user switches account before the connect
+    // handler finishes resolving the address. The switch commits B; the
+    // late connect continuation must not write A back over it.
+    const accounts = [ADDRESS];
+    const provider = makeProvider(accounts);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { sent.push(e); });
+
+    (formo as any).evmEvents.registerAccountsChangedListener(provider);
+    (formo as any).evmEvents.registerConnectListener(provider);
+
+    let releaseAddress!: () => void;
+    let addressParked = false;
+    const addressGate = new Promise<void>((r) => { releaseAddress = r; });
+    const registry = (formo as any).evm;
+    // The continuation must resume holding the address it captured (A), not
+    // re-read current state - that is the whole race. A stub that re-resolved
+    // would return B and prove nothing.
+    sandbox.stub(registry, "addressOf").callsFake(async () => {
+      addressParked = true;
+      await addressGate;
+      return ADDRESS;
+    });
+
+    // connect starts resolving A...
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(() => addressParked, "the connect to park resolving its address");
+
+    // ...the user switches to B, and that commits.
+    accounts[0] = OTHER;
+    provider.emit("accountsChanged", [OTHER]);
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === OTHER.toLowerCase(),
+      "B to be committed"
+    );
+
+    // The stalled connect resumes holding A.
+    accounts[0] = ADDRESS;
+    releaseAddress();
+    await settle();
+
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "the newer account switch must win"
+    ).to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("stops reacting to wallet announcements after cleanup()", async () => {
+    // Left subscribed, a disposed SDK kept wrapping providers and emitting
+    // detect events from an instance the host had already replaced.
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const tracker = (formo as any).evmEvents;
+    let released = false;
+    tracker.unsubscribeDiscovery = () => { released = true; };
+
+    formo.cleanup();
+
+    expect(released, "the discovery subscription is released").to.be.true;
+    expect(tracker.unsubscribeDiscovery).to.equal(undefined);
+  });
+
+  it("untracks a provider that a later announcement no longer lists", async () => {
+    // The registry's list is historical and append-only. Comparing against
+    // it could never find a provider missing, so this cleanup never fired.
+    const gone = makeProvider([ADDRESS]);
+    const stays = makeProvider([OTHER]);
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const tracker = (formo as any).evmEvents;
+    const registry = (formo as any).evm;
+    const detail = (p: any, name: string) => ({ provider: p, info: { name, rdns: name, icon: "", uuid: name } });
+
+    registry.add(detail(gone, "gone"));
+    registry.add(detail(stays, "stays"));
+    registry.markTracked(gone);
+    registry.markTracked(stays);
+
+    tracker.cleanupUnavailableProviders([detail(stays, "stays")]);
+
+    expect(registry.isTracked(gone), "the missing provider is untracked").to.be.false;
+    expect(registry.isTracked(stays), "the present one is kept").to.be.true;
+    formo.cleanup?.();
+  });
+
+  it("wraps a provider even when signature and transaction capture start disabled", async () => {
+    // The wrapper checks the autocapture flags per request, so skipping it at
+    // init bought nothing and cost a real case: enabling capture later left
+    // the provider unwrapped for the rest of the session.
+    const provider = makeProvider([ADDRESS]);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      autocapture: { signature: false, transaction: false },
+    } as any);
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { sent.push(e); });
+
+    (formo as any).evmEvents.trackEIP1193Provider(provider);
+    expect((formo as any).evm.isWrapped(provider, provider.request), "wrapped at init").to.be.true;
+
+    // Capture is switched on after init.
+    (formo as any).options.autocapture = { signature: true, transaction: true };
+    await provider.request({ method: "personal_sign", params: ["0x68656c6c6f", ADDRESS] });
+    await settle();
+
+    expect(
+      sent.filter((e) => e.type === "signature").length,
+      "a signature after enabling capture is reported"
+    ).to.be.greaterThan(0);
+    formo.cleanup?.();
+  });
+
+  it("leaves an unwrappable provider untracked so discovery can retry it", async () => {
+    // A frozen provider cannot take the wrapper. Marking it tracked anyway
+    // meant nothing would ever try again, and every signature and
+    // transaction from that wallet was silently missed.
+    const provider = Object.freeze(makeProvider([ADDRESS]));
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    (formo as any).evmEvents.trackEIP1193Provider(provider);
+
+    expect((formo as any).evm.isTracked(provider), "not tracked").to.be.false;
+    formo.cleanup?.();
+  });
 });
