@@ -84,7 +84,8 @@
     "test-watch": "nodemon --config test.nodemon.json",
     "size": "size-limit",
     "version": "node scripts/update-version.js && git add src/version.ts",
-    "preview-release": "bash scripts/preview-release-notes.sh"
+    "preview-release": "bash scripts/preview-release-notes.sh",
+    "test:browser": "node test/browser/run.mjs"
   },
   "size-limit": [
     {
