@@ -94,7 +94,7 @@ describe("Address backfill from autocapture", () => {
     // `connect` maintain, never from an RPC issued inside the request path.
     (formo as any).rememberProviderChain(mockProvider, CHAIN_ID);
 
-    const payload = await (formo as any).buildTransactionEventPayload(
+    const payload = await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS_LOWER, to: "0xabc", value: "0x0", data: "0x" }],
       mockProvider
     );
@@ -109,7 +109,7 @@ describe("Address backfill from autocapture", () => {
   it("buildSignatureEventPayload backfills currentAddress when none is set", () => {
     expect(formo.currentAddress).to.be.undefined;
 
-    const payload = (formo as any).buildSignatureEventPayload(
+    const payload = (formo as any).evmRequests.buildSignatureEventPayload(
       "eth_signTypedData_v4",
       [ADDRESS_LOWER, '{"foo":"bar"}'],
       undefined,
@@ -131,7 +131,7 @@ describe("Address backfill from autocapture", () => {
     // Simulate autocapture transaction having been processed; no
     // accountsChanged was ever dispatched, so currentAddress starts empty.
     expect(formo.currentAddress).to.be.undefined;
-    await (formo as any).buildTransactionEventPayload(
+    await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS_LOWER, to: "0xabc", value: "0x0", data: "0x" }],
       mockProvider
     );
@@ -153,7 +153,7 @@ describe("Address backfill from autocapture", () => {
       request: sandbox.stub().withArgs(sinon.match({ method: "eth_chainId" })).resolves(`0x${CHAIN_ID.toString(16)}`),
     } as any;
 
-    await (formo as any).buildTransactionEventPayload(
+    await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS_LOWER, to: "0xabc", value: "0x0", data: "0x" }],
       mockProvider
     );
