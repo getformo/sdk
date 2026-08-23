@@ -211,7 +211,8 @@ describe("EIP-5792 batched calls", () => {
 
   it("lets a per-call receipt outrank the batch verdict", async () => {
     // A partially reverted non-atomic batch must report honestly rather than
-    // marking every call with the batch's worst outcome.
+    // marking every call with the batch's worst outcome. 600 is only
+    // meaningful when the batch did not require atomicity.
     const provider = makeProvider({
       status: {
         status: 600,
@@ -223,7 +224,10 @@ describe("EIP-5792 batched calls", () => {
     });
     const { formo, sent } = await setup(provider);
 
-    await provider.request({ method: "wallet_sendCalls", params: batchParams() });
+    await provider.request({
+      method: "wallet_sendCalls",
+      params: batchParams({ atomicRequired: false }),
+    });
     await settle();
 
     const outcomes = txs(sent)
@@ -318,6 +322,89 @@ describe("EIP-5792 batched calls", () => {
     await settle();
 
     expect(txs(sent)).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("stops polling when the SDK is torn down", async () => {
+    // A poll re-arms for up to thirty seconds. A torn-down instance that kept
+    // asking would hold the process open for that whole window and keep
+    // questioning a wallet nobody is listening to - the same shape as the
+    // batch timer that hung the suite in #338.
+    const provider = makeProvider({ status: { status: 100 } });
+    const { formo } = await setup(provider);
+
+    await provider.request({ method: "wallet_sendCalls", params: batchParams() });
+    await settle();
+
+    const before = provider.methodsCalled.filter(
+      (m: string) => m === "wallet_getCallsStatus"
+    ).length;
+    expect(before, "it polled at least once").to.be.greaterThan(0);
+
+    formo.cleanup();
+    await new Promise((r) => setTimeout(r, 60));
+
+    const tracker = (formo as any).evmRequests;
+    expect(tracker.polls.size, "armed timers are cleared").to.equal(0);
+
+    // And a poll already mid-flight when cleanup ran must not re-arm. Asking
+    // the scheduler directly, because waiting out a 3s interval in a test is
+    // exactly the cost this fix exists to remove.
+    tracker.schedulePoll(() => undefined, 5000);
+    expect(
+      tracker.polls.size,
+      "a torn-down tracker refuses to schedule anything further"
+    ).to.equal(0);
+  });
+
+  it("reports a batch that failed before landing as rejected, not reverted", async () => {
+    // EIP-5792 status 400 means the batch never made it on chain. Calling
+    // that "reverted" would report gas spent and on-chain activity that
+    // never happened.
+    const provider = makeProvider({ status: { status: 400 } });
+    const { formo, sent } = await setup(provider);
+
+    await provider.request({ method: "wallet_sendCalls", params: batchParams() });
+    await settle();
+
+    expect(txs(sent).filter((e) => e.status === "rejected").length).to.equal(2);
+    expect(txs(sent).filter((e) => e.status === "reverted")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("leaves a call unsettled when a partial batch gave it no receipt", async () => {
+    // 600 means SOME calls reverted. Deciding a call the wallet said nothing
+    // about would be inventing a result.
+    const provider = makeProvider({
+      status: { status: 600, receipts: [{ status: "0x1", transactionHash: "0xok" }] },
+    });
+    const { formo, sent } = await setup(provider);
+
+    await provider.request({
+      method: "wallet_sendCalls",
+      params: batchParams({ atomicRequired: false }),
+    });
+    await settle();
+
+    const settled = txs(sent).filter(
+      (e) => e.status === "confirmed" || e.status === "reverted"
+    );
+    expect(settled.length, "only the call with a receipt is decided").to.equal(1);
+    expect(settled[0].properties?.batch_index).to.equal(0);
+    formo.cleanup?.();
+  });
+
+  it("falls back to the batch verdict when a receipt has no readable status", async () => {
+    // An unreadable receipt must not be assumed good on a failed batch.
+    const provider = makeProvider({
+      status: { status: 500, receipts: [{ transactionHash: "0xa" }, { transactionHash: "0xb" }] },
+    });
+    const { formo, sent } = await setup(provider);
+
+    await provider.request({ method: "wallet_sendCalls", params: batchParams() });
+    await settle();
+
+    expect(txs(sent).filter((e) => e.status === "reverted").length).to.equal(2);
     formo.cleanup?.();
   });
 });

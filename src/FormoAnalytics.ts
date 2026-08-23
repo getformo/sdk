@@ -269,8 +269,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       connect: (params, properties) => this.connect(params, properties),
       disconnect: (params) => this.disconnect(params),
       chain: (params, properties) => this.chain(params, properties),
-      detect: ({ providerName, rdns }) =>
-        this.detect({ providerName: providerName ?? "", rdns: rdns ?? "" }),
+      detect: (params) => this.detect(params),
       registerRequestListeners: (provider) =>
         this.evmRequests.registerRequestListeners(provider),
     });
@@ -432,6 +431,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     // continuation that outlives this instance cannot send with its stale
     // options. See issue #339.
     this.eventManager.close();
+
+    // Stop any receipt or batch-status polling: a torn-down instance must
+    // not keep asking a wallet about transactions nobody is listening for.
+    this.evmRequests.cleanup();
 
     // Clean up Wagmi handler if present
     if (this.wagmiHandler) {

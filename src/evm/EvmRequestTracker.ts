@@ -19,6 +19,31 @@ import { WalletStateStore } from "../wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./EvmProviderRegistry";
 import { AutocaptureEventType } from "../tracking/TrackingPolicy";
 
+/**
+ * Decode a hex-encoded `personal_sign` message.
+ *
+ * Deliberately not `Buffer.from(hex, "hex")`. `Buffer` is a Node global with
+ * no polyfill in this bundle, so in a browser that line threw and the
+ * signature event was dropped with it - silently, which is the worst way for
+ * analytics to fail. `TextDecoder` is available everywhere this SDK runs, and
+ * `TextEncoder` is already used elsewhere in the queue.
+ *
+ * Malformed input decodes to as much as can be read rather than throwing: a
+ * message we cannot fully read is still worth reporting the signature for.
+ */
+function hexToUtf8(hex: string): string {
+  const clean = typeof hex === "string" && hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (typeof clean !== "string" || clean.length === 0) return "";
+  const byteCount = Math.floor(clean.length / 2);
+  const bytes = new Uint8Array(byteCount);
+  for (let i = 0; i < byteCount; i++) {
+    const byte = Number.parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(byte)) return new TextDecoder().decode(bytes.subarray(0, i));
+    bytes[i] = byte;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 /** What the request tracker needs from the SDK that owns it. */
 export interface EvmRequestTrackerDeps {
   isAutocaptureEnabled(eventType: AutocaptureEventType): boolean;
@@ -58,11 +83,39 @@ export interface EvmRequestTrackerDeps {
  * user's wallet, which is never an acceptable price for a label.
  */
 export class EvmRequestTracker {
+  /**
+   * Timers for receipt and batch-status polling.
+   *
+   * A poll re-arms for up to thirty seconds, so a torn-down instance would
+   * otherwise keep asking a wallet about transactions nobody is listening
+   * for, and hold the process open for the whole window. That is the same
+   * shape as the batch timer that hung the test suite in #338.
+   */
+  private polls = new Set<ReturnType<typeof setTimeout>>();
+  private disposed = false;
+
   constructor(
     private readonly wallet: WalletStateStore,
     private readonly registry: EvmProviderRegistry,
     private readonly deps: EvmRequestTrackerDeps
   ) {}
+
+  /** Stop every poll in flight. Terminal, like the event queue's close(). */
+  cleanup(): void {
+    this.disposed = true;
+    this.polls.forEach((timer) => clearTimeout(timer));
+    this.polls.clear();
+  }
+
+  /** Re-arm a poll, unless this tracker has been torn down. */
+  private schedulePoll(fn: () => void, delayMs: number): void {
+    if (this.disposed) return;
+    const timer = setTimeout(() => {
+      this.polls.delete(timer);
+      fn();
+    }, delayMs);
+    this.polls.add(timer);
+  }
 
   registerRequestListeners(provider: EIP1193Provider): void {
     logger.info("registerRequestListeners");
@@ -354,13 +407,9 @@ export class EvmRequestTracker {
     };
 
     if (method === "personal_sign") {
-      const message = Buffer.from(
-        (params[0] as string).slice(2),
-        "hex"
-      ).toString("utf8");
       return {
         ...basePayload,
-        message,
+        message: hexToUtf8(params[0] as string),
       };
     }
 
@@ -427,6 +476,7 @@ export class EvmRequestTracker {
     if (!provider) return;
     type Receipt = { status: string | number } | null;
     const poll = async () => {
+      if (this.disposed) return;
       try {
         const receipt = (await provider.request({
           method: "eth_getTransactionReceipt",
@@ -454,9 +504,7 @@ export class EvmRequestTracker {
         logger.error("Error polling transaction receipt", e);
       }
       attempts++;
-      if (attempts < maxAttempts) {
-        setTimeout(poll, intervalMs);
-      }
+      if (attempts < maxAttempts) this.schedulePoll(poll, intervalMs);
     };
     poll();
   }
@@ -585,6 +633,38 @@ export class EvmRequestTracker {
   }
 
   /**
+   * How one call in a settled batch ended.
+   *
+   * A per-call receipt is authoritative where it exists: that is what makes a
+   * partially reverted non-atomic batch report honestly rather than tarring
+   * every call with the batch's worst outcome. A receipt whose own status is
+   * unreadable falls back to the batch verdict rather than being assumed good.
+   *
+   * The codes are EIP-5792's: 200 confirmed, 400 failed BEFORE landing on
+   * chain, 500 reverted, 600 partially reverted. 400 is a rejection, not a
+   * revert - nothing was mined, so calling it reverted would misreport gas
+   * spent and on-chain activity that never happened.
+   *
+   * Returns undefined when the call cannot be decided, which happens on 600
+   * for a call the wallet gave no receipt for.
+   */
+  private batchCallOutcome(
+    code: number,
+    receipt?: { status?: string | number }
+  ): TransactionStatus | undefined {
+    const receiptStatus = receipt?.status;
+    if (receiptStatus !== undefined) {
+      return receiptStatus === "0x0" || receiptStatus === 0
+        ? TransactionStatus.REVERTED
+        : TransactionStatus.CONFIRMED;
+    }
+    if (code >= 600) return undefined;
+    if (code >= 500) return TransactionStatus.REVERTED;
+    if (code >= 400) return TransactionStatus.REJECTED;
+    return TransactionStatus.CONFIRMED;
+  }
+
+  /**
    * The batch identifier from a `wallet_sendCalls` result.
    *
    * EIP-5792 settled on `{ id }`, but wallets shipped against the earlier
@@ -633,6 +713,7 @@ export class EvmRequestTracker {
 
     let attempts = 0;
     const poll = async () => {
+      if (this.disposed) return;
       try {
         const res = (await provider.request({
           method: "wallet_getCallsStatus",
@@ -644,17 +725,16 @@ export class EvmRequestTracker {
           const receipts = Array.isArray(res?.receipts) ? res.receipts : [];
           payloads.forEach((p, index) => {
             const receipt = receipts[index];
-            const reverted =
-              receipt !== undefined
-                ? receipt.status === "0x0" || receipt.status === 0
-                : code >= 400;
+            const outcome = this.batchCallOutcome(code, receipt);
+            // 600 means SOME calls reverted, so a call with no receipt of its
+            // own has not been decided. Reporting it either way would invent
+            // a result; leaving it unsettled is the honest answer.
+            if (outcome === undefined) return;
             const { properties, ...rest } = p;
             this.deps
               .transaction(
                 {
-                  status: reverted
-                    ? TransactionStatus.REVERTED
-                    : TransactionStatus.CONFIRMED,
+                  status: outcome,
                   ...rest,
                   ...(receipt?.transactionHash
                     ? { transactionHash: receipt.transactionHash }
@@ -672,7 +752,7 @@ export class EvmRequestTracker {
         logger.error("Error polling batch call status", e);
       }
       attempts++;
-      if (attempts < maxAttempts) setTimeout(poll, intervalMs);
+      if (attempts < maxAttempts) this.schedulePoll(poll, intervalMs);
     };
     poll();
   }

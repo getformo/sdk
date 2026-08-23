@@ -42,7 +42,12 @@ export interface EvmEventTrackerDeps {
     params: { chainId: ChainID; address?: Address },
     properties?: IFormoEventProperties
   ): Promise<void>;
-  detect(params: { providerName?: string; rdns?: string }): Promise<void>;
+  /**
+   * `rdns` is the session dedup key for detect, so it must reach `detect()`
+   * exactly as the wallet announced it. Required here rather than optional
+   * so no caller can quietly substitute a placeholder for a missing value.
+   */
+  detect(params: { providerName: string; rdns: string }): Promise<void>;
 
   /**
    * Install the request wrapper that captures signatures and transactions.
