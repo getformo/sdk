@@ -415,8 +415,13 @@ export class WalletStateStore {
       // persisted wallet restores a chain from a previous session, and if the
       // provider has since moved, the stale restored chain would stay in the
       // derived value and carry the unscoped events past an exclusion.
+      // `0` means "could not resolve". Correcting a stale chain with a real
+      // one is the point of this branch; replacing a chain we already know
+      // with "unknown" only makes attribution worse, and would trip the
+      // exclusion gate's fail-closed rule against a wallet we can place.
+      const usable = chainId !== undefined && !(chainId === 0 && this.evmChainId);
       if (
-        chainId !== undefined &&
+        usable &&
         known.toLowerCase() === address.toLowerCase() &&
         this.evmChainId !== chainId
       ) {
@@ -521,7 +526,15 @@ export class WalletStateStore {
       }
       const chainId = chainMissing ? undefined : (rawChain as ChainID);
 
-      const namespace = this.namespaceOf(chainId);
+      // With no chain to go on, the address shape decides. Defaulting to EVM
+      // filed a chainless Solana wallet under EVM, where later EVM handlers
+      // read it as `evmAddress` and emitted EVM state for a Solana wallet.
+      const namespace =
+        chainId === undefined
+          ? validateAndChecksumAddress(parsed.address)
+            ? "evm"
+            : "solana"
+          : this.namespaceOf(chainId);
       const validated = validateAddress(parsed.address, chainId);
       if (!validated) {
         cookie().remove(ACTIVE_WALLET_KEY);

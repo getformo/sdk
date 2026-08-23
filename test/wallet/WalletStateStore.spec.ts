@@ -422,4 +422,57 @@ describe("WalletStateStore", () => {
     });
   });
 
+
+  describe("more review follow-ups", () => {
+    it("files a chainless Solana snapshot under Solana, not EVM", () => {
+      // With no chain to go on, the address shape decides. Defaulting to EVM
+      // put a Solana wallet where later EVM handlers read it as `evmAddress`.
+      cookie().set(ACTIVE_WALLET_KEY, JSON.stringify({ address: SOL_A }));
+      const s = store();
+      s.load();
+      expect(s.address).to.equal(SOL_A);
+      expect(s.evmAddress, "not an EVM wallet").to.equal(undefined);
+    });
+
+    it("still files a chainless EVM snapshot under EVM", () => {
+      cookie().set(ACTIVE_WALLET_KEY, JSON.stringify({ address: EVM_A }));
+      const s = store();
+      s.load();
+      expect(s.evmAddress).to.equal(EVM_A);
+    });
+
+    it("does not replace a known chain with the unresolvable marker", () => {
+      // Correcting a stale chain with a real one is the point of backfill.
+      // Replacing a chain we already know with "unknown" only makes
+      // attribution worse, and trips the exclusion gate's fail-closed rule.
+      const s = store();
+      s.set(1, { address: EVM_A });
+      s.backfill(EVM_A, 0);
+      expect(s.chainId).to.equal(1);
+    });
+
+    it("still learns 0 when no chain is known at all", () => {
+      const s = store();
+      s.backfill(EVM_A, 0);
+      expect(s.chainId, "the unknown marker is what the gate needs").to.equal(0);
+    });
+
+    it("learns 0 for a known wallet that had no chain either", () => {
+      // Nothing is lost by recording "unknown" here, and something is
+      // gained: `undefined` means "no chain yet" and fails OPEN, while 0
+      // means "we asked and could not tell" and fails closed.
+      const s = store();
+      s.set("evm", { address: EVM_A });
+      expect(s.chainId).to.equal(undefined);
+      s.backfill(EVM_A, 0);
+      expect(s.chainId).to.equal(0);
+    });
+
+    it("still corrects a stale chain with a real one", () => {
+      const s = store();
+      s.set(1, { address: EVM_A });
+      s.backfill(EVM_A, 137);
+      expect(s.chainId).to.equal(137);
+    });
+  });
 });
