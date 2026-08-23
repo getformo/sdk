@@ -194,6 +194,17 @@ export class WalletStateStore {
   }
 
   /**
+   * The current newest observation, as a ticket, WITHOUT taking a new one.
+   *
+   * For a handler that must respect the order but has nothing to claim: it
+   * still abandons its work if something newer arrives, but it does not
+   * supersede whatever is already in flight.
+   */
+  currentObservation(namespace: ChainNamespace): Observation {
+    return { id: this.newestObservation[namespace], namespace };
+  }
+
+  /**
    * Whether this observation is still the newest for its namespace.
    *
    * False means a newer signal arrived while this handler was suspended, and
@@ -227,16 +238,11 @@ export class WalletStateStore {
         : this.namespaceOf(namespaceOrChainId);
     const ns = this.state[namespace];
 
-    if ("address" in update) {
-      // A namespace changing hands is what the generation tracks. Doing it
-      // here covers every claiming path: connect(), the public
-      // syncWalletState() an integration calls, and the EIP-1193 listeners.
-      //
-      // Only a CHANGE counts. Re-writing the same wallet (a chain switch, a
-      // re-confirmation) must not bump, or a legitimate disconnect that raced
-      // one would decide it was stale and leave the state behind.
-      ns.address = update.address;
-    }
+    // A plain write. Whether this transition is still the newest is decided
+    // by the observation ticket its caller holds, not by comparing addresses
+    // here: re-adopting the SAME wallet is a real transition, and no
+    // comparison of the values can tell that apart from nothing happening.
+    if ("address" in update) ns.address = update.address;
 
     if ("chainId" in update) {
       ns.chainId = update.chainId;

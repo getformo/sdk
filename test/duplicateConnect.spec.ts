@@ -905,4 +905,93 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.equal(ADDRESS.toLowerCase());
     formo.cleanup?.();
   });
+
+  it("does not let an ignored non-active event supersede a real disconnect", async () => {
+    // A tracked but non-active provider emitting `accountsChanged([])` is
+    // discarded by the handler. Letting it take a ticket anyway superseded
+    // the ACTIVE wallet's disconnect on the strength of an event we were
+    // about to throw away, so the disconnect skipped its cleanup.
+    const accounts = [ADDRESS];
+    const active = makeProvider(accounts);
+    const bystander = makeProvider([]);
+    (global as any).window.ethereum = active;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    let parked = false;
+    const gate = new Promise<void>((r) => { release = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { if (e.type === "disconnect") { parked = true; await gate; } });
+
+    for (const p of [active, bystander]) {
+      (formo as any).registerAccountsChangedListener(p);
+      (formo as any).registerConnectListener(p);
+    }
+    active.emit("connect", { chainId: "0x1" });
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(),
+      "the active wallet"
+    );
+
+    accounts.length = 0;
+    active.emit("accountsChanged", []);
+    await waitFor(() => parked, "the disconnect to park on its gate");
+
+    // The bystander's event is ignored, so it must not disturb the order.
+    bystander.emit("accountsChanged", []);
+    await settle();
+
+    release();
+    await settle();
+
+    expect(
+      formo.currentAddress,
+      "the real disconnect must still clean up"
+    ).to.equal(undefined);
+    formo.cleanup?.();
+  });
+
+  it("orders a direct disconnect() against an in-flight connect", async () => {
+    // A host app calling `disconnect()` itself must invalidate a connect
+    // observation that began earlier, exactly as a provider event does.
+    const provider = makeProvider([ADDRESS]);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let releaseAddress!: () => void;
+    let addressParked = false;
+    const addressGate = new Promise<void>((r) => { releaseAddress = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent").resolves();
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(),
+      "the first connect"
+    );
+
+    const realGetAddress = (formo as any).getAddress.bind(formo);
+    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+      addressParked = true;
+      await addressGate;
+      return realGetAddress(p);
+    });
+
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(() => addressParked, "the connect to park resolving its address");
+
+    await formo.disconnect({ chainId: 1, address: ADDRESS });
+    expect(formo.currentAddress, "cleared by the direct call").to.equal(undefined);
+
+    releaseAddress();
+    await settle();
+
+    expect(
+      formo.currentAddress,
+      "the older connect must not restore the disconnected wallet"
+    ).to.equal(undefined);
+    formo.cleanup?.();
+  });
 });

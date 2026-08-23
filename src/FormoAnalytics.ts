@@ -583,6 +583,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Snapshot the session being torn down. Emitting is asynchronous, so a
     // reconnect can land while the disconnect event is still being built.
     const namespace = this.wallet.namespaceOf(chainId);
+    // Every teardown announces itself here, before anything is awaited,
+    // whichever path reached it - a provider event or a direct call from the
+    // host app. A connect observation that began earlier is invalidated; one
+    // that begins after this point is a genuine reconnect and still reports.
+    this.wallet.beginDisconnect(namespace);
     const before = this.wallet.snapshot(namespace);
 
     await this.trackEvent(
@@ -616,10 +621,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     );
   }
 
-  /** @see WalletStateStore.namespaceOf */
-  private getNamespace(chainId?: ChainID): ChainNamespace {
-    return this.wallet.namespaceOf(chainId);
-  }
 
   /** @see WalletStateStore.set */
   private setChainState(
@@ -652,10 +653,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.wallet.syncWalletState(params);
   }
 
-  /** @see WalletStateStore.persist */
-  private persistActiveWallet(): void {
-    this.wallet.persist();
-  }
 
   /** @see WalletStateStore.clearProvider */
   private clearActiveProvider(): void {
@@ -1483,16 +1480,25 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     logger.info("onAccountsChanged", accounts);
 
-    // Take the ticket BEFORE any async work, so the order recorded is the
-    // order the wallet's signals arrived in.
+    // Only a signal that can actually CLAIM the namespace takes a ticket.
     //
-    // This used to drop a second `accountsChanged` outright while the first
-    // was still being processed. Dropping is not ordering: a wallet that
-    // disconnected and immediately reconnected had its reconnect thrown
-    // away, and the disconnect then cleared a namespace that was live again.
-    // Superseding keeps both signals, and lets the older handler abandon its
-    // captured state when it resumes.
-    const observation = this.wallet.observe("evm");
+    // An empty `accountsChanged` from a provider that is not the active one
+    // is ignored below, so letting it take a ticket would supersede a real
+    // transition - including an active wallet's disconnect - on the strength
+    // of an event we are about to discard. Accounts arriving always claim:
+    // from the active provider it is a connect or switch, and from another it
+    // is a wallet switch.
+    const claims = accounts.length > 0 || this._provider === provider;
+    const observation = claims
+      ? this.wallet.observe("evm")
+      : this.wallet.currentObservation("evm");
+
+    // Take the ticket BEFORE any async work, so the order recorded is the
+    // order the wallet's signals arrived in. This path used to DROP a second
+    // `accountsChanged` while the first was in flight; dropping is not
+    // ordering, and a wallet that disconnected and came straight back had its
+    // reconnect thrown away.
+
     await this._handleAccountsChanged(provider, accounts, observation);
   }
 
@@ -1524,7 +1530,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         // reconnect later reports again rather than being taken for a
         // duplicate.
         this._announcedConnect.delete(provider);
-        this.wallet.beginDisconnect("evm");
 
         // Check if disconnect tracking is enabled before emitting event
         if (this.isAutocaptureEnabled("disconnect")) {
@@ -1544,6 +1549,8 @@ export class FormoAnalytics implements IFormoAnalytics {
           }
         } else {
           logger.debug("OnAccountsChanged: Disconnect event skipped (autocapture.disconnect: false)");
+          // Whether the app opted into the EVENT has no bearing on ordering.
+          this.wallet.beginDisconnect("evm");
           // Still clear state even if not tracking the event
           this.clearChainState('evm');
         }
@@ -1959,7 +1966,6 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       );
 
-      this.wallet.beginDisconnect("evm");
 
       // Double-check disconnect tracking is enabled (defensive programming)
       // Note: This listener should only be registered if tracking is enabled
@@ -1977,6 +1983,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       } else {
         logger.debug("OnDisconnect: Disconnect event skipped (autocapture.disconnect: false)");
+        this.wallet.beginDisconnect("evm");
         // Still clear state even if not tracking the event
         this.clearChainState('evm');
       }
