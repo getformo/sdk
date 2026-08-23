@@ -304,4 +304,34 @@ describe("EvmProviderRegistry", () => {
       expect(await registry().addressOf()).to.equal(null);
     });
   });
+
+  describe("teardown eligibility", () => {
+    it("still counts a provider as tracked when its listeners would not detach", () => {
+      // `cleanup()` iterates the TRACKED set. A provider dropped from it
+      // while a listener is still attached becomes unreachable, so the
+      // retention that makes a retry possible never gets used.
+      const r = registry();
+      const p = {
+        removeListener: () => { throw new Error("busy"); },
+      } as unknown as EIP1193Provider;
+      r.markTracked(p);
+      r.addListener(p, "accountsChanged", () => undefined);
+
+      r.removeListeners(p);
+      expect(r.attachedEvents(p)).to.deep.equal(["accountsChanged"]);
+      expect(
+        r.isTracked(p),
+        "a provider we could not detach from is still one we are attached to"
+      ).to.be.true;
+    });
+
+    it("reports nothing attached once teardown succeeds", () => {
+      const r = registry();
+      const p = makeProvider();
+      r.markTracked(p);
+      r.addListener(p, "accountsChanged", () => undefined);
+      r.removeListeners(p);
+      expect(r.attachedEvents(p)).to.deep.equal([]);
+    });
+  });
 });
