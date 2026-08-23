@@ -120,6 +120,35 @@ describe("EvmProviderRegistry", () => {
       expect((p as any).removed).to.deep.equal([]);
     });
 
+    it("keeps a listener it could not remove, so teardown can retry", () => {
+      // Forgetting a listener that is still attached loses the only reference
+      // to it: nothing can try again, and the callback holds the instance it
+      // closes over for the life of the page.
+      const r = registry();
+      let failing = true;
+      const removed: string[] = [];
+      const p = {
+        removeListener: (ev: string) => {
+          if (ev === "accountsChanged" && failing) throw new Error("busy");
+          removed.push(ev);
+        },
+      } as unknown as EIP1193Provider;
+
+      r.addListener(p, "accountsChanged", () => undefined);
+      r.addListener(p, "chainChanged", () => undefined);
+      r.removeListeners(p);
+      expect(removed).to.deep.equal(["chainChanged"]);
+      expect(
+        r.attachedEvents(p),
+        "the one that failed is retained"
+      ).to.deep.equal(["accountsChanged"]);
+
+      failing = false;
+      r.removeListeners(p);
+      expect(removed).to.deep.equal(["chainChanged", "accountsChanged"]);
+      expect(r.attachedEvents(p), "nothing left after a clean retry").to.deep.equal([]);
+    });
+
     it("does not let a throwing removeListener abort the rest", () => {
       const r = registry();
       const removed: string[] = [];
@@ -222,7 +251,7 @@ describe("EvmProviderRegistry", () => {
       expect(await r.accountsOf(p)).to.equal(null);
     });
 
-    it("prefers what the SDK already knows over an RPC", async () => {
+    it("prefers what the SDK already knows for the active provider", async () => {
       // An EVM context must never return a Solana address, and there is no
       // reason to ask a wallet something already in hand.
       const r = registry();
@@ -231,8 +260,36 @@ describe("EvmProviderRegistry", () => {
       const p = {
         request: async () => { asked = true; return []; },
       } as unknown as EIP1193Provider;
+      active = p;
       expect(await r.addressOf(p)).to.equal(knownAddress);
       expect(asked, "no RPC was issued").to.be.false;
+    });
+
+    it("prefers what the SDK already knows when no provider is named", async () => {
+      const r = registry();
+      knownAddress = "0x88C0224CEABF6D559d7B622F2918b308285280DE" as Address;
+      active = makeProvider([]);
+      expect(await r.addressOf()).to.equal(knownAddress);
+    });
+
+    it("does not report the active wallet's address for another provider", async () => {
+      // `identify()` scans every discovered provider. Answering from the
+      // cache each time identified one wallet under every other wallet's
+      // name and rdns.
+      const r = registry();
+      knownAddress = "0x88C0224CEABF6D559d7B622F2918b308285280DE" as Address;
+      active = makeProvider([]);
+      const other = makeProvider(["0x51377e9b985bb90b7c091b9a7d30c93d4c9c1cef"]);
+      expect(await r.addressOf(other)).to.equal(
+        "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf"
+      );
+    });
+
+    it("reports nothing for a provider with no accounts, even when a wallet is known", () => {
+      const r = registry();
+      knownAddress = "0x88C0224CEABF6D559d7B622F2918b308285280DE" as Address;
+      active = makeProvider([]);
+      return r.addressOf(makeProvider([])).then((a) => expect(a).to.equal(null));
     });
 
     it("falls back to the active provider when none is named", async () => {
@@ -245,6 +302,36 @@ describe("EvmProviderRegistry", () => {
 
     it("returns null with no provider at all", async () => {
       expect(await registry().addressOf()).to.equal(null);
+    });
+  });
+
+  describe("teardown eligibility", () => {
+    it("still counts a provider as tracked when its listeners would not detach", () => {
+      // `cleanup()` iterates the TRACKED set. A provider dropped from it
+      // while a listener is still attached becomes unreachable, so the
+      // retention that makes a retry possible never gets used.
+      const r = registry();
+      const p = {
+        removeListener: () => { throw new Error("busy"); },
+      } as unknown as EIP1193Provider;
+      r.markTracked(p);
+      r.addListener(p, "accountsChanged", () => undefined);
+
+      r.removeListeners(p);
+      expect(r.attachedEvents(p)).to.deep.equal(["accountsChanged"]);
+      expect(
+        r.isTracked(p),
+        "a provider we could not detach from is still one we are attached to"
+      ).to.be.true;
+    });
+
+    it("reports nothing attached once teardown succeeds", () => {
+      const r = registry();
+      const p = makeProvider();
+      r.markTracked(p);
+      r.addListener(p, "accountsChanged", () => undefined);
+      r.removeListeners(p);
+      expect(r.attachedEvents(p)).to.deep.equal([]);
     });
   });
 });

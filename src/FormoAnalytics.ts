@@ -2885,7 +2885,16 @@ export class FormoAnalytics implements IFormoAnalytics {
   private untrackProvider(provider: EIP1193Provider): void {
     try {
       this.removeProviderListeners(provider);
-      this.evm.forgetTracked(provider);
+
+      // Only stop tracking it if the listeners actually came off. "Tracked"
+      // means "has our listeners wired up", which is still true when removal
+      // threw, and `cleanup()` iterates the tracked set. Forgetting it here
+      // regardless is what made a retained listener unreachable: the entry
+      // survived but nothing ever looked at it again, so the retry that
+      // retention exists for could never happen.
+      if (this.evm.attachedEvents(provider).length === 0) {
+        this.evm.forgetTracked(provider);
+      }
 
       if (this._provider === provider) {
         this.clearActiveProvider();

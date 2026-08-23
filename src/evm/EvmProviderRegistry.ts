@@ -158,14 +158,32 @@ export class EvmProviderRegistry {
   removeListeners(provider: EIP1193Provider): void {
     const attached = this.listeners.get(provider);
     if (!attached) return;
+
+    // Keep whatever could not be removed. Forgetting a listener that is still
+    // attached loses the only reference to it, so nothing can ever try again:
+    // the callback stays live for the life of the page and holds the instance
+    // it closes over. A provider that throws transiently during teardown gets
+    // another chance on the next attempt.
+    const stillAttached: Record<string, (...args: unknown[]) => void> = {};
     for (const [event, fn] of Object.entries(attached)) {
       try {
         provider.removeListener(event, fn);
       } catch (e) {
         logger.warn(`Failed to remove listener for ${String(event)}`, e);
+        stillAttached[event] = fn;
       }
     }
-    this.listeners.delete(provider);
+
+    if (Object.keys(stillAttached).length > 0) {
+      this.listeners.set(provider, stillAttached);
+    } else {
+      this.listeners.delete(provider);
+    }
+  }
+
+  /** Events still attached to a provider after a failed teardown. */
+  attachedEvents(provider: EIP1193Provider): string[] {
+    return Object.keys(this.listeners.get(provider) ?? {});
   }
 
   /**
@@ -270,9 +288,18 @@ export class EvmProviderRegistry {
    * Solana address and no RPC is issued when the answer is already in hand.
    */
   async addressOf(provider?: EIP1193Provider): Promise<Address | null> {
-    const known = this.deps.knownEvmAddress();
-    if (known) return known;
-    const p = provider || this.deps.activeProvider();
+    const active = this.deps.activeProvider();
+    const p = provider || active;
+
+    // The cached wallet describes the ACTIVE provider, so it may only answer
+    // for that one. Returning it for any provider reported the active wallet's
+    // address under every other wallet's name and rdns, which is exactly what
+    // `identify()` does when it scans the providers it has discovered.
+    if (!provider || provider === active) {
+      const known = this.deps.knownEvmAddress();
+      if (known) return known;
+    }
+
     if (!p) {
       logger.info("The provider is not set");
       return null;

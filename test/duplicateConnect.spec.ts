@@ -994,4 +994,40 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.equal(undefined);
     formo.cleanup?.();
   });
+
+  it("retries a provider whose listeners would not detach on the first cleanup", async () => {
+    // End to end: a provider that throws once on `removeListener` must still
+    // be reachable by a later teardown, or the retained listener stays live
+    // for the life of the page and holds the instance it closes over.
+    let failing = true;
+    const removed: string[] = [];
+    const provider = makeProvider([ADDRESS]);
+    (provider as any).removeListener = (ev: string) => {
+      if (failing) throw new Error("busy");
+      removed.push(ev);
+    };
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    (formo as any).trackEIP1193Provider(provider);
+
+    const registry = (formo as any).evm;
+    expect(registry.isTracked(provider), "tracked once wired").to.be.true;
+
+    (formo as any).untrackProvider(provider);
+    expect(
+      registry.attachedEvents(provider).length,
+      "listeners are retained after a failed detach"
+    ).to.be.greaterThan(0);
+    expect(
+      registry.isTracked(provider),
+      "and it stays reachable by a later teardown"
+    ).to.be.true;
+
+    failing = false;
+    (formo as any).untrackProvider(provider);
+    expect(removed.length, "the retry actually detaches them").to.be.greaterThan(0);
+    expect(registry.attachedEvents(provider)).to.deep.equal([]);
+    expect(registry.isTracked(provider)).to.be.false;
+    formo.cleanup?.();
+  });
 });
