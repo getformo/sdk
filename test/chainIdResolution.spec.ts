@@ -85,7 +85,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       // so the poll would run to exhaustion and hold the process open for
       // roughly 28 seconds on top of every run. No test here asserts on
       // receipts.
-      sandbox.stub(instance as any, "pollTransactionReceipt").resolves(undefined);
+      sandbox.stub((instance as any).evmRequests, "pollTransactionReceipt").resolves(undefined);
       created.push(instance);
       return instance;
     };
@@ -123,7 +123,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
     await announceChain(formo, other, OTHER_CHAIN);
 
-    const payload = await (formo as any).buildTransactionEventPayload(
+    const payload = await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
       other
     );
@@ -147,7 +147,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       request: raw,
     };
     // Wrapping replaces provider.request, so assert against the raw stub.
-    (formo as any).registerRequestListeners(signer);
+    (formo as any).evmRequests.registerRequestListeners(signer);
     await signer.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
 
@@ -166,7 +166,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       request: raw,
     };
     // Wrapping replaces provider.request, so assert against the raw stub.
-    (formo as any).registerRequestListeners(signer);
+    (formo as any).evmRequests.registerRequestListeners(signer);
     await signer.request({
       method: "eth_sendTransaction",
       params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
@@ -183,7 +183,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     (formo as any)._provider = active;
     (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
 
-    const payload = await (formo as any).buildTransactionEventPayload(
+    const payload = await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
       stranger
     );
@@ -198,7 +198,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     (formo as any)._provider = active;
     (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
 
-    const payload = await (formo as any).buildTransactionEventPayload(
+    const payload = await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
       active
     );
@@ -214,7 +214,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
     const signer = providerOnChain(OTHER_CHAIN);
 
-    const payload = await (formo as any).buildTransactionEventPayload(
+    const payload = await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
       signer
     );
@@ -232,7 +232,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       chainId: `0x${OTHER_CHAIN.toString(16)}`,
     });
 
-    const payload = await (formo as any).buildTransactionEventPayload(
+    const payload = await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
       signer
     );
@@ -252,7 +252,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       seen.push(pl.chainId);
     }) as any);
 
-    (formo as any).registerRequestListeners(drifting);
+    (formo as any).evmRequests.registerRequestListeners(drifting);
     const call = drifting.request({
       method: "eth_sendTransaction",
       params: [{ from: ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
@@ -279,7 +279,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     const seen: any[] = [];
     sandbox.stub(formo, "signature").callsFake((async (pl: any) => { seen.push(pl); }) as any);
 
-    (formo as any).registerRequestListeners(rejecting);
+    (formo as any).evmRequests.registerRequestListeners(rejecting);
     // Asserted precisely: a bare try/catch also passes if the wrapper
     // swallows the rejection and resolves, which would make the dapp treat a
     // declined signature as a successful one.
@@ -313,7 +313,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     const seen: any[] = [];
     sandbox.stub(formo, "transaction").callsFake((async (pl: any) => { seen.push(pl); }) as any);
 
-    (formo as any).registerRequestListeners(rejecting);
+    (formo as any).evmRequests.registerRequestListeners(rejecting);
     let caught: any;
     let resolved = false;
     try {
@@ -349,7 +349,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     (formo as any).rememberProviderChain(other, OTHER_CHAIN);
 
     const OTHER_ADDRESS = "0x1111111111111111111111111111111111111111";
-    await (formo as any).buildTransactionEventPayload(
+    await (formo as any).evmRequests.buildTransactionEventPayload(
       [{ from: OTHER_ADDRESS, to: "0xabc", value: "0x0", data: "0x" }],
       other
     );
@@ -480,7 +480,7 @@ describe("Chain id resolution for autocaptured requests", () => {
         return "0xsigned";
       }),
     };
-    (formo as any).registerRequestListeners(provider);
+    (formo as any).evmRequests.registerRequestListeners(provider);
     expect((formo as any).resolveChainIdForProvider(provider)).to.equal(0);
 
     // The APP asks, for its own reasons.
@@ -506,7 +506,7 @@ describe("Chain id resolution for autocaptured requests", () => {
         new Promise((res, rej) => { answers.push(res); rejecters.push(rej); })
       ),
     };
-    (formo as any).registerRequestListeners(provider);
+    (formo as any).evmRequests.registerRequestListeners(provider);
 
     const first = provider.request({ method: "eth_chainId" });
     const second = provider.request({ method: "eth_chainId" });
@@ -555,7 +555,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     };
     (gated as any).rememberProviderChain(provider, OTHER_CHAIN);
     (gated as any)._provider = provider;
-    (gated as any).registerRequestListeners(provider);
+    (gated as any).evmRequests.registerRequestListeners(provider);
 
     await provider.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
@@ -596,7 +596,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xsigned"),
     };
-    (gated as any).registerRequestListeners(stranger);
+    (gated as any).evmRequests.registerRequestListeners(stranger);
     await stranger.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
     expect(addEvent.called, "the signature itself is dropped").to.be.false;
@@ -627,7 +627,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       ),
     };
     const b = providerOnChain(OTHER_CHAIN);
-    (formo as any).registerRequestListeners(a);
+    (formo as any).evmRequests.registerRequestListeners(a);
 
     const pendingA = a.request({ method: "eth_chainId" });
     // Unrelated activity on B while A's lookup is still in flight.
@@ -689,7 +689,7 @@ describe("Chain id resolution for autocaptured requests", () => {
         return Promise.resolve("0xsigned");
       }),
     };
-    (formo as any).registerRequestListeners(provider);
+    (formo as any).evmRequests.registerRequestListeners(provider);
 
     const pending = provider.request({ method: "eth_chainId" });
     // A chainChanged lands first; it is newer by definition.
@@ -764,7 +764,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xsigned"),
     };
-    (excluded as any).registerRequestListeners(stranger);
+    (excluded as any).evmRequests.registerRequestListeners(stranger);
     await stranger.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
 
@@ -792,7 +792,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     // clears central state, so the secondary chain would become the central
     // one and the test would pass even against the old central-chain gate.
     (excluded as any).rememberProviderChain(other, OTHER_CHAIN);
-    (excluded as any).registerRequestListeners(other);
+    (excluded as any).evmRequests.registerRequestListeners(other);
     await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
 
@@ -823,7 +823,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       request: sandbox.stub().resolves("0xsigned"),
     };
     (excluded as any).rememberProviderChain(other, OTHER_CHAIN);
-    (excluded as any).registerRequestListeners(other);
+    (excluded as any).evmRequests.registerRequestListeners(other);
     await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
     await new Promise((r) => setTimeout(r, 20));
 
@@ -847,7 +847,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xok"),
     };
-    (off as any).registerRequestListeners(provider);
+    (off as any).evmRequests.registerRequestListeners(provider);
 
     expect(await provider.request({ method: "personal_sign", params: ["0x68", ADDRESS] })).to.equal("0xok");
     expect(
@@ -861,9 +861,9 @@ describe("Chain id resolution for autocaptured requests", () => {
   it("rejects payloads whose address is not a valid EIP-55 address", async () => {
     const bad = "0xnot-an-address";
     expect(() =>
-      (formo as any).buildSignatureEventPayload("personal_sign", ["0x68", bad])
+      (formo as any).evmRequests.buildSignatureEventPayload("personal_sign", ["0x68", bad])
     ).to.throw(/Invalid address in signature payload/);
-    await (formo as any)
+    await (formo as any).evmRequests
       .buildTransactionEventPayload([{ from: bad, to: "0xabc", value: "0x0", data: "0x" }])
       .then(
         () => expect.fail("should have thrown"),
@@ -882,7 +882,7 @@ describe("Chain id resolution for autocaptured requests", () => {
       configurable: false,
     });
     // Must not throw out of provider tracking.
-    expect(() => (formo as any).registerRequestListeners(frozen)).to.not.throw();
+    expect(() => (formo as any).evmRequests.registerRequestListeners(frozen)).to.not.throw();
   });
 
   it("survives a chain event that fails to emit", async () => {
@@ -908,9 +908,9 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xok"),
     };
-    (formo as any).registerRequestListeners(provider);
+    (formo as any).evmRequests.registerRequestListeners(provider);
     const wrappedOnce = provider.request;
-    (formo as any).registerRequestListeners(provider);
+    (formo as any).evmRequests.registerRequestListeners(provider);
 
     expect(provider.request, "left alone the second time").to.equal(wrappedOnce);
   });
@@ -925,7 +925,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     };
     (formo as any).rememberProviderChain(provider, ACTIVE_CHAIN);
     sandbox.stub(formo, "signature").rejects(new Error("queue is gone"));
-    (formo as any).registerRequestListeners(provider);
+    (formo as any).evmRequests.registerRequestListeners(provider);
 
     const result = await provider.request({
       method: "personal_sign",
@@ -951,7 +951,7 @@ describe("Chain id resolution for autocaptured requests", () => {
     (gated as any)._provider = provider;
     (gated as any).rememberProviderChain(provider, ACTIVE_CHAIN);
     (gated as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
-    (gated as any).registerRequestListeners(provider);
+    (gated as any).evmRequests.registerRequestListeners(provider);
 
     // The wallet moves to the excluded chain while the prompt is open.
     const pending = provider.request({
