@@ -16,6 +16,15 @@ import {
   EvmChainState,
 } from "../types";
 
+/**
+ * A ticket identifying one wallet observation, taken before any async work.
+ * See `WalletStateStore.observe`.
+ */
+export interface Observation {
+  readonly id: number;
+  readonly namespace: ChainNamespace;
+}
+
 /** What the store needs from the SDK that owns it. */
 export interface WalletStateStoreDeps {
   /** Opt-out or an excluded timezone: purge persisted identity, don't keep it. */
@@ -72,16 +81,45 @@ export class WalletStateStore {
   }
 
   /**
-   * Monotonic generation per namespace, bumped whenever a namespace changes
-   * hands.
+   * Ticket counter for wallet observations.
    *
-   * Address and provider alone cannot tell "this session never changed" apart
-   * from "the same wallet disconnected and reconnected", because both leave
-   * identical state. The generation can, which is what lets a slow disconnect
-   * know it is stale. Kept per namespace rather than per provider so it
-   * covers Solana, which has no EIP-1193 provider to hang a stamp on.
+   * Every signal from a wallet is handled asynchronously: resolving an
+   * address, emitting an event. Between the moment a handler decides what to
+   * do and the moment it commits, a newer signal can arrive and be fully
+   * processed. Whichever handler resumes last then writes its captured data
+   * over the newer state.
+   *
+   * Bespoke guards were added for each case as it was found - a per-provider
+   * disconnect count, a per-namespace session generation, a "currently
+   * processing" flag - and a fourth review round kept producing new ones,
+   * because each guard answers one question and none establishes an order.
+   *
+   * A ticket does. A handler takes one before its first await; anything it
+   * commits afterwards is refused if a newer observation has claimed the
+   * namespace since.
    */
-  private seq: Record<ChainNamespace, number> = { evm: 0, solana: 0 };
+  private observationSeq = 0;
+  private newestObservation: Record<ChainNamespace, number> = {
+    evm: 0,
+    solana: 0,
+  };
+
+  /**
+   * How many disconnects a namespace has begun.
+   *
+   * Separate from the observation ticket on purpose, because they answer
+   * different questions. A ticket asks "is the state I captured still the
+   * newest?", which is what a switch or a probe needs. This asks "did the
+   * wallet go away after I started?", which is what a connect handler needs.
+   *
+   * Conflating them loses connects: a connect observation superseded by a
+   * NEWER connect must still be reported by somebody, and the ticket cannot
+   * tell that apart from being superseded by a disconnect.
+   */
+  private disconnectCount: Record<ChainNamespace, number> = {
+    evm: 0,
+    solana: 0,
+  };
 
   /** Derived from the active namespace. Read by integrations and by events. */
   address?: Address;
@@ -108,26 +146,73 @@ export class WalletStateStore {
     return this.state.evm.provider;
   }
 
-  /** The current generation of a namespace. See `seq`. */
-  generation(namespace: ChainNamespace): number {
-    return this.seq[namespace];
+  /**
+   * Take a ticket for an observation about to be processed.
+   *
+   * MUST be called before the handler's first await, so the order recorded is
+   * the order the signals arrived in, not the order their async work happens
+   * to finish in.
+   */
+  observe(namespace: ChainNamespace): Observation {
+    const id = ++this.observationSeq;
+    this.newestObservation[namespace] = id;
+    return { id, namespace };
   }
 
   /**
-   * Record that a wallet has claimed a namespace, without touching state.
+   * Record that a namespace's wallet is being torn down.
    *
-   * `connect()` calls this because an emitted connect always means a claim,
-   * even when the address it writes is the one already there: a wallet that
-   * disconnects and reconnects leaves identical state, and a disconnect still
-   * in flight must be able to tell that apart from nothing having happened.
+   * Called at EVERY teardown site before anything is awaited, and whether or
+   * not a disconnect event will be emitted: whether the app opted into
+   * disconnect autocapture has no bearing on ordering.
    */
-  claim(chainId?: ChainID): void {
-    this.seq[this.namespaceOf(chainId)]++;
+  beginDisconnect(namespace: ChainNamespace): void {
+    this.disconnectCount[namespace]++;
   }
 
-  /** Whether a namespace changed hands since `previous` was taken. */
-  hasNewSessionSince(namespace: ChainNamespace, previous: number): boolean {
-    return this.seq[namespace] !== previous;
+  /** How many disconnects this namespace has begun so far. */
+  disconnectsSoFar(namespace: ChainNamespace): number {
+    return this.disconnectCount[namespace];
+  }
+
+  /**
+   * The newest observation for a namespace, for a caller that must NOT
+   * supersede its own caller.
+   *
+   * `disconnect()` is reached both directly by a consumer and from a handler
+   * that already holds a ticket. Taking a fresh ticket there would invalidate
+   * the handler that called it. Reading the current value and checking it
+   * later asks the same question without changing the answer for anyone else.
+   */
+  snapshot(namespace: ChainNamespace): number {
+    return this.newestObservation[namespace];
+  }
+
+  /** Whether nothing newer has claimed the namespace since `snapshot`. */
+  isUnchangedSince(namespace: ChainNamespace, snapshot: number): boolean {
+    return this.newestObservation[namespace] === snapshot;
+  }
+
+  /**
+   * The current newest observation, as a ticket, WITHOUT taking a new one.
+   *
+   * For a handler that must respect the order but has nothing to claim: it
+   * still abandons its work if something newer arrives, but it does not
+   * supersede whatever is already in flight.
+   */
+  currentObservation(namespace: ChainNamespace): Observation {
+    return { id: this.newestObservation[namespace], namespace };
+  }
+
+  /**
+   * Whether this observation is still the newest for its namespace.
+   *
+   * False means a newer signal arrived while this handler was suspended, and
+   * it must abandon whatever it captured rather than write it over the newer
+   * state. Superseding, not dropping: the newer handler is already running.
+   */
+  isCurrent(observation: Observation): boolean {
+    return this.newestObservation[observation.namespace] === observation.id;
   }
 
   // ── writes ───────────────────────────────────────────────────────────────
@@ -153,19 +238,11 @@ export class WalletStateStore {
         : this.namespaceOf(namespaceOrChainId);
     const ns = this.state[namespace];
 
-    if ("address" in update) {
-      // A namespace changing hands is what the generation tracks. Doing it
-      // here covers every claiming path: connect(), the public
-      // syncWalletState() an integration calls, and the EIP-1193 listeners.
-      //
-      // Only a CHANGE counts. Re-writing the same wallet (a chain switch, a
-      // re-confirmation) must not bump, or a legitimate disconnect that raced
-      // one would decide it was stale and leave the state behind.
-      const claimed =
-        !!update.address && !this.isSameWallet(namespace, ns.address, update.address);
-      if (claimed) this.seq[namespace]++;
-      ns.address = update.address;
-    }
+    // A plain write. Whether this transition is still the newest is decided
+    // by the observation ticket its caller holds, not by comparing addresses
+    // here: re-adopting the SAME wallet is a real transition, and no
+    // comparison of the values can tell that apart from nothing happening.
+    if ("address" in update) ns.address = update.address;
 
     if ("chainId" in update) {
       ns.chainId = update.chainId;
@@ -183,24 +260,6 @@ export class WalletStateStore {
 
     this._activeNamespace = namespace;
     this.syncDerived();
-  }
-
-  /**
-   * Whether two addresses are the same wallet, per namespace.
-   *
-   * EVM addresses are hex and compare case-insensitively, so a checksummed
-   * and a lowercase form are one wallet. Solana addresses are Base58, where
-   * case is significant: two addresses differing only in case are DIFFERENT
-   * wallets, and folding them together would let a stale disconnect target a
-   * live session.
-   */
-  private isSameWallet(
-    namespace: ChainNamespace,
-    a: Address | undefined,
-    b: Address
-  ): boolean {
-    if (!a) return false;
-    return namespace === "evm" ? a.toLowerCase() === b.toLowerCase() : a === b;
   }
 
   /** Wipe a namespace. Per-namespace so a Solana disconnect spares EVM. */
@@ -271,6 +330,12 @@ export class WalletStateStore {
    */
   syncWalletState(params: { chainId?: ChainID; address?: Address }): void {
     const { chainId, address } = params;
+
+    // An integration adopting or dropping a wallet is a wallet signal like
+    // any other, so it takes its place in the order. Without this, a
+    // disconnect still in flight could not tell that the wagmi handler had
+    // already adopted a replacement.
+    this.observe(this.namespaceOf(chainId));
 
     if (this.deps.isTrackingSuppressed()) {
       // While suppressed we must never LEARN a new wallet, but we must still
@@ -350,8 +415,13 @@ export class WalletStateStore {
       // persisted wallet restores a chain from a previous session, and if the
       // provider has since moved, the stale restored chain would stay in the
       // derived value and carry the unscoped events past an exclusion.
+      // `0` means "could not resolve". Correcting a stale chain with a real
+      // one is the point of this branch; replacing a chain we already know
+      // with "unknown" only makes attribution worse, and would trip the
+      // exclusion gate's fail-closed rule against a wallet we can place.
+      const usable = chainId !== undefined && !(chainId === 0 && this.evmChainId);
       if (
-        chainId !== undefined &&
+        usable &&
         known.toLowerCase() === address.toLowerCase() &&
         this.evmChainId !== chainId
       ) {
@@ -456,7 +526,15 @@ export class WalletStateStore {
       }
       const chainId = chainMissing ? undefined : (rawChain as ChainID);
 
-      const namespace = this.namespaceOf(chainId);
+      // With no chain to go on, the address shape decides. Defaulting to EVM
+      // filed a chainless Solana wallet under EVM, where later EVM handlers
+      // read it as `evmAddress` and emitted EVM state for a Solana wallet.
+      const namespace =
+        chainId === undefined
+          ? validateAndChecksumAddress(parsed.address)
+            ? "evm"
+            : "solana"
+          : this.namespaceOf(chainId);
       const validated = validateAddress(parsed.address, chainId);
       if (!validated) {
         cookie().remove(ACTIVE_WALLET_KEY);

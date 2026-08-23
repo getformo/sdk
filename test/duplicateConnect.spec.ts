@@ -826,4 +826,172 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     ).to.equal(undefined);
     formo.cleanup?.();
   });
+
+  it("does not lose a reconnect that arrives while a disconnect is still building", async () => {
+    // Issue #341, finding 1. A second `accountsChanged` used to be DROPPED
+    // outright while the first was still being processed, so a wallet that
+    // dropped and came straight back had its reconnect thrown away, and the
+    // disconnect then cleared a namespace that was live again.
+    const accounts = [ADDRESS];
+    const provider = makeProvider(accounts);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    let parked = false;
+    const gate = new Promise<void>((r) => { release = r; });
+    const sent: any[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { parked = true; await gate; }
+        sent.push(e);
+      });
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(() => sent.some((e) => e.type === "connect"), "the first connect");
+
+    // Wallet drops, and the disconnect event stalls...
+    accounts.length = 0;
+    provider.emit("accountsChanged", []);
+    await waitFor(() => parked, "the disconnect to park on its gate");
+
+    // ...and the wallet comes back through the SAME handler, which used to
+    // refuse to run at all while one was in flight.
+    accounts.push(OTHER);
+    provider.emit("accountsChanged", [OTHER]);
+    await settle();
+
+    release();
+    await settle();
+
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "the reconnected wallet must survive the superseded disconnect"
+    ).to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let an integration's adoption be undone by a stale disconnect", async () => {
+    // Issue #341, finding 5. The wagmi handler adopts a wallet through
+    // `syncWalletState()`. When it re-adopts the SAME address, an
+    // address-comparison guard saw no change and let the stale cleanup run.
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    let parked = false;
+    const gate = new Promise<void>((r) => { release = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => {
+        if (e.type === "disconnect") { parked = true; await gate; }
+      });
+
+    await formo.connect({ chainId: 1, address: ADDRESS });
+    const disconnecting = formo.disconnect({ chainId: 1, address: ADDRESS });
+    await waitFor(() => parked, "the disconnect to park on its gate");
+
+    // Re-adopting the SAME wallet, which is what a wagmi reconnect looks like.
+    formo.syncWalletState({ chainId: 1, address: ADDRESS });
+
+    release();
+    await disconnecting;
+    await settle();
+
+    expect(
+      formo.currentAddress?.toLowerCase(),
+      "a re-adopted wallet is still a live session"
+    ).to.equal(ADDRESS.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let an ignored non-active event supersede a real disconnect", async () => {
+    // A tracked but non-active provider emitting `accountsChanged([])` is
+    // discarded by the handler. Letting it take a ticket anyway superseded
+    // the ACTIVE wallet's disconnect on the strength of an event we were
+    // about to throw away, so the disconnect skipped its cleanup.
+    const accounts = [ADDRESS];
+    const active = makeProvider(accounts);
+    const bystander = makeProvider([]);
+    (global as any).window.ethereum = active;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let release!: () => void;
+    let parked = false;
+    const gate = new Promise<void>((r) => { release = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any) => { if (e.type === "disconnect") { parked = true; await gate; } });
+
+    for (const p of [active, bystander]) {
+      (formo as any).registerAccountsChangedListener(p);
+      (formo as any).registerConnectListener(p);
+    }
+    active.emit("connect", { chainId: "0x1" });
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(),
+      "the active wallet"
+    );
+
+    accounts.length = 0;
+    active.emit("accountsChanged", []);
+    await waitFor(() => parked, "the disconnect to park on its gate");
+
+    // The bystander's event is ignored, so it must not disturb the order.
+    bystander.emit("accountsChanged", []);
+    await settle();
+
+    release();
+    await settle();
+
+    expect(
+      formo.currentAddress,
+      "the real disconnect must still clean up"
+    ).to.equal(undefined);
+    formo.cleanup?.();
+  });
+
+  it("orders a direct disconnect() against an in-flight connect", async () => {
+    // A host app calling `disconnect()` itself must invalidate a connect
+    // observation that began earlier, exactly as a provider event does.
+    const provider = makeProvider([ADDRESS]);
+    (global as any).window.ethereum = provider;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+
+    let releaseAddress!: () => void;
+    let addressParked = false;
+    const addressGate = new Promise<void>((r) => { releaseAddress = r; });
+    sandbox.stub((formo as any).eventManager, "addEvent").resolves();
+
+    (formo as any).registerAccountsChangedListener(provider);
+    (formo as any).registerConnectListener(provider);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(
+      () => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(),
+      "the first connect"
+    );
+
+    const realGetAddress = (formo as any).getAddress.bind(formo);
+    sandbox.stub(formo as any, "getAddress").callsFake(async (p: any) => {
+      addressParked = true;
+      await addressGate;
+      return realGetAddress(p);
+    });
+
+    provider.emit("connect", { chainId: "0x1" });
+    await waitFor(() => addressParked, "the connect to park resolving its address");
+
+    await formo.disconnect({ chainId: 1, address: ADDRESS });
+    expect(formo.currentAddress, "cleared by the direct call").to.equal(undefined);
+
+    releaseAddress();
+    await settle();
+
+    expect(
+      formo.currentAddress,
+      "the older connect must not restore the disconnected wallet"
+    ).to.equal(undefined);
+    formo.cleanup?.();
+  });
 });
