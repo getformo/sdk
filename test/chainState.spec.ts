@@ -225,7 +225,7 @@ describe("Per-chain state isolation", () => {
       removeListener: () => undefined,
       request: async () => "0x2105",
     };
-    await (formo as any).onChainChanged(background, "0x2105");
+    await (formo as any).evmEvents.onChainChanged(background, "0x2105");
 
     expect((formo as any)._provider, "the slot is still unclaimed").to.be.undefined;
     expect((formo as any)._evmChainId, "restored chain untouched").to.equal(1);
