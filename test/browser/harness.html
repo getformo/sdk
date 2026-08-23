@@ -1,0 +1,103 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Formo SDK headless wallet harness</title></head>
+<body style="font-family:system-ui;padding:1.5rem;background:#111;color:#ddd">
+<h1>Formo SDK headless wallet harness</h1>
+<p>Two wallets announce themselves over <b>EIP-6963</b>, exactly as extensions do. Neither is a mock of the
+SDK's internals: the SDK discovers them, wraps them, and reacts to their events through the same
+code path a real wallet takes. Every event the SDK tries to send is captured in-page and never
+leaves this machine.</p>
+<pre id="log" style="background:#000;color:#9f9;padding:1rem;min-height:6rem;white-space:pre-wrap"></pre>
+<script>
+// ── 1. Capture the wire ──────────────────────────────────────────────────
+window.__sent = [];
+const realFetch = window.fetch.bind(window);
+window.fetch = async (url, init) => {
+  if (/events|formo\.so/i.test(String(url)) && (init?.method || "GET") === "POST") {
+    try { const b = JSON.parse(init.body); for (const e of (Array.isArray(b) ? b : [b])) window.__sent.push(e); } catch {}
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }
+  return realFetch(url, init);
+};
+window.__log = (m) => { document.getElementById("log").textContent += m + "\n"; };
+
+// ── 2. A wallet that speaks EIP-1193 AND announces over EIP-6963 ──────────
+// `rpcUrl` forwards chain reads to a real node (anvil) so gas/nonce/receipt
+// answers are genuine. Signing is simulated: this harness has no private key
+// on purpose, so it can never be pointed at a real chain by accident.
+function makeWallet({ name, rdns, uuid, account, chainId = "0x7a69", rpcUrl = "http://127.0.0.1:8545" }) {
+  const handlers = {};
+  let accounts = account ? [account] : [];
+  let chain = chainId;
+  let nonce = 0;
+  const rpc = async (method, params = []) => {
+    const r = await realFetch(rpcUrl, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+    const j = await r.json(); if (j.error) throw Object.assign(new Error(j.error.message), { code: j.error.code }); return j.result;
+  };
+  const provider = {
+    isMetaMask: rdns === "io.metamask", chainId: chain,
+    on(ev, fn) { (handlers[ev] ||= []).push(fn); },
+    removeListener(ev, fn) { handlers[ev] = (handlers[ev] || []).filter(f => f !== fn); },
+    emit(ev, ...a) { (handlers[ev] || []).forEach(f => f(...a)); },
+    async request({ method, params }) {
+      (window.__rpc ||= []).push(rdns + ":" + method);
+      switch (method) {
+        case "eth_chainId": return chain;
+        case "eth_accounts": return accounts;
+        case "eth_requestAccounts":
+          if (!accounts.length) throw Object.assign(new Error("User rejected"), { code: 4001 });
+          provider.emit("connect", { chainId: chain }); provider.emit("accountsChanged", accounts); return accounts;
+        case "personal_sign":
+          if (window.__rejectNext) { window.__rejectNext = false; throw Object.assign(new Error("User rejected"), { code: 4001 }); }
+          return "0x" + "ab".repeat(65);
+        case "eth_sendTransaction": {
+          if (window.__rejectNext) { window.__rejectNext = false; throw Object.assign(new Error("User rejected"), { code: 4001 }); }
+          // Ask the real node to mine it from an unlocked anvil account, so the
+          // receipt path is real. `from` is rewritten to anvil's funded signer.
+          const tx = { ...params[0], from: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", nonce: undefined };
+          delete tx.nonce;
+          return rpc("eth_sendTransaction", [tx]);
+        }
+        case "eth_getTransactionReceipt": return rpc("eth_getTransactionReceipt", params);
+        case "wallet_switchEthereumChain": chain = params[0].chainId; provider.chainId = chain; provider.emit("chainChanged", chain); return null;
+        case "wallet_sendCalls": {
+          const id = "0x" + (++nonce).toString(16).padStart(64, "0");
+          (window.__batches ||= {})[id] = { calls: params[0].calls, hashes: [] };
+          for (const c of params[0].calls) {
+            const h = await rpc("eth_sendTransaction", [{ from: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", to: c.to, value: c.value || "0x0", data: c.data || "0x" }]);
+            window.__batches[id].hashes.push(h);
+          }
+          return { id };
+        }
+        case "wallet_getCallsStatus": {
+          const b = window.__batches?.[params[0]]; if (!b) return null;
+          const receipts = [];
+          for (const h of b.hashes) { const r = await rpc("eth_getTransactionReceipt", [h]); if (!r) return { status: 100 }; receipts.push({ status: r.status, transactionHash: h }); }
+          return { status: 200, receipts };
+        }
+        default: return null;
+      }
+    },
+    // test controls
+    __setAccounts(next) { accounts = next; provider.emit("accountsChanged", next); },
+    __disconnect() { accounts = []; provider.emit("disconnect", { code: 4900 }); },
+  };
+  // EIP-6963: announce now and on every request, as the spec requires.
+  const detail = Object.freeze({ info: Object.freeze({ uuid, name, rdns, icon: "data:image/svg+xml," }), provider });
+  const announce = () => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
+  window.addEventListener("eip6963:requestProvider", announce);
+  announce();
+  return provider;
+}
+
+// Two wallets, so provider switching and per-provider chain labelling are exercised.
+window.__walletA = makeWallet({ name: "MetaMask", rdns: "io.metamask", uuid: "a0000000-0000-4000-8000-000000000001", account: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf" });
+window.__walletB = makeWallet({ name: "Rabby",    rdns: "io.rabby",    uuid: "b0000000-0000-4000-8000-000000000002", account: "0x88C0224CEABF6D559d7B622F2918b308285280DE" });
+// No window.ethereum on purpose: discovery must happen over 6963.
+</script>
+<script src="./sdk.js"></script>
+<script>
+window.__ready = new Promise((resolve) => {
+  window.formofy("test-write-key", { tracking: true, flushAt: 1, logger: { enabled: false }, ready: (f) => { window.__log("SDK ready"); resolve(f); } });
+});
+</script>
+</body></html>

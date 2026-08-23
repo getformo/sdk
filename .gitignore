@@ -91,3 +91,5 @@ coverage/
 # Local MCP / browser-automation scratch
 .playwright-mcp/
 .mcp.json
+# built bundle copied into the browser harness at run time
+test/browser/sdk.js
