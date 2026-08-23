@@ -11,7 +11,8 @@ npm run test:browser
 
 It adds **no dependencies**: the runner drives headless Chrome over the
 DevTools protocol with Node's built-in `WebSocket`, and the harness page is
-plain HTML.
+plain HTML. It needs **Node 20.10 or newer** for that global; older Node
+exits with a clear message.
 
 ## Why it exists
 

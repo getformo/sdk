@@ -82,7 +82,7 @@ function makeWallet({ name, rdns, uuid, account, chainId = "0x7a69", rpcUrl = "h
     __disconnect() { accounts = []; provider.emit("disconnect", { code: 4900 }); },
   };
   // EIP-6963: announce now and on every request, as the spec requires.
-  const detail = Object.freeze({ info: Object.freeze({ uuid, name, rdns, icon: "data:image/svg+xml," }), provider });
+  const detail = Object.freeze({ info: Object.freeze({ uuid, name, rdns, icon: "data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22/>" }), provider });
   const announce = () => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
   window.addEventListener("eip6963:requestProvider", announce);
   announce();

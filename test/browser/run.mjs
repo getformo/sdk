@@ -5,20 +5,31 @@
 // Usage: node test/browser/run.mjs   (expects anvil on :8545 and a built dist/)
 import { spawn, execSync } from "node:child_process";
 import { createServer } from "node:http";
-import { readFileSync, copyFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
+if (typeof WebSocket === "undefined") {
+  console.error("test:browser needs Node >= 20.10 (built-in WebSocket)");
+  process.exit(2);
+}
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
-copyFileSync(join(root, "dist/index.umd.min.js"), join(here, "sdk.js"));
+const sdkPath = join(root, "dist/index.umd.min.js");
 
 // ── static server for the harness page ───────────────────────────────────
+// Serves exactly two files, by name, so a request path can never reach
+// anything else on disk. Bound to loopback only.
+const files = { "/harness.html": readFileSync(join(here, "harness.html")), "/sdk.js": readFileSync(sdkPath) };
 const server = createServer((req, res) => {
-  const file = req.url === "/" ? "/harness.html" : req.url.split("?")[0];
-  try { res.end(readFileSync(join(here, file))); } catch { res.statusCode = 404; res.end(); }
-}).listen(0);
+  const path = req.url === "/" ? "/harness.html" : req.url.split("?")[0];
+  const body = Object.prototype.hasOwnProperty.call(files, path) ? files[path] : null;
+  if (!body) { res.statusCode = 404; res.end(); return; }
+  res.setHeader("content-type", path.endsWith(".js") ? "text/javascript" : "text/html");
+  res.end(body);
+});
+await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const port = server.address().port;
 
 // ── headless chrome over CDP ─────────────────────────────────────────────
@@ -26,9 +37,20 @@ const chrome = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", 
   .find((c) => { try { execSync(`test -x "${c}" || command -v ${c}`, { stdio: "ignore" }); return true; } catch { return false; } });
 if (!chrome) { console.error("no chrome found"); process.exit(2); }
 const profile = mkdtempSync(join(tmpdir(), "formo-e2e-"));
-const proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+let proc, ws;
+const teardown = () => {
+  try { ws?.close(); } catch {}
+  try { proc?.kill(); } catch {}
+  try { server.close(); } catch {}
+  try { rmSync(profile, { recursive: true, force: true }); } catch {}
+};
+process.on("exit", teardown);
+// A hung page must not hang CI: every await below is bounded by this.
+const deadline = setTimeout(() => { console.error("test:browser timed out after 90s"); process.exit(3); }, 90_000);
+deadline.unref();
+proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
 const wsUrl = await new Promise((resolve) => { proc.stderr.on("data", (d) => { const m = String(d).match(/ws:\/\/[^\s]+/); if (m) resolve(m[0]); }); });
-const ws = new WebSocket(wsUrl);
+ws = new WebSocket(wsUrl);
 await new Promise((r) => (ws.onopen = r));
 let id = 0; const pending = new Map();
 ws.onmessage = (m) => { const j = JSON.parse(m.data); if (j.id && pending.has(j.id)) { pending.get(j.id)(j); pending.delete(j.id); } };
@@ -98,6 +120,5 @@ for (const [k, v] of results) {
 const rpc = results.find(([k]) => k === "sdk-issued rpc")[1];
 const disallowed = rpc.filter((m) => !/:(eth_accounts|eth_getTransactionReceipt|wallet_getCallsStatus)$/.test(m));
 if (disallowed.length) { failed++; console.log(`  FAIL sdk issued disallowed rpc: ${JSON.stringify(disallowed)}`); }
-ws.close(); proc.kill(); server.close();
 console.log(failed ? `\n${failed} check(s) failed` : "\nall checks passed");
 process.exit(failed ? 1 : 0);
