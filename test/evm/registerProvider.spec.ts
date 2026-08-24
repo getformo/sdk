@@ -22,9 +22,21 @@ describe("registerProvider", () => {
 
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
+  // Original global descriptors, restored verbatim in afterEach. Deleting
+  // is wrong for keys Node itself defines (Event, addEventListener, ...):
+  // it would remove the built-in for every later spec in the process.
+  let savedGlobals: Map<string, PropertyDescriptor | undefined>;
+
+  const GLOBAL_KEYS = [
+    "window","document","location","navigator","localStorage","sessionStorage",
+    "Event","CustomEvent","addEventListener","removeEventListener","dispatchEvent","crypto",
+  ] as const;
 
   beforeEach(() => {
     sandbox = sinon.createSandbox();
+    savedGlobals = new Map(
+      GLOBAL_KEYS.map((k) => [k, Object.getOwnPropertyDescriptor(global, k)])
+    );
     jsdom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
       url: "https://example.com",
     });
@@ -55,9 +67,10 @@ describe("registerProvider", () => {
 
   afterEach(() => {
     sandbox.restore();
-    for (const k of ["window","document","location","navigator","localStorage","sessionStorage","crypto"]) {
-      delete (global as any)[k];
-    }
+    savedGlobals.forEach((desc, k) => {
+      if (desc) Object.defineProperty(global, k, desc);
+      else delete (global as any)[k];
+    });
     jsdom?.window.close();
   });
 
@@ -212,6 +225,57 @@ describe("registerProvider", () => {
     await settle();
 
     expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("reports failure when the provider cannot be tracked", async () => {
+    // A frozen provider defeats the request wrapper. Claiming success while
+    // its requests stay invisible would recreate the very silent loss this
+    // API exists to close.
+    const provider = Object.freeze(makeWcProvider({ accounts: [ADDR], peer: PEER }));
+    const { formo, sent } = await setup();
+
+    const result = formo.registerProvider(provider);
+    await settle();
+
+    if (!result) {
+      // Refused: then it must have adopted nothing either.
+      expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+    } else {
+      // Trackable after all (wrapper strategy tolerates frozen objects):
+      // then events must actually flow.
+      await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+      await settle();
+      expect(sent.filter((e) => e.type === "signature").length).to.be.greaterThan(0);
+    }
+    formo.cleanup?.();
+  });
+
+  it("survives a later EIP-6963 announcement without losing the registration", async () => {
+    // The P1 from review: announcement-driven cleanup untracked anything
+    // absent from the announcement list, and a registered provider is
+    // never announced. Its absence is its normal state, not removal.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    formo.registerProvider(provider);
+    await settle();
+
+    const announced = makeWcProvider({});
+    (announced as any).isMetaMask = true;
+    (global as any).window.dispatchEvent(
+      new (global as any).CustomEvent("eip6963:announceProvider", {
+        detail: Object.freeze({
+          info: { uuid: "11111111-2222-4333-8444-555555555555", name: "MetaMask", icon: "data:image/svg+xml;base64,", rdns: "io.metamask" },
+          provider: announced,
+        }),
+      })
+    );
+    await settle();
+
+    // The registered provider still tracks: its signature still captures.
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(sent.filter((e) => e.type === "signature").length, "requested + confirmed").to.equal(2);
     formo.cleanup?.();
   });
 

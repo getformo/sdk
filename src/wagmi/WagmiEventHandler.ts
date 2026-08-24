@@ -212,7 +212,16 @@ function isUserRejection(error: unknown): boolean {
  * carries the real wallet's name. The first connect may still say
  * "WalletConnect"; that is the honest state at that instant.
  *
- * WeakMap-keyed by the connector object, so a torn-down config cannot leak.
+ * Names are keyed by the CONNECTOR (stable across a page's sessions) so
+ * they actually serve reads; lookups are guarded per CONNECTION (wagmi
+ * replaces the connection object per session), so every new session
+ * re-resolves and OVERWRITES the name. A reconnect through the same
+ * connector to a different wallet can therefore mislabel at most the one
+ * event that fires between the new session's start and its resolution -
+ * one microtask for an initialised connector - and self-corrects. The
+ * alternative, keying names by connection, was tried and kept the name
+ * from ever surfacing: the only reader that fires per session runs before
+ * any lookup can resolve. WeakMaps, so nothing outlives its object.
  */
 const walletConnectPeerNames = new WeakMap<object, string>();
 const walletConnectPeerLookups = new WeakSet<object>();
@@ -704,6 +713,15 @@ export class WagmiEventHandler {
    * re-entry for an already-tracked address as a no-op (or a chain change).
    */
   private seedFromCurrentState(): void {
+    // Fire-and-forget here: the seed is synchronous by design, so its own
+    // connect may carry the generic name; the status flow awaits instead.
+    // A throwing store must not break construction.
+    try {
+      this.kickWalletConnectPeerLookup(this.getState());
+    } catch {
+      /* the seed continues; names fall back to the connector's own */
+    }
+
     try {
       const state = this.getState();
       if (state.status !== "connected") {
@@ -1011,6 +1029,7 @@ export class WagmiEventHandler {
     status: WagmiState["status"],
     prevStatus: WagmiState["status"]
   ): Promise<void> {
+
     // Prevent concurrent processing
     if (this.trackingState.isProcessing) {
       // Dropped, not queued - but remember that a disconnect went past.
@@ -1028,6 +1047,17 @@ export class WagmiEventHandler {
     }
 
     this.trackingState.isProcessing = true;
+
+    // Start resolving the wallet behind a WalletConnect session. NEVER
+    // awaited: every path from a store signal to its emission is
+    // synchronous by design, and an await here reorders transitions (it
+    // demonstrably drops connects under rapid connect/disconnect cycles).
+    try {
+      this.kickWalletConnectPeerLookup(this.getState());
+    } catch {
+      // A throwing store must not break the status flow.
+    }
+
     // A status change outranks any connection transition still in flight. A
     // full disconnect advances no ticket of its own, so without this an older
     // fallback continuation could resume and announce a wallet wagmi no longer
@@ -2670,7 +2700,7 @@ export class WagmiEventHandler {
     const connector = connection?.connector as
       | { name?: string; getProvider?: () => Promise<unknown> }
       | undefined;
-    if (!connector) {
+    if (!connection || !connector) {
       return undefined;
     }
 
@@ -2679,33 +2709,57 @@ export class WagmiEventHandler {
       return cached;
     }
 
-    // Kick the peer lookup on first sight of a WalletConnect connector.
-    // Fire-and-forget on purpose: this method is called from synchronous
-    // emission paths that must not wait (see the connect marker comment).
-    if (
-      typeof connector.name === "string" &&
-      /walletconnect/i.test(connector.name) &&
-      typeof connector.getProvider === "function" &&
-      !walletConnectPeerLookups.has(connector as object)
-    ) {
-      walletConnectPeerLookups.add(connector as object);
-      connector
-        .getProvider()
-        .then((provider) => {
-          const peer = readWalletConnectPeer(provider as never);
-          if (peer?.name) {
-            walletConnectPeerNames.set(connector as object, peer.name);
-            logger.debug("WagmiEventHandler: WalletConnect peer resolved", {
-              peer: peer.name,
-            });
-          }
-        })
-        .catch(() => {
-          // A connector that cannot produce its provider keeps its own name.
-        });
-    }
+    // Backstop kick; the flow entry points kick earlier so the lookup has
+    // usually resolved by the time an emission reads the name.
+    this.kickWalletConnectPeerLookup(state);
 
     return connector.name;
+  }
+
+  /**
+   * Start resolving the wallet behind a WalletConnect connection.
+   *
+   * Fire-and-forget on purpose: emission paths are synchronous by design
+   * and must never wait (see the connect marker comment). Called at the
+   * START of the status/address flows rather than only at read time - the
+   * lookup is one microtask for an initialised connector, and the emission
+   * sits behind several awaits, so kicking early usually means even the
+   * FIRST connect names the real wallet. When the race is lost the event
+   * honestly says "WalletConnect" and every later event names the peer.
+   */
+  private kickWalletConnectPeerLookup(state: WagmiState): void {
+    const connection = state.current
+      ? state.connections.get(state.current)
+      : undefined;
+    const connector = connection?.connector as
+      | { name?: string; getProvider?: () => Promise<unknown> }
+      | undefined;
+    if (
+      !connection ||
+      !connector ||
+      typeof connector.name !== "string" ||
+      !/walletconnect/i.test(connector.name) ||
+      typeof connector.getProvider !== "function" ||
+      walletConnectPeerLookups.has(connection as object)
+    ) {
+      return;
+    }
+    walletConnectPeerLookups.add(connection as object);
+    connector
+      .getProvider()
+      .then((provider) => {
+        const peer = readWalletConnectPeer(provider as never);
+        if (peer?.name) {
+          walletConnectPeerNames.set(connector as object, peer.name);
+          logger.debug("WagmiEventHandler: WalletConnect peer resolved", {
+            peer: peer.name,
+          });
+        }
+      })
+      .catch(() => {
+        // A connection that cannot produce its provider keeps the
+        // connector's own name.
+      });
   }
 
   /**

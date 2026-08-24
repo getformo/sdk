@@ -32,6 +32,9 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
         : {},
   });
 
+  // One state object per session: wagmi keeps the same connection object
+  // while a session lives, and replaces it on reconnect. The cache is keyed
+  // by that object, so tests must model it faithfully.
   const stateWith = (connector: any): WagmiState => {
     const connections = new Map();
     connections.set("wc-conn", { accounts: [ADDRESS], chainId: 1, connector });
@@ -65,7 +68,22 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
     sandbox.restore();
   });
 
-  const mount = (state: WagmiState) => {
+  const disconnectedState = (): WagmiState => ({
+    status: "disconnected",
+    connections: new Map(),
+    current: undefined,
+    chainId: undefined,
+  });
+
+  /**
+   * Mount over a DISCONNECTED store, as a real WalletConnect page load is:
+   * the session restores asynchronously after the handler exists, and the
+   * connect flows through handleStatusChange - the path that awaits the
+   * bounded peer lookup. Returns a setState to swap in the connected state
+   * before firing the status listener.
+   */
+  const mount = () => {
+    let state: WagmiState = disconnectedState();
     const config: any = {
       subscribe: sandbox.stub().callsFake((selector: any, listener: any) => {
         // Route only the status subscription; the handler's other
@@ -80,49 +98,79 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
         return () => undefined;
       }),
       getState: () => state,
-      state,
+      get state() {
+        return state;
+      },
     };
     const queryClient: QueryClient = {
       getMutationCache: () => ({ subscribe: () => () => undefined }),
       getQueryCache: () => ({ subscribe: () => () => undefined }),
     } as any;
     handler = new WagmiEventHandler(mockFormo, config, queryClient);
+    return (next: WagmiState) => {
+      state = next;
+    };
   };
 
   const flush = () => new Promise((r) => setTimeout(r, 10));
 
-  it("names the peer wallet on events once the lookup resolves", async () => {
+  it("names the peer wallet on events after the lookup resolves", async () => {
+    // Emission paths are synchronous by design, so the FIRST event of the
+    // very first session honestly says "WalletConnect": no lookup can have
+    // resolved yet. Every event after resolution names the real wallet -
+    // here, the next session's connect.
     const connector = makeConnector("Ledger Live");
-    mount(stateWith(connector));
-
+    const setState = mount();
+    setState(stateWith(connector));
     await statusListener?.("connected", "disconnected");
     await flush();
-
-    expect(mockFormo.connect.called).to.equal(true);
-    // The first connect fired synchronously, before the async peer lookup
-    // could resolve: "WalletConnect" is the honest state at that instant.
     expect(mockFormo.connect.firstCall.args[1]?.providerName).to.equal("WalletConnect");
 
-    // A later session for the same connector names the real wallet.
     handler?.cleanup?.();
     __resetSeededWallet();
-    mount(stateWith(connector));
+    const setState2 = mount();
+    setState2(stateWith(connector));
     await statusListener?.("connected", "disconnected");
     await flush();
 
-    const last = mockFormo.connect.lastCall;
-    expect(last.args[1]?.providerName).to.equal("Ledger Live");
+    expect(mockFormo.connect.lastCall.args[1]?.providerName).to.equal("Ledger Live");
+  });
+
+  it("re-resolves each new session so a different wallet cannot stay mislabeled", async () => {
+    // Same connector, new session, DIFFERENT wallet: the per-connection
+    // kick re-resolves and overwrites, so at most the one event between the
+    // new session's start and its resolution can carry the old name.
+    const connector = makeConnector("Ledger Live");
+    const setState = mount();
+    setState(stateWith(connector));
+    await statusListener?.("connected", "disconnected");
+    await flush();
+
+    handler?.cleanup?.();
+    __resetSeededWallet();
+    (connector as any).getProvider = async () => ({
+      session: { peer: { metadata: { name: "MetaMask Mobile" } } },
+    });
+    const setState2 = mount();
+    setState2(stateWith(connector));
+    await statusListener?.("connected", "disconnected");
+    await flush();
+
+    handler?.cleanup?.();
+    __resetSeededWallet();
+    const setState3 = mount();
+    setState3(stateWith(connector));
+    await statusListener?.("connected", "disconnected");
+    await flush();
+
+    expect(mockFormo.connect.lastCall.args[1]?.providerName).to.equal("MetaMask Mobile");
   });
 
   it("keeps the connector's own name when the session has no peer", async () => {
     const connector = makeConnector(undefined);
-    mount(stateWith(connector));
+    const setState = mount();
+    setState(stateWith(connector));
 
-    await statusListener?.("connected", "disconnected");
-    await flush();
-    handler?.cleanup?.();
-    __resetSeededWallet();
-    mount(stateWith(connector));
     await statusListener?.("connected", "disconnected");
     await flush();
 
@@ -135,10 +183,11 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
       ...makeConnector("Ledger Live"),
       getProvider: () => new Promise(() => undefined),
     };
-    mount(stateWith(connector));
+    const setState = mount();
+    setState(stateWith(connector));
 
     await statusListener?.("connected", "disconnected");
-    await flush();
+    await new Promise((r) => setTimeout(r, 300));
 
     expect(mockFormo.connect.called).to.equal(true);
     expect(mockFormo.connect.firstCall.args[1]?.providerName).to.equal("WalletConnect");

@@ -203,6 +203,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.transaction = this.transaction.bind(this);
     this.detect = this.detect.bind(this);
     this.track = this.track.bind(this);
+    this.registerProvider = this.registerProvider.bind(this);
     this.page = this.page.bind(this);
     this.reset = this.reset.bind(this);
     this.cleanup = this.cleanup.bind(this);
@@ -1685,7 +1686,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         : detected.rdns);
     const name = info?.name ?? peer?.name ?? detected.name;
 
-    this.evmEvents.adoptExternalProvider({
+    return this.evmEvents.adoptExternalProvider({
       info: {
         name,
         rdns,
@@ -1694,7 +1695,6 @@ export class FormoAnalytics implements IFormoAnalytics {
       },
       provider: provider as EIP6963ProviderDetail["provider"],
     });
-    return true;
   }
 
   // Debug/monitoring helpers

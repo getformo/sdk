@@ -70,6 +70,15 @@ export interface EvmEventTrackerDeps {
  */
 export class EvmEventTracker {
   /**
+   * Providers adopted through `registerProvider` rather than discovered.
+   * Announcement-driven cleanup must not touch them: they are never in an
+   * announcement list, so "missing from the announcement" is their normal
+   * state, not evidence of removal. WeakSet, so a dropped provider is
+   * collectable.
+   */
+  private externallyRegistered = new WeakSet<EIP1193Provider>();
+
+  /**
    * The connect this SDK has already reported for a provider.
    *
    * Connection REPORTING, which is why it lives with the handlers rather than
@@ -243,11 +252,25 @@ export class EvmEventTracker {
    * WalletConnect's serialised relay socket is the very case that rule
    * exists for.
    */
-  adoptExternalProvider(detail: EIP6963ProviderDetail): void {
+  adoptExternalProvider(detail: EIP6963ProviderDetail): boolean {
     const provider = detail.provider as EIP1193Provider;
+    // Exempt from announcement-driven cleanup BEFORE tracking: a registered
+    // provider is never in an EIP-6963 announcement, so without this the
+    // next wallet announcement would untrack it and its events would stop.
+    this.externallyRegistered.add(provider);
     this.registry.add(detail);
-    void this.detectWallets([detail]);
     this.trackProviders([detail]);
+
+    // Adoption and success both hinge on the wrapper actually installing:
+    // reporting success for a provider whose requests stay invisible would
+    // recreate the silent loss this API exists to close.
+    if (!this.registry.isTracked(provider)) {
+      this.externallyRegistered.delete(provider);
+      logger.warn("adoptExternalProvider: provider could not be tracked");
+      return false;
+    }
+
+    void this.detectWallets([detail]);
 
     const accounts = (provider as unknown as { accounts?: unknown }).accounts;
     if (
@@ -257,6 +280,7 @@ export class EvmEventTracker {
     ) {
       void this.onAccountsChanged(provider, accounts as string[]);
     }
+    return true;
   }
 
   private registerAccountsChangedListener(provider: EIP1193Provider): void {
@@ -1146,6 +1170,11 @@ export class EvmEventTracker {
     );
 
     for (const provider of this.registry.trackedProviders()) {
+      // A registered external provider is never announced over EIP-6963;
+      // its absence from an announcement list says nothing about it.
+      if (this.externallyRegistered.has(provider)) {
+        continue;
+      }
       if (!currentProviderInstances.has(provider)) {
         logger.info(
           `Cleaning up unavailable provider: ${provider.constructor.name}`
