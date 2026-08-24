@@ -90,6 +90,20 @@ export interface EvmRequestTrackerDeps {
  * probed - an SDK-issued lookup on a serialising transport can wedge the
  * user's wallet, which is never an acceptable price for a label.
  */
+/**
+ * Providers with a dispatch already on the synchronous call stack.
+ *
+ * A page can end up with LAYERED Formo wrappers: another library wraps our
+ * wrapper, the SDK rebuilds, and the new instance wraps the outer function
+ * because the marker is not on it. Both layers route to the same newest
+ * live tracker, which would instrument one user request twice. Every
+ * dispatch issues its underlying request synchronously (deliberately -
+ * the wallet call always goes out first), so an inner shim reached during
+ * that window belongs to the SAME user request and passes straight
+ * through.
+ */
+const dispatchInFlight = new WeakSet<object>();
+
 export class EvmRequestTracker {
   /**
    * Timers for receipt and batch-status polling.
@@ -195,14 +209,28 @@ export class EvmRequestTracker {
       const owners = (provider as unknown as Record<symbol, unknown>)[
         WRAPPED_REQUEST_OWNER_SYMBOL
       ] as EvmRequestTracker[] | undefined;
+      if (dispatchInFlight.has(provider)) {
+        // An outer Formo wrapper is already instrumenting this very
+        // request; this layer only forwards.
+        return request({ method, params }) as Promise<T | null | undefined>;
+      }
       const liveOwner = Array.isArray(owners)
         ? [...owners].reverse().find((o) => !o.disposed)
         : undefined;
-      return (liveOwner ?? this).dispatchWrappedRequest<T>(
-        { method, params },
-        provider,
-        request
-      );
+      dispatchInFlight.add(provider);
+      try {
+        return (liveOwner ?? this).dispatchWrappedRequest<T>(
+          { method, params },
+          provider,
+          request
+        );
+      } finally {
+        // Cleared as soon as the dispatch call RETURNS its promise: the
+        // underlying request has been issued synchronously by then, so
+        // the window covers exactly the nested layers of this one call
+        // and never a concurrent request.
+        dispatchInFlight.delete(provider);
+      }
     };
     try {
       // MERGE with any existing list rather than overwriting: a wallet that

@@ -437,6 +437,36 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("instruments exactly once through layered wrappers after a rebuild", async () => {
+    // Another library wraps OUR wrapper, then the SDK rebuilds and wraps
+    // the outer function (the marker is not on it). Both layers route to
+    // the same live tracker; without the in-flight guard one user request
+    // produced doubled events.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const a = await setup();
+    a.formo.registerProvider(provider);
+    await settle();
+
+    // A third-party wrapper chains through ours.
+    const formoWrapped = provider.request;
+    provider.request = (args: unknown) => (formoWrapped as any)(args);
+
+    a.formo.cleanup?.();
+    const b = await setup();
+    expect(b.formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    b.sent.length = 0;
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      b.sent.filter((e) => e.type === "signature").length,
+      "one request, one requested + one confirmed"
+    ).to.equal(2);
+    b.formo.cleanup?.();
+  });
+
   it("refuses an object that is not an EIP-1193 provider", async () => {
     const { formo } = await setup();
     expect(formo.registerProvider({} as any)).to.equal(false);

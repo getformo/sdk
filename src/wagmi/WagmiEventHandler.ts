@@ -2794,8 +2794,11 @@ export class WagmiEventHandler {
           });
         } else {
           // Resolved WITHOUT peer metadata: the previous wallet's name is
-          // disproven for this session, not merely unproven. Drop it.
+          // disproven for this session, not merely unproven. Drop it, and
+          // let a later event retry the lookup - the session may simply
+          // not have populated its peer yet.
           walletConnectPeerNames.delete(connector as object);
+          walletConnectPeerLookups.delete(connection as object);
         }
       })
       .catch(() => {
@@ -2808,6 +2811,10 @@ export class WagmiEventHandler {
         if (walletConnectPeerLatest.get(connector as object) === connection) {
           walletConnectPeerNames.delete(connector as object);
         }
+        // A failed lookup must not permanently disqualify the connection:
+        // the connector may just have been initialising. A later event
+        // retries.
+        walletConnectPeerLookups.delete(connection as object);
       });
   }
 

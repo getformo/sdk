@@ -1641,7 +1641,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Metadata resolution order: the caller's `info` overrides win; then a
    * WalletConnect session's peer metadata, which names the REAL wallet on
    * the far side of the transport (for example "Ledger Live"); then flag
-   * sniffing; then a generic fallback.
+   * sniffing; then a generic fallback. One deliberate exception: a caller
+   * name of exactly "WalletConnect" is the generic transport name, so the
+   * live peer still replaces it on events - name the provider anything
+   * else to pin it verbatim.
    *
    * No-op outside the EIP-1193 path: in wagmi mode the connector system
    * already tracks these sessions, and wrapping the same provider twice
