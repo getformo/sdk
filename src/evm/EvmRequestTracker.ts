@@ -177,16 +177,14 @@ export class EvmRequestTracker {
       const owners = (provider as unknown as Record<symbol, unknown>)[
         WRAPPED_REQUEST_OWNER_SYMBOL
       ] as EvmRequestTracker[] | undefined;
-      let owner: EvmRequestTracker = this;
-      if (Array.isArray(owners)) {
-        for (let i = owners.length - 1; i >= 0; i--) {
-          if (!owners[i].disposed) {
-            owner = owners[i];
-            break;
-          }
-        }
-      }
-      return owner.dispatchWrappedRequest<T>({ method, params }, provider, request);
+      const liveOwner = Array.isArray(owners)
+        ? [...owners].reverse().find((o) => !o.disposed)
+        : undefined;
+      return (liveOwner ?? this).dispatchWrappedRequest<T>(
+        { method, params },
+        provider,
+        request
+      );
     };
     try {
       (provider as unknown as Record<symbol, unknown>)[
