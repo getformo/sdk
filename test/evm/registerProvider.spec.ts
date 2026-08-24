@@ -339,7 +339,8 @@ describe("registerProvider", () => {
     await settle();
 
     provider.request = (args: unknown) => (native as any)(args);
-    (a.formo as any).evmRequests.registerRequestListeners(provider);
+    // Re-registration through the PUBLIC path must re-verify the wrapper.
+    expect(a.formo.registerProvider(provider)).to.equal(true);
     await settle();
 
     a.formo.cleanup?.();

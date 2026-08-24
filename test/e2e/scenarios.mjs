@@ -9,6 +9,20 @@
 const A = "0x5137", B = "0x88C0";
 
 export const SCENARIOS = [
+  // ── the KyberSwap shape, WalletConnect edition (P-2403 / #364) ─────────
+  // A session exists BEFORE the SDK does, on a provider the page
+  // constructed: never announced over EIP-6963, never at window.ethereum.
+  { name: "walletconnect: a constructed provider is invisible until registered (the pre-364 gap)", mode: "walletconnect",
+    expect: { unregistered: [] } },
+  { name: "walletconnect: registerProvider adopts a session that predates the SDK, named by its signer", mode: "walletconnect",
+    expect: { registered: ["detect@-/-~Ledger Live", `connect@1/${A}~Ledger Live`] } },
+  { name: "walletconnect: signatures and transactions flow through the registered provider", mode: "walletconnect",
+    expect: {
+      signature: [`signature:requested@1/${A}`, `signature:confirmed@1/${A}`],
+      transaction: [`transaction:started@1/${A}`, `transaction:broadcasted@1/${A}`, `transaction:confirmed@1/${A}`] } },
+  { name: "walletconnect: a session swap renames events to the NEW signer", mode: "walletconnect",
+    expect: { sessionSwap: [`disconnect@1/${A}~WalletConnect`, `connect@1/${B}~MetaMask Mobile`] } },
+
   // ── autocaptured wallet events, happy path ─────────────────────────────
   { name: "wagmi: full session", mode: "wagmi", expect: {
       connect: [`connect@1/${A}`], chainSwitch: [`chain@137/${A}`],

@@ -274,6 +274,19 @@ export class EvmEventTracker {
       return false;
     }
 
+    // A provider that was ALREADY tracked skips the pipeline above, and
+    // "tracked" means lifecycle listeners - it says nothing about the
+    // request wrapper, which a wallet can have replaced since. Re-verify
+    // it on every registration: the call reinstalls a displaced wrapper,
+    // rebinds ownership of an intact one, and refuses when it cannot -
+    // and success here must mean capture actually works.
+    if (!this.deps.registerRequestListeners(provider)) {
+      this.externallyRegistered.delete(provider);
+      this.untrackProvider(provider);
+      logger.warn("adoptExternalProvider: request wrapper could not be ensured");
+      return false;
+    }
+
     // Detect with the LIVE name (peer-resolved when a session exists);
     // the stored metadata stays generic so later sessions rename freely.
     void this.detectWallets([

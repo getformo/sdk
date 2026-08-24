@@ -54,7 +54,7 @@ globalThis.fetch = async (url, init) => {
     if (process.env.E2E_RAW) console.error("RAW " + JSON.stringify(body).slice(0, 900));
     for (const e of Array.isArray(body) ? body : [body]) {
       const pr = e.properties ?? {};
-      sent.push({ type: e.type ?? e.event ?? e.action, event: e.type === "track" ? e.event : undefined, userId: e.user_id ?? e.userId, address: e.address, chainId: pr.chain_id ?? e.chain_id, status: pr.status, path: e.type === "page" ? pr.path ?? e.context?.page?.path : undefined });
+      sent.push({ type: e.type ?? e.event ?? e.action, event: e.type === "track" ? e.event : undefined, userId: e.user_id ?? e.userId, address: e.address, chainId: pr.chain_id ?? e.chain_id, status: pr.status, providerName: pr.provider_name ?? pr.providerName, path: e.type === "page" ? pr.path ?? e.context?.page?.path : undefined });
     }
   } catch { /* non-JSON */ }
   return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
@@ -68,7 +68,9 @@ const ADDR_B = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
 
 const log = [];
 const rec = (label) => {
-  log.push({ step: label, events: sent.splice(0).map(e => `${e.type}${e.status ? ":" + e.status : ""}${e.event ? "(" + e.event + ")" : ""}@${e.chainId ?? "-"}${process.env.E2E_ADDR ? "/" + (e.address ?? "-").slice(0, 6) : ""}${e.userId ? "#" + e.userId : ""}`) });
+  // The provider-name token appears only in walletconnect mode, where WHO
+  // the event is attributed to is the point; other modes' rows stay stable.
+  log.push({ step: label, events: sent.splice(0).map(e => `${e.type}${e.status ? ":" + e.status : ""}${e.event ? "(" + e.event + ")" : ""}@${e.chainId ?? "-"}${process.env.E2E_ADDR ? "/" + (e.address ?? "-").slice(0, 6) : ""}${e.userId ? "#" + e.userId : ""}${MODE === "walletconnect" && e.providerName ? "~" + e.providerName : ""}`) });
 };
 const settle = (ms = 60) => new Promise(r => setTimeout(r, ms));
 
@@ -372,7 +374,78 @@ async function runApi(opts) {
   return { log, rpcCalls: provider.rpcCalls };
 }
 
+/**
+ * The KyberSwap shape, WalletConnect edition. A session exists BEFORE the
+ * SDK does, on a provider the page constructed - never announced over
+ * EIP-6963, never at window.ethereum. Pre-364 the whole session was
+ * invisible. registerProvider is the fix under test: adoption of the
+ * pre-existing session, capture from the request wrapper, live peer
+ * naming, and renaming across a session swap.
+ */
+function makeWalletConnectProvider({ accounts = [], peer } = {}) {
+  const handlers = {};
+  const p = {
+    accounts,                        // plain array, as the real EthereumProvider
+    chainId: 1,                      // plain NUMBER, as the real EthereumProvider
+    session: peer ? { peer: { metadata: { name: peer, url: "https://example.com" } } } : undefined,
+    on: (ev, fn) => { (handlers[ev] ??= []).push(fn); },
+    removeListener: (ev, fn) => { handlers[ev] = (handlers[ev] ?? []).filter(f => f !== fn); },
+    request: async ({ method }) => {
+      p.rpcCalls.push(method);
+      if (method === "eth_chainId") return "0x1";
+      if (method === "eth_accounts") return p.accounts;
+      if (method === "personal_sign" || method === "eth_signTypedData_v4") return "0xsigned";
+      if (method === "eth_sendTransaction") return "0x" + "cd".repeat(32);
+      if (method === "eth_getTransactionReceipt") return { status: "0x1", blockNumber: "0x1" };
+      return null;
+    },
+    rpcCalls: [],
+    emit: (ev, ...a) => (handlers[ev] ?? []).forEach(f => f(...a)),
+  };
+  return p;
+}
+
+async function runWalletConnect(opts) {
+  // The session exists FIRST: wallet approved, accounts live, peer known.
+  const wc = makeWalletConnectProvider({ accounts: [ADDR_A], peer: "Ledger Live" });
+
+  const formo = await FormoAnalytics.init("wk_e2e", { tracking: true, flushAt: 1, flushInterval: 10, ...opts.sdk });
+  await settle(); sent.length = 0;
+
+  // Pre-registration: the pre-364 reality. Nothing sees this provider.
+  wc.emit("accountsChanged", [ADDR_A]);
+  await wc.request({ method: "personal_sign", params: ["0x6869", ADDR_A] });
+  await settle(); rec("unregistered");
+
+  // The fix under test: hand the SDK the provider. The session predates
+  // the SDK, so adoption - not a future event - must produce the connect.
+  const accepted = formo.registerProvider(wc);
+  await settle(); rec("registered");
+  if (!accepted) throw new Error("registerProvider refused a valid provider");
+
+  await wc.request({ method: "personal_sign", params: ["0x6869", ADDR_A] });
+  await settle(); rec("signature");
+
+  await wc.request({ method: "eth_sendTransaction", params: [{ from: ADDR_A, to: ADDR_B, value: "0x0", data: "0x" }] });
+  await settle(120); rec("transaction");
+
+  // The wallet on the far side changes: disconnect, then a new session
+  // with a different peer. Names must follow the session, not the past.
+  wc.accounts = [];
+  wc.session = undefined;
+  wc.emit("accountsChanged", []);
+  await settle();
+  wc.accounts = [ADDR_B];
+  wc.session = { peer: { metadata: { name: "MetaMask Mobile" } } };
+  wc.emit("accountsChanged", [ADDR_B]);
+  await settle(); rec("sessionSwap");
+
+  formo.cleanup?.();
+  return { log, rpcCalls: wc.rpcCalls };
+}
+
 const out = MODE === "api" ? await runApi(opts)
+  : MODE === "walletconnect" ? await runWalletConnect(opts)
   : MODE === "twowallets" ? await runTwoWallets(opts)
   : MODE === "unknownchain" ? await runUnknownChain(opts)
   : MODE === "wagmi" ? await runWagmi(opts)
