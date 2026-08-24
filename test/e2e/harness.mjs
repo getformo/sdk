@@ -23,7 +23,6 @@ function reqFrom(pkg, fallback) {
   try { return createRequire(req.resolve(pkg + "/package.json")); }
   catch { try { return createRequire(req.resolve(pkg)); } catch { return fallback; } }
 }
-const coreReq = reqFrom("wagmi", req);
 const qReq = reqFrom("@tanstack/react-query", req);
 const sdkReq = createRequire(SDK_DIR + "/package.json");
 

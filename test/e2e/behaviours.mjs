@@ -6,6 +6,7 @@
 //
 // Usage: node test/e2e/behaviours.mjs [filter]   (after npm run build)
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCENARIOS } from "./scenarios.mjs";
@@ -25,12 +26,19 @@ const exampleFor = () => root;
 let hasWagmi = true;
 try { await import("wagmi"); } catch { hasWagmi = false; }
 
+// A fresh checkout without a build fails every scenario with a masked
+// "harness crashed"; say what is actually missing instead.
+if (!existsSync(join(sdkDir, "dist/cjs/src/index.js"))) {
+  console.error("dist/ is missing: run `pnpm build` before `pnpm test:e2e`.");
+  process.exit(2);
+}
+
 let failed = 0, ran = 0, skipped = 0;
 for (const sc of SCENARIOS) {
   if (filter && !sc.name.includes(filter)) continue;
   if (sc.mode === "wagmi" && !hasWagmi) { skipped++; continue; }
   ran++;
-  const r = spawnSync("node", [join(here, "harness.mjs"), sdkDir, exampleFor(sc.mode), sc.mode], {
+  const r = spawnSync("node", [join(here, "harness.mjs"), sdkDir, exampleFor(), sc.mode], {
     encoding: "utf8", env: { ...process.env, E2E_ADDR: "1", E2E_OPTS: JSON.stringify(sc.opts ?? {}) },
   });
   let out;
@@ -64,5 +72,11 @@ for (const sc of SCENARIOS) {
   else console.log(`  ok   ${sc.name}`);
 }
 if (skipped) console.log(`\n  ${skipped} wagmi scenario(s) skipped: wagmi is a peer dependency and is not installed here. They run in the examples repo.`);
+if (ran === 0) {
+  // "all 0 passed" exiting 0 is how a typoed filter silently disables the
+  // suite. Nothing ran means nothing was verified.
+  console.error("no scenarios ran" + (filter ? ` (filter: ${filter})` : ""));
+  process.exit(2);
+}
 console.log(failed ? `\n${failed} of ${ran} scenario(s) failed` : `\nall ${ran} scenarios passed`);
 process.exit(failed ? 1 : 0);
