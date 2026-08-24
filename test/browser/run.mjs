@@ -76,7 +76,14 @@ const step = async (name, js, waitMs = 400) => {
   const out = await evaluate(`(async () => { const f = await window.__ready; const m = window.__sent.length;
     ${js || "void 0"};
     await new Promise(r => setTimeout(r, ${waitMs}));
-    return window.__sent.slice(m).map(e => e.type + (e.properties?.status ? ":" + e.properties.status : "") + "@" + (e.properties?.chain_id ?? "-") + "/" + (e.address ? e.address.slice(0,6) : "-")); })()`);
+    return window.__sent.slice(m).map(e => e.type + (e.properties?.status ? ":" + e.properties.status : "") + "@" + (e.properties?.chain_id ?? "-") + "/" + (e.address ? e.address.slice(0,6) : "-"))
+      // The SDK debounces page hits 300ms to coalesce SPA navigations, so
+      // WHICH step's window the ambient page event lands in depends on
+      // runner speed - the first CI run proved it (page fired during init
+      // there, after connect locally). Wallet events are what this suite
+      // asserts; page behaviour has its own deterministic coverage in the
+      // api-mode e2e behaviours.
+      .filter(x => !x.startsWith("page@")); })()`);
   return [name, out];
 };
 const results = [];
@@ -100,7 +107,7 @@ results.push(["hasBuffer", await evaluate("typeof Buffer !== 'undefined'")]);
 // duplicated event, which is the shape of every bug in this sequence.
 const expect = {
   "discovered":        ["io.metamask", "io.rabby"],
-  "connect A":         ["connect@31337/0x5137", "page@-/0x5137"],
+  "connect A":         ["connect@31337/0x5137"],
   "sign (A)":          ["signature:requested@31337/0x5137", "signature:confirmed@31337/0x5137"],
   "reject sign (A)":   ["signature:requested@31337/0x5137", "signature:rejected@31337/0x5137"],
   "switch chain":      ["chain@1/0x5137", "chain@31337/0x5137"],
