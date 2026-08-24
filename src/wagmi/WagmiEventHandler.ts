@@ -10,6 +10,13 @@ import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import {
+  readBatchId,
+  readBatchStatusCode,
+  batchCallOutcome,
+  batchReceiptForCall,
+  BatchStatusResult,
+} from "../evm/batch";
+import {
   WagmiConfig,
   WagmiState,
   QueryClient,
@@ -171,6 +178,26 @@ const ownerKey = (writeKey: string, config: WagmiConfig): string => {
   return `${writeKey}:${id}`;
 };
 
+/**
+ * Was this mutation error the user dismissing the wallet prompt?
+ *
+ * Matches the EIP-1193 path's rule (code 4001), but a wagmi mutation error
+ * arrives wrapped: viem nests the RPC error under `cause`, sometimes twice.
+ * Walk the chain rather than trusting the top level, and accept viem's
+ * `UserRejectedRequestError` by name for wallets that map the rejection to a
+ * typed error without preserving the numeric code.
+ */
+function isUserRejection(error: unknown): boolean {
+  let cursor = error as { code?: unknown; name?: unknown; cause?: unknown } | undefined;
+  for (let depth = 0; cursor && depth < 5; depth++) {
+    if (cursor.code === 4001 || cursor.name === "UserRejectedRequestError") {
+      return true;
+    }
+    cursor = cursor.cause as typeof cursor;
+  }
+  return false;
+}
+
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
   address: string;
@@ -207,6 +234,26 @@ const pendingTransactionsByDestination = new Map<
 >();
 
 /**
+ * A broadcast EIP-5792 batch we are waiting on `callsStatus` for.
+ *
+ * Keyed by the wallet's batch id, shared per destination for the same reason
+ * as pending transactions: the handler that saw the `sendCalls` mutation may
+ * be replaced before `useWaitForCallsStatus` settles, and the successor must
+ * still be able to attribute the outcome.
+ */
+type PendingBatch = {
+  address: string;
+  chainId?: number;
+  calls: Array<{
+    to?: string;
+    value?: string;
+    data?: string;
+  }>;
+};
+
+const pendingBatchesByDestination = new Map<string, Map<string, PendingBatch>>();
+
+/**
  * Pending records outlive a rebuild by the same grace period as the markers.
  * The ordinary rebuild is cleanup THEN remount, so dropping them the instant
  * the last handler goes would lose the receipt for anything broadcast just
@@ -222,6 +269,7 @@ function schedulePendingTransactionExpiry(key: string): void {
   const timer = setTimeout(() => {
     pendingTransactionExpiry.delete(key);
     pendingTransactionsByDestination.delete(key);
+    pendingBatchesByDestination.delete(key);
   }, MARKER_GRACE_MS);
   (timer as unknown as { unref?: () => void }).unref?.();
   pendingTransactionExpiry.set(key, timer);
@@ -291,6 +339,7 @@ export function __resetSeededWallet(): void {
   pendingTransactionExpiry.forEach((t) => clearTimeout(t));
   pendingTransactionExpiry.clear();
   pendingTransactionsByDestination.clear();
+  pendingBatchesByDestination.clear();
   announcedConnections.clear();
   liveHandlers.clear();
   markerExpiry.forEach((timer) => clearTimeout(timer));
@@ -470,6 +519,17 @@ export class WagmiEventHandler {
     if (!map) {
       map = new Map();
       pendingTransactionsByDestination.set(key, map);
+    }
+    return map;
+  }
+
+  /** Broadcast batches awaiting `callsStatus`, shared like the map above. */
+  private get pendingBatches(): Map<string, PendingBatch> {
+    const key = this.ownerKey ?? "";
+    let map = pendingBatchesByDestination.get(key);
+    if (!map) {
+      map = new Map();
+      pendingBatchesByDestination.set(key, map);
     }
     return map;
   }
@@ -1757,17 +1817,26 @@ export class WagmiEventHandler {
 
     const queryType = queryKey[0] as string;
 
-    // Only handle waitForTransactionReceipt queries
-    if (queryType !== "waitForTransactionReceipt") {
+    // Only the two query families that settle something we broadcast:
+    // waitForTransactionReceipt for single transactions, callsStatus for
+    // EIP-5792 batches (both useCallsStatus and useWaitForCallsStatus share
+    // the 'callsStatus' key, in wagmi 2 and 3 alike).
+    if (queryType !== "waitForTransactionReceipt" && queryType !== "callsStatus") {
       return;
     }
 
     const state = query.state;
 
-    // Extract receipt status early to include in deduplication key
-    // This ensures CONFIRMED vs REVERTED outcomes are processed separately
-    const receipt = state.data as { status?: string } | undefined;
-    const receiptStatus = receipt?.status;
+    // Extract the settlement marker early to include in the deduplication
+    // key. For receipts that is the receipt status (CONFIRMED vs REVERTED
+    // are distinct outcomes); for a batch it is the numeric EIP-5792 code.
+    const receipt = state.data as
+      | { status?: string | number; statusCode?: number }
+      | undefined;
+    const receiptStatus =
+      queryType === "callsStatus"
+        ? readBatchStatusCode(receipt)
+        : receipt?.status;
 
     // Create a unique key for this query state to prevent duplicate processing
     // Include receipt status to distinguish between CONFIRMED and REVERTED outcomes
@@ -1793,11 +1862,96 @@ export class WagmiEventHandler {
       status: state.status,
     });
 
-    // Handle transaction receipt queries
-    this.handleTransactionReceiptQuery(query);
+    if (queryType === "callsStatus") {
+      this.handleCallsStatusQuery(query);
+    } else {
+      this.handleTransactionReceiptQuery(query);
+    }
 
     // Clean up old processed queries to prevent memory leaks
     cleanupOldEntries(this.processedQueries);
+  }
+
+  /**
+   * Settle an EIP-5792 batch from a `callsStatus` query.
+   *
+   * Only batches whose broadcast this SDK observed are settled: the batch id
+   * must be in `pendingBatches`, for the same reason receipt queries are
+   * gated on an observed hash - queries are visible to any code sharing the
+   * QueryClient, and emitting for an id we never saw broadcast would let a
+   * forged query invent transactions.
+   *
+   * Outcome semantics are shared with the EIP-1193 path (`src/evm/batch.ts`):
+   * per-call receipts outrank the batch verdict, an atomic batch's single
+   * receipt reaches every call, and a 600 leaves receipt-less calls
+   * unsettled rather than guessed.
+   */
+  private handleCallsStatusQuery(query: any): void {
+    if (!this.formo.isAutocaptureEnabled("transaction")) {
+      return;
+    }
+
+    const queryKey = query.queryKey;
+    // Query key format: ['callsStatus', { id, ... }]
+    const params = queryKey[1] as { id?: string } | undefined;
+    const batchId = params?.id;
+    if (!batchId) {
+      return;
+    }
+
+    const pending = this.pendingBatches.get(batchId);
+    if (!pending) {
+      logger.debug("WagmiEventHandler: unobserved batch", { batchId });
+      return;
+    }
+
+    const state = query.state;
+    if (state.status !== "success" || !state.data) {
+      return;
+    }
+
+    try {
+      const res = state.data as BatchStatusResult;
+      const code = readBatchStatusCode(res);
+      // Below 200 the batch is still pending; the query will update again.
+      if (code === undefined || code < 200) {
+        return;
+      }
+
+      logger.debug("WagmiEventHandler: batch settled", { batchId, code });
+
+      pending.calls.forEach((call, index) => {
+        const receipt = batchReceiptForCall(res, index, pending.calls.length);
+        const outcome = batchCallOutcome(code, receipt);
+        // 600 means SOME calls reverted, so a call with no receipt of its
+        // own has not been decided. Reporting it either way would invent a
+        // result; leaving it unsettled is the honest answer.
+        if (outcome === undefined) return;
+        this.formo.transaction(
+          {
+            status: outcome,
+            chainId: pending.chainId || 0,
+            address: pending.address,
+            ...(call.data && { data: call.data }),
+            ...(call.to && { to: call.to }),
+            ...(call.value && { value: call.value }),
+            ...(receipt?.transactionHash
+              ? { transactionHash: receipt.transactionHash }
+              : {}),
+          },
+          {
+            batch_size: pending.calls.length,
+            batch_index: index,
+            batch_id: batchId,
+          }
+        );
+      });
+
+      // Settled; a later refetch of the same query must not re-emit.
+      this.pendingBatches.delete(batchId);
+    } catch (error) {
+      logger.error("WagmiEventHandler: callsStatus error:", error);
+    }
   }
 
   /**
@@ -1973,6 +2127,14 @@ export class WagmiEventHandler {
     // Handle transaction mutations
     if (mutationType === "sendTransaction" || mutationType === "writeContract") {
       this.handleTransactionMutation(mutationType as WagmiMutationKey, mutation);
+    }
+
+    // Handle EIP-5792 batch mutations (useSendCalls). Absent this branch,
+    // wagmi-mode apps captured nothing for a batch: the EIP-1193 request
+    // wrapper that handles `wallet_sendCalls` is never installed in wagmi
+    // mode, so the mutation was the only place the batch was visible at all.
+    if (mutationType === "sendCalls") {
+      this.handleSendCallsMutation(mutation);
     }
 
     // Clean up old processed mutations to prevent memory leaks
@@ -2222,6 +2384,120 @@ export class WagmiEventHandler {
         "WagmiEventHandler: Error handling transaction mutation:",
         error
       );
+    }
+  }
+
+  /**
+   * One `transaction` event per call in an EIP-5792 batch, wagmi path.
+   *
+   * Mirrors `EvmRequestTracker.trackBatchedCalls` exactly: the CALL is the
+   * unit of attribution, so each call gets its own STARTED at pending and
+   * BROADCASTED (with `batch_id`) when the wallet returns an id. The batch's
+   * on-chain outcome arrives through the `callsStatus` query, handled in
+   * `handleCallsStatusQuery`.
+   *
+   * Rejection matches the 1193 path's rule: only a user rejection (4001
+   * anywhere in the error chain) marks the calls rejected - one dismissal
+   * dismisses the whole prompt, so every call in it is rejected, and
+   * reporting only the first would undercount. Any other error (a wallet
+   * without EIP-5792 support, a transport failure) emits nothing further:
+   * inventing a rejection the user never made would be worse.
+   */
+  private handleSendCallsMutation(mutation: any): void {
+    if (!this.formo.isAutocaptureEnabled("transaction")) {
+      return;
+    }
+
+    const state = mutation.state;
+    const variables = state.variables || {};
+    const rawCalls = Array.isArray(variables.calls) ? variables.calls : [];
+    if (rawCalls.length === 0) {
+      return;
+    }
+
+    // Same resolution order as single transactions: an explicit per-call
+    // value beats the tracked connection.
+    const explicitChainId = normalizeChainId(variables.chainId);
+    const chainId = explicitChainId ?? this.trackingState.lastChainId;
+    const accountAddress = resolveAccountAddress(variables.account);
+    const userAddress = accountAddress || this.trackingState.lastAddress;
+
+    if (!userAddress) {
+      logger.warn("WagmiEventHandler: sendCalls without address");
+      return;
+    }
+
+    try {
+      const calls = rawCalls.map(
+        (call: { to?: string; value?: unknown; data?: string }) => ({
+          to: call?.to,
+          value: call?.value !== undefined ? String(call.value) : undefined,
+          data: call?.data,
+        })
+      );
+
+      const emitAll = (
+        status: TransactionStatus,
+        extra?: Record<string, unknown>
+      ) => {
+        calls.forEach(
+          (
+            call: { to?: string; value?: string; data?: string },
+            index: number
+          ) => {
+            this.formo.transaction(
+              {
+                status,
+                chainId: chainId || 0,
+                address: userAddress,
+                ...(call.data && { data: call.data }),
+                ...(call.to && { to: call.to }),
+                ...(call.value && { value: call.value }),
+              },
+              {
+                batch_size: calls.length,
+                batch_index: index,
+                ...extra,
+              }
+            );
+          }
+        );
+      };
+
+      if (state.status === "pending") {
+        // STARTED carries no batch id, exactly as a single transaction has
+        // no hash yet: the wallet has not issued one.
+        logger.debug("WagmiEventHandler: sendCalls start", { calls: calls.length });
+        emitAll(TransactionStatus.STARTED);
+      } else if (state.status === "success") {
+        const batchId = readBatchId(state.data);
+        logger.debug("WagmiEventHandler: sendCalls broadcast", { batchId });
+        emitAll(
+          TransactionStatus.BROADCASTED,
+          batchId ? { batch_id: batchId } : undefined
+        );
+        if (batchId) {
+          this.pendingBatches.set(batchId, {
+            address: userAddress,
+            ...(chainId !== undefined && { chainId }),
+            calls,
+          });
+          // Same bound as pendingTransactions, same reason.
+          if (this.pendingBatches.size > 100) {
+            const keys = Array.from(this.pendingBatches.keys());
+            for (let i = 0; i < 50 && i < keys.length; i++) {
+              this.pendingBatches.delete(keys[i]);
+            }
+          }
+        }
+      } else if (state.status === "error") {
+        if (isUserRejection(state.error)) {
+          logger.debug("WagmiEventHandler: sendCalls rejected");
+          emitAll(TransactionStatus.REJECTED);
+        }
+      }
+    } catch (error) {
+      logger.error("WagmiEventHandler: sendCalls error:", error);
     }
   }
 
