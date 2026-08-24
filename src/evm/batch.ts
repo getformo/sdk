@@ -102,11 +102,16 @@ export function batchCallOutcome(
  * the one receipt - same hash, same fate - which is also what makes
  * `count(distinct transaction_hash)` count on-chain transactions correctly.
  *
- * The wallet's own `atomic` flag is trusted first. Wallets predating that
- * field get a conservative inference: one receipt for several calls on a
- * batch that is NOT partially reverted can only be atomic execution (600
- * explicitly means some calls reverted and others did not, which one shared
- * transaction cannot do).
+ * The wallet's own `atomic` flag is authoritative in BOTH directions. An
+ * explicit `atomic: false` with a single receipt is a real shape - a
+ * non-atomic batch whose execution stopped after one call mined - and
+ * sharing that receipt would hand calls that never reached the chain a
+ * transaction hash they do not have. Only when the field is ABSENT (a
+ * wallet predating it, reached over raw EIP-1193; viem fills the field in,
+ * so the wagmi path never lands here) does the conservative inference
+ * apply: one receipt for several calls on a batch that is NOT partially
+ * reverted can only be atomic execution (600 explicitly means some calls
+ * reverted and others did not, which one shared transaction cannot do).
  */
 export function batchReceiptForCall(
   res: BatchStatusResult,
@@ -117,6 +122,9 @@ export function batchReceiptForCall(
   const code = readBatchStatusCode(res) ?? 0;
   const atomic =
     res?.atomic === true ||
-    (receipts.length === 1 && callCount > 1 && code < 600);
+    (res?.atomic === undefined &&
+      receipts.length === 1 &&
+      callCount > 1 &&
+      code < 600);
   return atomic ? receipts[0] : receipts[index];
 }

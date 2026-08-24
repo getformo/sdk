@@ -107,16 +107,19 @@ describe("WagmiEventHandler EIP-5792 sendCalls", () => {
   let nextMutationId = 100;
   const sendMutation = (
     state: Record<string, unknown>,
-    variables: Record<string, unknown> = { calls: CALLS }
+    variables: Record<string, unknown> = { calls: CALLS },
+    mutationId?: number
   ) => {
+    const id = mutationId ?? (nextMutationId += 1);
     mutationListener?.({
       type: "updated",
       mutation: {
-        mutationId: (nextMutationId += 1),
+        mutationId: id,
         options: { mutationKey: ["sendCalls"] },
         state: { variables, ...state },
       },
     } as any);
+    return id;
   };
 
   const callsStatusQuery = (id: string, data: unknown, status = "success") => {
@@ -182,9 +185,17 @@ describe("WagmiEventHandler EIP-5792 sendCalls", () => {
 
   it("emits nothing further for a wallet that does not support batches", () => {
     // A method-not-supported error is not a user decision; inventing a
-    // rejection would miscount. STARTED (from pending) is all there is.
-    sendMutation({ status: "error", error: Object.assign(new Error("nope"), { code: -32601 }) });
+    // rejection would miscount. Drive the real lifecycle - the mutation goes
+    // pending, then errors - so the assertion covers what actually happens:
+    // STARTED is all there is.
+    const id = sendMutation({ status: "pending" });
+    sendMutation(
+      { status: "error", error: Object.assign(new Error("nope"), { code: -32601 }) },
+      { calls: CALLS },
+      id
+    );
 
+    expect(emitted("started").length).to.equal(2);
     expect(emitted("rejected").length).to.equal(0);
   });
 
@@ -223,6 +234,25 @@ describe("WagmiEventHandler EIP-5792 sendCalls", () => {
     expect(emitted("confirmed").length).to.equal(1);
     expect(emitted("reverted").length).to.equal(1);
     expect(emitted("reverted")[0].args[0].transactionHash).to.equal("0xbad");
+  });
+
+  it("does not share a single receipt when the wallet says atomic is false", () => {
+    // A non-atomic batch whose execution stopped after one call mined is a
+    // real shape: one receipt, atomic: false. Sharing that receipt would
+    // hand the unmined call a transaction hash it does not have. The mined
+    // call keeps its receipt; the other falls back to the batch verdict,
+    // hashless.
+    sendMutation({ status: "success", data: { id: "0xbatch7" } });
+    callsStatusQuery("0xbatch7", {
+      statusCode: 500,
+      atomic: false,
+      receipts: [{ status: "reverted", transactionHash: "0xonlymined" }],
+    });
+
+    const reverted = emitted("reverted");
+    expect(reverted.length).to.equal(2);
+    expect(reverted[0].args[0].transactionHash).to.equal("0xonlymined");
+    expect(reverted[1].args[0].transactionHash).to.equal(undefined);
   });
 
   it("leaves a call unsettled when a partial batch gave it no receipt", () => {
