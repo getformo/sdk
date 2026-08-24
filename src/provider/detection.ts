@@ -110,6 +110,34 @@ export function detectInjectedProviderInfo(
 }
 
 /**
+ * The wallet on the far side of a WalletConnect session.
+ *
+ * WalletConnect is a transport, not a wallet: the signing wallet (Ledger
+ * Live, MetaMask Mobile, Safe, ...) identifies itself in the session's peer
+ * metadata. Reporting only "WalletConnect" hides every wallet behind it -
+ * production showed Ledger at effectively zero while its sessions were being
+ * tracked under the transport's name. Reads synchronous state only; never
+ * issues an RPC.
+ */
+export function readWalletConnectPeer(
+  provider: EIP1193Provider
+): { name: string; url?: string } | undefined {
+  const session = (provider as unknown as {
+    session?: { peer?: { metadata?: { name?: unknown; url?: unknown } } };
+  }).session;
+  const metadata = session?.peer?.metadata;
+  if (!metadata || typeof metadata.name !== "string" || metadata.name.length === 0) {
+    return undefined;
+  }
+  return {
+    name: metadata.name,
+    ...(typeof metadata.url === "string" && metadata.url.length > 0
+      ? { url: metadata.url }
+      : {}),
+  };
+}
+
+/**
  * Validates that a provider implements the required EIP-1193 interface
  * 
  * @param provider The provider to validate

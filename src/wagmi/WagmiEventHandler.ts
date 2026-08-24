@@ -9,6 +9,7 @@
 import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
+import { readWalletConnectPeer } from "../provider";
 import {
   readBatchId,
   readBatchStatusCode,
@@ -198,6 +199,23 @@ function isUserRejection(error: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * Real wallet names behind WalletConnect connectors, resolved lazily.
+ *
+ * WalletConnect is a transport: the signing wallet (Ledger Live, MetaMask
+ * Mobile, Safe, ...) names itself in the session's peer metadata, reachable
+ * only through the connector's async `getProvider()`. Connect emission is
+ * deliberately synchronous (see the marker comments below), so the lookup
+ * can never be awaited in line - it is kicked fire-and-forget the first
+ * time a WalletConnect connector is seen, and every event after resolution
+ * carries the real wallet's name. The first connect may still say
+ * "WalletConnect"; that is the honest state at that instant.
+ *
+ * WeakMap-keyed by the connector object, so a torn-down config cannot leak.
+ */
+const walletConnectPeerNames = new WeakMap<object, string>();
+const walletConnectPeerLookups = new WeakSet<object>();
 
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
@@ -2649,7 +2667,45 @@ export class WagmiEventHandler {
     }
 
     const connection = state.connections.get(state.current);
-    return connection?.connector.name;
+    const connector = connection?.connector as
+      | { name?: string; getProvider?: () => Promise<unknown> }
+      | undefined;
+    if (!connector) {
+      return undefined;
+    }
+
+    const cached = walletConnectPeerNames.get(connector as object);
+    if (cached) {
+      return cached;
+    }
+
+    // Kick the peer lookup on first sight of a WalletConnect connector.
+    // Fire-and-forget on purpose: this method is called from synchronous
+    // emission paths that must not wait (see the connect marker comment).
+    if (
+      typeof connector.name === "string" &&
+      /walletconnect/i.test(connector.name) &&
+      typeof connector.getProvider === "function" &&
+      !walletConnectPeerLookups.has(connector as object)
+    ) {
+      walletConnectPeerLookups.add(connector as object);
+      connector
+        .getProvider()
+        .then((provider) => {
+          const peer = readWalletConnectPeer(provider as never);
+          if (peer?.name) {
+            walletConnectPeerNames.set(connector as object, peer.name);
+            logger.debug("WagmiEventHandler: WalletConnect peer resolved", {
+              peer: peer.name,
+            });
+          }
+        })
+        .catch(() => {
+          // A connector that cannot produce its provider keeps its own name.
+        });
+    }
+
+    return connector.name;
   }
 
   /**

@@ -226,6 +226,39 @@ export class EvmEventTracker {
     }
   }
 
+  /**
+   * Adopt a provider the page constructed rather than announced.
+   *
+   * Discovery only ever sees EIP-6963 announcements and `window.ethereum`.
+   * A WalletConnect or Ledger provider is a constructed object that does
+   * neither, so without this entry point its whole session is invisible -
+   * the P-2403 gap. The pipeline from here on is the same one every
+   * discovered provider takes: registry, detect event, listeners, request
+   * wrapper.
+   *
+   * A session that already exists at registration is seeded from the
+   * provider's SYNCHRONOUS `accounts` state (WalletConnect exposes it), via
+   * the same accounts-arrival path a live `accountsChanged` takes. No RPC:
+   * nothing analytics-only may go on a wallet's transport, and
+   * WalletConnect's serialised relay socket is the very case that rule
+   * exists for.
+   */
+  adoptExternalProvider(detail: EIP6963ProviderDetail): void {
+    const provider = detail.provider as EIP1193Provider;
+    this.registry.add(detail);
+    void this.detectWallets([detail]);
+    this.trackProviders([detail]);
+
+    const accounts = (provider as unknown as { accounts?: unknown }).accounts;
+    if (
+      Array.isArray(accounts) &&
+      accounts.length > 0 &&
+      accounts.every((a) => typeof a === "string")
+    ) {
+      void this.onAccountsChanged(provider, accounts as string[]);
+    }
+  }
+
   private registerAccountsChangedListener(provider: EIP1193Provider): void {
     logger.info("registerAccountsChangedListener");
     const listener = (...args: unknown[]) =>

@@ -49,6 +49,11 @@ import {
 } from "./tracking/TrackingPolicy";
 import { WalletStateStore } from "./wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./evm/EvmProviderRegistry";
+import {
+  detectInjectedProviderInfo,
+  isValidProvider,
+  readWalletConnectPeer,
+} from "./provider";
 import { EvmEventTracker } from "./evm/EvmEventTracker";
 import { EvmRequestTracker } from "./evm/EvmRequestTracker";
 import { parseChainId } from "./utils/chain";
@@ -1618,6 +1623,79 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   // Explicitly untrack a provider: remove listeners, clear wrapper flag
   // and tracking
+
+  /**
+   * Track an EIP-1193 provider the page constructed itself.
+   *
+   * Discovery covers EIP-6963 announcements and `window.ethereum`, which is
+   * every injected wallet and nothing else. WalletConnect and Ledger
+   * providers are built by the app (`EthereumProvider.init(...)`) and
+   * announce nothing, so their sessions were invisible: connects,
+   * signatures, and transactions all silently missing. Hand the provider
+   * here once it exists and it takes the exact pipeline a discovered
+   * provider takes - detect event, lifecycle listeners, request wrapper -
+   * and a session that is already live is adopted from the provider's
+   * synchronous state.
+   *
+   * Metadata resolution order: the caller's `info` overrides win; then a
+   * WalletConnect session's peer metadata, which names the REAL wallet on
+   * the far side of the transport (for example "Ledger Live"); then flag
+   * sniffing; then a generic fallback.
+   *
+   * No-op outside the EIP-1193 path: in wagmi mode the connector system
+   * already tracks these sessions, and wrapping the same provider twice
+   * would double-report every event.
+   *
+   * @returns true when the provider is (now) tracked, false when it was
+   * refused (wagmi mode, EVM disabled, or not a valid EIP-1193 provider).
+   *
+   * @example
+   * ```typescript
+   * const wcProvider = await EthereumProvider.init({ projectId, chains });
+   * formo.registerProvider(wcProvider);
+   * ```
+   */
+  public registerProvider(
+    provider: EIP1193Provider,
+    info?: { name?: string; rdns?: string; icon?: `data:image/${string}` }
+  ): boolean {
+    if (this.isEvmDisabled) {
+      logger.warn("registerProvider: EVM tracking is disabled; refusing");
+      return false;
+    }
+    if (this.isWagmiMode) {
+      logger.warn(
+        "registerProvider: wagmi mode tracks connectors already; registering the provider here would double-report its events. Refusing."
+      );
+      return false;
+    }
+    if (!isValidProvider(provider)) {
+      logger.warn("registerProvider: not a valid EIP-1193 provider; refusing");
+      return false;
+    }
+
+    const detected = detectInjectedProviderInfo(provider);
+    const peer = readWalletConnectPeer(provider);
+    // A live peer identifies the session as WalletConnect even when the
+    // provider carries no isWalletConnect flag (v2 providers often do not).
+    const rdns =
+      info?.rdns ??
+      (peer && detected.rdns === "io.injected.provider"
+        ? "com.walletconnect"
+        : detected.rdns);
+    const name = info?.name ?? peer?.name ?? detected.name;
+
+    this.evmEvents.adoptExternalProvider({
+      info: {
+        name,
+        rdns,
+        uuid: `registered-${rdns.replace(/[^a-zA-Z0-9]/g, "-")}`,
+        icon: info?.icon ?? detected.icon,
+      },
+      provider: provider as EIP6963ProviderDetail["provider"],
+    });
+    return true;
+  }
 
   // Debug/monitoring helpers
   public getTrackedProvidersCount(): number {

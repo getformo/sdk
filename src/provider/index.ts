@@ -5,6 +5,7 @@
 export {
   detectInjectedProviderInfo,
   isValidProvider,
+  readWalletConnectPeer,
   DEFAULT_PROVIDER_ICON,
 } from './detection';
 
