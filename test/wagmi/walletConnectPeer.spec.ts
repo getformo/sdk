@@ -177,6 +177,35 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
     expect(mockFormo.connect.lastCall.args[1]?.providerName).to.equal("WalletConnect");
   });
 
+  it("drops a cached name when the new session cannot be inspected", async () => {
+    // A rejecting getProvider means the previous wallet's name is unproven
+    // for this session; generic is honest, stale is not.
+    const connector = makeConnector("Ledger Live");
+    const setState = mount();
+    setState(stateWith(connector));
+    await statusListener?.("connected", "disconnected");
+    await flush();
+
+    handler?.cleanup?.();
+    __resetSeededWallet();
+    (connector as any).getProvider = async () => {
+      throw new Error("session gone");
+    };
+    const setState2 = mount();
+    setState2(stateWith(connector));
+    await statusListener?.("connected", "disconnected");
+    await flush();
+
+    handler?.cleanup?.();
+    __resetSeededWallet();
+    const setState3 = mount();
+    setState3(stateWith(connector));
+    await statusListener?.("connected", "disconnected");
+    await flush();
+
+    expect(mockFormo.connect.lastCall.args[1]?.providerName).to.equal("WalletConnect");
+  });
+
   it("never blocks emission on the lookup", async () => {
     // getProvider that never resolves must not delay the connect.
     const connector = {

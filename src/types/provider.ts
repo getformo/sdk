@@ -35,9 +35,13 @@ export const WRAPPED_REQUEST_REF_SYMBOL = Symbol("formoWrappedRequestRef");
  * and its closure holds the instance that installed it - whose event queue
  * is CLOSED after cleanup. Without this slot, a rebuilt instance saw
  * "already wrapped", reported success, and every request-derived event
- * silently died in the old instance's queue. The wrapper reads this slot on
- * every call and routes to the current owner; re-registration just rebinds
- * it.
+ * silently died in the old instance's queue. The slot holds the LIST of
+ * instances that registered this provider, in registration order; the
+ * wrapper routes each call to the newest one still live. A list rather
+ * than a single ref for two reasons: with several live instances (multi
+ * write-key pages) a cleanup degrades to newest-live-wins instead of
+ * dead-instance-wins, and the list is attached at install time, so
+ * rebinding mutates it and works even on a provider frozen AFTER wrapping.
  */
 export const WRAPPED_REQUEST_OWNER_SYMBOL = Symbol("formoWrappedRequestOwner");
 

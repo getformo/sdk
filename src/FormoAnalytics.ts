@@ -1684,7 +1684,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       (peer && detected.rdns === "io.injected.provider"
         ? "com.walletconnect"
         : detected.rdns);
-    const name = info?.name ?? peer?.name ?? detected.name;
+    // The peer name is deliberately NOT stored: sessions change wallets,
+    // and metadata frozen at registration would misname every later one.
+    // `infoFor` resolves the peer live on each read, over the generic
+    // transport name; a caller's explicit name still wins everywhere.
+    const name =
+      info?.name ?? (peer ? "WalletConnect" : detected.name);
 
     // Per-instance uuid: EIP-6963 consumers (mipd included) deduplicate on
     // it, so two registered instances sharing an rdns-derived uuid would

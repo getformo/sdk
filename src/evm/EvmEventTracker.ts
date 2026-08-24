@@ -274,7 +274,11 @@ export class EvmEventTracker {
       return false;
     }
 
-    void this.detectWallets([detail]);
+    // Detect with the LIVE name (peer-resolved when a session exists);
+    // the stored metadata stays generic so later sessions rename freely.
+    void this.detectWallets([
+      { ...detail, info: { ...detail.info, ...this.registry.infoFor(provider) } },
+    ]);
 
     const accounts = (provider as unknown as { accounts?: unknown }).accounts;
     if (

@@ -259,6 +259,49 @@ describe("registerProvider", () => {
     second.formo.cleanup?.();
   });
 
+  it("renames when a later session belongs to a different wallet", async () => {
+    // Peer names resolve live per read, never frozen at registration.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    formo.registerProvider(provider);
+    await settle();
+    expect(sent.find((e) => e.type === "connect")?.properties?.providerName).to.equal(PEER);
+
+    sent.length = 0;
+    provider.session = { peer: { metadata: { name: "MetaMask Mobile" } } };
+    provider.emit("accountsChanged", []);
+    await settle();
+    provider.emit("accountsChanged", [ADDR]);
+    await settle();
+
+    const reconnect = sent.find((e) => e.type === "connect");
+    expect(reconnect?.properties?.providerName).to.equal("MetaMask Mobile");
+    formo.cleanup?.();
+  });
+
+  it("routes to the newest LIVE instance when several registered", async () => {
+    // Owner routing is newest-live-wins: a cleaned-up newest instance must
+    // hand capture back to the older live one, not swallow events into its
+    // closed queue.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const a = await setup();
+    expect(a.formo.registerProvider(provider)).to.equal(true);
+    const b = await setup();
+    expect(b.formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    b.formo.cleanup?.();
+    a.sent.length = 0;
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      a.sent.filter((e) => e.type === "signature").length,
+      "instance A captures after B is torn down"
+    ).to.equal(2);
+    a.formo.cleanup?.();
+  });
+
   it("refuses in wagmi mode, where the connector system already tracks the session", async () => {
     const wagmiConfig: any = {
       subscribe: () => () => undefined,

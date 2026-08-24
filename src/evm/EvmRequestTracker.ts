@@ -147,14 +147,18 @@ export class EvmRequestTracker {
     // the dead instance's queue. The wrapper reads the owner slot per call.
     const currentRequest = provider.request as WrappedRequestFunction;
     if (this.registry.isWrapped(provider, currentRequest)) {
-      try {
-        (provider as unknown as Record<symbol, unknown>)[
-          WRAPPED_REQUEST_OWNER_SYMBOL
-        ] = this;
-      } catch {
-        // The slot was writable when the wrapper installed; a provider
-        // frozen since keeps its previous owner.
+      const owners = (provider as unknown as Record<symbol, unknown>)[
+        WRAPPED_REQUEST_OWNER_SYMBOL
+      ] as EvmRequestTracker[] | undefined;
+      if (!Array.isArray(owners)) {
+        // A wrapper without its owner list cannot be taken over, and
+        // claiming success would silence every request event.
+        logger.warn("Provider wrapped but has no owner list; cannot rebind");
+        return false;
       }
+      const idx = owners.indexOf(this);
+      if (idx !== -1) owners.splice(idx, 1);
+      owners.push(this);
       logger.info(
         "Provider already wrapped; rebinding the wrapper to this instance."
       );
@@ -167,24 +171,29 @@ export class EvmRequestTracker {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
-      // Route to the wrapper's CURRENT owner. `this` here is whichever
+      // Route to the newest LIVE registrant. `this` here is whichever
       // instance installed the wrapper, which after an SDK rebuild is a
-      // torn-down instance with a closed queue; the slot always names the
-      // live one. Same body, different `deps`.
-      const owner = ((provider as unknown as Record<symbol, unknown>)[
+      // torn-down instance with a closed queue. Same body, different deps.
+      const owners = (provider as unknown as Record<symbol, unknown>)[
         WRAPPED_REQUEST_OWNER_SYMBOL
-      ] ?? this) as EvmRequestTracker;
-      if (owner !== this) {
-        return owner.dispatchWrappedRequest<T>({ method, params }, provider, request);
+      ] as EvmRequestTracker[] | undefined;
+      let owner: EvmRequestTracker = this;
+      if (Array.isArray(owners)) {
+        for (let i = owners.length - 1; i >= 0; i--) {
+          if (!owners[i].disposed) {
+            owner = owners[i];
+            break;
+          }
+        }
       }
-      return this.dispatchWrappedRequest<T>({ method, params }, provider, request);
+      return owner.dispatchWrappedRequest<T>({ method, params }, provider, request);
     };
     try {
       (provider as unknown as Record<symbol, unknown>)[
         WRAPPED_REQUEST_OWNER_SYMBOL
-      ] = this;
+      ] = [this];
     } catch {
-      /* frozen provider: symbol write fails below too and aborts cleanly */
+      /* frozen provider: the request write below fails too and aborts */
     }
     return this.installWrappedRequest(provider, wrappedRequest);
   }

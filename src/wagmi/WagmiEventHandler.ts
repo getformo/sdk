@@ -2779,8 +2779,13 @@ export class WagmiEventHandler {
         }
       })
       .catch(() => {
-        // A connection that cannot produce its provider keeps the
-        // connector's own name.
+        // The new session could not be inspected, so the PREVIOUS wallet's
+        // name must not keep serving: drop it and fall back to the
+        // connector's own name until a later session resolves. Guarded so
+        // an old session's late failure cannot clear a newer resolution.
+        if (walletConnectPeerLatest.get(connector as object) === connection) {
+          walletConnectPeerNames.delete(connector as object);
+        }
       });
   }
 
