@@ -170,7 +170,7 @@ export class EvmRequestTracker {
       if (!Array.isArray(owners)) {
         // A wrapper without its owner list cannot be taken over, and
         // claiming success would silence every request event.
-        logger.warn("Provider wrapped but has no owner list; cannot rebind");
+        logger.warn("wrapped without owner list; cannot rebind");
         return false;
       }
       const idx = owners.indexOf(this);
@@ -245,7 +245,7 @@ export class EvmRequestTracker {
       // Read back: an accessor or Proxy can ACCEPT the assignment without
       // installing it, and success here is a promise that capture works.
       if (provider.request !== wrappedRequest) {
-        logger.warn("provider.request assignment was swallowed; not wrapped");
+        logger.warn("request assignment swallowed; not wrapped");
         return false;
       }
       return true;
