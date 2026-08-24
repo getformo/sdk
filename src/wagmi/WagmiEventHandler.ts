@@ -12,6 +12,7 @@ import { logger } from "../logger";
 import {
   readBatchId,
   readBatchStatusCode,
+  readBatchChainId,
   batchCallOutcome,
   batchReceiptForCall,
   BatchStatusResult,
@@ -244,6 +245,13 @@ const pendingTransactionsByDestination = new Map<
 type PendingBatch = {
   address: string;
   chainId?: number;
+  /**
+   * Whether the caller named the chain. An explicit chain outranks the one
+   * the settlement result reports; an inferred one does not - the wallet
+   * can move chains while the prompt is up, and EIP-5792 v2 puts the chain
+   * the batch actually settled on in the `wallet_getCallsStatus` response.
+   */
+  chainIdWasExplicit?: boolean;
   calls: Array<{
     to?: string;
     value?: string;
@@ -1825,18 +1833,25 @@ export class WagmiEventHandler {
       return;
     }
 
+    // Batch settlement dedupes on the pending-batch registry, NOT on
+    // processedQueries: settling deletes the registration, so a duplicate
+    // delivery finds nothing to do. A processed-key here would be worse
+    // than redundant - the status query can complete BEFORE the sendCalls
+    // mutation registers the batch (TanStack dispatches a mutation's
+    // success state after its onSuccess callbacks, and apps await the
+    // status inside onSuccess), and a key recorded on that early skip
+    // would block every refetch from ever settling the batch.
+    if (queryType === "callsStatus") {
+      this.handleCallsStatusQuery(query);
+      return;
+    }
+
     const state = query.state;
 
-    // Extract the settlement marker early to include in the deduplication
-    // key. For receipts that is the receipt status (CONFIRMED vs REVERTED
-    // are distinct outcomes); for a batch it is the numeric EIP-5792 code.
-    const receipt = state.data as
-      | { status?: string | number; statusCode?: number }
-      | undefined;
-    const receiptStatus =
-      queryType === "callsStatus"
-        ? readBatchStatusCode(receipt)
-        : receipt?.status;
+    // Extract receipt status early to include in deduplication key
+    // This ensures CONFIRMED vs REVERTED outcomes are processed separately
+    const receipt = state.data as { status?: string } | undefined;
+    const receiptStatus = receipt?.status;
 
     // Create a unique key for this query state to prevent duplicate processing
     // Include receipt status to distinguish between CONFIRMED and REVERTED outcomes
@@ -1862,14 +1877,41 @@ export class WagmiEventHandler {
       status: state.status,
     });
 
-    if (queryType === "callsStatus") {
-      this.handleCallsStatusQuery(query);
-    } else {
-      this.handleTransactionReceiptQuery(query);
-    }
+    // Handle transaction receipt queries
+    this.handleTransactionReceiptQuery(query);
 
     // Clean up old processed queries to prevent memory leaks
     cleanupOldEntries(this.processedQueries);
+  }
+
+  /**
+   * Settle a just-registered batch from a status query that already ran.
+   *
+   * Best-effort by design: the minimal QueryClient interface the SDK
+   * accepts is not guaranteed to expose cache lookup, and a missing
+   * `getAll` just means settlement waits for the next query event, which
+   * is where it normally comes from anyway.
+   */
+  private settleFromCachedCallsStatus(batchId: string): void {
+    try {
+      const cache = this.queryClient?.getQueryCache() as unknown as {
+        getAll?: () => Array<{ queryKey?: unknown[]; state?: unknown }>;
+      };
+      const queries = cache?.getAll?.();
+      if (!Array.isArray(queries)) return;
+      for (const query of queries) {
+        const key = query?.queryKey;
+        if (
+          Array.isArray(key) &&
+          key[0] === "callsStatus" &&
+          (key[1] as { id?: string } | undefined)?.id === batchId
+        ) {
+          this.handleCallsStatusQuery(query);
+        }
+      }
+    } catch (error) {
+      logger.debug("WagmiEventHandler: cached callsStatus scan failed", error);
+    }
   }
 
   /**
@@ -1920,6 +1962,16 @@ export class WagmiEventHandler {
 
       logger.debug("WagmiEventHandler: batch settled", { batchId, code });
 
+      // An explicit mutation chain is authoritative. Otherwise prefer the
+      // chain the settlement result names - EIP-5792 v2 reports where the
+      // batch actually landed - over one inferred from the connection at
+      // broadcast, which goes stale if the wallet moves chains while the
+      // prompt is up. Same precedence as the single-transaction receipt
+      // path.
+      const settledChainId = pending.chainIdWasExplicit
+        ? pending.chainId
+        : readBatchChainId(res) ?? pending.chainId;
+
       pending.calls.forEach((call, index) => {
         const receipt = batchReceiptForCall(res, index, pending.calls.length);
         const outcome = batchCallOutcome(code, receipt);
@@ -1930,7 +1982,7 @@ export class WagmiEventHandler {
         this.formo.transaction(
           {
             status: outcome,
-            chainId: pending.chainId || 0,
+            chainId: settledChainId || 0,
             address: pending.address,
             ...(call.data && { data: call.data }),
             ...(call.to && { to: call.to }),
@@ -2480,6 +2532,7 @@ export class WagmiEventHandler {
           this.pendingBatches.set(batchId, {
             address: userAddress,
             ...(chainId !== undefined && { chainId }),
+            chainIdWasExplicit: explicitChainId !== undefined,
             calls,
           });
           // Same bound as pendingTransactions, same reason.
@@ -2489,6 +2542,12 @@ export class WagmiEventHandler {
               this.pendingBatches.delete(keys[i]);
             }
           }
+          // The status query can have completed BEFORE this registration:
+          // TanStack dispatches a mutation's success state after its
+          // onSuccess callbacks, and apps await waitForCallsStatus inside
+          // onSuccess. That early query event found no registration and did
+          // nothing, so look for its settled result in the cache now.
+          this.settleFromCachedCallsStatus(batchId);
         }
       } else if (state.status === "error") {
         if (isUserRejection(state.error)) {

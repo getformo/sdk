@@ -288,6 +288,89 @@ describe("WagmiEventHandler EIP-5792 sendCalls", () => {
     expect(emitted("confirmed").length).to.equal(2);
   });
 
+  it("settles from a status refetch when the query beat the mutation", () => {
+    // TanStack dispatches a mutation's success state AFTER its onSuccess
+    // callbacks, so an app awaiting waitForCallsStatus inside onSuccess
+    // produces the settled query first. That early event finds no
+    // registered batch and must not poison deduplication: a later refetch
+    // with the very same terminal result still settles the batch.
+    const settled = {
+      statusCode: 200,
+      atomic: true,
+      receipts: [{ status: "success", transactionHash: "0xearly" }],
+    };
+    callsStatusQuery("0xbatch8", settled);
+    expect(emitted("confirmed").length).to.equal(0);
+
+    sendMutation({ status: "success", data: { id: "0xbatch8" } });
+    callsStatusQuery("0xbatch8", settled);
+    expect(emitted("confirmed").length).to.equal(2);
+  });
+
+  it("settles from the cached query at registration, without a refetch", () => {
+    // Same ordering, but the app never refetches. When the cache exposes
+    // lookup, registration itself finds the already-settled query.
+    const settled = {
+      statusCode: 200,
+      atomic: true,
+      receipts: [{ status: "success", transactionHash: "0xcached" }],
+    };
+    const cachedQuery = {
+      queryKey: ["callsStatus", { id: "0xbatch9" }],
+      state: { status: "success", data: settled },
+    };
+    (mockQueryClient.getQueryCache as any).returns({
+      subscribe: (listener: any) => {
+        queryListener = listener;
+        return () => {
+          queryListener = null;
+        };
+      },
+      getAll: () => [cachedQuery],
+    });
+
+    callsStatusQuery("0xbatch9", settled);
+    expect(emitted("confirmed").length).to.equal(0);
+
+    sendMutation({ status: "success", data: { id: "0xbatch9" } });
+    expect(emitted("confirmed").length).to.equal(2);
+    expect(emitted("confirmed")[0].args[0].transactionHash).to.equal("0xcached");
+  });
+
+  it("labels settlement with the chain the status result names", () => {
+    // The mutation named no chain, so broadcast used the connection's (137).
+    // The wallet moved chains before settling; EIP-5792 v2 reports where
+    // the batch actually landed, and that outranks the stale inference.
+    sendMutation({ status: "success", data: { id: "0xbatch10" } });
+    callsStatusQuery("0xbatch10", {
+      statusCode: 200,
+      atomic: true,
+      chainId: 8453,
+      receipts: [{ status: "success", transactionHash: "0xmoved" }],
+    });
+
+    for (const c of emitted("confirmed")) {
+      expect(c.args[0].chainId).to.equal(8453);
+    }
+  });
+
+  it("keeps an explicitly named mutation chain over the settlement chain", () => {
+    sendMutation(
+      { status: "success", data: { id: "0xbatch11" } },
+      { calls: CALLS, chainId: 10 }
+    );
+    callsStatusQuery("0xbatch11", {
+      statusCode: 200,
+      atomic: true,
+      chainId: "0x2105",
+      receipts: [{ status: "success", transactionHash: "0xexplicit" }],
+    });
+
+    for (const c of emitted("confirmed")) {
+      expect(c.args[0].chainId).to.equal(10);
+    }
+  });
+
   it("ignores a callsStatus query for a batch this page never broadcast", () => {
     // Queries are visible to any code sharing the QueryClient; emitting for
     // an unobserved id would let a forged query invent transactions.

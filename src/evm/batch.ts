@@ -16,6 +16,7 @@ export type BatchStatusResult = {
   status?: number | string;
   statusCode?: number;
   atomic?: boolean;
+  chainId?: number | string;
   receipts?: BatchReceipt[];
 } | null | undefined;
 
@@ -51,6 +52,25 @@ export function readBatchId(result: unknown): string | undefined {
 export function readBatchStatusCode(res: BatchStatusResult): number | undefined {
   if (typeof res?.statusCode === "number") return res.statusCode;
   if (typeof res?.status === "number") return res.status;
+  return undefined;
+}
+
+/**
+ * The chain a settled batch reports itself on.
+ *
+ * EIP-5792 v2 puts `chainId` in the `wallet_getCallsStatus` response as hex;
+ * viem returns it as a number. Either way it names the chain the batch
+ * actually settled on, which outranks a chain merely inferred from the
+ * connection at broadcast time - the wallet can move chains while the
+ * prompt is up.
+ */
+export function readBatchChainId(res: BatchStatusResult): number | undefined {
+  const raw = res?.chainId;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return raw;
+  if (typeof raw === "string") {
+    const parsed = parseInt(raw, 16);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
   return undefined;
 }
 
