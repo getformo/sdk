@@ -14,9 +14,11 @@ import { initStorageManager } from "../../src/storage";
  * missing-connect bug that started this work.
  *
  * The decision recorded on the issue: one `transaction` event PER CALL,
- * carrying the batch id so the calls can be reassembled downstream. A batch
- * maps to several on-chain transactions, so reporting it as one event would
- * understate volume and misattribute revenue.
+ * carrying the batch id so the calls can be reassembled downstream. The call
+ * is the unit of attribution - each has its own target, calldata, and value.
+ * How many on-chain transactions a batch becomes depends on execution (an
+ * atomic batch lands as ONE), so on-chain volume is counted by distinct
+ * transaction_hash and wallet actions by distinct batch_id, never by events.
  */
 describe("EIP-5792 batched calls", () => {
   const FROM = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
@@ -206,6 +208,49 @@ describe("EIP-5792 batched calls", () => {
     const confirmed = txs(sent).filter((e) => e.status === "confirmed");
     expect(confirmed.length).to.equal(2);
     expect(confirmed.map((e) => e.transactionHash)).to.deep.equal(["0xhashA", "0xhashB"]);
+    formo.cleanup?.();
+  });
+
+  it("shares an atomic batch's single receipt across every call", async () => {
+    // An atomic batch lands as ONE on-chain transaction, so the wallet
+    // returns one receipt covering all calls. Positional indexing would give
+    // the hash to call 0 and leave its siblings hashless; every call must
+    // carry the shared hash so distinct-hash counting stays correct.
+    const provider = makeProvider({
+      status: {
+        status: 200,
+        atomic: true,
+        receipts: [{ status: "0x1", transactionHash: "0xatomic" }],
+      },
+    });
+    const { formo, sent } = await setup(provider);
+
+    await provider.request({ method: "wallet_sendCalls", params: batchParams() });
+    await settle();
+
+    const confirmed = txs(sent).filter((e) => e.status === "confirmed");
+    expect(confirmed.length).to.equal(2);
+    expect(confirmed.map((e) => e.transactionHash)).to.deep.equal(["0xatomic", "0xatomic"]);
+    formo.cleanup?.();
+  });
+
+  it("infers atomic execution from a single receipt when the wallet omits the flag", async () => {
+    // Wallets predating EIP-5792's `atomic` field still return one receipt
+    // for an atomically executed batch. One receipt for several calls on a
+    // non-600 batch can only mean shared execution.
+    const provider = makeProvider({
+      status: {
+        status: 200,
+        receipts: [{ status: "0x1", transactionHash: "0xshared" }],
+      },
+    });
+    const { formo, sent } = await setup(provider);
+
+    await provider.request({ method: "wallet_sendCalls", params: batchParams() });
+    await settle();
+
+    const confirmed = txs(sent).filter((e) => e.status === "confirmed");
+    expect(confirmed.map((e) => e.transactionHash)).to.deep.equal(["0xshared", "0xshared"]);
     formo.cleanup?.();
   });
 

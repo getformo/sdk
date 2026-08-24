@@ -18,6 +18,13 @@ import {
 import { WalletStateStore } from "../wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./EvmProviderRegistry";
 import { AutocaptureEventType } from "../tracking/TrackingPolicy";
+import {
+  readBatchId,
+  readBatchStatusCode,
+  batchCallOutcome,
+  batchReceiptForCall,
+  BatchStatusResult,
+} from "./batch";
 
 /**
  * Decode a hex-encoded `personal_sign` message.
@@ -530,11 +537,14 @@ export class EvmRequestTracker {
   /**
    * One `transaction` event per call in an EIP-5792 batch.
    *
-   * A batch is not a transaction. It maps to several on-chain transactions,
-   * so reporting it as one event would understate volume and make revenue and
-   * per-contract attribution wrong for every app that adopts smart accounts.
-   * Each call is reported on its own, carrying the batch id so the calls can
-   * be reassembled downstream.
+   * The CALL is the unit of attribution: each has its own target, calldata,
+   * and value, and folding a batch into one event would misattribute revenue
+   * and per-contract activity for every app that adopts smart accounts. How
+   * many on-chain transactions a batch becomes depends on execution - an
+   * atomic batch lands as ONE transaction, a non-atomic fallback as several -
+   * so on-chain volume is `count(distinct transaction_hash)`, wallet actions
+   * `count(distinct batch_id)`, never the event count. Each call is reported
+   * on its own, carrying the batch id so the calls reassemble downstream.
    *
    * Status is per BATCH, because that is what `wallet_getCallsStatus` reports.
    * When it resolves, every call in the batch moves together, except where
@@ -617,7 +627,7 @@ export class EvmRequestTracker {
 
     try {
       const result = await sendPromise;
-      const batchId = this.readBatchId(result);
+      const batchId = readBatchId(result);
 
       for (const p of payloads) {
         const { properties, ...rest } = p;
@@ -652,54 +662,6 @@ export class EvmRequestTracker {
   }
 
   /**
-   * How one call in a settled batch ended.
-   *
-   * A per-call receipt is authoritative where it exists: that is what makes a
-   * partially reverted non-atomic batch report honestly rather than tarring
-   * every call with the batch's worst outcome. A receipt whose own status is
-   * unreadable falls back to the batch verdict rather than being assumed good.
-   *
-   * The codes are EIP-5792's: 200 confirmed, 400 failed BEFORE landing on
-   * chain, 500 reverted, 600 partially reverted. 400 is a rejection, not a
-   * revert - nothing was mined, so calling it reverted would misreport gas
-   * spent and on-chain activity that never happened.
-   *
-   * Returns undefined when the call cannot be decided, which happens on 600
-   * for a call the wallet gave no receipt for.
-   */
-  private batchCallOutcome(
-    code: number,
-    receipt?: { status?: string | number }
-  ): TransactionStatus | undefined {
-    const receiptStatus = receipt?.status;
-    if (receiptStatus !== undefined) {
-      return receiptStatus === "0x0" || receiptStatus === 0
-        ? TransactionStatus.REVERTED
-        : TransactionStatus.CONFIRMED;
-    }
-    if (code >= 600) return undefined;
-    if (code >= 500) return TransactionStatus.REVERTED;
-    if (code >= 400) return TransactionStatus.REJECTED;
-    return TransactionStatus.CONFIRMED;
-  }
-
-  /**
-   * The batch identifier from a `wallet_sendCalls` result.
-   *
-   * EIP-5792 settled on `{ id }`, but wallets shipped against the earlier
-   * draft return a bare string. Both are accepted so a wallet on either
-   * version is still grouped.
-   */
-  private readBatchId(result: unknown): string | undefined {
-    if (typeof result === "string" && result.length > 0) return result;
-    if (result && typeof result === "object") {
-      const id = (result as { id?: unknown }).id;
-      if (typeof id === "string" && id.length > 0) return id;
-    }
-    return undefined;
-  }
-
-  /**
    * Resolve a batch through `wallet_getCallsStatus`.
    *
    * The status codes are EIP-5792's: 100 pending, 200 confirmed, 400 failed
@@ -725,11 +687,6 @@ export class EvmRequestTracker {
     intervalMs = 3000
   ): Promise<void> {
     if (!provider) return;
-    type BatchStatus = {
-      status?: number;
-      receipts?: Array<{ status?: string | number; transactionHash?: string }>;
-    } | null;
-
     let attempts = 0;
     const poll = async () => {
       if (this.disposed) return;
@@ -737,14 +694,15 @@ export class EvmRequestTracker {
         const res = (await provider.request({
           method: "wallet_getCallsStatus",
           params: [batchId],
-        })) as BatchStatus;
+        })) as BatchStatusResult;
 
-        const code = typeof res?.status === "number" ? res.status : undefined;
+        const code = readBatchStatusCode(res);
         if (code !== undefined && code >= 200) {
-          const receipts = Array.isArray(res?.receipts) ? res.receipts : [];
           payloads.forEach((p, index) => {
-            const receipt = receipts[index];
-            const outcome = this.batchCallOutcome(code, receipt);
+            // Atomic-aware: one receipt covering the whole batch reaches
+            // every call, hash included, not just call 0.
+            const receipt = batchReceiptForCall(res, index, payloads.length);
+            const outcome = batchCallOutcome(code, receipt);
             // 600 means SOME calls reverted, so a call with no receipt of its
             // own has not been decided. Reporting it either way would invent
             // a result; leaving it unsettled is the honest answer.
