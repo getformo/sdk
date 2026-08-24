@@ -205,9 +205,19 @@ export class EvmRequestTracker {
       );
     };
     try {
-      (provider as unknown as Record<symbol, unknown>)[
-        WRAPPED_REQUEST_OWNER_SYMBOL
-      ] = [this];
+      // MERGE with any existing list rather than overwriting: a wallet that
+      // replaced `request` forces a re-wrap, and discarding the prior list
+      // would drop other live instances from ownership - the newest-live
+      // fallback then has nobody to fall back to.
+      const slot = provider as unknown as Record<symbol, unknown>;
+      const prior = slot[WRAPPED_REQUEST_OWNER_SYMBOL];
+      const owners: EvmRequestTracker[] = Array.isArray(prior) ? prior : [];
+      const idx = owners.indexOf(this);
+      if (idx !== -1) owners.splice(idx, 1);
+      owners.push(this);
+      if (!Array.isArray(prior)) {
+        slot[WRAPPED_REQUEST_OWNER_SYMBOL] = owners;
+      }
       this.wrappedProviders.add(provider);
     } catch {
       /* frozen provider: the request write below fails too and aborts */

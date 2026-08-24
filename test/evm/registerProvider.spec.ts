@@ -323,6 +323,37 @@ describe("registerProvider", () => {
     expect(owners().length, "nothing retained after both").to.equal(0);
   });
 
+  it("keeps every registrant when a wallet's request replacement forces a re-wrap", async () => {
+    // A wallet replacing provider.request defeats the marker and forces a
+    // fresh wrap. That install must MERGE ownership, not restart it: after
+    // the re-wrapping instance is torn down, the other live registrant
+    // still captures.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    // A wallet that replaces `request` restores its OWN transport - the
+    // wrapper is gone from the chain, not layered under the replacement.
+    const native = provider.request.bind(provider);
+    const b = await setup();
+    b.formo.registerProvider(provider);
+    const a = await setup();
+    a.formo.registerProvider(provider);
+    await settle();
+
+    provider.request = (args: unknown) => (native as any)(args);
+    (a.formo as any).evmRequests.registerRequestListeners(provider);
+    await settle();
+
+    a.formo.cleanup?.();
+    b.sent.length = 0;
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      b.sent.filter((e) => e.type === "signature").length,
+      "B still captures after the re-wrapper is gone"
+    ).to.equal(2);
+    b.formo.cleanup?.();
+  });
+
   it("refuses in wagmi mode, where the connector system already tracks the session", async () => {
     const wagmiConfig: any = {
       subscribe: () => () => undefined,
