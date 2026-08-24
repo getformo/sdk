@@ -113,7 +113,24 @@ export class EvmRequestTracker {
     this.disposed = true;
     this.polls.forEach((timer) => clearTimeout(timer));
     this.polls.clear();
+    // Remove this instance from every provider's owner list. The lists
+    // live on LONG-LIVED provider objects; leaving disposed trackers in
+    // them retains each old instance's whole object graph across rebuilds,
+    // growing without bound under HMR.
+    this.wrappedProviders.forEach((provider) => {
+      const owners = (provider as unknown as Record<symbol, unknown>)[
+        WRAPPED_REQUEST_OWNER_SYMBOL
+      ] as EvmRequestTracker[] | undefined;
+      if (Array.isArray(owners)) {
+        const idx = owners.indexOf(this);
+        if (idx !== -1) owners.splice(idx, 1);
+      }
+    });
+    this.wrappedProviders.clear();
   }
+
+  /** Providers whose owner list includes this instance; pruned on cleanup. */
+  private wrappedProviders = new Set<EIP1193Provider>();
 
   /** Re-arm a poll, unless this tracker has been torn down. */
   private schedulePoll(fn: () => void, delayMs: number): void {
@@ -159,6 +176,7 @@ export class EvmRequestTracker {
       const idx = owners.indexOf(this);
       if (idx !== -1) owners.splice(idx, 1);
       owners.push(this);
+      this.wrappedProviders.add(provider);
       logger.info(
         "Provider already wrapped; rebinding the wrapper to this instance."
       );
@@ -190,6 +208,7 @@ export class EvmRequestTracker {
       (provider as unknown as Record<symbol, unknown>)[
         WRAPPED_REQUEST_OWNER_SYMBOL
       ] = [this];
+      this.wrappedProviders.add(provider);
     } catch {
       /* frozen provider: the request write below fails too and aborts */
     }

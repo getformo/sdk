@@ -1647,6 +1647,14 @@ export class FormoAnalytics implements IFormoAnalytics {
    * already tracks these sessions, and wrapping the same provider twice
    * would double-report every event.
    *
+   * With several live SDK instances (multi write-key pages) registering
+   * the SAME provider, request-derived events (signatures, transactions)
+   * go to the most recently registered live instance - the same
+   * single-observer semantics discovery has always had for the request
+   * wrapper. Lifecycle events (connect, chain, disconnect) reach every
+   * instance. Fanning request observations out to all instances is a
+   * separate feature.
+   *
    * @returns true when the provider is (now) tracked, false when it was
    * refused (wagmi mode, EVM disabled, or not a valid EIP-1193 provider).
    *

@@ -2761,9 +2761,25 @@ export class WagmiEventHandler {
     }
     walletConnectPeerLookups.add(connection as object);
     walletConnectPeerLatest.set(connector as object, connection as object);
+    let settled = false;
+    // A cached name from a PREVIOUS session is unproven for this one. It
+    // keeps serving only until this session's lookup settles or the grace
+    // timer fires - whichever ends the uncertainty first - so a hung
+    // lookup cannot leave the old wallet's name attached indefinitely.
+    const staleTimer = setTimeout(() => {
+      if (
+        !settled &&
+        walletConnectPeerLatest.get(connector as object) === connection
+      ) {
+        walletConnectPeerNames.delete(connector as object);
+      }
+    }, 3000);
+    (staleTimer as unknown as { unref?: () => void }).unref?.();
     connector
       .getProvider()
       .then((provider) => {
+        settled = true;
+        clearTimeout(staleTimer);
         // Only the NEWEST session's lookup may write. A previous session's
         // slow resolution landing late would otherwise overwrite the
         // current wallet's name with the old one.
@@ -2776,9 +2792,15 @@ export class WagmiEventHandler {
           logger.debug("WagmiEventHandler: WalletConnect peer resolved", {
             peer: peer.name,
           });
+        } else {
+          // Resolved WITHOUT peer metadata: the previous wallet's name is
+          // disproven for this session, not merely unproven. Drop it.
+          walletConnectPeerNames.delete(connector as object);
         }
       })
       .catch(() => {
+        settled = true;
+        clearTimeout(staleTimer);
         // The new session could not be inspected, so the PREVIOUS wallet's
         // name must not keep serving: drop it and fall back to the
         // connector's own name until a later session resolves. Guarded so

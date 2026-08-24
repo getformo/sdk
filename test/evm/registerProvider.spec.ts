@@ -4,6 +4,7 @@ import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
 import { initStorageManager } from "../../src/storage";
+import { WRAPPED_REQUEST_OWNER_SYMBOL } from "../../src/types";
 
 /**
  * registerProvider (P-2403).
@@ -300,6 +301,26 @@ describe("registerProvider", () => {
       "instance A captures after B is torn down"
     ).to.equal(2);
     a.formo.cleanup?.();
+  });
+
+  it("prunes a torn-down instance from the provider's owner list", async () => {
+    // The list lives on the LONG-LIVED provider; a disposed instance left
+    // in it retains its whole object graph across every rebuild.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const a = await setup();
+    a.formo.registerProvider(provider);
+    const b = await setup();
+    b.formo.registerProvider(provider);
+    await settle();
+
+    const owners = () =>
+      ((provider as any)[WRAPPED_REQUEST_OWNER_SYMBOL] as unknown[]) ?? [];
+    expect(owners().length).to.equal(2);
+
+    a.formo.cleanup?.();
+    expect(owners().length, "A pruned itself on cleanup").to.equal(1);
+    b.formo.cleanup?.();
+    expect(owners().length, "nothing retained after both").to.equal(0);
   });
 
   it("refuses in wagmi mode, where the connector system already tracks the session", async () => {
