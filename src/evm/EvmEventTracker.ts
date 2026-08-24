@@ -266,6 +266,10 @@ export class EvmEventTracker {
     // recreate the silent loss this API exists to close.
     if (!this.registry.isTracked(provider)) {
       this.externallyRegistered.delete(provider);
+      // Tracking got partway: lifecycle listeners may already be attached
+      // even though the request wrapper failed. Leaving them would leak
+      // callbacks that hold this instance for the life of the page.
+      this.untrackProvider(provider);
       logger.warn("adoptExternalProvider: provider could not be tracked");
       return false;
     }

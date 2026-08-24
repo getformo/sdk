@@ -225,6 +225,10 @@ function isUserRejection(error: unknown): boolean {
  */
 const walletConnectPeerNames = new WeakMap<object, string>();
 const walletConnectPeerLookups = new WeakSet<object>();
+/** The connection whose lookup may write the connector's name: always the
+ * newest kicked one, so a slow resolution from a PREVIOUS session cannot
+ * land after the current session's and overwrite it. */
+const walletConnectPeerLatest = new WeakMap<object, object>();
 
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
@@ -2745,9 +2749,16 @@ export class WagmiEventHandler {
       return;
     }
     walletConnectPeerLookups.add(connection as object);
+    walletConnectPeerLatest.set(connector as object, connection as object);
     connector
       .getProvider()
       .then((provider) => {
+        // Only the NEWEST session's lookup may write. A previous session's
+        // slow resolution landing late would otherwise overwrite the
+        // current wallet's name with the old one.
+        if (walletConnectPeerLatest.get(connector as object) !== connection) {
+          return;
+        }
         const peer = readWalletConnectPeer(provider as never);
         if (peer?.name) {
           walletConnectPeerNames.set(connector as object, peer.name);

@@ -1686,16 +1686,28 @@ export class FormoAnalytics implements IFormoAnalytics {
         : detected.rdns);
     const name = info?.name ?? peer?.name ?? detected.name;
 
+    // Per-instance uuid: EIP-6963 consumers (mipd included) deduplicate on
+    // it, so two registered instances sharing an rdns-derived uuid would
+    // collapse into one. Random when the platform provides it; a
+    // monotonic suffix otherwise.
+    const uuid =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `registered-${rdns.replace(/[^a-zA-Z0-9]/g, "-")}-${(FormoAnalytics.registeredProviderSeq += 1)}`;
+
     return this.evmEvents.adoptExternalProvider({
       info: {
         name,
         rdns,
-        uuid: `registered-${rdns.replace(/[^a-zA-Z0-9]/g, "-")}`,
+        uuid,
         icon: info?.icon ?? detected.icon,
       },
       provider: provider as EIP6963ProviderDetail["provider"],
     });
   }
+
+  /** Fallback uuid suffix for platforms without crypto.randomUUID. */
+  private static registeredProviderSeq = 0;
 
   // Debug/monitoring helpers
   public getTrackedProvidersCount(): number {

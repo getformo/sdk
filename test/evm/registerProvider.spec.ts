@@ -228,26 +228,19 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
-  it("reports failure when the provider cannot be tracked", async () => {
-    // A frozen provider defeats the request wrapper. Claiming success while
-    // its requests stay invisible would recreate the very silent loss this
-    // API exists to close.
+  it("reports failure for a provider the wrapper cannot instrument", async () => {
+    // Wrapping reassigns provider.request, so a frozen provider
+    // deterministically defeats it. Claiming success while its requests
+    // stay invisible would recreate the very silent loss this API exists
+    // to close - and the partial registration must unwind: no adopted
+    // session, and no listeners left behind holding the instance.
     const provider = Object.freeze(makeWcProvider({ accounts: [ADDR], peer: PEER }));
     const { formo, sent } = await setup();
 
-    const result = formo.registerProvider(provider);
+    expect(formo.registerProvider(provider)).to.equal(false);
     await settle();
 
-    if (!result) {
-      // Refused: then it must have adopted nothing either.
-      expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
-    } else {
-      // Trackable after all (wrapper strategy tolerates frozen objects):
-      // then events must actually flow.
-      await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
-      await settle();
-      expect(sent.filter((e) => e.type === "signature").length).to.be.greaterThan(0);
-    }
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
     formo.cleanup?.();
   });
 
