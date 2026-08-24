@@ -128,6 +128,16 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      # Drives the BUILT bundle through the EIP-1193 path end to end and
+      # asserts exact event lists per scenario, so a regression is caught
+      # before it is published rather than a day after. The wagmi rows need
+      # real wagmi, which is a peer dependency, so they run in the examples
+      # repo against the published package.
+      - name: Build
+        run: pnpm build
+      - name: End-to-end behaviours
+        run: pnpm test:e2e
+
   audit:
     runs-on: ubuntu-latest
     steps:
