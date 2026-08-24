@@ -242,6 +242,12 @@ export class EvmRequestTracker {
       (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
         wrappedRequest;
       provider.request = wrappedRequest;
+      // Read back: an accessor or Proxy can ACCEPT the assignment without
+      // installing it, and success here is a promise that capture works.
+      if (provider.request !== wrappedRequest) {
+        logger.warn("provider.request assignment was swallowed; not wrapped");
+        return false;
+      }
       return true;
     } catch (e) {
       logger.warn("Failed to wrap provider.request; skipping", e);

@@ -415,6 +415,25 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("refuses a provider whose setter swallows the wrapper", async () => {
+    // An accessor that accepts `provider.request = ...` without storing it
+    // defeats the wrapper silently. Success must mean capture works, so
+    // the install reads the property back.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const native = provider.request;
+    Object.defineProperty(provider, "request", {
+      get: () => native,
+      set: () => undefined, // swallowed
+      configurable: false,
+    });
+    const { formo, sent } = await setup();
+
+    expect(formo.registerProvider(provider)).to.equal(false);
+    await settle();
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
   it("refuses an object that is not an EIP-1193 provider", async () => {
     const { formo } = await setup();
     expect(formo.registerProvider({} as any)).to.equal(false);
