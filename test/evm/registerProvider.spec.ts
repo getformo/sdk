@@ -215,10 +215,12 @@ describe("registerProvider", () => {
 
   it("names the signer on connects even when the session forms after registration", async () => {
     // The recommended order is register-early-then-connect, so the peer
-    // is unknown at registration. The name resolves LIVE per event: once
-    // the session exists, its connect carries the signer.
+    // is unknown at registration - and this provider carries NO
+    // isWalletConnect flag, so at registration it detects as nothing at
+    // all. The name resolves LIVE per event: once the session exists, its
+    // peer is the proof of what the provider was, and the connect carries
+    // the signer with the WalletConnect rdns.
     const provider = makeWcProvider({});
-    provider.isWalletConnect = true;
     const { formo, sent } = await setup();
 
     formo.registerProvider(provider);
@@ -232,6 +234,7 @@ describe("registerProvider", () => {
 
     const connect = sent.find((e) => e.type === "connect");
     expect(connect?.properties?.providerName).to.equal(PEER);
+    expect(connect?.properties?.rdns).to.equal("com.walletconnect");
     formo.cleanup?.();
   });
 
