@@ -14,6 +14,7 @@ import {
   WrappedRequestFunction,
   WRAPPED_REQUEST_SYMBOL,
   WRAPPED_REQUEST_REF_SYMBOL,
+  WRAPPED_REQUEST_OWNER_SYMBOL,
 } from "../types";
 import { WalletStateStore } from "../wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./EvmProviderRegistry";
@@ -139,11 +140,23 @@ export class EvmRequestTracker {
       return false;
     }
 
-    // Check if the provider is already wrapped with our SDK's wrapper
+    // Already wrapped: take OWNERSHIP rather than skipping. The wrapper
+    // survives an SDK rebuild and closes over the instance that installed
+    // it, whose queue is closed after cleanup - "skip" made the rebuilt
+    // instance report success while every request-derived event died in
+    // the dead instance's queue. The wrapper reads the owner slot per call.
     const currentRequest = provider.request as WrappedRequestFunction;
     if (this.registry.isWrapped(provider, currentRequest)) {
+      try {
+        (provider as unknown as Record<symbol, unknown>)[
+          WRAPPED_REQUEST_OWNER_SYMBOL
+        ] = this;
+      } catch {
+        // The slot was writable when the wrapper installed; a provider
+        // frozen since keeps its previous owner.
+      }
       logger.info(
-        "Provider already wrapped with our SDK; skipping request wrapping."
+        "Provider already wrapped; rebinding the wrapper to this instance."
       );
       return true;
     }
@@ -154,6 +167,63 @@ export class EvmRequestTracker {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
+      // Route to the wrapper's CURRENT owner. `this` here is whichever
+      // instance installed the wrapper, which after an SDK rebuild is a
+      // torn-down instance with a closed queue; the slot always names the
+      // live one. Same body, different `deps`.
+      const owner = ((provider as unknown as Record<symbol, unknown>)[
+        WRAPPED_REQUEST_OWNER_SYMBOL
+      ] ?? this) as EvmRequestTracker;
+      if (owner !== this) {
+        return owner.dispatchWrappedRequest<T>({ method, params }, provider, request);
+      }
+      return this.dispatchWrappedRequest<T>({ method, params }, provider, request);
+    };
+    try {
+      (provider as unknown as Record<symbol, unknown>)[
+        WRAPPED_REQUEST_OWNER_SYMBOL
+      ] = this;
+    } catch {
+      /* frozen provider: symbol write fails below too and aborts cleanly */
+    }
+    return this.installWrappedRequest(provider, wrappedRequest);
+  }
+
+  /** Install the wrapper function onto the provider; separated so the
+   * routing shim above stays small. */
+  private installWrappedRequest(
+    provider: EIP1193Provider,
+    wrappedRequest: WrappedRequestFunction
+  ): boolean {
+    // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
+    wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
+
+    // Both writes go inside the try. A frozen or non-extensible provider
+    // throws on the symbol assignment just as readily as on `request`, and
+    // that one used to sit outside the guard, so an unwrappable provider
+    // aborted registration instead of being skipped.
+    try {
+      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
+        wrappedRequest;
+      provider.request = wrappedRequest;
+      return true;
+    } catch (e) {
+      logger.warn("Failed to wrap provider.request; skipping", e);
+      return false;
+    }
+  }
+
+  /**
+   * The wrapper body proper: everything a request observation does, run
+   * against THIS instance's registry, wallet state, and event queue. Kept
+   * as a method so a surviving wrapper installed by a previous SDK
+   * instance can hand calls to the current one.
+   */
+  private async dispatchWrappedRequest<T>(
+    { method, params }: RequestArguments,
+    provider: EIP1193Provider,
+    request: (args: RequestArguments) => Promise<unknown>
+  ): Promise<T | null | undefined> {
       // Learn the chain from a call the APP was making anyway.
       //
       // A standards-compliant provider need not expose a synchronous `chainId`
@@ -190,7 +260,7 @@ export class EvmRequestTracker {
       ) {
         if (!this.deps.isAutocaptureEnabled("signature")) {
           logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
-          return request({ method, params });
+          return request({ method, params }) as Promise<T | null | undefined>;
         }
         // Issue the wallet call FIRST, before the chain lookup is even
         // started. Not awaiting our own lookup is not enough: a provider that
@@ -300,7 +370,7 @@ export class EvmRequestTracker {
       ) {
         if (!this.deps.isAutocaptureEnabled("transaction")) {
           logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
-          return request({ method, params });
+          return request({ method, params }) as Promise<T | null | undefined>;
         }
         // Issue the wallet call FIRST, for the same reason as the signature
         // path above: a provider that serializes RPC would otherwise queue the
@@ -374,24 +444,7 @@ export class EvmRequestTracker {
         }
       }
 
-      return request({ method, params });
-    };
-    // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
-    wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
-
-    // Both writes go inside the try. A frozen or non-extensible provider
-    // throws on the symbol assignment just as readily as on `request`, and
-    // that one used to sit outside the guard, so an unwrappable provider
-    // aborted registration instead of being skipped.
-    try {
-      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
-        wrappedRequest;
-      provider.request = wrappedRequest;
-      return true;
-    } catch (e) {
-      logger.warn("Failed to wrap provider.request; skipping", e);
-      return false;
-    }
+      return request({ method, params }) as Promise<T | null | undefined>;
   }
 
   private buildSignatureEventPayload(

@@ -28,6 +28,19 @@ export type WrappedRequestFunction = (<T>(args: RequestArguments) => Promise<T |
 
 export const WRAPPED_REQUEST_REF_SYMBOL = Symbol("formoWrappedRequestRef");
 
+/**
+ * The SDK instance a provider's installed wrapper currently reports to.
+ *
+ * The wrapper survives an SDK rebuild (nothing restores `provider.request`),
+ * and its closure holds the instance that installed it - whose event queue
+ * is CLOSED after cleanup. Without this slot, a rebuilt instance saw
+ * "already wrapped", reported success, and every request-derived event
+ * silently died in the old instance's queue. The wrapper reads this slot on
+ * every call and routes to the current owner; re-registration just rebinds
+ * it.
+ */
+export const WRAPPED_REQUEST_OWNER_SYMBOL = Symbol("formoWrappedRequestOwner");
+
 export interface WrappedEIP1193Provider extends EIP1193Provider {
   [WRAPPED_REQUEST_REF_SYMBOL]?: WrappedRequestFunction;
 }

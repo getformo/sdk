@@ -212,6 +212,53 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("names the signer on connects even when the session forms after registration", async () => {
+    // The recommended order is register-early-then-connect, so the peer
+    // is unknown at registration. The name resolves LIVE per event: once
+    // the session exists, its connect carries the signer.
+    const provider = makeWcProvider({});
+    provider.isWalletConnect = true;
+    const { formo, sent } = await setup();
+
+    formo.registerProvider(provider);
+    await settle();
+
+    // Session forms now, after registration.
+    provider.session = { peer: { metadata: { name: PEER, url: "https://ledger.com" } } };
+    provider.accounts = [ADDR];
+    provider.emit("accountsChanged", [ADDR]);
+    await settle();
+
+    const connect = sent.find((e) => e.type === "connect");
+    expect(connect?.properties?.providerName).to.equal(PEER);
+    formo.cleanup?.();
+  });
+
+  it("keeps capturing after an SDK rebuild over the same provider", async () => {
+    // The wrapper survives a rebuild and used to keep feeding the OLD
+    // instance's closed queue while the new registration reported success.
+    // Ownership now rebinds: the new instance's queue gets the events.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const first = await setup();
+    expect(first.formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    first.formo.cleanup?.();
+
+    const second = await setup();
+    expect(second.formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    second.sent.length = 0;
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      second.sent.filter((e) => e.type === "signature").length,
+      "the LIVE instance captures requested + confirmed"
+    ).to.equal(2);
+    second.formo.cleanup?.();
+  });
+
   it("refuses in wagmi mode, where the connector system already tracks the session", async () => {
     const wagmiConfig: any = {
       subscribe: () => () => undefined,

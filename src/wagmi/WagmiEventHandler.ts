@@ -1424,10 +1424,21 @@ export class WagmiEventHandler {
    * already recorded the new address synchronously by the time this runs. The
    * `lastAddress` check below is what makes the two paths mutually exclusive.
    */
+  private handleActiveAddressChangeEntryKick(): void {
+    // An account switch replaces the connection object; kick a lookup for
+    // the new one so events that follow can name the wallet.
+    try {
+      this.kickWalletConnectPeerLookup(this.getState());
+    } catch {
+      /* a throwing store must not break the flow */
+    }
+  }
+
   private async handleActiveAddressChange(
     address: string | undefined,
     prevAddress: string | undefined
   ): Promise<void> {
+    this.handleActiveAddressChangeEntryKick();
     const state = this.getState();
     if (state.status !== "connected") return;
 
