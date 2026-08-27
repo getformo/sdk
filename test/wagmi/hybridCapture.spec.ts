@@ -292,6 +292,86 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("records the chain that is live when a slow getProvider resolves", async () => {
+    // connector.getProvider is asynchronous. A chain switch that lands
+    // while it is in flight fires before the provider exists, so a chain
+    // snapshot taken when the wrap was KICKED would stick as the recorded
+    // chain. The wrap must read the store when it RESOLVES.
+    const provider: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    };
+    const state = makeState(provider, 137);
+    state.connections.get("c1").connector.getProvider = () =>
+      new Promise((resolve) => setTimeout(() => resolve(provider), 50));
+    const subscriptions: Subscription[] = [];
+    const { formo, sent } = await setup(true, { provider, state, subscriptions });
+
+    // The wrap is still pending. Switch chains under it.
+    const prev = subscriptions.map((s) => s.selector(state));
+    state.chainId = 10;
+    state.connections.get("c1").chainId = 10;
+    subscriptions.forEach((s, i) => s.listener(s.selector(state), prev[i]));
+    await new Promise((r) => setTimeout(r, 80));
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    expect(chains).to.deep.equal([10, 10]);
+    formo.cleanup?.();
+  });
+
+  it("wraps the new provider when the active connector switches", async () => {
+    // A connector switch keeps status "connected", so only the connection
+    // subscription sees it. The new connection's provider must be wrapped
+    // from there, and later chain reports must go to IT, not to the
+    // previously wrapped provider.
+    const makeBareProvider = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const providerA: any = makeBareProvider();
+    const providerB: any = makeBareProvider();
+    const subscriptions: Subscription[] = [];
+    const { formo, sent, state } = await setup(true, {
+      provider: providerA,
+      chainId: 137,
+      subscriptions,
+    });
+    state.connections.set("c2", {
+      accounts: [ADDR],
+      chainId: 10,
+      connector: {
+        id: "rabby",
+        name: "Rabby",
+        type: "injected",
+        uid: "2",
+        getProvider: async () => providerB,
+      },
+    });
+
+    const prev = subscriptions.map((s) => s.selector(state));
+    state.current = "c2";
+    state.chainId = 10;
+    subscriptions.forEach((s, i) => s.listener(s.selector(state), prev[i]));
+    await settle();
+
+    await providerB.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await providerA.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    // Two from provider B on ITS chain, then two from provider A still on
+    // the chain it was wrapped with - B's report must not bleed onto A.
+    expect(chains).to.deep.equal([10, 10, 137, 137]);
+    formo.cleanup?.();
+  });
+
   it("stands down when a pending mutation owns the request", async () => {
     const { formo, sent, provider } = await setup();
     pendingMutations.push({

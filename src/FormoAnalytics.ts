@@ -1711,15 +1711,20 @@ export class FormoAnalytics implements IFormoAnalytics {
    * request wrapper installs here. Double counting is prevented in the
    * wrapper via `shouldSkipRequestCapture`.
    */
-  public _wrapWagmiProvider(provider: EIP1193Provider, chainId?: number): void {
-    if (this.isCleanedUp || !isValidProvider(provider)) return;
+  public _wrapWagmiProvider(
+    provider: EIP1193Provider,
+    chainId?: number
+  ): boolean {
+    if (this.isCleanedUp || !isValidProvider(provider)) return false;
     try {
       this.evmRequests.registerRequestListeners(provider);
       if (chainId !== undefined) {
         this.evm.rememberChain(provider, chainId);
       }
+      return true;
     } catch (e) {
       logger.warn("Failed to wrap wagmi provider for hybrid capture", e);
+      return false;
     }
   }
 

@@ -672,6 +672,10 @@ export class WagmiEventHandler {
       (key, prevKey) => {
         const [, address] = key.split("|");
         const [, prevAddress] = (prevKey ?? "|").split("|");
+        // A connector switch keeps status "connected", so the status
+        // subscription never re-wraps; the NEW active connection's provider
+        // must be instrumented from here or its imperative calls are lost.
+        this.wrapActiveConnectorProvider(this.getState());
         this.handleActiveAddressChange(
           address || undefined,
           prevAddress || undefined
@@ -1747,14 +1751,23 @@ export class WagmiEventHandler {
   ): Promise<void> {
     // Keep the fallback-wrapped provider's registry chain in step with the
     // store, so request-derived events are labelled correctly even when the
-    // provider exposes no synchronous chainId.
+    // provider exposes no synchronous chainId. Only when the report is
+    // about the connection that provider belongs to: after a connector
+    // switch the store's chain describes the NEW connection, and writing it
+    // to the old provider would mislabel that wallet's events.
     if (this.fallbackProvider !== undefined) {
-      try {
-        (this.formo as unknown as {
-          _rememberWagmiProviderChain?: (p: unknown, c: number | undefined) => void;
-        })._rememberWagmiProviderChain?.(this.fallbackProvider, chainId);
-      } catch {
-        /* never let bookkeeping break the chain flow */
+      const live = this.getState();
+      const activeConnection = live.current
+        ? live.connections.get(live.current)
+        : undefined;
+      if (activeConnection === this.fallbackConnection) {
+        try {
+          (this.formo as unknown as {
+            _rememberWagmiProviderChain?: (p: unknown, c: number | undefined) => void;
+          })._rememberWagmiProviderChain?.(this.fallbackProvider, chainId);
+        } catch {
+          /* never let bookkeeping break the chain flow */
+        }
       }
     }
 
@@ -2865,7 +2878,10 @@ export class WagmiEventHandler {
    */
   private wrappedConnections = new WeakSet<object>();
 
-  /** The provider this instance wrapped, for chain updates. */
+  /** The active connection this instance wrapped, and its provider, for
+   * chain updates. Kept as a pair so a chain report is only ever applied
+   * to the provider of the connection it describes. */
+  private fallbackConnection?: object;
   private fallbackProvider?: unknown;
 
   private wrapActiveConnectorProvider(state: WagmiState): void {
@@ -2894,18 +2910,40 @@ export class WagmiEventHandler {
       return;
     }
     this.wrappedConnections.add(connection as object);
-    // 2: the fallback installs only the request wrapper, so a provider
-    // without a synchronous chainId property would never teach the
-    // registry its chain and its events would carry chain 0. The wagmi
-    // store knows; feed it at wrap time and on every later chain change.
-    const chainId = connection.chainId;
     connector
       .getProvider()
       .then((provider) => {
-        this.fallbackProvider = provider;
-        (this.formo as unknown as {
-          _wrapWagmiProvider?: (p: unknown, chainId?: number) => void;
-        })._wrapWagmiProvider?.(provider, typeof chainId === "number" ? chainId : undefined);
+        // The fallback installs only the request wrapper, so a provider
+        // without a synchronous chainId property would never teach the
+        // registry its chain and its events would carry chain 0. The wagmi
+        // store knows; feed it here and on every later chain change. Read
+        // the chain from LIVE state, not from a snapshot taken before this
+        // asynchronous resolution: a switch that lands while getProvider is
+        // in flight fires handleChainChange before fallbackProvider exists,
+        // so a pre-resolution snapshot would stick as the recorded chain.
+        const live = this.getState();
+        const stillActive =
+          live.current !== undefined &&
+          live.connections.get(live.current) === connection;
+        const chainId = stillActive
+          ? this.getActiveConnectionChainId(live) ?? live.chainId
+          : undefined;
+        const wrapped = (this.formo as unknown as {
+          _wrapWagmiProvider?: (p: unknown, chainId?: number) => boolean;
+        })._wrapWagmiProvider?.(
+          provider,
+          typeof chainId === "number" ? chainId : undefined
+        );
+        if (wrapped === false) {
+          // The provider was refused (invalid shape, torn-down SDK). Leave
+          // the connection unguarded so a later resolution can retry.
+          this.wrappedConnections.delete(connection as object);
+          return;
+        }
+        if (stillActive) {
+          this.fallbackConnection = connection as object;
+          this.fallbackProvider = provider;
+        }
       })
       .catch(() => {
         // Mutation-only capture remains; retry on the next connection.
