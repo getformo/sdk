@@ -98,7 +98,7 @@ describe("wagmi hybrid capture", () => {
     options: { mutationKey: string[] };
   }> = [];
 
-  async function setup() {
+  async function setup(captureImperative = true) {
     pendingMutations.length = 0;
     const provider = makeProvider();
     const connections = new Map();
@@ -128,7 +128,7 @@ describe("wagmi hybrid capture", () => {
     };
     const formo = await FormoAnalytics.init("test-write-key", {
       tracking: true,
-      wagmi: { config, queryClient },
+      wagmi: { config, queryClient, captureImperative },
     });
     const sent: any[] = [];
     sandbox.stub((formo as any).eventManager, "addEvent")
@@ -139,6 +139,18 @@ describe("wagmi hybrid capture", () => {
   }
 
   const settle = () => new Promise((r) => setTimeout(r, 40));
+
+  it("does NOT instrument the provider unless explicitly opted in", async () => {
+    // Wagmi mode's baseline contract: observe state and caches, never
+    // touch the signing transport. Instrumentation is opt-in.
+    const { formo, sent, provider } = await setup(false);
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(sent.filter((e) => e.type === "signature")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
 
   it("captures an imperative personal_sign that creates no mutation", async () => {
     const { formo, sent, provider } = await setup();
