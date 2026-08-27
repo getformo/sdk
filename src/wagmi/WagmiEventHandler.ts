@@ -221,8 +221,6 @@ const walletConnectPeerLookups = new WeakSet<object>();
  * newest kicked one, so a slow resolution from a PREVIOUS session cannot
  * land after the current session's and overwrite it. */
 const walletConnectPeerLatest = new WeakMap<object, object>();
-/** Connections whose provider already has the hybrid-capture wrapper. */
-const wagmiWrappedConnections = new WeakSet<object>();
 
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
@@ -1747,6 +1745,19 @@ export class WagmiEventHandler {
     chainId: number | undefined,
     prevChainId: number | undefined
   ): Promise<void> {
+    // Keep the fallback-wrapped provider's registry chain in step with the
+    // store, so request-derived events are labelled correctly even when the
+    // provider exposes no synchronous chainId.
+    if (this.fallbackProvider !== undefined) {
+      try {
+        (this.formo as unknown as {
+          _rememberWagmiProviderChain?: (p: unknown, c: number | undefined) => void;
+        })._rememberWagmiProviderChain?.(this.fallbackProvider, chainId);
+      } catch {
+        /* never let bookkeeping break the chain flow */
+      }
+    }
+
     if (chainId === prevChainId || chainId === undefined) {
       return;
     }
@@ -2844,6 +2855,19 @@ export class WagmiEventHandler {
    * dedup. Fire-and-forget per connection; a provider that cannot be
    * produced simply keeps mutation-only capture.
    */
+  /**
+   * Connections THIS instance has wrapped. Deliberately per-instance, not
+   * module-level: a module-level guard let a rebuilt SDK instance skip
+   * re-wrapping, so ownership stayed with the torn-down instance and every
+   * capture died in its closed queue - and it also stopped a second
+   * write-key instance from ever registering. Re-wrapping is safe and
+   * cheap: the request tracker rebinds ownership of an intact wrapper.
+   */
+  private wrappedConnections = new WeakSet<object>();
+
+  /** The provider this instance wrapped, for chain updates. */
+  private fallbackProvider?: unknown;
+
   private wrapActiveConnectorProvider(state: WagmiState): void {
     // OPT-IN only. Wagmi mode's baseline never touches the signing
     // transport; instrumenting the provider is an explicit integrator
@@ -2865,21 +2889,27 @@ export class WagmiEventHandler {
     if (
       !connection ||
       typeof connector?.getProvider !== "function" ||
-      wagmiWrappedConnections.has(connection as object)
+      this.wrappedConnections.has(connection as object)
     ) {
       return;
     }
-    wagmiWrappedConnections.add(connection as object);
+    this.wrappedConnections.add(connection as object);
+    // 2: the fallback installs only the request wrapper, so a provider
+    // without a synchronous chainId property would never teach the
+    // registry its chain and its events would carry chain 0. The wagmi
+    // store knows; feed it at wrap time and on every later chain change.
+    const chainId = connection.chainId;
     connector
       .getProvider()
       .then((provider) => {
+        this.fallbackProvider = provider;
         (this.formo as unknown as {
-          _wrapWagmiProvider?: (p: unknown) => void;
-        })._wrapWagmiProvider?.(provider);
+          _wrapWagmiProvider?: (p: unknown, chainId?: number) => void;
+        })._wrapWagmiProvider?.(provider, typeof chainId === "number" ? chainId : undefined);
       })
       .catch(() => {
         // Mutation-only capture remains; retry on the next connection.
-        wagmiWrappedConnections.delete(connection as object);
+        this.wrappedConnections.delete(connection as object);
       });
   }
 

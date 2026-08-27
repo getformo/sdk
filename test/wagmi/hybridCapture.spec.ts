@@ -98,13 +98,27 @@ describe("wagmi hybrid capture", () => {
     options: { mutationKey: string[] };
   }> = [];
 
-  async function setup(eip1193Fallback = true) {
-    pendingMutations.length = 0;
-    const provider = makeProvider();
+  type Subscription = {
+    selector: (s: unknown) => unknown;
+    listener: (next: unknown, prev: unknown) => void;
+  };
+
+  type SetupOpts = {
+    /** Reuse an existing provider (remount / side-by-side scenarios). */
+    provider?: any;
+    /** Reuse existing wagmi state (remount / side-by-side scenarios). */
+    state?: any;
+    /** Chain the store reports for the connection. */
+    chainId?: number;
+    /** Collects every config.subscribe call so tests can fire updates. */
+    subscriptions?: Subscription[];
+  };
+
+  function makeState(provider: any, chainId: number) {
     const connections = new Map();
     connections.set("c1", {
       accounts: [ADDR],
-      chainId: 1,
+      chainId,
       connector: {
         id: "metamask",
         name: "MetaMask",
@@ -113,9 +127,18 @@ describe("wagmi hybrid capture", () => {
         getProvider: async () => provider,
       },
     });
-    const state = { status: "connected", connections, current: "c1", chainId: 1 };
+    return { status: "connected", connections, current: "c1", chainId };
+  }
+
+  async function setup(eip1193Fallback = true, opts: SetupOpts = {}) {
+    pendingMutations.length = 0;
+    const provider = opts.provider ?? makeProvider();
+    const state = opts.state ?? makeState(provider, opts.chainId ?? 1);
     const config: any = {
-      subscribe: () => () => undefined,
+      subscribe: (selector: any, listener: any) => {
+        opts.subscriptions?.push({ selector, listener });
+        return () => undefined;
+      },
       getState: () => state,
       state,
     };
@@ -135,7 +158,7 @@ describe("wagmi hybrid capture", () => {
       .callsFake(async (e: any) => { sent.push(e); });
     // The wrap resolves through connector.getProvider's microtask.
     await new Promise((r) => setTimeout(r, 20));
-    return { formo, sent, provider };
+    return { formo, sent, provider, state };
   }
 
   const settle = () => new Promise((r) => setTimeout(r, 40));
@@ -174,6 +197,98 @@ describe("wagmi hybrid capture", () => {
 
     const statuses = sent.filter((e) => e.type === "transaction").map((e) => e.status);
     expect(statuses).to.include.members(["started", "broadcasted"]);
+    formo.cleanup?.();
+  });
+
+  it("keeps capturing after an SDK remount over the same connection", async () => {
+    // React strict/dev remounts rebuild the SDK. The wrap guard must not be
+    // page-global: the new instance has to take ownership of the wrapper,
+    // or captures die in the old instance's closed queue.
+    const first = await setup();
+    first.formo.cleanup?.();
+
+    const second = await setup(true, { provider: first.provider, state: first.state });
+    await second.provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(
+      second.sent.filter((e) => e.type === "signature").length,
+      "the remounted instance captures"
+    ).to.equal(2);
+    second.formo.cleanup?.();
+  });
+
+  it("routes captures to the NEWEST instance when two run side by side", async () => {
+    // Two live instances over one connection: multiple write-key
+    // destinations. The wrapper's owner list dispatches to the newest
+    // non-disposed registrant, so the guard must let the second instance
+    // register at all.
+    const first = await setup();
+    const second = await setup(true, { provider: first.provider, state: first.state });
+
+    await second.provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      second.sent.filter((e) => e.type === "signature").length,
+      "the newest instance captures"
+    ).to.equal(2);
+    expect(
+      first.sent.filter((e) => e.type === "signature").length,
+      "the older instance stands by"
+    ).to.equal(0);
+    second.formo.cleanup?.();
+    first.formo.cleanup?.();
+  });
+
+  it("labels events with the store's chain when the provider has no sync chainId", async () => {
+    // Standards-compliant providers need not expose a synchronous chainId
+    // property, and the fallback wrapper is the ONLY capture path here, so
+    // the registry would otherwise never learn the chain and events would
+    // carry chain 0. The wagmi store knows; the wrap feeds it.
+    const provider: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    };
+    const { formo, sent } = await setup(true, { provider, chainId: 137 });
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    expect(chains).to.deep.equal([137, 137]);
+    formo.cleanup?.();
+  });
+
+  it("follows chain switches reported by the wagmi store", async () => {
+    const provider: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    };
+    const subscriptions: Subscription[] = [];
+    const { formo, sent, state } = await setup(true, {
+      provider,
+      chainId: 137,
+      subscriptions,
+    });
+
+    // The store switches chains: mutate state, then fire every subscriber
+    // the way wagmi would, with (selected(next), selected(prev)).
+    const prev = subscriptions.map((s) => s.selector(state));
+    state.chainId = 10;
+    state.connections.get("c1").chainId = 10;
+    subscriptions.forEach((s, i) => s.listener(s.selector(state), prev[i]));
+    await settle();
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    expect(chains).to.deep.equal([10, 10]);
     formo.cleanup?.();
   });
 
