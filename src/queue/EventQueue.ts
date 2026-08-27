@@ -119,6 +119,10 @@ export class EventQueue implements IEventQueue {
   private wallElapsed = 0;
   private readonly monotonicStart = monotonicNow();
   private canSend?: () => boolean;
+  // Bumped by every clear(), so an enqueue() suspended on its hash awaits
+  // can tell that a withdrawal happened in the gap even if consent has
+  // already been granted again by the time it resumes.
+  private clearSeq = 0;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
   private closed = false;
@@ -197,6 +201,7 @@ export class EventQueue implements IEventQueue {
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
+    this.clearSeq++;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -256,6 +261,7 @@ export class EventQueue implements IEventQueue {
       return;
     }
 
+    const clearSeqAtEntry = this.clearSeq;
     const message_id = await this.generateMessageId(event);
     const dedupKey = await this.generateDedupKey(event);
 
@@ -271,6 +277,10 @@ export class EventQueue implements IEventQueue {
       this.clear();
       return;
     }
+    // A withdrawal that was already reversed by the time we resume still
+    // counts: this event predates it, and clear() dropped everything that
+    // was pending then. Sampling consent alone cannot see that.
+    if (this.clearSeq !== clearSeqAtEntry) return;
 
     // check if an identical event was accepted within the dedup window
     if (this.isDuplicate(dedupKey)) {

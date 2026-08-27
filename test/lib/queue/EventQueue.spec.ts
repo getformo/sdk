@@ -1053,6 +1053,39 @@ describe("EventQueue", () => {
       expect((eventQueue as any).queue, "accepted once consent is back").to.have.length(1);
     });
 
+    it("drops an event whose consent was withdrawn AND restored while it was being hashed", async () => {
+      // Sampling consent after the awaits sees it granted again. The event
+      // predates the withdrawal, and clear() dropped everything pending
+      // then, so it must not slip through on the round trip.
+      useUniqueCryptoHashes();
+      let allowed = true;
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+
+      const event = createMockEvent({ properties: { n: 2 } });
+      const suspended = eventQueue.enqueue(event);
+      allowed = false;
+      eventQueue.clear(); // what optOutTracking() does
+      allowed = true;
+      await suspended;
+
+      expect((eventQueue as any).queue, "nothing buffered").to.have.length(0);
+      await eventQueue.flush();
+      expect(fetchStub.called).to.be.false;
+
+      // Not remembered either: a fresh send of it after opt-in goes.
+      await eventQueue.enqueue({ ...event });
+      expect((eventQueue as any).queue, "accepted afresh").to.have.length(1);
+    });
+
     it("enqueue is a no-op once canSend() is false", async () => {
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
