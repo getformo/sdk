@@ -840,6 +840,33 @@ describe("EventQueue", () => {
       expect(fetchStub.called, "no network send after opt-out").to.be.false;
     });
 
+    it("does not buffer an event whose consent was withdrawn while it was being hashed", async () => {
+      // enqueue() suspends on its hash awaits after passing the consent
+      // gate. Withdrawal in that gap must still stop the event from being
+      // buffered or remembered as accepted, not merely from being sent.
+      useUniqueCryptoHashes();
+      let allowed = true;
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+
+      const suspended = eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      allowed = false;
+      await suspended;
+
+      expect((eventQueue as any).queue, "nothing buffered").to.have.length(0);
+      expect((eventQueue as any).payloadHashes.size, "nothing remembered").to.equal(0);
+      await eventQueue.flush();
+      expect(fetchStub.called).to.be.false;
+    });
+
     it("enqueue is a no-op once canSend() is false", async () => {
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",

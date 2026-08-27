@@ -73,6 +73,18 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 // the wall clock happens to fall (see generateDedupKey).
 const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
 
+/**
+ * Elapsed-time clock for the dedup window. Monotonic where the platform
+ * offers one: a wall-clock step (NTP correction, manual change) would
+ * otherwise expire entries early or, stepping backwards, file a new entry
+ * behind older ones with later expiries, where the front-prune would not
+ * reach it until they expired.
+ */
+const elapsedNow = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
 export class EventQueue implements IEventQueue {
   private writeKey: string;
   private apiHost: string;
@@ -238,6 +250,13 @@ export class EventQueue implements IEventQueue {
     // would push and flush immediately - the exact shape of the bug close()
     // exists to stop.
     if (this.closed) return;
+    // Consent can be withdrawn in the same gap. The flush gate would still
+    // stop the send, but the contract of this path is to never buffer after
+    // withdrawal, not merely to never send.
+    if (this.canSend && !this.canSend()) {
+      this.clear();
+      return;
+    }
 
     // check if an identical event was accepted within the dedup window
     if (this.isDuplicate(dedupKey)) {
@@ -486,7 +505,7 @@ export class EventQueue implements IEventQueue {
    * no timer of its own.
    */
   private isDuplicate(dedupKey: string): boolean {
-    const now = Date.now();
+    const now = elapsedNow();
     this.pruneExpired(now);
     if (this.payloadHashes.has(dedupKey)) return true;
 
@@ -499,10 +518,9 @@ export class EventQueue implements IEventQueue {
    *
    * Entries are in insertion order and every one expires a fixed interval
    * after insertion, so the first live entry ends the scan: each expired
-   * entry is visited once in its life, not once per enqueue. A clock that
-   * steps backwards can leave a later entry with an earlier expiry behind
-   * it; it then lingers until the entry ahead expires, which is at most the
-   * window and never causes a false duplicate beyond it.
+   * entry is visited once in its life, not once per enqueue. The clock is
+   * monotonic (see elapsedNow), which is what makes insertion order expiry
+   * order.
    *
    * Manual iteration: for..of over a Map does not compile under the ES5
    * build target, and Map.forEach cannot stop early. Deleting the current
