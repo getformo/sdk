@@ -245,15 +245,17 @@ export interface ReferralOptions {
  */
 export interface WagmiOptions {
   /**
-   * OPT-IN: also capture IMPERATIVE viem calls (walletClient.sendTransaction,
-   * .signMessage, .writeContract, raw request) by instrumenting the active
-   * connector's EIP-1193 provider with the same request wrapper the default
-   * mode uses. Off by default: wagmi mode's baseline contract is observing
-   * wagmi state and caches without touching the signing transport, and
-   * enabling this is an explicit, auditable decision. Hook-driven calls are
-   * never double-counted (a pending wagmi mutation stands the wrapper down).
+   * OPT-IN: fall back to the EIP-1193 request wrapper for wallet calls the
+   * wagmi caches cannot see - imperative viem calls
+   * (walletClient.sendTransaction, .signMessage, .writeContract, raw
+   * request) that create no mutation. The active connector's provider gets
+   * the same wrapper the SDK's default mode uses. Off by default: wagmi
+   * mode's baseline contract is observing wagmi state and caches without
+   * touching the signing transport, and enabling this is an explicit,
+   * auditable decision. Hook-driven calls are never double-counted (a
+   * pending wagmi mutation stands the wrapper down).
    */
-  captureImperative?: boolean;
+  eip1193Fallback?: boolean;
 
   /**
    * Wagmi config instance from createConfig()

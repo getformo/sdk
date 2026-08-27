@@ -2847,12 +2847,12 @@ export class WagmiEventHandler {
   private wrapActiveConnectorProvider(state: WagmiState): void {
     // OPT-IN only. Wagmi mode's baseline never touches the signing
     // transport; instrumenting the provider is an explicit integrator
-    // decision (options.wagmi.captureImperative), made auditable in
+    // decision (options.wagmi.eip1193Fallback), made auditable in
     // configuration rather than implied by a version bump.
     const optedIn =
       (this.formo as unknown as {
-        options?: { wagmi?: { captureImperative?: boolean } };
-      }).options?.wagmi?.captureImperative === true;
+        options?: { wagmi?: { eip1193Fallback?: boolean } };
+      }).options?.wagmi?.eip1193Fallback === true;
     if (!optedIn) {
       return;
     }

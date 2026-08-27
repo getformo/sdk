@@ -98,7 +98,7 @@ describe("wagmi hybrid capture", () => {
     options: { mutationKey: string[] };
   }> = [];
 
-  async function setup(captureImperative = true) {
+  async function setup(eip1193Fallback = true) {
     pendingMutations.length = 0;
     const provider = makeProvider();
     const connections = new Map();
@@ -128,7 +128,7 @@ describe("wagmi hybrid capture", () => {
     };
     const formo = await FormoAnalytics.init("test-write-key", {
       tracking: true,
-      wagmi: { config, queryClient, captureImperative },
+      wagmi: { config, queryClient, eip1193Fallback },
     });
     const sent: any[] = [];
     sandbox.stub((formo as any).eventManager, "addEvent")
