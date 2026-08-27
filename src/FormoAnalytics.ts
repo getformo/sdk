@@ -265,6 +265,12 @@ export class FormoAnalytics implements IFormoAnalytics {
       isAutocaptureEnabled: (t) => this.isAutocaptureEnabled(t),
       signature: (params, properties) => this.signature(params, properties),
       transaction: (params, properties) => this.transaction(params, properties),
+      // Hybrid capture: in wagmi mode the wrapper skips a request that a
+      // PENDING wagmi mutation already covers - the mutation handler
+      // captures it with ABI enrichment - and captures everything else
+      // (imperative viem calls that create no mutation).
+      shouldSkipRequestCapture: (method, params) =>
+        this.wagmiHandler?.hasMatchingPendingMutation(method, params) ?? false,
     });
 
     this.evmEvents = new EvmEventTracker(this.wallet, this.evm, {
@@ -1693,6 +1699,27 @@ export class FormoAnalytics implements IFormoAnalytics {
    * formo.registerProvider(wcProvider);
    * ```
    */
+  /**
+   * INTERNAL. Install the request wrapper on a wagmi connector's provider.
+   *
+   * Wagmi mode watches the store and caches, which see hook-driven calls
+   * only; imperative viem calls (walletClient.sendTransaction,
+   * .signMessage, .writeContract, raw request) create no mutation and were
+   * silently lost. Every viem client in a wagmi app is built on the
+   * connector's EIP-1193 provider, so wrapping that provider closes the
+   * gap. Lifecycle (connect/chain/disconnect) stays store-driven: only the
+   * request wrapper installs here. Double counting is prevented in the
+   * wrapper via `shouldSkipRequestCapture`.
+   */
+  public _wrapWagmiProvider(provider: EIP1193Provider): void {
+    if (this.isCleanedUp || !isValidProvider(provider)) return;
+    try {
+      this.evmRequests.registerRequestListeners(provider);
+    } catch (e) {
+      logger.warn("Failed to wrap wagmi provider for hybrid capture", e);
+    }
+  }
+
   public registerProvider(
     provider: EIP1193Provider,
     info?: { name?: string; rdns?: string; icon?: `data:image/${string}` }

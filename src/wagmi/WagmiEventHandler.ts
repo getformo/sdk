@@ -221,6 +221,8 @@ const walletConnectPeerLookups = new WeakSet<object>();
  * newest kicked one, so a slow resolution from a PREVIOUS session cannot
  * land after the current session's and overwrite it. */
 const walletConnectPeerLatest = new WeakMap<object, object>();
+/** Connections whose provider already has the hybrid-capture wrapper. */
+const wagmiWrappedConnections = new WeakSet<object>();
 
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
@@ -718,7 +720,9 @@ export class WagmiEventHandler {
     // connect may carry the generic name; the status flow awaits instead.
     // A throwing store must not break construction.
     try {
-      this.kickWalletConnectPeerLookup(this.getState());
+      const snapshot = this.getState();
+      this.kickWalletConnectPeerLookup(snapshot);
+      this.wrapActiveConnectorProvider(snapshot);
     } catch {
       /* the seed continues; names fall back to the connector's own */
     }
@@ -1054,7 +1058,9 @@ export class WagmiEventHandler {
     // synchronous by design, and an await here reorders transitions (it
     // demonstrably drops connects under rapid connect/disconnect cycles).
     try {
-      this.kickWalletConnectPeerLookup(this.getState());
+      const snapshot = this.getState();
+      this.kickWalletConnectPeerLookup(snapshot);
+      this.wrapActiveConnectorProvider(snapshot);
     } catch {
       // A throwing store must not break the status flow.
     }
@@ -2265,6 +2271,66 @@ export class WagmiEventHandler {
    * Handle signature mutations (signMessage, signTypedData)
    */
   /**
+   * Is a PENDING wagmi mutation already covering this wallet request?
+   *
+   * The hybrid-capture dedup. TanStack dispatches `pending` BEFORE the
+   * mutationFn issues the wallet call (verified against query-core), so a
+   * hook-driven request always finds its mutation here and the request
+   * wrapper stands down; an imperative viem call never does, and the
+   * wrapper captures it. Matching is by mutation type, refined with cheap
+   * parameter checks where the shapes allow, and errs toward NOT skipping:
+   * a duplicate is visible and diagnosable, a silent loss is neither.
+   */
+  public hasMatchingPendingMutation(method: string, params: unknown[]): boolean {
+    try {
+      const cache = this.queryClient?.getMutationCache() as unknown as {
+        getAll?: () => Array<{
+          state?: { status?: string; variables?: Record<string, unknown> };
+          options?: { mutationKey?: unknown[] };
+        }>;
+      };
+      const mutations = cache?.getAll?.();
+      if (!Array.isArray(mutations)) return false;
+
+      const wanted: Record<string, string[]> = {
+        personal_sign: ["signMessage"],
+        eth_signTypedData_v4: ["signTypedData"],
+        eth_sendTransaction: ["sendTransaction", "writeContract"],
+        wallet_sendCalls: ["sendCalls"],
+      };
+      const types = wanted[method];
+      if (!types) return false;
+
+      for (const mutation of mutations) {
+        if (mutation?.state?.status !== "pending") continue;
+        const key = mutation?.options?.mutationKey?.[0];
+        if (typeof key !== "string" || !types.includes(key)) continue;
+
+        // Cheap refinements. On mismatch keep scanning; on no basis to
+        // compare, treat the type-level match as decisive.
+        const variables = mutation.state?.variables;
+        if (key === "sendTransaction" && variables) {
+          const req = (Array.isArray(params) ? params[0] : undefined) as
+            | { to?: string }
+            | undefined;
+          const mutTo = (variables as { to?: string }).to;
+          if (
+            typeof req?.to === "string" &&
+            typeof mutTo === "string" &&
+            req.to.toLowerCase() !== mutTo.toLowerCase()
+          ) {
+            continue;
+          }
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Wallet attribution for mutation- and query-derived events.
    *
    * Mid-session events (signatures, transactions) fire after the peer
@@ -2768,6 +2834,55 @@ export class WagmiEventHandler {
    * FIRST connect names the real wallet. When the race is lost the event
    * honestly says "WalletConnect" and every later event names the peer.
    */
+  /**
+   * Install the request wrapper on the active connector's provider.
+   *
+   * This is what lets wagmi mode capture IMPERATIVE viem calls
+   * (walletClient.sendTransaction / .signMessage / .writeContract / raw
+   * request), which create no mutation and were silently lost. Hook-driven
+   * calls stay owned by the mutation handlers via the pending-mutation
+   * dedup. Fire-and-forget per connection; a provider that cannot be
+   * produced simply keeps mutation-only capture.
+   */
+  private wrapActiveConnectorProvider(state: WagmiState): void {
+    // OPT-IN only. Wagmi mode's baseline never touches the signing
+    // transport; instrumenting the provider is an explicit integrator
+    // decision (options.wagmi.eip1193Fallback), made auditable in
+    // configuration rather than implied by a version bump.
+    const optedIn =
+      (this.formo as unknown as {
+        options?: { wagmi?: { eip1193Fallback?: boolean } };
+      }).options?.wagmi?.eip1193Fallback === true;
+    if (!optedIn) {
+      return;
+    }
+    const connection = state.current
+      ? state.connections.get(state.current)
+      : undefined;
+    const connector = connection?.connector as
+      | { getProvider?: () => Promise<unknown> }
+      | undefined;
+    if (
+      !connection ||
+      typeof connector?.getProvider !== "function" ||
+      wagmiWrappedConnections.has(connection as object)
+    ) {
+      return;
+    }
+    wagmiWrappedConnections.add(connection as object);
+    connector
+      .getProvider()
+      .then((provider) => {
+        (this.formo as unknown as {
+          _wrapWagmiProvider?: (p: unknown) => void;
+        })._wrapWagmiProvider?.(provider);
+      })
+      .catch(() => {
+        // Mutation-only capture remains; retry on the next connection.
+        wagmiWrappedConnections.delete(connection as object);
+      });
+  }
+
   private kickWalletConnectPeerLookup(state: WagmiState): void {
     const connection = state.current
       ? state.connections.get(state.current)
