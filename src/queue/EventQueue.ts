@@ -68,6 +68,12 @@ const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 30 SECONDS
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
+// How long an accepted event's hash keeps suppressing identical events.
+// The hash folds in the timestamp truncated to the minute, so two identical
+// events can only collide within one minute; holding a hash any longer than
+// that cannot suppress anything.
+const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
+
 export class EventQueue implements IEventQueue {
   private writeKey: string;
   private apiHost: string;
@@ -81,7 +87,15 @@ export class EventQueue implements IEventQueue {
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
-  private payloadHashes: Set<string> = new Set();
+  // Accepted message ids and when each stops counting as a duplicate.
+  //
+  // Keyed on time, not on queue membership. Hashes used to be dropped when
+  // their event left the queue, which was the same thing while every event
+  // waited for the batch timer. Since the first event of a page load is sent
+  // the moment it arrives (see enqueue), its hash left with it, and an
+  // identical track() a moment later, the double-fire this exists to
+  // catch, was accepted (#372).
+  private payloadHashes: Map<string, number> = new Map();
   private canSend?: () => boolean;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
@@ -209,9 +223,9 @@ export class EventQueue implements IEventQueue {
     // check if the message already exists
     if (this.isDuplicate(message_id)) {
       logger.warn(
-        `Event already enqueued, try again after ${millisecondsToSecond(
-          this.flushIntervalMs
-        )} seconds.`
+        `Duplicate event dropped: an identical event was accepted less than ${millisecondsToSecond(
+          DEDUP_WINDOW_MS
+        )} seconds ago.`
       );
       return;
     }
@@ -285,11 +299,9 @@ export class EventQueue implements IEventQueue {
 
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
-    // Only remove hashes for flushed items so duplicate detection remains
-    // active for events still in the queue. Also decrement the running
-    // byte total by exactly what left the queue.
+    // Decrement the running byte total by exactly what left the queue. The
+    // dedup hashes stay: they expire on their own clock, not on flush.
     for (const item of items) {
-      this.payloadHashes.delete(item.message.message_id);
       this.queueByteSize -= item.byteSize;
     }
     // Re-anchor to the exact invariant when the queue empties, so any
@@ -448,11 +460,22 @@ export class EventQueue implements IEventQueue {
     return false;
   }
 
-  private isDuplicate(eventId: string) {
-    // check if exists a message with identical payload within 1 minute
+  /**
+   * Whether an identical event was accepted within the dedup window. Records
+   * the id when it was not. Expired ids are pruned here, on the enqueue
+   * path, so the map is bounded by one minute of accepted events and needs
+   * no timer of its own.
+   */
+  private isDuplicate(eventId: string): boolean {
+    const now = Date.now();
+    // Deleting during Map.forEach is spec-safe; for..of is off-limits under
+    // the ES5 build target.
+    this.payloadHashes.forEach((expiresAt, id) => {
+      if (expiresAt <= now) this.payloadHashes.delete(id);
+    });
     if (this.payloadHashes.has(eventId)) return true;
 
-    this.payloadHashes.add(eventId);
+    this.payloadHashes.set(eventId, now + DEDUP_WINDOW_MS);
     return false;
   }
 

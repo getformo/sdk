@@ -200,14 +200,74 @@ describe("EventQueue", () => {
     it("should batch subsequent events instead of flushing each", async () => {
       await eventQueue.enqueue(createMockEvent());
       await (eventQueue as any).pendingFlush;
-      await eventQueue.enqueue(
-        createMockEvent({ original_timestamp: new Date(Date.now() + 1).toISOString() })
-      );
+      // A distinct event: the dedup hash truncates timestamps to the
+      // minute, so a same-minute copy would be dropped as a duplicate rather
+      // than batched, and this test would pass for the wrong reason.
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
       await (eventQueue as any).pendingFlush;
 
       // Only the first event's immediate flush hit the network; the second
       // stays queued for the flushAt/interval/pagehide paths.
       expect(fetchStub.calledOnce).to.be.true;
+      expect((eventQueue as any).queue).to.have.length(1);
+    });
+
+    // The dedup hash used to leave with its event at flush time. Once the
+    // first event of a page load was sent the instant it arrived (#326),
+    // its hash went with it, so a double-fired track() a moment later was
+    // accepted instead of suppressed (#372). The hash now lives for the
+    // full dedup window whatever the flush timing.
+    describe("duplicate suppression", () => {
+      it("drops an identical event sent right after the immediate first flush", async () => {
+        const event = createMockEvent();
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        expect(fetchStub.calledOnce).to.be.true;
+
+        await eventQueue.enqueue({ ...event });
+        await (eventQueue as any).pendingFlush;
+
+        expect(fetchStub.calledOnce, "no second send").to.be.true;
+        expect((eventQueue as any).queue, "nothing left queued").to.have.length(0);
+      });
+
+      it("keeps suppressing after a later flush while the window is open", async () => {
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        const event = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(event);
+        await eventQueue.flush();
+        expect(fetchStub.callCount).to.equal(2);
+
+        clock.tick(30_000);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("accepts an identical event again once the window has passed", async () => {
+        // Same original_timestamp on purpose: an event created after the
+        // clock moves would hash differently on its own, which would prove
+        // nothing about the window.
+        const event = createMockEvent();
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+
+        clock.tick(60_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue).to.have.length(1);
+        expect((eventQueue as any).payloadHashes.size, "expired id pruned, new one recorded").to.equal(1);
+      });
+
+      it("still suppresses a duplicate of an event waiting in the queue", async () => {
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        const queued = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(queued);
+        await eventQueue.enqueue({ ...queued });
+        expect((eventQueue as any).queue).to.have.length(1);
+      });
     });
 
     it("should accept callback parameter", async () => {
@@ -712,7 +772,10 @@ describe("EventQueue", () => {
       await (eventQueue as any).pendingFlush;
       fetchStub.resetHistory();
 
-      await eventQueue.enqueue(createMockEvent());
+      // Distinct from the first: a same-minute copy would be dropped as a
+      // duplicate before ever reaching the buffer.
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      expect((eventQueue as any).queue, "event is buffered").to.have.length(1);
       allowed = false; // consent withdrawn while buffered
       await eventQueue.flush();
 
@@ -749,14 +812,15 @@ describe("EventQueue", () => {
       await (eventQueue as any).pendingFlush;
       fetchStub.resetHistory();
 
-      await eventQueue.enqueue(createMockEvent());
-      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
+      expect((eventQueue as any).queue, "events are buffered").to.have.length(2);
       eventQueue.clear();
       await eventQueue.flush();
       expect(fetchStub.called, "cleared events are not sent").to.be.false;
 
       // Queue still works after clear (byteSize/state re-anchored).
-      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 4 } }));
       await eventQueue.flush();
       expect(fetchStub.calledOnce, "post-clear enqueue still flushes").to.be
         .true;
