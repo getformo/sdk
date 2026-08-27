@@ -358,9 +358,24 @@ export class EventQueue implements IEventQueue {
       // before the keepalive fetch for the remaining items is dispatched.
       if (!drainAll) {
         await this.pendingFlush;
+        // The wait is a gap like any other: consent can go, and clear() or
+        // close() can empty the queue. Without this re-check a resumed
+        // flush would splice nothing and POST an empty batch.
+        if (this.canSend && !this.canSend()) {
+          this.clear();
+          safeCall(callback);
+          return Promise.resolve();
+        }
+        if (!this.queue.length) {
+          safeCall(callback);
+          return Promise.resolve();
+        }
       }
     }
 
+    // Captured for sendBatches: a clear() while a split batch is in flight
+    // must abandon the batches behind it even if consent is back by then.
+    const clearSeqAtFlush = this.clearSeq;
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
     // Decrement the running byte total by exactly what left the queue. The
@@ -382,7 +397,7 @@ export class EventQueue implements IEventQueue {
     // Split into chunks that fit within the browser's 64KB keepalive limit.
     const batches = this.splitIntoBatches(items, data);
 
-    return (this.pendingFlush = this.sendBatches(batches, data)
+    return (this.pendingFlush = this.sendBatches(batches, data, clearSeqAtFlush)
       .then((firstError) => {
         if (firstError) {
           safeCall(callback, firstError, data);
@@ -472,7 +487,11 @@ export class EventQueue implements IEventQueue {
    * Sends batches sequentially, notifying per-item callbacks on success/failure.
    * Returns the first error encountered (if any) so the caller can report it.
    */
-  private async sendBatches(batches: Batch[], allData: IFormoEventFlushPayload[]): Promise<Error | undefined> {
+  private async sendBatches(
+    batches: Batch[],
+    allData: IFormoEventFlushPayload[],
+    clearSeqAtFlush: number
+  ): Promise<Error | undefined> {
     let firstError: Error | undefined;
 
     for (let i = 0; i < batches.length; i++) {
@@ -481,8 +500,12 @@ export class EventQueue implements IEventQueue {
       // batches were spliced before opt-out, and split batches / retry
       // backoff span seconds. Re-check before every send and abandon
       // the remaining batches if consent was revoked mid-flush. They were
-      // never sent, so they must not count as accepted either.
-      if (this.canSend && !this.canSend()) {
+      // never sent, so they must not count as accepted either. A clear()
+      // in the gap counts even if consent is back: these items predate it.
+      if (
+        (this.canSend && !this.canSend()) ||
+        this.clearSeq !== clearSeqAtFlush
+      ) {
         for (let j = i; j < batches.length; j++) {
           this.releaseFingerprints(batches[j].items);
         }

@@ -445,6 +445,61 @@ describe("EventQueue", () => {
         expect((eventQueue as any).queue, "a delivered one is still a duplicate").to.have.length(1);
       });
 
+      it("abandons the batches behind an in-flight one after an opt-out / opt-in round trip", async () => {
+        // Consent sampled true again at the next batch boundary is not
+        // enough: these batches were spliced before the withdrawal, and
+        // clear() could not reach them. The generation counter can.
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        const largeProps: Record<string, string> = {};
+        for (let i = 0; i < 50; i++) largeProps[`field_${i}`] = "x".repeat(200);
+        const events = Array.from({ length: 8 }, (_, i) =>
+          createMockEvent({ properties: { ...largeProps, index: i } })
+        );
+        for (const e of events) await eventQueue.enqueue(e);
+        await (eventQueue as any).pendingFlush;
+        fetchStub.resetHistory();
+
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        const inFlight = eventQueue.flush();
+        await clock.tickAsync(0);
+        expect(fetchStub.calledOnce, "first split batch is in flight").to.be.true;
+
+        allowed = false;
+        eventQueue.clear();
+        allowed = true;
+        settle(makeResponse(200, "OK"));
+        await inFlight;
+
+        expect(fetchStub.calledOnce, "no further batch was sent").to.be.true;
+        const sent = new Set(
+          JSON.parse(fetchStub.firstCall.args[1].body).map((e: any) => e.properties.index)
+        );
+        const abandoned = events.find((e) => (e.properties as any).index !== 0 && !sent.has((e.properties as any).index))!;
+        await eventQueue.enqueue({ ...abandoned });
+        expect((eventQueue as any).queue, "an abandoned event can be sent again").to.have.length(1);
+      });
+
+      it("does not POST an empty batch when clear() empties the queue while flush waits", async () => {
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } })); // in flight
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } })); // buffered
+        const waiting = eventQueue.flush(); // waits on the in-flight one
+        eventQueue.clear();
+        settle(makeResponse(200, "OK"));
+        await waiting;
+
+        expect(fetchStub.calledOnce, "only the first event's flush hit the network").to.be.true;
+        expect(JSON.parse(fetchStub.firstCall.args[1].body)).to.have.length(1);
+      });
+
       it("keeps the fingerprint of an event whose send succeeded", async () => {
         const event = createMockEvent({ properties: { n: 1 } });
         await eventQueue.enqueue(event);
