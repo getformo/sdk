@@ -460,6 +460,30 @@ describe("EventQueue", () => {
         expect((eventQueue as any).queue, "forward step expires").to.have.length(1);
       });
 
+      it("keeps real pace after a forward wall-clock jump that is later corrected", async () => {
+        // A forward step counts (safe: expires early). The correction back
+        // must not leave the clock pinned: an event accepted after it must
+        // still expire 60s of real time later, not an hour later.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        const t0 = Date.now();
+        clock.setSystemTime(t0 + 3_600_000);
+        clock.setSystemTime(t0);
+        const event = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(event);
+        expect((eventQueue as any).queue).to.have.length(1);
+        await eventQueue.flush();
+
+        clock.tick(30_000);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "inside the window: duplicate").to.have.length(0);
+
+        clock.tick(30_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "60s of real time later: accepted").to.have.length(1);
+      });
+
       it("still suppresses a duplicate of an event waiting in the queue", async () => {
         await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
         await (eventQueue as any).pendingFlush;

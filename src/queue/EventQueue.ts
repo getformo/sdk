@@ -113,10 +113,11 @@ export class EventQueue implements IEventQueue {
   private payloadHashes: Map<string, { expiresAt: number; token: number }> =
     new Map();
   private acceptanceSeq = 0;
-  // Origins and high-water mark for elapsedNow().
-  private readonly wallStart = Date.now();
+  // State for elapsedNow(): the wall clock as a forward-only accumulator,
+  // and the monotonic origin.
+  private lastWall = Date.now();
+  private wallElapsed = 0;
   private readonly monotonicStart = monotonicNow();
-  private lastElapsed = 0;
   private canSend?: () => boolean;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
@@ -559,29 +560,36 @@ export class EventQueue implements IEventQueue {
 
   /**
    * Elapsed time since this queue was created, for the dedup window. Never
-   * decreases, and errs toward running fast.
+   * decreases, keeps real pace after any clock step, and errs toward
+   * running fast.
    *
    * Two sources, the larger wins. The monotonic clock (performance.now) is
    * immune to wall-clock steps but on some platforms stops while the OS is
    * suspended, so a device that sleeps mid-window would wake still inside
-   * it. The wall clock counts suspension but can step: forward steps only
-   * expire entries early, which is the safe direction for a duplicate guard;
-   * backward steps are absorbed by the other source and by the clamp.
+   * it. The wall clock counts suspension but can step, so it is read as a
+   * sum of forward deltas: a forward step (or suspension) is added and only
+   * expires entries early, the safe direction for a duplicate guard; a
+   * backward step adds nothing and the sum resumes at real pace from the
+   * new reading. A forward step later corrected backwards therefore leaves
+   * the clock ahead but still advancing, never pinned for the length of
+   * the step.
    *
-   * The clamp is what lets pruneExpired assume insertion order is expiry
-   * order. Per instance, so test clocks that start from zero are not pinned
-   * by a previous instance's high-water mark.
+   * Both sources are non-decreasing, so their max is, which is what lets
+   * pruneExpired assume insertion order is expiry order. Per instance, so
+   * test clocks that start from zero are unaffected by other instances.
    */
   private elapsedNow(): number {
-    const wall = Date.now() - this.wallStart;
+    const wallNow = Date.now();
+    const delta = wallNow - this.lastWall;
+    this.lastWall = wallNow;
+    if (delta > 0) this.wallElapsed += delta;
+
     const mono = monotonicNow();
     const monotonic =
       mono !== undefined && this.monotonicStart !== undefined
         ? mono - this.monotonicStart
         : 0;
-    const raw = Math.max(wall, monotonic);
-    if (raw > this.lastElapsed) this.lastElapsed = raw;
-    return this.lastElapsed;
+    return Math.max(this.wallElapsed, monotonic);
   }
 
   /**
