@@ -406,6 +406,26 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("prefers the active chain's account when the session differs per chain", async () => {
+    // WalletConnect permits different accounts per chain; the adopted
+    // address must be the one the ACTIVE chain authorized.
+    const OTHER = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
+    const provider = makeWcProvider({ peer: PEER });
+    provider.accounts = [];
+    provider.chainId = "0x1";
+    provider.session = {
+      peer: { metadata: { name: PEER } },
+      namespaces: { eip155: { accounts: [`eip155:11155111:${OTHER}`, `eip155:1:${ADDR}`] } },
+    };
+    const { formo, sent } = await setup();
+    formo.registerProvider(provider);
+    await settle();
+
+    const connect = sent.find((e) => e.type === "connect");
+    expect(connect?.address?.toLowerCase()).to.equal(ADDR.toLowerCase());
+    formo.cleanup?.();
+  });
+
   it("ignores non-EVM namespaces when adopting from the session", async () => {
     // A session can carry Solana alongside eip155; a non-EVM address fed
     // into EVM adoption would fail validation and drop the whole adoption.
