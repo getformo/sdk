@@ -1684,9 +1684,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    *
    * With several live SDK instances (multi write-key pages) registering
    * the SAME provider, request-derived events (signatures, transactions)
-   * go to the most recently registered live instance - the same
-   * single-observer semantics discovery has always had for the request
-   * wrapper. Lifecycle events (connect, chain, disconnect) reach every
+   * go to the most recently CREATED live instance, regardless of the
+   * order registrations happen to land in - the same single-observer
+   * semantics discovery has always had for the request wrapper. Lifecycle events (connect, chain, disconnect) reach every
    * instance. Fanning request observations out to all instances is a
    * separate feature.
    *
