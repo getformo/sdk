@@ -362,7 +362,7 @@ export class EvmRequestTracker {
                 capturedChainId,
                 provider
               ),
-            });
+            }, this.attributionFor(provider));
           } catch (e) {
             logger.error("Formo: Failed to track signature request", e);
           }
@@ -383,7 +383,7 @@ export class EvmRequestTracker {
                     capturedChainId,
                     provider
                   ),
-                });
+                }, this.attributionFor(provider));
               } catch (e) {
                 logger.error(
                   "Formo: Failed to track signature confirmation",
@@ -408,7 +408,7 @@ export class EvmRequestTracker {
                     capturedChainId,
                     provider
                   ),
-                });
+                }, this.attributionFor(provider));
               } catch (e) {
                 logger.error("Formo: Failed to track signature rejection", e);
               }
@@ -461,7 +461,7 @@ export class EvmRequestTracker {
               provider,
               txChainId
             );
-            await this.deps.transaction({ status: TransactionStatus.STARTED, ...payload });
+            await this.deps.transaction({ status: TransactionStatus.STARTED, ...payload }, this.attributionFor(provider));
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
           }
@@ -481,7 +481,7 @@ export class EvmRequestTracker {
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
                 transactionHash,
-              });
+              }, this.attributionFor(provider));
 
               // Start async polling for transaction receipt
               this.pollTransactionReceipt(provider, transactionHash, payload);
@@ -505,7 +505,7 @@ export class EvmRequestTracker {
                 await this.deps.transaction({
                   status: TransactionStatus.REJECTED,
                   ...payload,
-                });
+                }, this.attributionFor(provider));
               } catch (e) {
                 logger.error("Formo: Failed to track transaction rejection", e);
               }
@@ -516,6 +516,19 @@ export class EvmRequestTracker {
       }
 
       return request({ method, params }) as Promise<T | null | undefined>;
+  }
+
+  /**
+   * Wallet attribution for request-derived events.
+   *
+   * Live per read through the registry, so a WalletConnect session names
+   * its actual signer ("MetaMask Wallet", "Ledger Live") - the live-test
+   * rows had provider_name EMPTY on every signature and transaction, which
+   * made per-wallet activity unanswerable in the warehouse.
+   */
+  private attributionFor(provider: EIP1193Provider): IFormoEventProperties {
+    const info = this.registry.infoFor(provider);
+    return { providerName: info.name, rdns: info.rdns };
   }
 
   private buildSignatureEventPayload(
@@ -632,7 +645,7 @@ export class EvmRequestTracker {
                 status: TransactionStatus.CONFIRMED,
                 ...payload,
                 transactionHash,
-              })
+              }, this.attributionFor(provider))
               .catch((e) =>
                 logger.error("Formo: Failed to track transaction confirmation", e)
               );
@@ -643,7 +656,7 @@ export class EvmRequestTracker {
                 status: TransactionStatus.REVERTED,
                 ...payload,
                 transactionHash,
-              })
+              }, this.attributionFor(provider))
               .catch((e) =>
                 logger.error("Formo: Failed to track transaction revert", e)
               );
@@ -727,6 +740,7 @@ export class EvmRequestTracker {
       this.wallet.backfill(address, chainId, provider);
     }
 
+    const attribution = this.attributionFor(provider);
     const payloads = calls.map((call, index) => ({
       chainId,
       address,
@@ -736,6 +750,7 @@ export class EvmRequestTracker {
       properties: {
         batch_size: calls.length,
         batch_index: index,
+        ...attribution,
       } as IFormoEventProperties,
     }));
 

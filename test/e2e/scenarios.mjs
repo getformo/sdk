@@ -16,10 +16,10 @@ export const SCENARIOS = [
     expect: { unregistered: [] } },
   { name: "walletconnect: registerProvider adopts a session that predates the SDK, named by its signer", mode: "walletconnect",
     expect: { registered: ["detect@-/-~Ledger Live", `connect@1/${A}~Ledger Live`] } },
-  { name: "walletconnect: signatures and transactions flow through the registered provider", mode: "walletconnect",
+  { name: "walletconnect: signatures and transactions carry the signer's name", mode: "walletconnect",
     expect: {
-      signature: [`signature:requested@1/${A}`, `signature:confirmed@1/${A}`],
-      transaction: [`transaction:started@1/${A}`, `transaction:broadcasted@1/${A}`, `transaction:confirmed@1/${A}`] } },
+      signature: [`signature:requested@1/${A}~Ledger Live`, `signature:confirmed@1/${A}~Ledger Live`],
+      transaction: [`transaction:started@1/${A}~Ledger Live`, `transaction:broadcasted@1/${A}~Ledger Live`, `transaction:confirmed@1/${A}~Ledger Live`] } },
   { name: "walletconnect: a session swap renames events to the NEW signer", mode: "walletconnect",
     expect: { sessionSwap: [`disconnect@1/${A}~WalletConnect`, `connect@1/${B}~MetaMask Mobile`] } },
 
