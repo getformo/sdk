@@ -743,6 +743,73 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("a stale retry timer for a LEFT connector does not stomp the new connector", async () => {
+    // Connector A fails and schedules a retry. The user switches to B,
+    // whose only good resolution is slow. A's timer must not fire at B:
+    // its fresh epoch would discard B's in-flight resolution, and B's own
+    // later attempts fail, so capture would stay off.
+    const goodB: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    };
+    let bCalls = 0;
+    const subscriptions: Subscription[] = [];
+    const state = makeState(goodB, 1);
+    state.connections.get("c1").connector.getProvider = () =>
+      Promise.reject(new Error("A is down"));
+    state.connections.set("c2", {
+      accounts: [ADDR],
+      chainId: 1,
+      connector: {
+        id: "rabby", name: "Rabby", type: "injected", uid: "2",
+        getProvider: () => {
+          bCalls += 1;
+          return bCalls === 1
+            ? new Promise((resolve) => setTimeout(() => resolve(goodB), 40))
+            : Promise.reject(new Error("B flakes after the first answer"));
+        },
+      },
+    });
+    const { formo, sent } = await setup(true, { provider: goodB, state, subscriptions });
+
+    // Switch to B while A's retry timer is still pending.
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c2";
+    });
+    await new Promise((r) => setTimeout(r, 150));
+
+    await goodB.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      sent.filter((e) => e.type === "signature").length,
+      "B's slow-but-good resolution survives A's stale timer"
+    ).to.equal(2);
+    formo.cleanup?.();
+  });
+
+  it("cleanup cancels pending wrap retries", async () => {
+    let calls = 0;
+    const dead: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async () => null,
+    };
+    const state = makeState(dead, 1);
+    state.connections.get("c1").connector.getProvider = () => {
+      calls += 1;
+      return Promise.reject(new Error("always down"));
+    };
+    const { formo } = await setup(true, { provider: dead, state });
+    const callsAtCleanup = calls;
+    formo.cleanup?.();
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(calls, "no retry fires after cleanup").to.equal(callsAtCleanup);
+  });
+
   it("keeps capture on the newest instance even when the older one re-registers late", async () => {
     // Owner precedence is CREATION order. An async wrap kick from the
     // older instance may resolve (or re-fire) after the newer instance

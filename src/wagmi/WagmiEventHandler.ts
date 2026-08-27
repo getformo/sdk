@@ -2890,6 +2890,9 @@ export class WagmiEventHandler {
   /** Consecutive automatic wrap retries per connector; see below. */
   private wrapRetryCounts = new WeakMap<object, number>();
 
+  /** Pending retry timers, cancelled by cleanup(). */
+  private wrapRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+
   /** The active connector this instance wrapped, and its provider, for
    * chain updates. Kept as a pair so a chain report is only ever applied
    * to the provider of the connector it describes. Keyed by connector,
@@ -2940,11 +2943,24 @@ export class WagmiEventHandler {
       const failures = (this.wrapRetryCounts.get(connector as object) ?? 0) + 1;
       this.wrapRetryCounts.set(connector as object, failures);
       if (failures > 3) return;
-      setTimeout(() => {
-        if (this.wrapEpochs.get(connector as object) === epoch) {
-          this.wrapActiveConnectorProvider(this.getState(), true);
+      const timer = setTimeout(() => {
+        this.wrapRetryTimers.delete(timer);
+        if (this.disposed) return;
+        // Re-kick only while THIS connector is still the active one and
+        // no newer attempt superseded this one. A retry for a connector
+        // the user has left must not fire at the current connector: with
+        // the retry flag it would skip the budget reset and, worse, its
+        // fresh epoch would discard the current connector's own in-flight
+        // resolution.
+        const live = this.getState();
+        const stillCurrent =
+          live.current !== undefined &&
+          live.connections.get(live.current)?.connector === connector;
+        if (stillCurrent && this.wrapEpochs.get(connector as object) === epoch) {
+          this.wrapActiveConnectorProvider(live, true);
         }
       }, 25 * failures);
+      this.wrapRetryTimers.add(timer);
     };
     let resolution: Promise<unknown>;
     try {
@@ -3098,6 +3114,8 @@ export class WagmiEventHandler {
    * Clean up all subscriptions
    */
   public cleanup(): void {
+    this.wrapRetryTimers.forEach((t) => clearTimeout(t));
+    this.wrapRetryTimers.clear();
     logger.debug("WagmiEventHandler: Cleaning up subscriptions");
 
     if (!this.disposed) {
