@@ -535,10 +535,14 @@ describe("EventQueue", () => {
 
         const t0 = Date.now();
         clock.setSystemTime(t0 + 3_600_000);
+        // Sample the dedup clock while jumped, so the forward delta is
+        // actually taken; without a read here the jump is invisible.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 99 } }));
+        expect((eventQueue as any).elapsedNow(), "the jump was counted").to.be.at.least(3_600_000);
         clock.setSystemTime(t0);
         const event = createMockEvent({ properties: { n: 2 } });
         await eventQueue.enqueue(event);
-        expect((eventQueue as any).queue).to.have.length(1);
+        expect((eventQueue as any).queue).to.have.length(2);
         await eventQueue.flush();
 
         clock.tick(30_000);
