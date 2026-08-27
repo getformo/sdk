@@ -2936,6 +2936,7 @@ export class WagmiEventHandler {
     // persistently failing connector cannot loop: after the budget is
     // spent, recovery waits for a real store update, which resets it.
     const retryAfterFailure = () => {
+      if (this.disposed) return;
       if (this.wrapEpochs.get(connector as object) !== epoch) {
         // Superseded: the newer attempt owns recovery.
         return;
