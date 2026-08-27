@@ -17,6 +17,9 @@ const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...
 type QueueItem = {
   message: IFormoEventPayload;
   callback: (...args: any) => any;
+  // Key under which this event is remembered for duplicate suppression, so
+  // a failed send can release it. See isDuplicate.
+  dedupKey: string;
   // Serialized size of this item, computed once at enqueue so the queue
   // byte total can be tracked incrementally (avoids an O(n) re-serialize
   // of the whole queue on every enqueue → O(n^2) overall).
@@ -73,11 +76,11 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 // the wall clock happens to fall (see generateDedupKey).
 const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
 
-/** Raw elapsed-time source: monotonic where the platform offers one. */
-const rawElapsed = (): number =>
+/** Monotonic time where the platform offers one, else undefined. */
+const monotonicNow = (): number | undefined =>
   typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
-    : Date.now();
+    : undefined;
 
 export class EventQueue implements IEventQueue {
   private writeKey: string;
@@ -104,7 +107,9 @@ export class EventQueue implements IEventQueue {
   // Insertion order is expiry order (each entry expires DEDUP_WINDOW_MS after
   // it was added), which is what lets the prune stop at the first live entry.
   private payloadHashes: Map<string, number> = new Map();
-  // Last value handed out by elapsedNow(), so the clock never steps back.
+  // Origins and high-water mark for elapsedNow().
+  private readonly wallStart = Date.now();
+  private readonly monotonicStart = monotonicNow();
   private lastElapsed = 0;
   private canSend?: () => boolean;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
@@ -267,6 +272,7 @@ export class EventQueue implements IEventQueue {
     const queueItem: QueueItem = {
       message: { ...event, message_id },
       callback,
+      dedupKey,
       byteSize: 0,
     };
     // Measure once here (message only — JSON.stringify drops the
@@ -470,6 +476,11 @@ export class EventQueue implements IEventQueue {
         batch.items.forEach(({ message, callback: cb }) => safeCall(cb, undefined, message, allData));
       } catch (err: any) {
         firstError = firstError || err;
+        // The batch is lost: retries are exhausted or the response was not
+        // retryable. Release its fingerprints so the app can send the same
+        // event again after the error callback, instead of having that
+        // retry classified as a double-fire and dropped for a minute.
+        batch.items.forEach(({ dedupKey }) => this.payloadHashes.delete(dedupKey));
         batch.items.forEach(({ message, callback: cb }) => safeCall(cb, err, message, allData));
       }
     }
@@ -510,17 +521,28 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
-   * Elapsed-time clock for the dedup window, never decreasing.
+   * Elapsed time since this queue was created, for the dedup window. Never
+   * decreases, and errs toward running fast.
    *
-   * A wall-clock step (NTP correction, manual change) would otherwise expire
-   * entries early or, stepping backwards, file a new entry behind older ones
-   * with later expiries, where the front-prune would not reach it until they
-   * expired. performance.now() is monotonic where it exists; the clamp
-   * covers the Date.now() fallback. Per instance, so test clocks that start
-   * from zero are not pinned by a previous instance's high-water mark.
+   * Two sources, the larger wins. The monotonic clock (performance.now) is
+   * immune to wall-clock steps but on some platforms stops while the OS is
+   * suspended, so a device that sleeps mid-window would wake still inside
+   * it. The wall clock counts suspension but can step: forward steps only
+   * expire entries early, which is the safe direction for a duplicate guard;
+   * backward steps are absorbed by the other source and by the clamp.
+   *
+   * The clamp is what lets pruneExpired assume insertion order is expiry
+   * order. Per instance, so test clocks that start from zero are not pinned
+   * by a previous instance's high-water mark.
    */
   private elapsedNow(): number {
-    const raw = rawElapsed();
+    const wall = Date.now() - this.wallStart;
+    const mono = monotonicNow();
+    const monotonic =
+      mono !== undefined && this.monotonicStart !== undefined
+        ? mono - this.monotonicStart
+        : 0;
+    const raw = Math.max(wall, monotonic);
     if (raw > this.lastElapsed) this.lastElapsed = raw;
     return this.lastElapsed;
   }

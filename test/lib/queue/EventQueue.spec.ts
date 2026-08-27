@@ -317,6 +317,52 @@ describe("EventQueue", () => {
         expect((eventQueue as any).payloadHashes.size).to.equal(5);
       });
 
+      it("releases the fingerprint of an event whose send failed, so it can be sent again", async () => {
+        // A 400 is not retryable, so the batch is lost. The app hears about
+        // it through the callback; if it sends the same event again within
+        // the window, that is a retry, not a double-fire.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        fetchStub.resolves(makeResponse(400, "Bad Request"));
+        const event = createMockEvent({ properties: { n: 2 } });
+        const cb = sinon.spy();
+        await eventQueue.enqueue(event, cb);
+        await eventQueue.flush();
+        expect(cb.calledOnce).to.be.true;
+        expect(cb.firstCall.args[0], "callback saw the error").to.be.an("error");
+
+        fetchStub.resolves(makeResponse(200, "OK"));
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "the retry is accepted").to.have.length(1);
+      });
+
+      it("keeps the fingerprint of an event whose send succeeded", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("counts a forward wall-clock step toward expiry, and ignores a backward one", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+
+        // Backward step of an hour with no elapsed time: still inside the
+        // window, still a duplicate.
+        clock.setSystemTime(Date.now() - 3_600_000);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "backward step does not reopen").to.have.length(0);
+
+        // Forward step past the window with no monotonic time elapsed
+        // (a device that slept): the window has run out.
+        clock.setSystemTime(Date.now() + 3_600_000 + 60_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "forward step expires").to.have.length(1);
+      });
+
       it("still suppresses a duplicate of an event waiting in the queue", async () => {
         await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
         await (eventQueue as any).pendingFlush;
