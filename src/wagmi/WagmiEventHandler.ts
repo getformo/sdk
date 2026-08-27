@@ -1107,6 +1107,13 @@ export class WagmiEventHandler {
         this.trackingState.lastChainId = undefined;
         this.pendingChainId = undefined;
         this.missedDisconnect = false;
+        // The session the fallback pair described is over. A reconnect
+        // through the SAME connector may hand out a replacement provider;
+        // keeping the old pair would let the chain callback, racing the
+        // new wrap's resolution, write the new session's chain onto the
+        // old provider and mislabel requests still flowing through it.
+        this.fallbackConnector = undefined;
+        this.fallbackProvider = undefined;
         // A real disconnect ends the adoption, so a genuine reconnect later in
         // this same page load emits again.
         announcedConnections.delete(
@@ -2991,7 +2998,12 @@ export class WagmiEventHandler {
         // Activity is judged by CONNECTOR identity: wagmi replaces the
         // connection record itself on every account or chain update.
         const live = this.getState();
+        // A wrap only describes a CONNECTED session. Status changes kick
+        // this path for every transition, and a resolution landing while
+        // disconnected would re-point the fallback pair at a provider
+        // whose session is over.
         const stillActive =
+          live.status === "connected" &&
           live.current !== undefined &&
           live.connections.get(live.current)?.connector === connector;
         if (!stillActive) {

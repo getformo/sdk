@@ -540,6 +540,55 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("does not write the new session's chain onto the old session's provider", async () => {
+    // Same connector, replaced provider, new chain. The chain callback
+    // fires synchronously while the new wrap is still resolving; it must
+    // not feed the new chain to the OLD provider, which is still wrapped
+    // and may still carry requests from a stale wallet client.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const provider1: any = bare();
+    const provider2: any = bare();
+    let session = provider1;
+    let slow = false;
+    const subscriptions: Subscription[] = [];
+    const state = makeState(provider1, 1);
+    state.connections.get("c1").connector.getProvider = () =>
+      slow
+        ? new Promise((resolve) => setTimeout(() => resolve(session), 40))
+        : Promise.resolve(session);
+    const { formo, sent } = await setup(true, { provider: provider1, state, subscriptions });
+
+    // Session dies; the reconnect hands out provider2 on chain 137, and
+    // its wrap resolves SLOWLY while the chain report lands at once.
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "disconnected";
+    });
+    await settle();
+    session = provider2;
+    slow = true;
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "connected";
+      state.chainId = 137;
+      replaceConnection(state, "c1", { chainId: 137 });
+    });
+    // The chain callback has fired; the wrap is still in flight.
+    await provider1.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await new Promise((r) => setTimeout(r, 80));
+    await provider2.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    // The old provider keeps its own session's chain; the new provider
+    // carries the new session's.
+    expect(chains).to.deep.equal([1, 1, 137, 137]);
+    formo.cleanup?.();
+  });
+
   it("discards an out-of-order resolution from a superseded wrap kick", async () => {
     // Two wrap kicks race: the FIRST getProvider() resolves LAST, with a
     // provider from the earlier session. The epoch must discard it - it
