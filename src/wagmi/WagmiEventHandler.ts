@@ -2876,11 +2876,16 @@ export class WagmiEventHandler {
    * write-key instance from ever registering. Re-wrapping is safe and
    * cheap: the request tracker rebinds ownership of an intact wrapper.
    */
-  private wrappedConnectors = new WeakSet<object>();
-
-  /** Resolved provider per wrapped connector, so switching BACK to an
-   * already-wrapped connector can repoint the fallback synchronously. */
-  private wrappedProviderByConnector = new WeakMap<object, unknown>();
+  /**
+   * Latest wrap attempt per connector. Every kick re-resolves
+   * getProvider() - a connector can hand out a REPLACEMENT provider after
+   * a reconnect, so a once-only guard would leave the new session's
+   * provider unwrapped forever. Re-wrapping is idempotent: the request
+   * tracker rebinds ownership of an intact wrapper. The epoch lets a slow
+   * resolution from a superseded kick (an earlier session, an earlier
+   * chain) be discarded instead of overwriting fresher state.
+   */
+  private wrapEpochs = new WeakMap<object, number>();
 
   /** The active connector this instance wrapped, and its provider, for
    * chain updates. Kept as a pair so a chain report is only ever applied
@@ -2911,21 +2916,16 @@ export class WagmiEventHandler {
     if (!connection || typeof connector?.getProvider !== "function") {
       return;
     }
-    if (this.wrappedConnectors.has(connector as object)) {
-      // Already wrapped - but the user may be switching BACK to this
-      // connector, and chain reports must follow the switch. Repoint the
-      // fallback pair from the resolved-provider map.
-      const known = this.wrappedProviderByConnector.get(connector as object);
-      if (known !== undefined) {
-        this.fallbackConnector = connector as object;
-        this.fallbackProvider = known;
-      }
-      return;
-    }
-    this.wrappedConnectors.add(connector as object);
+    const epoch = (this.wrapEpochs.get(connector as object) ?? 0) + 1;
+    this.wrapEpochs.set(connector as object, epoch);
     connector
       .getProvider()
       .then((provider) => {
+        if (this.wrapEpochs.get(connector as object) !== epoch) {
+          // A newer kick is in flight or already resolved; this answer may
+          // describe an earlier session. Let the newest one win.
+          return;
+        }
         // The fallback installs only the request wrapper, so a provider
         // without a synchronous chainId property would never teach the
         // registry its chain and its events would carry chain 0. The wagmi
@@ -2951,20 +2951,16 @@ export class WagmiEventHandler {
         );
         if (wrapped !== true) {
           // The provider was refused (invalid shape, frozen provider,
-          // torn-down SDK). Leave the connector unguarded so a later
-          // resolution can retry.
-          this.wrappedConnectors.delete(connector as object);
+          // torn-down SDK). The next kick simply retries.
           return;
         }
-        this.wrappedProviderByConnector.set(connector as object, provider);
         if (stillActive) {
           this.fallbackConnector = connector as object;
           this.fallbackProvider = provider;
         }
       })
       .catch(() => {
-        // Mutation-only capture remains; retry on the next connection.
-        this.wrappedConnectors.delete(connector as object);
+        // Mutation-only capture remains; the next kick retries.
       });
   }
 

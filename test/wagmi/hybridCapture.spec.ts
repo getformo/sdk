@@ -447,6 +447,99 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("feeds the chain a connector moved to while it was INACTIVE", async () => {
+    // While B is active, A's chain change does not move the chain
+    // subscription's selected value, so nothing fires for it. When the
+    // user switches back to A, the wrap kick must feed A's CURRENT chain,
+    // not the one A had when it was last active.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const providerA: any = bare();
+    const providerB: any = bare();
+    const subscriptions: Subscription[] = [];
+    const { formo, sent, state } = await setup(true, {
+      provider: providerA,
+      chainId: 137,
+      subscriptions,
+    });
+    state.connections.set("c2", {
+      accounts: [ADDR],
+      chainId: 10,
+      connector: {
+        id: "rabby", name: "Rabby", type: "injected", uid: "2",
+        getProvider: async () => providerB,
+      },
+    });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c2";
+      state.chainId = 10;
+    });
+    await settle();
+    // A switches to chain 42 in the background. Not the active
+    // connection, so the chain subscription's selector does not move.
+    fireStoreUpdate(subscriptions, state, () => {
+      replaceConnection(state, "c1", { chainId: 42 });
+    });
+    // Back to A, which now reports 42.
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c1";
+      state.chainId = 42;
+    });
+    await settle();
+
+    await providerA.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    expect(chains).to.deep.equal([42, 42]);
+    formo.cleanup?.();
+  });
+
+  it("wraps the REPLACEMENT provider a connector hands out after a reconnect", async () => {
+    // Connector identity is stable but provider identity is not: a
+    // disconnect/reconnect can produce a fresh provider object (a new
+    // WalletConnect session, say). A once-only wrap guard would leave the
+    // new session's provider unwrapped forever.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const provider1: any = bare();
+    const provider2: any = bare();
+    let session = provider1;
+    const subscriptions: Subscription[] = [];
+    const state = makeState(provider1, 1);
+    state.connections.get("c1").connector.getProvider = async () => session;
+    const { formo, sent } = await setup(true, { provider: provider1, state, subscriptions });
+
+    // The session dies and reconnects with a NEW provider object.
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "disconnected";
+    });
+    await settle();
+    session = provider2;
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "connected";
+    });
+    await settle();
+
+    await provider2.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      sent.filter((e) => e.type === "signature").length,
+      "the reconnected session's provider is captured"
+    ).to.equal(2);
+    formo.cleanup?.();
+  });
+
   it("retries the wrap after the tracker refuses a provider", async () => {
     // registerRequestListeners reports refusals (a frozen provider, an
     // unrebindable wrapper) by returning false, not by throwing. The
