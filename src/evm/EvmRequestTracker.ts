@@ -56,6 +56,13 @@ function hexToUtf8(hex: string): string {
 /** What the request tracker needs from the SDK that owns it. */
 export interface EvmRequestTrackerDeps {
   isAutocaptureEnabled(eventType: AutocaptureEventType): boolean;
+  /**
+   * Hybrid-capture dedup: true when a PENDING wagmi mutation already covers
+   * this request, so the mutation handler owns the capture. TanStack sets a
+   * mutation pending BEFORE its mutationFn issues the wallet call, so a
+   * hook-driven request always matches; an imperative one never does.
+   */
+  shouldSkipRequestCapture?(method: string, params: unknown[]): boolean;
   signature(
     params: {
       status: SignatureStatus;
@@ -333,6 +340,10 @@ export class EvmRequestTracker {
           logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
           return request({ method, params }) as Promise<T | null | undefined>;
         }
+        if (this.deps.shouldSkipRequestCapture?.(method, params)) {
+          // A pending wagmi mutation owns this capture.
+          return request({ method, params }) as Promise<T | null | undefined>;
+        }
         // Issue the wallet call FIRST, before the chain lookup is even
         // started. Not awaiting our own lookup is not enough: a provider that
         // serializes RPC over a single transport - WalletConnect's relay
@@ -441,6 +452,10 @@ export class EvmRequestTracker {
       ) {
         if (!this.deps.isAutocaptureEnabled("transaction")) {
           logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
+          return request({ method, params }) as Promise<T | null | undefined>;
+        }
+        if (this.deps.shouldSkipRequestCapture?.(method, params)) {
+          // A pending wagmi mutation owns this capture.
           return request({ method, params }) as Promise<T | null | undefined>;
         }
         // Issue the wallet call FIRST, for the same reason as the signature
@@ -696,6 +711,10 @@ export class EvmRequestTracker {
       logger.debug("Transaction event skipped (autocapture.transaction: false)", {
         method: "wallet_sendCalls",
       });
+      return request({ method: "wallet_sendCalls", params });
+    }
+    if (this.deps.shouldSkipRequestCapture?.("wallet_sendCalls", params)) {
+      // A pending wagmi sendCalls mutation owns this capture.
       return request({ method: "wallet_sendCalls", params });
     }
 
