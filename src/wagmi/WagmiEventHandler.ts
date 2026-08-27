@@ -3022,6 +3022,7 @@ export class WagmiEventHandler {
         // disconnected would re-point the fallback pair at a provider
         // whose session is over.
         const stillActive =
+          !this.disposed &&
           this.wrapSessionGeneration === session &&
           live.status === "connected" &&
           live.current !== undefined &&

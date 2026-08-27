@@ -639,8 +639,10 @@ describe("wagmi hybrid capture", () => {
   it("a wrap still unresolved at disconnect cannot land after the reconnect", async () => {
     // The first session's wrap is IN FLIGHT when the session ends: no
     // fallback pair exists yet, so no per-connector record can be
-    // invalidated. The session generation must stop that resolution from
-    // wrapping the ended provider with the NEW session's chain.
+    // invalidated. The processing lock is held through the reconnect so
+    // no new kick bumps the connector epoch - ONLY the session
+    // generation stands between the ended session's resolution and the
+    // live wrapper.
     const bare = () => ({
       on: () => undefined,
       removeListener: () => undefined,
@@ -649,41 +651,48 @@ describe("wagmi hybrid capture", () => {
     });
     const provider1: any = bare();
     const provider2: any = bare();
-    let session = provider1;
-    let slow = true; // the FIRST wrap resolves late
+    let call = 0;
     const subscriptions: Subscription[] = [];
     const state = makeState(provider1, 1);
-    state.connections.get("c1").connector.getProvider = () =>
-      slow
-        ? new Promise((resolve) => setTimeout(() => resolve(session), 40))
-        : Promise.resolve(session);
+    state.connections.get("c1").connector.getProvider = () => {
+      call += 1;
+      return call === 1
+        ? new Promise((resolve) => setTimeout(() => resolve(provider1), 40))
+        : Promise.resolve(provider2);
+    };
     const { formo, sent } = await setup(true, { provider: provider1, state, subscriptions });
 
-    // Disconnect while the seed wrap is pending, dropped by the lock so
-    // no replay path can help.
     const handler: any = (formo as any).wagmiHandler;
     handler.trackingState.isProcessing = true;
     fireStoreUpdate(subscriptions, state, () => {
       state.status = "disconnected";
     });
-    handler.trackingState.isProcessing = false;
-
-    session = provider2;
-    slow = false;
     fireStoreUpdate(subscriptions, state, () => {
       state.status = "connected";
       state.chainId = 137;
       replaceConnection(state, "c1", { chainId: 137 });
     });
-    // Let the ended session's slow resolution arrive.
+    // The ended session's resolution lands while the lock still holds.
     await new Promise((r) => setTimeout(r, 80));
-
-    await provider2.request({ method: "personal_sign", params: ["0x68", ADDR] });
     await provider1.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(
+      sent.filter((e) => e.type === "signature"),
+      "the ended session's provider was not wrapped"
+    ).to.deep.equal([]);
+
+    // Release the lock; the next store update wraps the new session.
+    handler.trackingState.isProcessing = false;
+    fireStoreUpdate(subscriptions, state, () => {
+      replaceConnection(state, "c1", {
+        accounts: ["0x88C0224CEABF6D559d7B622F2918b308285280DE"],
+      });
+    });
+    await settle();
+    await provider2.request({ method: "personal_sign", params: ["0x68", ADDR] });
     await settle();
 
     const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
-    // Only the new session's provider is instrumented.
     expect(chains).to.deep.equal([137, 137]);
     formo.cleanup?.();
   });
