@@ -90,18 +90,31 @@ function readProviderAccounts(provider: EIP1193Provider): string[] {
   const session = (provider as unknown as {
     session?: { namespaces?: Record<string, { accounts?: unknown }> };
   }).session;
-  const out: string[] = [];
   // eip155 ONLY: a session can also carry Solana or other namespaces, and
   // feeding a non-EVM address into the EVM adoption path would make
-  // validation reject it and drop the whole adoption.
+  // validation reject it and drop the whole adoption. A session can also
+  // authorize DIFFERENT accounts per chain, so entries for the provider's
+  // active chain come first - the adopted address should be the one this
+  // chain actually authorized.
   const ns = session?.namespaces?.eip155;
+  const chainId = (provider as unknown as { chainId?: unknown }).chainId;
+  const activePrefix =
+    typeof chainId === "number" || typeof chainId === "string"
+      ? `eip155:${parseInt(String(chainId), typeof chainId === "string" && String(chainId).startsWith("0x") ? 16 : 10)}:`
+      : undefined;
+  const forChain: string[] = [];
+  const others: string[] = [];
   if (Array.isArray(ns?.accounts)) {
     for (const entry of ns.accounts) {
       if (typeof entry !== "string" || !entry.startsWith("eip155:")) continue;
       const address = entry.split(":")[2];
-      if (address && !out.includes(address)) out.push(address);
+      if (!address) continue;
+      const bucket =
+        activePrefix && entry.startsWith(activePrefix) ? forChain : others;
+      if (!bucket.includes(address)) bucket.push(address);
     }
   }
+  const out = [...forChain, ...others.filter((a) => !forChain.includes(a))];
   return out;
 }
 
