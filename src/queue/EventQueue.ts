@@ -73,14 +73,8 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 // the wall clock happens to fall (see generateDedupKey).
 const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
 
-/**
- * Elapsed-time clock for the dedup window. Monotonic where the platform
- * offers one: a wall-clock step (NTP correction, manual change) would
- * otherwise expire entries early or, stepping backwards, file a new entry
- * behind older ones with later expiries, where the front-prune would not
- * reach it until they expired.
- */
-const elapsedNow = (): number =>
+/** Raw elapsed-time source: monotonic where the platform offers one. */
+const rawElapsed = (): number =>
   typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : Date.now();
@@ -110,6 +104,8 @@ export class EventQueue implements IEventQueue {
   // Insertion order is expiry order (each entry expires DEDUP_WINDOW_MS after
   // it was added), which is what lets the prune stop at the first live entry.
   private payloadHashes: Map<string, number> = new Map();
+  // Last value handed out by elapsedNow(), so the clock never steps back.
+  private lastElapsed = 0;
   private canSend?: () => boolean;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
@@ -505,7 +501,7 @@ export class EventQueue implements IEventQueue {
    * no timer of its own.
    */
   private isDuplicate(dedupKey: string): boolean {
-    const now = elapsedNow();
+    const now = this.elapsedNow();
     this.pruneExpired(now);
     if (this.payloadHashes.has(dedupKey)) return true;
 
@@ -514,12 +510,28 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
+   * Elapsed-time clock for the dedup window, never decreasing.
+   *
+   * A wall-clock step (NTP correction, manual change) would otherwise expire
+   * entries early or, stepping backwards, file a new entry behind older ones
+   * with later expiries, where the front-prune would not reach it until they
+   * expired. performance.now() is monotonic where it exists; the clamp
+   * covers the Date.now() fallback. Per instance, so test clocks that start
+   * from zero are not pinned by a previous instance's high-water mark.
+   */
+  private elapsedNow(): number {
+    const raw = rawElapsed();
+    if (raw > this.lastElapsed) this.lastElapsed = raw;
+    return this.lastElapsed;
+  }
+
+  /**
    * Drop expired fingerprints from the front of the map.
    *
    * Entries are in insertion order and every one expires a fixed interval
    * after insertion, so the first live entry ends the scan: each expired
-   * entry is visited once in its life, not once per enqueue. The clock is
-   * monotonic (see elapsedNow), which is what makes insertion order expiry
+   * entry is visited once in its life, not once per enqueue. The clock never
+   * decreases (see elapsedNow), which is what makes insertion order expiry
    * order.
    *
    * Manual iteration: for..of over a Map does not compile under the ES5
