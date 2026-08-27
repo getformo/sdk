@@ -112,7 +112,7 @@ describe("registerProvider", () => {
     return { formo, sent };
   }
 
-  const settle = () => new Promise((r) => setTimeout(r, 30));
+  const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
   it("captures nothing from a constructed provider that is never registered", async () => {
     // Today's failure, pinned: this is the P-2403 gap itself.
@@ -403,6 +403,52 @@ describe("registerProvider", () => {
 
     const statuses = sent.filter((e) => e.type === "signature").map((e) => e.status);
     expect(statuses).to.deep.equal(["requested", "rejected"]);
+    formo.cleanup?.();
+  });
+
+  it("ignores non-EVM namespaces when adopting from the session", async () => {
+    // A session can carry Solana alongside eip155; a non-EVM address fed
+    // into EVM adoption would fail validation and drop the whole adoption.
+    const provider = makeWcProvider({ peer: PEER });
+    provider.accounts = [];
+    provider.session = {
+      peer: { metadata: { name: PEER } },
+      namespaces: {
+        solana: { accounts: ["solana:mainnet:9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"] },
+        eip155: { accounts: [`eip155:11155111:${ADDR}`] },
+      },
+    };
+    const { formo, sent } = await setup();
+    formo.registerProvider(provider);
+    await settle();
+
+    const connect = sent.find((e) => e.type === "connect");
+    expect(connect?.address?.toLowerCase()).to.equal(ADDR.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("refuses registration on a cleaned-up instance", async () => {
+    const { formo } = await setup();
+    formo.cleanup?.();
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(false);
+  });
+
+  it("retries a suppressed adoption when the visitor opts back in", async () => {
+    const { formo, sent } = await setup();
+    formo.optOutTracking();
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    formo.registerProvider(provider);
+    await settle();
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle(60);
+
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()),
+      "adoption retried after opt-in"
+    ).to.equal(true);
     formo.cleanup?.();
   });
 

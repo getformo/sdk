@@ -427,7 +427,11 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Call this when destroying the analytics instance
    * @returns {void}
    */
+  /** Set by cleanup(); a torn-down instance refuses new registrations. */
+  private isCleanedUp = false;
+
   public cleanup(): void {
+    this.isCleanedUp = true;
     logger.debug("FormoAnalytics: Cleaning up resources");
 
     // Close the queue, don't just empty it. clear() only drops what is
@@ -1353,6 +1357,15 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {void}
    */
   public optInTracking(): void {
+    // A provider registered while the visitor was opted out had its
+    // session adoption refused; nothing else retries it.
+    setTimeout(() => {
+      try {
+        this.evmEvents.retryExternalAdoptions();
+      } catch {
+        /* adoption retry must never break opt-in */
+      }
+    }, 0);
     logger.info("Opting back into tracking");
 
     // Remove opt-out flag
@@ -1457,6 +1470,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    // A route change can end path-based suppression; a provider registered
+    // while suppressed gets its refused session adoption retried here.
+    // Idempotent and cheap when nothing is pending.
+    try {
+      this.evmEvents.retryExternalAdoptions();
+    } catch {
+      /* never let the retry break a page hit */
+    }
+
     if (!this.shouldTrack()) {
       logger.info(
         "Track page hit: Skipping event due to tracking configuration"
@@ -1671,6 +1693,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     provider: EIP1193Provider,
     info?: { name?: string; rdns?: string; icon?: `data:image/${string}` }
   ): boolean {
+    if (this.isCleanedUp) {
+      // Cleanup terminally closed the event queue; listeners attached now
+      // would hold this instance forever and deliver nothing.
+      logger.warn("registerProvider: instance is cleaned up; refusing");
+      return false;
+    }
     if (this.isEvmDisabled) {
       logger.warn("registerProvider: EVM tracking is disabled; refusing");
       return false;

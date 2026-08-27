@@ -198,6 +198,12 @@ const isUserRejection = isUserRejectionError;
  * carries the real wallet's name. The first connect may still say
  * "WalletConnect"; that is the honest state at that instant.
  *
+ * HONEST STATUS: with the new-connection invalidation below, no event the
+ * wagmi path emits TODAY observably carries the resolved name - connects
+ * fire before resolution and rebuilds suppress re-emission. The cache
+ * exists for the attribution work (wallet names on signature and
+ * transaction events), which fires mid-session, after resolution.
+ *
  * Names are keyed by the CONNECTOR (stable across a page's sessions) so
  * they actually serve reads; lookups are guarded per CONNECTION (wagmi
  * replaces the connection object per session), so every new session
@@ -2746,6 +2752,18 @@ export class WagmiEventHandler {
       return;
     }
     walletConnectPeerLookups.add(connection as object);
+    // A NEW connection invalidates the cached name SYNCHRONOUSLY. The
+    // connect flow reads the cache in the same tick it kicks the lookup,
+    // so retaining the previous session's name here deterministically
+    // attributed a reconnect-to-a-different-wallet to the OLD wallet.
+    // Wrong is worse than generic: the new session's connect now says
+    // "WalletConnect" and the resolved peer serves the session's LATER
+    // events (signatures, transactions - the attribution work) instead.
+    // A rebuild over the SAME connection does not re-kick (guard above),
+    // so it keeps its already-proven name.
+    if (walletConnectPeerLatest.get(connector as object) !== connection) {
+      walletConnectPeerNames.delete(connector as object);
+    }
     walletConnectPeerLatest.set(connector as object, connection as object);
     let settled = false;
     // A cached name from a PREVIOUS session is unproven for this one. It

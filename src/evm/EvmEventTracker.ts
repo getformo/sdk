@@ -91,10 +91,13 @@ function readProviderAccounts(provider: EIP1193Provider): string[] {
     session?: { namespaces?: Record<string, { accounts?: unknown }> };
   }).session;
   const out: string[] = [];
-  for (const ns of Object.values(session?.namespaces ?? {})) {
-    if (!Array.isArray(ns?.accounts)) continue;
+  // eip155 ONLY: a session can also carry Solana or other namespaces, and
+  // feeding a non-EVM address into the EVM adoption path would make
+  // validation reject it and drop the whole adoption.
+  const ns = session?.namespaces?.eip155;
+  if (Array.isArray(ns?.accounts)) {
     for (const entry of ns.accounts) {
-      if (typeof entry !== "string") continue;
+      if (typeof entry !== "string" || !entry.startsWith("eip155:")) continue;
       const address = entry.split(":")[2];
       if (address && !out.includes(address)) out.push(address);
     }
@@ -107,10 +110,11 @@ export class EvmEventTracker {
    * Providers adopted through `registerProvider` rather than discovered.
    * Announcement-driven cleanup must not touch them: they are never in an
    * announcement list, so "missing from the announcement" is their normal
-   * state, not evidence of removal. WeakSet, so a dropped provider is
-   * collectable.
+   * state, not evidence of removal. A Set rather than a WeakSet because
+   * suppressed adoptions retry from it; the registry holds these providers
+   * strongly anyway, and untrack removes them.
    */
-  private externallyRegistered = new WeakSet<EIP1193Provider>();
+  private externallyRegistered = new Set<EIP1193Provider>();
 
   /**
    * The connect this SDK has already reported for a provider.
@@ -332,6 +336,25 @@ export class EvmEventTracker {
       void this.onAccountsChanged(provider, accounts);
     }
     return true;
+  }
+
+  /**
+   * Re-run session adoption for every registered external provider.
+   *
+   * Registration while tracking was suppressed (opt-out, excluded route)
+   * reached the adoption path and was refused - and a provider whose
+   * session already exists may never emit another accountsChanged, so
+   * nothing would ever retry. Called when suppression can have ended
+   * (opt-in, page navigation). Idempotent: an already-adopted wallet is
+   * deduplicated by the same state and markers as any repeated signal.
+   */
+  retryExternalAdoptions(): void {
+    this.externallyRegistered.forEach((provider) => {
+      const accounts = readProviderAccounts(provider);
+      if (accounts.length > 0) {
+        void this.onAccountsChanged(provider, accounts);
+      }
+    });
   }
 
   private registerAccountsChangedListener(provider: EIP1193Provider): void {
