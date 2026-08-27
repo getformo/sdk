@@ -363,6 +363,41 @@ describe("EventQueue", () => {
         expect((eventQueue as any).queue, "the newer entry still suppresses").to.have.length(1);
       });
 
+      it("does not release a same-instant re-acceptance after clear() when the old send fails", async () => {
+        // clear() (consent withdrawn) and a re-accept can land in the same
+        // millisecond as the original acceptance, so the release token must
+        // be unique per acceptance, not derived from time.
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        const event = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(event);
+        const inFlight = eventQueue.flush();
+        await clock.tickAsync(0);
+
+        // Opt out and back in with no time passing; same event accepted anew.
+        allowed = false;
+        eventQueue.clear();
+        allowed = true;
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue).to.have.length(1);
+
+        settle(makeResponse(400, "Bad Request"));
+        await inFlight;
+
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "the newer acceptance still suppresses").to.have.length(1);
+      });
+
       it("releases the fingerprints of batches abandoned when consent is withdrawn mid-flush", async () => {
         let allowed = true;
         eventQueue = new EventQueue("test-key", {

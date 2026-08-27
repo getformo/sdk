@@ -18,10 +18,11 @@ type QueueItem = {
   message: IFormoEventPayload;
   callback: (...args: any) => any;
   // Key under which this event is remembered for duplicate suppression, and
-  // the expiry recorded for it, so a failed send can release exactly its own
-  // entry and not a newer one for the same key. See releaseFingerprints.
+  // the acceptance token recorded for it, so a failed send can release
+  // exactly its own entry and not a newer one for the same key. See
+  // releaseFingerprints.
   dedupKey: string;
-  dedupExpiresAt: number;
+  dedupToken: number;
   // Serialized size of this item, computed once at enqueue so the queue
   // byte total can be tracked incrementally (avoids an O(n) re-serialize
   // of the whole queue on every enqueue → O(n^2) overall).
@@ -108,7 +109,10 @@ export class EventQueue implements IEventQueue {
   //
   // Insertion order is expiry order (each entry expires DEDUP_WINDOW_MS after
   // it was added), which is what lets the prune stop at the first live entry.
-  private payloadHashes: Map<string, number> = new Map();
+  // The token is unique per acceptance; see releaseFingerprints.
+  private payloadHashes: Map<string, { expiresAt: number; token: number }> =
+    new Map();
+  private acceptanceSeq = 0;
   // Origins and high-water mark for elapsedNow().
   private readonly wallStart = Date.now();
   private readonly monotonicStart = monotonicNow();
@@ -275,7 +279,7 @@ export class EventQueue implements IEventQueue {
       message: { ...event, message_id },
       callback,
       dedupKey,
-      dedupExpiresAt: this.payloadHashes.get(dedupKey) as number,
+      dedupToken: this.acceptanceSeq,
       byteSize: 0,
     };
     // Measure once here (message only — JSON.stringify drops the
@@ -526,7 +530,10 @@ export class EventQueue implements IEventQueue {
     this.pruneExpired(now);
     if (this.payloadHashes.has(dedupKey)) return true;
 
-    this.payloadHashes.set(dedupKey, now + DEDUP_WINDOW_MS);
+    this.payloadHashes.set(dedupKey, {
+      expiresAt: now + DEDUP_WINDOW_MS,
+      token: ++this.acceptanceSeq,
+    });
     return false;
   }
 
@@ -535,14 +542,16 @@ export class EventQueue implements IEventQueue {
    * again. For items that were never delivered.
    *
    * Only an item's OWN entry is released. A send can outlive the window
-   * through retry backoff; by the time it fails, the same event may have
-   * expired, been accepted again and be in flight under the same key. The
-   * recorded expiry tells the two apart: a newer acceptance necessarily
-   * carries a later one.
+   * through retry backoff, or be cut short by clear(); by the time it
+   * fails, the same event may have been accepted again and be in flight
+   * under the same key. The acceptance token tells the two apart. (An
+   * expiry would not: clear() and a re-accept can land in the same
+   * millisecond as the original.)
    */
   private releaseFingerprints(items: QueueItem[]): void {
     for (const item of items) {
-      if (this.payloadHashes.get(item.dedupKey) === item.dedupExpiresAt) {
+      const entry = this.payloadHashes.get(item.dedupKey);
+      if (entry && entry.token === item.dedupToken) {
         this.payloadHashes.delete(item.dedupKey);
       }
     }
@@ -592,8 +601,7 @@ export class EventQueue implements IEventQueue {
     const entries = this.payloadHashes.entries();
     for (let step = entries.next(); !step.done; step = entries.next()) {
       const key = step.value[0];
-      const expiresAt = step.value[1];
-      if (expiresAt > now) break;
+      if (step.value[1].expiresAt > now) break;
       this.payloadHashes.delete(key);
     }
   }
