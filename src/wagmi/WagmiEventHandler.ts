@@ -9,6 +9,7 @@
 import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
+import { readWalletConnectPeer, isUserRejectionError } from "../provider";
 import {
   readBatchId,
   readBatchStatusCode,
@@ -179,25 +180,47 @@ const ownerKey = (writeKey: string, config: WagmiConfig): string => {
   return `${writeKey}:${id}`;
 };
 
+// User-rejection detection is shared with the EIP-1193 path (4001, the
+// WalletConnect 5000-family, and viem's typed error): see
+// provider/detection.ts for the dialects and why 4001 alone missed every
+// WalletConnect rejection.
+const isUserRejection = isUserRejectionError;
+
 /**
- * Was this mutation error the user dismissing the wallet prompt?
+ * Real wallet names behind WalletConnect connectors, resolved lazily.
  *
- * Matches the EIP-1193 path's rule (code 4001), but a wagmi mutation error
- * arrives wrapped: viem nests the RPC error under `cause`, sometimes twice.
- * Walk the chain rather than trusting the top level, and accept viem's
- * `UserRejectedRequestError` by name for wallets that map the rejection to a
- * typed error without preserving the numeric code.
+ * WalletConnect is a transport: the signing wallet (Ledger Live, MetaMask
+ * Mobile, Safe, ...) names itself in the session's peer metadata, reachable
+ * only through the connector's async `getProvider()`. Connect emission is
+ * deliberately synchronous (see the marker comments below), so the lookup
+ * can never be awaited in line - it is kicked fire-and-forget the first
+ * time a WalletConnect connector is seen, and every event after resolution
+ * carries the real wallet's name. The first connect may still say
+ * "WalletConnect"; that is the honest state at that instant.
+ *
+ * HONEST STATUS: with the new-connection invalidation below, no event the
+ * wagmi path emits TODAY observably carries the resolved name - connects
+ * fire before resolution and rebuilds suppress re-emission. The cache
+ * exists for the attribution work (wallet names on signature and
+ * transaction events), which fires mid-session, after resolution.
+ *
+ * Names are keyed by the CONNECTOR (stable across a page's sessions) so
+ * they actually serve reads; lookups are guarded per CONNECTION (wagmi
+ * replaces the connection object per session), so every new session
+ * re-resolves and OVERWRITES the name. A reconnect through the same
+ * connector to a different wallet can therefore mislabel at most the one
+ * event that fires between the new session's start and its resolution -
+ * one microtask for an initialised connector - and self-corrects. The
+ * alternative, keying names by connection, was tried and kept the name
+ * from ever surfacing: the only reader that fires per session runs before
+ * any lookup can resolve. WeakMaps, so nothing outlives its object.
  */
-function isUserRejection(error: unknown): boolean {
-  let cursor = error as { code?: unknown; name?: unknown; cause?: unknown } | undefined;
-  for (let depth = 0; cursor && depth < 5; depth++) {
-    if (cursor.code === 4001 || cursor.name === "UserRejectedRequestError") {
-      return true;
-    }
-    cursor = cursor.cause as typeof cursor;
-  }
-  return false;
-}
+const walletConnectPeerNames = new WeakMap<object, string>();
+const walletConnectPeerLookups = new WeakSet<object>();
+/** The connection whose lookup may write the connector's name: always the
+ * newest kicked one, so a slow resolution from a PREVIOUS session cannot
+ * land after the current session's and overwrite it. */
+const walletConnectPeerLatest = new WeakMap<object, object>();
 
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
@@ -686,6 +709,15 @@ export class WagmiEventHandler {
    * re-entry for an already-tracked address as a no-op (or a chain change).
    */
   private seedFromCurrentState(): void {
+    // Fire-and-forget here: the seed is synchronous by design, so its own
+    // connect may carry the generic name; the status flow awaits instead.
+    // A throwing store must not break construction.
+    try {
+      this.kickWalletConnectPeerLookup(this.getState());
+    } catch {
+      /* the seed continues; names fall back to the connector's own */
+    }
+
     try {
       const state = this.getState();
       if (state.status !== "connected") {
@@ -993,6 +1025,7 @@ export class WagmiEventHandler {
     status: WagmiState["status"],
     prevStatus: WagmiState["status"]
   ): Promise<void> {
+
     // Prevent concurrent processing
     if (this.trackingState.isProcessing) {
       // Dropped, not queued - but remember that a disconnect went past.
@@ -1010,6 +1043,17 @@ export class WagmiEventHandler {
     }
 
     this.trackingState.isProcessing = true;
+
+    // Start resolving the wallet behind a WalletConnect session. NEVER
+    // awaited: every path from a store signal to its emission is
+    // synchronous by design, and an await here reorders transitions (it
+    // demonstrably drops connects under rapid connect/disconnect cycles).
+    try {
+      this.kickWalletConnectPeerLookup(this.getState());
+    } catch {
+      // A throwing store must not break the status flow.
+    }
+
     // A status change outranks any connection transition still in flight. A
     // full disconnect advances no ticket of its own, so without this an older
     // fallback continuation could resume and announce a wallet wagmi no longer
@@ -1372,10 +1416,21 @@ export class WagmiEventHandler {
    * already recorded the new address synchronously by the time this runs. The
    * `lastAddress` check below is what makes the two paths mutually exclusive.
    */
+  private handleActiveAddressChangeEntryKick(): void {
+    // An account switch replaces the connection object; kick a lookup for
+    // the new one so events that follow can name the wallet.
+    try {
+      this.kickWalletConnectPeerLookup(this.getState());
+    } catch {
+      /* a throwing store must not break the flow */
+    }
+  }
+
   private async handleActiveAddressChange(
     address: string | undefined,
     prevAddress: string | undefined
   ): Promise<void> {
+    this.handleActiveAddressChangeEntryKick();
     const state = this.getState();
     if (state.status !== "connected") return;
 
@@ -2649,7 +2704,122 @@ export class WagmiEventHandler {
     }
 
     const connection = state.connections.get(state.current);
-    return connection?.connector.name;
+    const connector = connection?.connector as
+      | { name?: string; getProvider?: () => Promise<unknown> }
+      | undefined;
+    if (!connection || !connector) {
+      return undefined;
+    }
+
+    const cached = walletConnectPeerNames.get(connector as object);
+    if (cached) {
+      return cached;
+    }
+
+    // Backstop kick; the flow entry points kick earlier so the lookup has
+    // usually resolved by the time an emission reads the name.
+    this.kickWalletConnectPeerLookup(state);
+
+    return connector.name;
+  }
+
+  /**
+   * Start resolving the wallet behind a WalletConnect connection.
+   *
+   * Fire-and-forget on purpose: emission paths are synchronous by design
+   * and must never wait (see the connect marker comment). Called at the
+   * START of the status/address flows rather than only at read time - the
+   * lookup is one microtask for an initialised connector, and the emission
+   * sits behind several awaits, so kicking early usually means even the
+   * FIRST connect names the real wallet. When the race is lost the event
+   * honestly says "WalletConnect" and every later event names the peer.
+   */
+  private kickWalletConnectPeerLookup(state: WagmiState): void {
+    const connection = state.current
+      ? state.connections.get(state.current)
+      : undefined;
+    const connector = connection?.connector as
+      | { name?: string; getProvider?: () => Promise<unknown> }
+      | undefined;
+    if (
+      !connection ||
+      !connector ||
+      typeof connector.name !== "string" ||
+      !/walletconnect/i.test(connector.name) ||
+      typeof connector.getProvider !== "function" ||
+      walletConnectPeerLookups.has(connection as object)
+    ) {
+      return;
+    }
+    walletConnectPeerLookups.add(connection as object);
+    // A NEW connection invalidates the cached name SYNCHRONOUSLY. The
+    // connect flow reads the cache in the same tick it kicks the lookup,
+    // so retaining the previous session's name here deterministically
+    // attributed a reconnect-to-a-different-wallet to the OLD wallet.
+    // Wrong is worse than generic: the new session's connect now says
+    // "WalletConnect" and the resolved peer serves the session's LATER
+    // events (signatures, transactions - the attribution work) instead.
+    // A rebuild over the SAME connection does not re-kick (guard above),
+    // so it keeps its already-proven name.
+    if (walletConnectPeerLatest.get(connector as object) !== connection) {
+      walletConnectPeerNames.delete(connector as object);
+    }
+    walletConnectPeerLatest.set(connector as object, connection as object);
+    let settled = false;
+    // A cached name from a PREVIOUS session is unproven for this one. It
+    // keeps serving only until this session's lookup settles or the grace
+    // timer fires - whichever ends the uncertainty first - so a hung
+    // lookup cannot leave the old wallet's name attached indefinitely.
+    const staleTimer = setTimeout(() => {
+      if (
+        !settled &&
+        walletConnectPeerLatest.get(connector as object) === connection
+      ) {
+        walletConnectPeerNames.delete(connector as object);
+      }
+    }, 3000);
+    (staleTimer as unknown as { unref?: () => void }).unref?.();
+    connector
+      .getProvider()
+      .then((provider) => {
+        settled = true;
+        clearTimeout(staleTimer);
+        // Only the NEWEST session's lookup may write. A previous session's
+        // slow resolution landing late would otherwise overwrite the
+        // current wallet's name with the old one.
+        if (walletConnectPeerLatest.get(connector as object) !== connection) {
+          return;
+        }
+        const peer = readWalletConnectPeer(provider as never);
+        if (peer?.name) {
+          walletConnectPeerNames.set(connector as object, peer.name);
+          logger.debug("WagmiEventHandler: WalletConnect peer resolved", {
+            peer: peer.name,
+          });
+        } else {
+          // Resolved WITHOUT peer metadata: the previous wallet's name is
+          // disproven for this session, not merely unproven. Drop it, and
+          // let a later event retry the lookup - the session may simply
+          // not have populated its peer yet.
+          walletConnectPeerNames.delete(connector as object);
+          walletConnectPeerLookups.delete(connection as object);
+        }
+      })
+      .catch(() => {
+        settled = true;
+        clearTimeout(staleTimer);
+        // The new session could not be inspected, so the PREVIOUS wallet's
+        // name must not keep serving: drop it and fall back to the
+        // connector's own name until a later session resolves. Guarded so
+        // an old session's late failure cannot clear a newer resolution.
+        if (walletConnectPeerLatest.get(connector as object) === connection) {
+          walletConnectPeerNames.delete(connector as object);
+        }
+        // A failed lookup must not permanently disqualify the connection:
+        // the connector may just have been initialising. A later event
+        // retries.
+        walletConnectPeerLookups.delete(connection as object);
+      });
   }
 
   /**

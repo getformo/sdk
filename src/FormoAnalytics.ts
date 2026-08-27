@@ -49,6 +49,11 @@ import {
 } from "./tracking/TrackingPolicy";
 import { WalletStateStore } from "./wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./evm/EvmProviderRegistry";
+import {
+  detectInjectedProviderInfo,
+  isValidProvider,
+  readWalletConnectPeer,
+} from "./provider";
 import { EvmEventTracker } from "./evm/EvmEventTracker";
 import { EvmRequestTracker } from "./evm/EvmRequestTracker";
 import { parseChainId } from "./utils/chain";
@@ -198,6 +203,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.transaction = this.transaction.bind(this);
     this.detect = this.detect.bind(this);
     this.track = this.track.bind(this);
+    this.registerProvider = this.registerProvider.bind(this);
     this.page = this.page.bind(this);
     this.reset = this.reset.bind(this);
     this.cleanup = this.cleanup.bind(this);
@@ -421,7 +427,11 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Call this when destroying the analytics instance
    * @returns {void}
    */
+  /** Set by cleanup(); a torn-down instance refuses new registrations. */
+  private isCleanedUp = false;
+
   public cleanup(): void {
+    this.isCleanedUp = true;
     logger.debug("FormoAnalytics: Cleaning up resources");
 
     // Close the queue, don't just empty it. clear() only drops what is
@@ -1347,6 +1357,17 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @returns {void}
    */
   public optInTracking(): void {
+    // A provider registered while the visitor was opted out had its
+    // session adoption refused; nothing else retries it. Guarded: a
+    // cleanup() racing this timer must not drive the torn-down tracker.
+    setTimeout(() => {
+      if (this.isCleanedUp) return;
+      try {
+        this.evmEvents.retryExternalAdoptions();
+      } catch {
+        /* adoption retry must never break opt-in */
+      }
+    }, 0);
     logger.info("Opting back into tracking");
 
     // Remove opt-out flag
@@ -1451,6 +1472,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
+    // A route change can end path-based suppression; a provider registered
+    // while suppressed gets its refused session adoption retried here.
+    // Idempotent and cheap when nothing is pending.
+    if (!this.isCleanedUp) {
+      try {
+        this.evmEvents.retryExternalAdoptions();
+      } catch {
+        /* never let the retry break a page hit */
+      }
+    }
+
     if (!this.shouldTrack()) {
       logger.info(
         "Track page hit: Skipping event due to tracking configuration"
@@ -1618,6 +1650,112 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   // Explicitly untrack a provider: remove listeners, clear wrapper flag
   // and tracking
+
+  /**
+   * Track an EIP-1193 provider the page constructed itself.
+   *
+   * Discovery covers EIP-6963 announcements and `window.ethereum`, which is
+   * every injected wallet and nothing else. WalletConnect and Ledger
+   * providers are built by the app (`EthereumProvider.init(...)`) and
+   * announce nothing, so their sessions were invisible: connects,
+   * signatures, and transactions all silently missing. Hand the provider
+   * here once it exists and it takes the exact pipeline a discovered
+   * provider takes - detect event, lifecycle listeners, request wrapper -
+   * and a session that is already live is adopted from the provider's
+   * synchronous state.
+   *
+   * Metadata resolution order: the caller's `info` overrides win; then a
+   * WalletConnect session's peer metadata, which names the REAL wallet on
+   * the far side of the transport (for example "Ledger Live"); then flag
+   * sniffing; then a generic fallback. One deliberate exception: a caller
+   * name of exactly "WalletConnect" is the generic transport name, so the
+   * live peer still replaces it on events - name the provider anything
+   * else to pin it verbatim.
+   *
+   * No-op outside the EIP-1193 path: in wagmi mode the connector system
+   * already tracks these sessions, and wrapping the same provider twice
+   * would double-report every event.
+   *
+   * With several live SDK instances (multi write-key pages) registering
+   * the SAME provider, request-derived events (signatures, transactions)
+   * go to the most recently registered live instance - the same
+   * single-observer semantics discovery has always had for the request
+   * wrapper. Lifecycle events (connect, chain, disconnect) reach every
+   * instance. Fanning request observations out to all instances is a
+   * separate feature.
+   *
+   * @returns true when the provider is (now) tracked, false when it was
+   * refused (wagmi mode, EVM disabled, or not a valid EIP-1193 provider).
+   *
+   * @example
+   * ```typescript
+   * const wcProvider = await EthereumProvider.init({ projectId, chains });
+   * formo.registerProvider(wcProvider);
+   * ```
+   */
+  public registerProvider(
+    provider: EIP1193Provider,
+    info?: { name?: string; rdns?: string; icon?: `data:image/${string}` }
+  ): boolean {
+    if (this.isCleanedUp) {
+      // Cleanup terminally closed the event queue; listeners attached now
+      // would hold this instance forever and deliver nothing.
+      logger.warn("registerProvider: instance is cleaned up; refusing");
+      return false;
+    }
+    if (this.isEvmDisabled) {
+      logger.warn("registerProvider: EVM tracking is disabled; refusing");
+      return false;
+    }
+    if (this.isWagmiMode) {
+      logger.warn(
+        "registerProvider: wagmi mode tracks connectors already; registering the provider here would double-report its events. Refusing."
+      );
+      return false;
+    }
+    if (!isValidProvider(provider)) {
+      logger.warn("registerProvider: not a valid EIP-1193 provider; refusing");
+      return false;
+    }
+
+    const detected = detectInjectedProviderInfo(provider);
+    const peer = readWalletConnectPeer(provider);
+    // A live peer identifies the session as WalletConnect even when the
+    // provider carries no isWalletConnect flag (v2 providers often do not).
+    const rdns =
+      info?.rdns ??
+      (peer && detected.rdns === "io.injected.provider"
+        ? "com.walletconnect"
+        : detected.rdns);
+    // The peer name is deliberately NOT stored: sessions change wallets,
+    // and metadata frozen at registration would misname every later one.
+    // `infoFor` resolves the peer live on each read, over the generic
+    // transport name; a caller's explicit name still wins everywhere.
+    const name =
+      info?.name ?? (peer ? "WalletConnect" : detected.name);
+
+    // Per-instance uuid: EIP-6963 consumers (mipd included) deduplicate on
+    // it, so two registered instances sharing an rdns-derived uuid would
+    // collapse into one. Random when the platform provides it; a
+    // monotonic suffix otherwise.
+    const uuid =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `registered-${rdns.replace(/[^a-zA-Z0-9]/g, "-")}-${(FormoAnalytics.registeredProviderSeq += 1)}`;
+
+    return this.evmEvents.adoptExternalProvider({
+      info: {
+        name,
+        rdns,
+        uuid,
+        icon: info?.icon ?? detected.icon,
+      },
+      provider: provider as EIP6963ProviderDetail["provider"],
+    });
+  }
+
+  /** Fallback uuid suffix for platforms without crypto.randomUUID. */
+  private static registeredProviderSeq = 0;
 
   // Debug/monitoring helpers
   public getTrackedProvidersCount(): number {

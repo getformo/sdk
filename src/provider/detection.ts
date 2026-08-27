@@ -110,6 +110,67 @@ export function detectInjectedProviderInfo(
 }
 
 /**
+ * Was this error the USER declining, whatever transport delivered it?
+ *
+ * Three dialects say "the user said no":
+ * - EIP-1193: code 4001 (UserRejectedRequest).
+ * - WalletConnect sdkErrors: codes 5000-5005 (USER_REJECTED and its
+ *   variants). A LIVE MetaMask Mobile session rejecting a transaction
+ *   produced one of these and the SDK's 4001-only match reported nothing -
+ *   every WalletConnect rejection was silently uncounted.
+ * - viem: a typed UserRejectedRequestError, sometimes without the numeric
+ *   code surviving the wrapping.
+ *
+ * The real code often hides under `cause` (viem nests, WC wraps), so the
+ * chain is walked a few levels.
+ */
+export function isUserRejectionError(error: unknown): boolean {
+  let cursor = error as
+    | { code?: unknown; name?: unknown; cause?: unknown }
+    | undefined;
+  for (let depth = 0; cursor && depth < 5; depth++) {
+    const code = cursor.code;
+    if (
+      code === 4001 ||
+      (typeof code === "number" && code >= 5000 && code <= 5005) ||
+      cursor.name === "UserRejectedRequestError"
+    ) {
+      return true;
+    }
+    cursor = cursor.cause as typeof cursor;
+  }
+  return false;
+}
+
+/**
+ * The wallet on the far side of a WalletConnect session.
+ *
+ * WalletConnect is a transport, not a wallet: the signing wallet (Ledger
+ * Live, MetaMask Mobile, Safe, ...) identifies itself in the session's peer
+ * metadata. Reporting only "WalletConnect" hides every wallet behind it -
+ * production showed Ledger at effectively zero while its sessions were being
+ * tracked under the transport's name. Reads synchronous state only; never
+ * issues an RPC.
+ */
+export function readWalletConnectPeer(
+  provider: EIP1193Provider
+): { name: string; url?: string } | undefined {
+  const session = (provider as unknown as {
+    session?: { peer?: { metadata?: { name?: unknown; url?: unknown } } };
+  }).session;
+  const metadata = session?.peer?.metadata;
+  if (!metadata || typeof metadata.name !== "string" || metadata.name.length === 0) {
+    return undefined;
+  }
+  return {
+    name: metadata.name,
+    ...(typeof metadata.url === "string" && metadata.url.length > 0
+      ? { url: metadata.url }
+      : {}),
+  };
+}
+
+/**
  * Validates that a provider implements the required EIP-1193 interface
  * 
  * @param provider The provider to validate

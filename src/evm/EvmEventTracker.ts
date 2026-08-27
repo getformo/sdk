@@ -2,7 +2,7 @@ import { EIP6963ProviderDetail, createStore } from "mipd";
 import { logger } from "../logger";
 import { parseChainId } from "../utils/chain";
 import { validateAndChecksumAddress } from "../utils/address";
-import { detectInjectedProviderInfo, isValidProvider } from "../provider";
+import { detectInjectedProviderInfo, isValidProvider, DEFAULT_PROVIDER_ICON } from "../provider";
 import {
   Address,
   ChainID,
@@ -68,7 +68,70 @@ export interface EvmEventTrackerDeps {
  * deciding when a connect has to be reported, when a switch is stale, and
  * when a provider has stopped being the one we follow.
  */
+/**
+ * A registered provider's current accounts, from its synchronous state.
+ *
+ * `provider.accounts` first - but a LIVE MetaMask Mobile session over
+ * WalletConnect has been observed with `accounts` EMPTY while the session's
+ * namespaces held the approved account ("eip155:11155111:0xabc..."), which
+ * silently defeated adoption. The namespaces are the session's ground
+ * truth, so they are the fallback. Still purely synchronous property
+ * reads; nothing goes on the wallet transport.
+ */
+function readProviderAccounts(provider: EIP1193Provider): string[] {
+  const direct = (provider as unknown as { accounts?: unknown }).accounts;
+  if (
+    Array.isArray(direct) &&
+    direct.length > 0 &&
+    direct.every((a) => typeof a === "string")
+  ) {
+    return direct as string[];
+  }
+  const session = (provider as unknown as {
+    session?: { namespaces?: Record<string, { accounts?: unknown }> };
+  }).session;
+  // eip155 ONLY: a session can also carry Solana or other namespaces, and
+  // feeding a non-EVM address into the EVM adoption path would make
+  // validation reject it and drop the whole adoption. A session can also
+  // authorize DIFFERENT accounts per chain, so entries for the provider's
+  // active chain come first - the adopted address should be the one this
+  // chain actually authorized.
+  const ns = session?.namespaces?.eip155;
+  const chainId = (provider as unknown as { chainId?: unknown }).chainId;
+  const parsed =
+    typeof chainId === "number"
+      ? chainId
+      : typeof chainId === "string"
+        ? parseChainId(chainId)
+        : undefined;
+  const activePrefix = parsed ? `eip155:${parsed}:` : undefined;
+  const forChain: string[] = [];
+  const others: string[] = [];
+  if (Array.isArray(ns?.accounts)) {
+    for (const entry of ns.accounts) {
+      if (typeof entry !== "string" || !entry.startsWith("eip155:")) continue;
+      const address = entry.split(":")[2];
+      if (!address) continue;
+      const bucket =
+        activePrefix && entry.startsWith(activePrefix) ? forChain : others;
+      if (!bucket.includes(address)) bucket.push(address);
+    }
+  }
+  const out = [...forChain, ...others.filter((a) => !forChain.includes(a))];
+  return out;
+}
+
 export class EvmEventTracker {
+  /**
+   * Providers adopted through `registerProvider` rather than discovered.
+   * Announcement-driven cleanup must not touch them: they are never in an
+   * announcement list, so "missing from the announcement" is their normal
+   * state, not evidence of removal. A Set rather than a WeakSet because
+   * suppressed adoptions retry from it; the registry holds these providers
+   * strongly anyway, and untrack removes them.
+   */
+  private externallyRegistered = new Set<EIP1193Provider>();
+
   /**
    * The connect this SDK has already reported for a provider.
    *
@@ -224,6 +287,108 @@ export class EvmEventTracker {
         error
       );
     }
+  }
+
+  /**
+   * Adopt a provider the page constructed rather than announced.
+   *
+   * Discovery only ever sees EIP-6963 announcements and `window.ethereum`.
+   * A WalletConnect or Ledger provider is a constructed object that does
+   * neither, so without this entry point its whole session is invisible -
+   * the P-2403 gap. The pipeline from here on is the same one every
+   * discovered provider takes: registry, detect event, listeners, request
+   * wrapper.
+   *
+   * A session that already exists at registration is seeded from the
+   * provider's SYNCHRONOUS `accounts` state (WalletConnect exposes it), via
+   * the same accounts-arrival path a live `accountsChanged` takes. No RPC:
+   * nothing analytics-only may go on a wallet's transport, and
+   * WalletConnect's serialised relay socket is the very case that rule
+   * exists for.
+   */
+  adoptExternalProvider(detail: EIP6963ProviderDetail): boolean {
+    const provider = detail.provider as EIP1193Provider;
+    // Exempt from announcement-driven cleanup BEFORE tracking: a registered
+    // provider is never in an EIP-6963 announcement, so without this the
+    // next wallet announcement would untrack it and its events would stop.
+    this.externallyRegistered.add(provider);
+    this.registry.add(detail);
+    this.trackProviders([detail]);
+
+    // Adoption and success both hinge on the wrapper actually installing:
+    // reporting success for a provider whose requests stay invisible would
+    // recreate the silent loss this API exists to close.
+    if (!this.registry.isTracked(provider)) {
+      this.externallyRegistered.delete(provider);
+      // Tracking got partway: lifecycle listeners may already be attached
+      // even though the request wrapper failed. Leaving them would leak
+      // callbacks that hold this instance for the life of the page.
+      this.untrackProvider(provider);
+      logger.warn("adoptExternalProvider: provider could not be tracked");
+      return false;
+    }
+
+    // A provider that was ALREADY tracked skips the pipeline above, and
+    // "tracked" means lifecycle listeners - it says nothing about the
+    // request wrapper, which a wallet can have replaced since. Re-verify
+    // it on every registration: the call reinstalls a displaced wrapper,
+    // rebinds ownership of an intact one, and refuses when it cannot -
+    // and success here must mean capture actually works.
+    if (!this.deps.registerRequestListeners(provider)) {
+      this.externallyRegistered.delete(provider);
+      this.untrackProvider(provider);
+      logger.warn("adoptExternalProvider: request wrapper could not be ensured");
+      return false;
+    }
+
+    // Detect with the LIVE name (peer-resolved when a session exists);
+    // the stored metadata stays generic so later sessions rename freely.
+    void this.detectWallets([
+      { ...detail, info: { ...detail.info, ...this.registry.infoFor(provider) } },
+    ]);
+
+    const accounts = readProviderAccounts(provider);
+    if (accounts.length > 0) {
+      void this.onAccountsChanged(provider, accounts);
+    }
+    return true;
+  }
+
+  /**
+   * Re-run session adoption for every registered external provider.
+   *
+   * Registration while tracking was suppressed (opt-out, excluded route)
+   * reached the adoption path and was refused - and a provider whose
+   * session already exists may never emit another accountsChanged, so
+   * nothing would ever retry. Called when suppression can have ended
+   * (opt-in, page navigation). Idempotent: an already-adopted wallet is
+   * deduplicated by the same state and markers as any repeated signal.
+   */
+  retryExternalAdoptions(): void {
+    this.externallyRegistered.forEach((provider) => {
+      // A flagless provider registered BEFORE pairing detected as the
+      // generic injected identity; once the session's peer exists, the
+      // live identity differs and the corrected detect fires. The
+      // session-scoped rdns dedup keeps this from repeating.
+      const live = this.registry.infoFor(provider);
+      if (live.rdns === "com.walletconnect") {
+        void this.detectWallets([
+          {
+            info: {
+              name: live.name,
+              rdns: live.rdns,
+              uuid: "corrected-com-walletconnect",
+              icon: DEFAULT_PROVIDER_ICON,
+            },
+            provider: provider as never,
+          },
+        ]);
+      }
+      const accounts = readProviderAccounts(provider);
+      if (accounts.length > 0) {
+        void this.onAccountsChanged(provider, accounts);
+      }
+    });
   }
 
   private registerAccountsChangedListener(provider: EIP1193Provider): void {
@@ -1113,6 +1278,11 @@ export class EvmEventTracker {
     );
 
     for (const provider of this.registry.trackedProviders()) {
+      // A registered external provider is never announced over EIP-6963;
+      // its absence from an announcement list says nothing about it.
+      if (this.externallyRegistered.has(provider)) {
+        continue;
+      }
       if (!currentProviderInstances.has(provider)) {
         logger.info(
           `Cleaning up unavailable provider: ${provider.constructor.name}`

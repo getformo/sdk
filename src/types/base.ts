@@ -39,6 +39,16 @@ export interface IFormoAnalytics {
   ): Promise<void>;
   reset(): void;
   cleanup(): void;
+  /**
+   * Track a constructed (non-injected) EIP-1193 provider, such as a
+   * WalletConnect or Ledger provider the app built itself. Returns true when
+   * the provider is tracked, false when refused (wagmi mode, EVM disabled,
+   * or not a valid provider).
+   */
+  registerProvider(
+    provider: EIP1193Provider,
+    info?: { name?: string; rdns?: string; icon?: `data:image/${string}` }
+  ): boolean;
   detect(
     params: { rdns: string; providerName: string },
     properties?: IFormoEventProperties,

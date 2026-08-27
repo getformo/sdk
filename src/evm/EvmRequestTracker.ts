@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { isUserRejectionError } from "../provider";
 import { parseChainId } from "../utils/chain";
 import { validateAndChecksumAddress } from "../utils/address";
 import {
@@ -14,6 +15,7 @@ import {
   WrappedRequestFunction,
   WRAPPED_REQUEST_SYMBOL,
   WRAPPED_REQUEST_REF_SYMBOL,
+  WRAPPED_REQUEST_OWNER_SYMBOL,
 } from "../types";
 import { WalletStateStore } from "../wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./EvmProviderRegistry";
@@ -89,6 +91,20 @@ export interface EvmRequestTrackerDeps {
  * probed - an SDK-issued lookup on a serialising transport can wedge the
  * user's wallet, which is never an acceptable price for a label.
  */
+/**
+ * Providers with a dispatch already on the synchronous call stack.
+ *
+ * A page can end up with LAYERED Formo wrappers: another library wraps our
+ * wrapper, the SDK rebuilds, and the new instance wraps the outer function
+ * because the marker is not on it. Both layers route to the same newest
+ * live tracker, which would instrument one user request twice. Every
+ * dispatch issues its underlying request synchronously (deliberately -
+ * the wallet call always goes out first), so an inner shim reached during
+ * that window belongs to the SAME user request and passes straight
+ * through.
+ */
+const dispatchInFlight = new WeakSet<object>();
+
 export class EvmRequestTracker {
   /**
    * Timers for receipt and batch-status polling.
@@ -112,7 +128,24 @@ export class EvmRequestTracker {
     this.disposed = true;
     this.polls.forEach((timer) => clearTimeout(timer));
     this.polls.clear();
+    // Remove this instance from every provider's owner list. The lists
+    // live on LONG-LIVED provider objects; leaving disposed trackers in
+    // them retains each old instance's whole object graph across rebuilds,
+    // growing without bound under HMR.
+    this.wrappedProviders.forEach((provider) => {
+      const owners = (provider as unknown as Record<symbol, unknown>)[
+        WRAPPED_REQUEST_OWNER_SYMBOL
+      ] as EvmRequestTracker[] | undefined;
+      if (Array.isArray(owners)) {
+        const idx = owners.indexOf(this);
+        if (idx !== -1) owners.splice(idx, 1);
+      }
+    });
+    this.wrappedProviders.clear();
   }
+
+  /** Providers whose owner list includes this instance; pruned on cleanup. */
+  private wrappedProviders = new Set<EIP1193Provider>();
 
   /** Re-arm a poll, unless this tracker has been torn down. */
   private schedulePoll(fn: () => void, delayMs: number): void {
@@ -139,11 +172,28 @@ export class EvmRequestTracker {
       return false;
     }
 
-    // Check if the provider is already wrapped with our SDK's wrapper
+    // Already wrapped: take OWNERSHIP rather than skipping. The wrapper
+    // survives an SDK rebuild and closes over the instance that installed
+    // it, whose queue is closed after cleanup - "skip" made the rebuilt
+    // instance report success while every request-derived event died in
+    // the dead instance's queue. The wrapper reads the owner slot per call.
     const currentRequest = provider.request as WrappedRequestFunction;
     if (this.registry.isWrapped(provider, currentRequest)) {
+      const owners = (provider as unknown as Record<symbol, unknown>)[
+        WRAPPED_REQUEST_OWNER_SYMBOL
+      ] as EvmRequestTracker[] | undefined;
+      if (!Array.isArray(owners)) {
+        // A wrapper without its owner list cannot be taken over, and
+        // claiming success would silence every request event.
+        logger.warn("wrapped without owner list; cannot rebind");
+        return false;
+      }
+      const idx = owners.indexOf(this);
+      if (idx !== -1) owners.splice(idx, 1);
+      owners.push(this);
+      this.wrappedProviders.add(provider);
       logger.info(
-        "Provider already wrapped with our SDK; skipping request wrapping."
+        "Provider already wrapped; rebinding the wrapper to this instance."
       );
       return true;
     }
@@ -154,6 +204,97 @@ export class EvmRequestTracker {
       method,
       params,
     }: RequestArguments): Promise<T | null | undefined> => {
+      // Route to the newest LIVE registrant. `this` here is whichever
+      // instance installed the wrapper, which after an SDK rebuild is a
+      // torn-down instance with a closed queue. Same body, different deps.
+      const owners = (provider as unknown as Record<symbol, unknown>)[
+        WRAPPED_REQUEST_OWNER_SYMBOL
+      ] as EvmRequestTracker[] | undefined;
+      if (dispatchInFlight.has(provider)) {
+        // An outer Formo wrapper is already instrumenting this very
+        // request; this layer only forwards.
+        return request({ method, params }) as Promise<T | null | undefined>;
+      }
+      const liveOwner = Array.isArray(owners)
+        ? [...owners].reverse().find((o) => !o.disposed)
+        : undefined;
+      dispatchInFlight.add(provider);
+      try {
+        return (liveOwner ?? this).dispatchWrappedRequest<T>(
+          { method, params },
+          provider,
+          request
+        );
+      } finally {
+        // Cleared as soon as the dispatch call RETURNS its promise: the
+        // underlying request has been issued synchronously by then, so
+        // the window covers exactly the nested layers of this one call
+        // and never a concurrent request.
+        dispatchInFlight.delete(provider);
+      }
+    };
+    try {
+      // MERGE with any existing list rather than overwriting: a wallet that
+      // replaced `request` forces a re-wrap, and discarding the prior list
+      // would drop other live instances from ownership - the newest-live
+      // fallback then has nobody to fall back to.
+      const slot = provider as unknown as Record<symbol, unknown>;
+      const prior = slot[WRAPPED_REQUEST_OWNER_SYMBOL];
+      const owners: EvmRequestTracker[] = Array.isArray(prior) ? prior : [];
+      const idx = owners.indexOf(this);
+      if (idx !== -1) owners.splice(idx, 1);
+      owners.push(this);
+      if (!Array.isArray(prior)) {
+        slot[WRAPPED_REQUEST_OWNER_SYMBOL] = owners;
+      }
+      this.wrappedProviders.add(provider);
+    } catch {
+      /* frozen provider: the request write below fails too and aborts */
+    }
+    return this.installWrappedRequest(provider, wrappedRequest);
+  }
+
+  /** Install the wrapper function onto the provider; separated so the
+   * routing shim above stays small. */
+  private installWrappedRequest(
+    provider: EIP1193Provider,
+    wrappedRequest: WrappedRequestFunction
+  ): boolean {
+    // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
+    wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
+
+    // Both writes go inside the try. A frozen or non-extensible provider
+    // throws on the symbol assignment just as readily as on `request`, and
+    // that one used to sit outside the guard, so an unwrappable provider
+    // aborted registration instead of being skipped.
+    try {
+      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
+        wrappedRequest;
+      provider.request = wrappedRequest;
+      // Read back: an accessor or Proxy can ACCEPT the assignment without
+      // installing it, and success here is a promise that capture works.
+      if (provider.request !== wrappedRequest) {
+        logger.warn("request assignment swallowed; not wrapped");
+        return false;
+      }
+      return true;
+    } catch (e) {
+      logger.warn("Failed to wrap provider.request; skipping", e);
+      return false;
+    }
+  }
+
+  /**
+   * The wrapper body proper: everything a request observation does, run
+   * against THIS instance's registry, wallet state, and event queue. Kept
+   * as a method so a surviving wrapper installed by a previous SDK
+   * instance can hand calls to the current one.
+   */
+  private async dispatchWrappedRequest<T>(
+    { method, params }: RequestArguments,
+    provider: EIP1193Provider,
+    request: (args: RequestArguments) => Promise<unknown>
+  ): Promise<T | null | undefined> {
       // Learn the chain from a call the APP was making anyway.
       //
       // A standards-compliant provider need not expose a synchronous `chainId`
@@ -190,7 +331,7 @@ export class EvmRequestTracker {
       ) {
         if (!this.deps.isAutocaptureEnabled("signature")) {
           logger.debug(`Signature event skipped (autocapture.signature: false)`, { method });
-          return request({ method, params });
+          return request({ method, params }) as Promise<T | null | undefined>;
         }
         // Issue the wallet call FIRST, before the chain lookup is even
         // started. Not awaiting our own lookup is not enough: a provider that
@@ -254,7 +395,7 @@ export class EvmRequestTracker {
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
-          if (rpcError?.code === 4001) {
+          if (isUserRejectionError(rpcError)) {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
@@ -300,7 +441,7 @@ export class EvmRequestTracker {
       ) {
         if (!this.deps.isAutocaptureEnabled("transaction")) {
           logger.debug(`Transaction event skipped (autocapture.transaction: false)`, { method });
-          return request({ method, params });
+          return request({ method, params }) as Promise<T | null | undefined>;
         }
         // Issue the wallet call FIRST, for the same reason as the signature
         // path above: a provider that serializes RPC would otherwise queue the
@@ -352,7 +493,7 @@ export class EvmRequestTracker {
           return transactionHash as unknown as T;
         } catch (error) {
           const rpcError = error as RPCError;
-          if (rpcError?.code === 4001) {
+          if (isUserRejectionError(rpcError)) {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
@@ -374,24 +515,7 @@ export class EvmRequestTracker {
         }
       }
 
-      return request({ method, params });
-    };
-    // Mark the wrapper so we can detect if request is replaced externally and keep a reference on provider
-    wrappedRequest[WRAPPED_REQUEST_SYMBOL] = true;
-
-    // Both writes go inside the try. A frozen or non-extensible provider
-    // throws on the symbol assignment just as readily as on `request`, and
-    // that one used to sit outside the guard, so an unwrappable provider
-    // aborted registration instead of being skipped.
-    try {
-      (provider as WrappedEIP1193Provider)[WRAPPED_REQUEST_REF_SYMBOL] =
-        wrappedRequest;
-      provider.request = wrappedRequest;
-      return true;
-    } catch (e) {
-      logger.warn("Failed to wrap provider.request; skipping", e);
-      return false;
-    }
+      return request({ method, params }) as Promise<T | null | undefined>;
   }
 
   private buildSignatureEventPayload(
@@ -645,7 +769,7 @@ export class EvmRequestTracker {
       return result;
     } catch (error) {
       const rpcError = error as RPCError;
-      if (rpcError?.code === 4001) {
+      if (isUserRejectionError(rpcError)) {
         // One rejection dismisses the whole prompt, so every call in it is
         // rejected. Reporting only the first would undercount.
         for (const p of payloads) {

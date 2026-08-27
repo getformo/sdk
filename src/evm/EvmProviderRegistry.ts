@@ -1,7 +1,7 @@
 import { EIP6963ProviderDetail } from "mipd";
 import { logger } from "../logger";
 import { validateAndChecksumAddress } from "../utils/address";
-import { detectInjectedProviderInfo } from "../provider";
+import { detectInjectedProviderInfo, readWalletConnectPeer } from "../provider";
 import {
   Address,
   ChainID,
@@ -135,11 +135,35 @@ export class EvmProviderRegistry {
    */
   infoFor(provider: EIP1193Provider): { name: string; rdns: string } {
     const announced = this.details.find((p) => p.provider === provider);
-    if (announced) {
-      return { name: announced.info.name, rdns: announced.info.rdns };
+    const info = announced
+      ? { name: announced.info.name, rdns: announced.info.rdns }
+      : (() => {
+          const injected = detectInjectedProviderInfo(provider);
+          return { name: injected.name, rdns: injected.rdns };
+        })();
+
+    // WalletConnect names the TRANSPORT; the session's peer names the
+    // wallet. Resolved live, per read: a session established after the
+    // provider was registered still gets its signer's name onto every
+    // event from then on. Only GENERIC names are replaced - a caller who
+    // registered an explicit display name keeps it. "Injected Provider"
+    // is included because a flagless WalletConnect-compatible provider
+    // registered BEFORE its session exists detects as nothing at all;
+    // the peer appearing later is itself the proof of what it was, so
+    // the rdns upgrades with it.
+    if (info.name === "WalletConnect" || info.name === "Injected Provider") {
+      const peer = readWalletConnectPeer(provider);
+      if (peer?.name) {
+        return {
+          name: peer.name,
+          rdns:
+            info.rdns === "io.injected.provider"
+              ? "com.walletconnect"
+              : info.rdns,
+        };
+      }
     }
-    const injected = detectInjectedProviderInfo(provider);
-    return { name: injected.name, rdns: injected.rdns };
+    return info;
   }
 
   // ── listener bookkeeping ─────────────────────────────────────────────────
