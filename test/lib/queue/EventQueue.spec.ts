@@ -259,6 +259,64 @@ describe("EventQueue", () => {
         expect((eventQueue as any).payloadHashes.size, "expired id pruned, new one recorded").to.equal(1);
       });
 
+      it("catches a double-fire that straddles a UTC minute boundary", async () => {
+        // message_id folds in the minute-truncated timestamp (it is the
+        // event's identity on the wire), so these two get DIFFERENT ids.
+        // The dedup key must not care: it is the same event 2ms apart.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        clock.setSystemTime(new Date("2026-08-27T12:34:59.999Z"));
+        const first = createMockEvent({ original_timestamp: new Date().toISOString() });
+        await eventQueue.enqueue(first);
+        expect((eventQueue as any).queue).to.have.length(1);
+
+        clock.setSystemTime(new Date("2026-08-27T12:35:00.001Z"));
+        const second = { ...first, original_timestamp: new Date().toISOString() };
+        expect(second.original_timestamp).to.not.equal(first.original_timestamp);
+        await eventQueue.enqueue(second);
+        expect((eventQueue as any).queue, "the copy across the boundary is dropped").to.have.length(1);
+      });
+
+      it("keeps message ids distinct across minutes while deduping by content", async () => {
+        // Same content a full window apart: both go out, with different
+        // ids, because the id must never collide for events a minute apart.
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        clock.tick(60_001);
+        await eventQueue.enqueue({ ...event, original_timestamp: new Date().toISOString() });
+        expect((eventQueue as any).queue).to.have.length(1);
+        expect((eventQueue as any).queue[0].message.message_id).to.not.equal(firstId);
+      });
+
+      it("prunes only from the front and stops at the first live entry", async () => {
+        // Ten distinct events spread over the window, then one more after
+        // the oldest six expired: exactly those six are gone.
+        for (let i = 0; i < 10; i++) {
+          await eventQueue.enqueue(createMockEvent({ properties: { i } }));
+          clock.tick(5_000);
+        }
+        await (eventQueue as any).pendingFlush;
+        expect((eventQueue as any).payloadHashes.size).to.equal(10);
+
+        // t = 50s now. Entry i expires at 5i + 60 s. At 90s that is i in
+        // 0..6: entry 6 expires at exactly 90s, and an entry is dead the
+        // instant its expiry is reached. Entries 7..9 (95s, 100s, 105s) live.
+        clock.tick(40_000);
+        await eventQueue.enqueue(createMockEvent({ properties: { i: 99 } }));
+        expect((eventQueue as any).payloadHashes.size).to.equal(10 - 7 + 1);
+
+        // A survivor is still enforced, and an expired one is accepted again.
+        await eventQueue.enqueue(createMockEvent({ properties: { i: 9 } }));
+        expect((eventQueue as any).queue.map((q: any) => q.message.properties.i)).to.not.include(9);
+        expect((eventQueue as any).payloadHashes.size).to.equal(4);
+        await eventQueue.enqueue(createMockEvent({ properties: { i: 0 } }));
+        expect((eventQueue as any).payloadHashes.size).to.equal(5);
+      });
+
       it("still suppresses a duplicate of an event waiting in the queue", async () => {
         await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
         await (eventQueue as any).pendingFlush;

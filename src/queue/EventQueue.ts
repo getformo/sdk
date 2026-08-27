@@ -68,10 +68,9 @@ const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 30 SECONDS
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
-// How long an accepted event's hash keeps suppressing identical events.
-// The hash folds in the timestamp truncated to the minute, so two identical
-// events can only collide within one minute; holding a hash any longer than
-// that cannot suppress anything.
+// How long an accepted event keeps suppressing identical events. A rolling
+// window from the moment of acceptance, so a double-fire is caught however
+// the wall clock happens to fall (see generateDedupKey).
 const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
 
 export class EventQueue implements IEventQueue {
@@ -87,7 +86,7 @@ export class EventQueue implements IEventQueue {
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
-  // Accepted message ids and when each stops counting as a duplicate.
+  // Accepted event fingerprints and when each stops counting as a duplicate.
   //
   // Keyed on time, not on queue membership. Hashes used to be dropped when
   // their event left the queue, which was the same thing while every event
@@ -95,6 +94,9 @@ export class EventQueue implements IEventQueue {
   // the moment it arrives (see enqueue), its hash left with it, and an
   // identical track() a moment later, the double-fire this exists to
   // catch, was accepted (#372).
+  //
+  // Insertion order is expiry order (each entry expires DEDUP_WINDOW_MS after
+  // it was added), which is what lets the prune stop at the first live entry.
   private payloadHashes: Map<string, number> = new Map();
   private canSend?: () => boolean;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
@@ -152,6 +154,22 @@ export class EventQueue implements IEventQueue {
     const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
     const eventString = JSON.stringify(eventForHashing);
     return hash(eventString);
+  }
+
+  /**
+   * The fingerprint duplicates are judged by: the event without its
+   * timestamp.
+   *
+   * Deliberately NOT the message id. That id folds in the timestamp truncated
+   * to the minute, because it is the event's identity on the wire and two
+   * events a minute apart must never share one. Judging duplicates by it
+   * meant a double-fire straddling a minute boundary (:59.999 and :00.001)
+   * got two different ids and both were sent. The window is a rolling one
+   * from acceptance, so it needs a key that does not change with the clock.
+   */
+  private async generateDedupKey(event: IFormoEvent): Promise<string> {
+    const { original_timestamp: _ignored, ...rest } = event;
+    return hash(JSON.stringify(rest));
   }
 
   /**
@@ -213,15 +231,16 @@ export class EventQueue implements IEventQueue {
     }
 
     const message_id = await this.generateMessageId(event);
+    const dedupKey = await this.generateDedupKey(event);
 
-    // Re-check after the await. A caller that entered before close() is
+    // Re-check after the awaits. A caller that entered before close() is
     // suspended here, and on a queue that has not flushed yet its event
     // would push and flush immediately - the exact shape of the bug close()
     // exists to stop.
     if (this.closed) return;
 
-    // check if the message already exists
-    if (this.isDuplicate(message_id)) {
+    // check if an identical event was accepted within the dedup window
+    if (this.isDuplicate(dedupKey)) {
       logger.warn(
         `Duplicate event dropped: an identical event was accepted less than ${millisecondsToSecond(
           DEDUP_WINDOW_MS
@@ -462,21 +481,41 @@ export class EventQueue implements IEventQueue {
 
   /**
    * Whether an identical event was accepted within the dedup window. Records
-   * the id when it was not. Expired ids are pruned here, on the enqueue
+   * the key when it was not. Expired keys are pruned here, on the enqueue
    * path, so the map is bounded by one minute of accepted events and needs
    * no timer of its own.
    */
-  private isDuplicate(eventId: string): boolean {
+  private isDuplicate(dedupKey: string): boolean {
     const now = Date.now();
-    // Deleting during Map.forEach is spec-safe; for..of is off-limits under
-    // the ES5 build target.
-    this.payloadHashes.forEach((expiresAt, id) => {
-      if (expiresAt <= now) this.payloadHashes.delete(id);
-    });
-    if (this.payloadHashes.has(eventId)) return true;
+    this.pruneExpired(now);
+    if (this.payloadHashes.has(dedupKey)) return true;
 
-    this.payloadHashes.set(eventId, now + DEDUP_WINDOW_MS);
+    this.payloadHashes.set(dedupKey, now + DEDUP_WINDOW_MS);
     return false;
+  }
+
+  /**
+   * Drop expired fingerprints from the front of the map.
+   *
+   * Entries are in insertion order and every one expires a fixed interval
+   * after insertion, so the first live entry ends the scan: each expired
+   * entry is visited once in its life, not once per enqueue. A clock that
+   * steps backwards can leave a later entry with an earlier expiry behind
+   * it; it then lingers until the entry ahead expires, which is at most the
+   * window and never causes a false duplicate beyond it.
+   *
+   * Manual iteration: for..of over a Map does not compile under the ES5
+   * build target, and Map.forEach cannot stop early. Deleting the current
+   * entry mid-iteration is spec-safe.
+   */
+  private pruneExpired(now: number): void {
+    const entries = this.payloadHashes.entries();
+    for (let step = entries.next(); !step.done; step = entries.next()) {
+      const key = step.value[0];
+      const expiresAt = step.value[1];
+      if (expiresAt > now) break;
+      this.payloadHashes.delete(key);
+    }
   }
 
   /**
