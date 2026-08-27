@@ -2,7 +2,7 @@ import { EIP6963ProviderDetail, createStore } from "mipd";
 import { logger } from "../logger";
 import { parseChainId } from "../utils/chain";
 import { validateAndChecksumAddress } from "../utils/address";
-import { detectInjectedProviderInfo, isValidProvider, DEFAULT_PROVIDER_ICON } from "../provider";
+import { detectInjectedProviderInfo, isValidProvider, readSafeAppAccount, DEFAULT_PROVIDER_ICON } from "../provider";
 import {
   Address,
   ChainID,
@@ -118,7 +118,13 @@ function readProviderAccounts(provider: EIP1193Provider): string[] {
     }
   }
   const out = [...forChain, ...others.filter((a) => !forChain.includes(a))];
-  return out;
+  if (out.length > 0) return out;
+
+  // Fallback #3: the Safe Apps provider. No accounts array, no namespaces,
+  // and no lifecycle events EVER (the iframe is connected from the first
+  // instant), so without this read its session is adopted never.
+  const safeAddress = readSafeAppAccount(provider);
+  return safeAddress ? [safeAddress] : out;
 }
 
 export class EvmEventTracker {
