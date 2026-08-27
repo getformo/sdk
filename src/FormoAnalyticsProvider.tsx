@@ -34,6 +34,44 @@ const defaultContext: IFormoAnalytics = {
 export const FormoAnalyticsContext =
   createContext<IFormoAnalytics>(defaultContext);
 
+/**
+ * A stable key over the serializable parts of Options. The provider effect
+ * re-initialises the SDK when this key changes; anything that alters SDK
+ * behaviour must be represented here, or a runtime change to it is silently
+ * ignored. Complex objects are tracked by presence, plus the flags that
+ * change what the SDK does with them.
+ */
+export const computeOptionsKey = (options?: Options): string => {
+  if (!options) return 'undefined';
+
+  const serializableOptions = {
+    tracking: options.tracking,
+    autocapture: options.autocapture,
+    crossSubdomainCookies: options.crossSubdomainCookies,
+    apiHost: options.apiHost,
+    flushAt: options.flushAt,
+    flushInterval: options.flushInterval,
+    retryCount: options.retryCount,
+    maxQueueSize: options.maxQueueSize,
+    logger: options.logger,
+    referral: options.referral,
+    evm: options.evm,
+    // For complex objects, just track their presence, not their content
+    hasProvider: !!options.provider,
+    hasWagmi: !!options.wagmi,
+    wagmiEip1193Fallback: !!options.wagmi?.eip1193Fallback,
+    hasReady: !!options.ready,
+  };
+
+  try {
+    return JSON.stringify(serializableOptions);
+  } catch (error) {
+    // Fallback to timestamp if serialization fails
+    logger.warn('Failed to serialize options, using timestamp', error);
+    return Date.now().toString();
+  }
+};
+
 export const FormoAnalyticsProvider: FC<FormoAnalyticsProviderProps> = (props) => {
   const { writeKey, disabled = false, children } = props;
 
@@ -60,37 +98,7 @@ const InitializedAnalytics: FC<FormoAnalyticsProviderProps> = ({
   const sdkRef = useRef<IFormoAnalytics>(defaultContext);
   initStorageManager(writeKey);
 
-  // Create a stable key from options that ignores complex objects and functions
-  // We only care about serializable config values that would affect SDK behavior
-  const optionsKey = useMemo(() => {
-    if (!options) return 'undefined';
-    
-    // Extract only the serializable parts of options
-    const serializableOptions = {
-      tracking: options.tracking,
-      autocapture: options.autocapture,
-      crossSubdomainCookies: options.crossSubdomainCookies,
-      apiHost: options.apiHost,
-      flushAt: options.flushAt,
-      flushInterval: options.flushInterval,
-      retryCount: options.retryCount,
-      maxQueueSize: options.maxQueueSize,
-      logger: options.logger,
-      referral: options.referral,
-      // For complex objects, just track their presence, not their content
-      hasProvider: !!options.provider,
-      hasWagmi: !!options.wagmi,
-      hasReady: !!options.ready,
-    };
-    
-    try {
-      return JSON.stringify(serializableOptions);
-    } catch (error) {
-      // Fallback to timestamp if serialization fails
-      logger.warn('Failed to serialize options, using timestamp', error);
-      return Date.now().toString();
-    }
-  }, [options]);
+  const optionsKey = useMemo(() => computeOptionsKey(options), [options]);
 
   useEffect(() => {
     let isCleanedUp = false;

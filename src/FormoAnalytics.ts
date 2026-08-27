@@ -1684,9 +1684,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    *
    * With several live SDK instances (multi write-key pages) registering
    * the SAME provider, request-derived events (signatures, transactions)
-   * go to the most recently registered live instance - the same
-   * single-observer semantics discovery has always had for the request
-   * wrapper. Lifecycle events (connect, chain, disconnect) reach every
+   * go to the most recently CREATED live instance, regardless of the
+   * order registrations happen to land in - the same single-observer
+   * semantics discovery has always had for the request wrapper. Lifecycle events (connect, chain, disconnect) reach every
    * instance. Fanning request observations out to all instances is a
    * separate feature.
    *
@@ -1711,12 +1711,38 @@ export class FormoAnalytics implements IFormoAnalytics {
    * request wrapper installs here. Double counting is prevented in the
    * wrapper via `shouldSkipRequestCapture`.
    */
-  public _wrapWagmiProvider(provider: EIP1193Provider): void {
-    if (this.isCleanedUp || !isValidProvider(provider)) return;
+  public _wrapWagmiProvider(
+    provider: EIP1193Provider,
+    chainId?: number
+  ): boolean {
+    if (this.isCleanedUp || !isValidProvider(provider)) return false;
     try {
-      this.evmRequests.registerRequestListeners(provider);
+      // The tracker reports refusals (frozen provider, unrebindable
+      // wrapper) by returning false rather than throwing; treat those as
+      // failures too so the caller can retry later.
+      if (!this.evmRequests.registerRequestListeners(provider)) {
+        return false;
+      }
+      if (chainId !== undefined) {
+        this.evm.rememberChain(provider, chainId);
+      }
+      return true;
     } catch (e) {
       logger.warn("Failed to wrap wagmi provider for hybrid capture", e);
+      return false;
+    }
+  }
+
+  /** INTERNAL. Chain updates for the fallback-wrapped provider. */
+  public _rememberWagmiProviderChain(
+    provider: EIP1193Provider,
+    chainId: number | undefined
+  ): void {
+    if (this.isCleanedUp) return;
+    try {
+      this.evm.rememberChain(provider, chainId);
+    } catch {
+      /* bookkeeping only */
     }
   }
 

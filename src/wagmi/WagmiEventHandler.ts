@@ -221,8 +221,6 @@ const walletConnectPeerLookups = new WeakSet<object>();
  * newest kicked one, so a slow resolution from a PREVIOUS session cannot
  * land after the current session's and overwrite it. */
 const walletConnectPeerLatest = new WeakMap<object, object>();
-/** Connections whose provider already has the hybrid-capture wrapper. */
-const wagmiWrappedConnections = new WeakSet<object>();
 
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
@@ -674,6 +672,10 @@ export class WagmiEventHandler {
       (key, prevKey) => {
         const [, address] = key.split("|");
         const [, prevAddress] = (prevKey ?? "|").split("|");
+        // A connector switch keeps status "connected", so the status
+        // subscription never re-wraps; the NEW active connection's provider
+        // must be instrumented from here or its imperative calls are lost.
+        this.wrapActiveConnectorProvider(this.getState());
         this.handleActiveAddressChange(
           address || undefined,
           prevAddress || undefined
@@ -1034,6 +1036,19 @@ export class WagmiEventHandler {
     status: WagmiState["status"],
     prevStatus: WagmiState["status"]
   ): Promise<void> {
+    if (status === "disconnected" || status === "reconnecting") {
+      // The wrapped session is over - or, for "reconnecting", about to be
+      // replaced without ever passing through "disconnected". This must
+      // run for EVERY such transition, before the processing lock and
+      // regardless of whether a wallet was being tracked, or a rapid
+      // same-connector reconnect retains the old provider and the chain
+      // callback writes the new session's chain onto it. The generation
+      // bump invalidates every wrap still in flight from the ended
+      // session, resolved or not. The "connected" that follows re-wraps.
+      this.wrapSessionGeneration += 1;
+      this.fallbackConnector = undefined;
+      this.fallbackProvider = undefined;
+    }
 
     // Prevent concurrent processing
     if (this.trackingState.isProcessing) {
@@ -1747,6 +1762,28 @@ export class WagmiEventHandler {
     chainId: number | undefined,
     prevChainId: number | undefined
   ): Promise<void> {
+    // Keep the fallback-wrapped provider's registry chain in step with the
+    // store, so request-derived events are labelled correctly even when the
+    // provider exposes no synchronous chainId. Only when the report is
+    // about the connection that provider belongs to: after a connector
+    // switch the store's chain describes the NEW connection, and writing it
+    // to the old provider would mislabel that wallet's events.
+    if (this.fallbackProvider !== undefined) {
+      const live = this.getState();
+      const activeConnector = live.current
+        ? live.connections.get(live.current)?.connector
+        : undefined;
+      if (activeConnector === this.fallbackConnector) {
+        try {
+          (this.formo as unknown as {
+            _rememberWagmiProviderChain?: (p: unknown, c: number | undefined) => void;
+          })._rememberWagmiProviderChain?.(this.fallbackProvider, chainId);
+        } catch {
+          /* never let bookkeeping break the chain flow */
+        }
+      }
+    }
+
     if (chainId === prevChainId || chainId === undefined) {
       return;
     }
@@ -2844,7 +2881,49 @@ export class WagmiEventHandler {
    * dedup. Fire-and-forget per connection; a provider that cannot be
    * produced simply keeps mutation-only capture.
    */
-  private wrapActiveConnectorProvider(state: WagmiState): void {
+  /**
+   * Connections THIS instance has wrapped. Deliberately per-instance, not
+   * module-level: a module-level guard let a rebuilt SDK instance skip
+   * re-wrapping, so ownership stayed with the torn-down instance and every
+   * capture died in its closed queue - and it also stopped a second
+   * write-key instance from ever registering. Re-wrapping is safe and
+   * cheap: the request tracker rebinds ownership of an intact wrapper.
+   */
+  /**
+   * Latest wrap attempt per connector. Every kick re-resolves
+   * getProvider() - a connector can hand out a REPLACEMENT provider after
+   * a reconnect, so a once-only guard would leave the new session's
+   * provider unwrapped forever. Re-wrapping is idempotent: the request
+   * tracker rebinds ownership of an intact wrapper. The epoch lets a slow
+   * resolution from a superseded kick (an earlier session, an earlier
+   * chain) be discarded instead of overwriting fresher state.
+   */
+  private wrapEpochs = new WeakMap<object, number>();
+
+  /** Consecutive automatic wrap retries per connector; see below. */
+  private wrapRetryCounts = new WeakMap<object, number>();
+
+  /** Pending retry timers, cancelled by cleanup(). */
+  private wrapRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  /**
+   * Bumped on every observed disconnect. Every wrap attempt captures it
+   * at kick time and its resolution stands down on a mismatch, so a
+   * disconnect invalidates ALL pending wraps at once - including ones
+   * whose getProvider() had not resolved yet, which no per-connector
+   * bookkeeping can reach because nothing has been recorded for them.
+   */
+  private wrapSessionGeneration = 0;
+
+  /** The active connector this instance wrapped, and its provider, for
+   * chain updates. Kept as a pair so a chain report is only ever applied
+   * to the provider of the connector it describes. Keyed by connector,
+   * not by connection record: wagmi REPLACES the connection object on
+   * every account or chain update, so record identity is not stable. */
+  private fallbackConnector?: object;
+  private fallbackProvider?: unknown;
+
+  private wrapActiveConnectorProvider(state: WagmiState, isRetry = false): void {
     // OPT-IN only. Wagmi mode's baseline never touches the signing
     // transport; instrumenting the provider is an explicit integrator
     // decision (options.wagmi.eip1193Fallback), made auditable in
@@ -2856,30 +2935,126 @@ export class WagmiEventHandler {
     if (!optedIn) {
       return;
     }
+    if (state.status !== "connected") {
+      // Status kicks run for every transition; only a connected snapshot
+      // describes a session worth wrapping.
+      return;
+    }
     const connection = state.current
       ? state.connections.get(state.current)
       : undefined;
     const connector = connection?.connector as
       | { getProvider?: () => Promise<unknown> }
       | undefined;
-    if (
-      !connection ||
-      typeof connector?.getProvider !== "function" ||
-      wagmiWrappedConnections.has(connection as object)
-    ) {
+    if (!connection || typeof connector?.getProvider !== "function") {
       return;
     }
-    wagmiWrappedConnections.add(connection as object);
-    connector
-      .getProvider()
+    const epoch = (this.wrapEpochs.get(connector as object) ?? 0) + 1;
+    this.wrapEpochs.set(connector as object, epoch);
+    const session = this.wrapSessionGeneration;
+    // A store-driven kick resets the retry budget; automatic retries
+    // (below) spend it.
+    if (!isRetry) {
+      this.wrapRetryCounts.delete(connector as object);
+    }
+    // When the NEWEST attempt fails, older in-flight resolutions have
+    // been epoch-discarded (they may describe an earlier session) and
+    // nothing else would wrap the provider until the next store update.
+    // Recover by re-kicking fresh with live state, bounded so a
+    // persistently failing connector cannot loop: after the budget is
+    // spent, recovery waits for a real store update, which resets it.
+    const retryAfterFailure = () => {
+      if (this.disposed) return;
+      if (this.wrapEpochs.get(connector as object) !== epoch) {
+        // Superseded: the newer attempt owns recovery.
+        return;
+      }
+      const failures = (this.wrapRetryCounts.get(connector as object) ?? 0) + 1;
+      this.wrapRetryCounts.set(connector as object, failures);
+      if (failures > 3) return;
+      const timer = setTimeout(() => {
+        this.wrapRetryTimers.delete(timer);
+        if (this.disposed) return;
+        // Re-kick only while THIS connector is still the active one and
+        // no newer attempt superseded this one. A retry for a connector
+        // the user has left must not fire at the current connector: with
+        // the retry flag it would skip the budget reset and, worse, its
+        // fresh epoch would discard the current connector's own in-flight
+        // resolution.
+        const live = this.getState();
+        const stillCurrent =
+          live.current !== undefined &&
+          live.connections.get(live.current)?.connector === connector;
+        if (stillCurrent && this.wrapEpochs.get(connector as object) === epoch) {
+          this.wrapActiveConnectorProvider(live, true);
+        }
+      }, 25 * failures);
+      this.wrapRetryTimers.add(timer);
+    };
+    let resolution: Promise<unknown>;
+    try {
+      resolution = connector.getProvider();
+    } catch {
+      // A synchronous throw must not escape into the subscription
+      // callback: address-change handling runs after this kick and a
+      // propagated throw would silently skip it.
+      retryAfterFailure();
+      return;
+    }
+    resolution
       .then((provider) => {
-        (this.formo as unknown as {
-          _wrapWagmiProvider?: (p: unknown) => void;
-        })._wrapWagmiProvider?.(provider);
+        if (this.wrapEpochs.get(connector as object) !== epoch) {
+          // A newer kick is in flight or already resolved; this answer may
+          // describe an earlier session. Let the newest one win.
+          return;
+        }
+        // The fallback installs only the request wrapper, so a provider
+        // without a synchronous chainId property would never teach the
+        // registry its chain and its events would carry chain 0. The wagmi
+        // store knows; feed it here and on every later chain change. Read
+        // the chain from LIVE state, not from a snapshot taken before this
+        // asynchronous resolution: a switch that lands while getProvider is
+        // in flight fires handleChainChange before fallbackProvider exists,
+        // so a pre-resolution snapshot would stick as the recorded chain.
+        // Activity is judged by CONNECTOR identity: wagmi replaces the
+        // connection record itself on every account or chain update.
+        const live = this.getState();
+        // A wrap only describes a CONNECTED session. Status changes kick
+        // this path for every transition, and a resolution landing while
+        // disconnected would re-point the fallback pair at a provider
+        // whose session is over.
+        const stillActive =
+          !this.disposed &&
+          this.wrapSessionGeneration === session &&
+          live.status === "connected" &&
+          live.current !== undefined &&
+          live.connections.get(live.current)?.connector === connector;
+        if (!stillActive) {
+          // The user moved on while getProvider was in flight. Wrapping
+          // now would instrument a provider whose chain nobody feeds -
+          // its requests would report chain 0. Switching back re-kicks.
+          return;
+        }
+        const chainId = this.getActiveConnectionChainId(live) ?? live.chainId;
+        const wrapped = (this.formo as unknown as {
+          _wrapWagmiProvider?: (p: unknown, chainId?: number) => boolean;
+        })._wrapWagmiProvider?.(
+          provider,
+          typeof chainId === "number" ? chainId : undefined
+        );
+        if (wrapped !== true) {
+          // The provider was refused (invalid shape, frozen provider,
+          // torn-down SDK).
+          retryAfterFailure();
+          return;
+        }
+        this.wrapRetryCounts.delete(connector as object);
+        this.fallbackConnector = connector as object;
+        this.fallbackProvider = provider;
       })
       .catch(() => {
-        // Mutation-only capture remains; retry on the next connection.
-        wagmiWrappedConnections.delete(connection as object);
+        // Mutation-only capture remains.
+        retryAfterFailure();
       });
   }
 
@@ -2975,6 +3150,8 @@ export class WagmiEventHandler {
    * Clean up all subscriptions
    */
   public cleanup(): void {
+    this.wrapRetryTimers.forEach((t) => clearTimeout(t));
+    this.wrapRetryTimers.clear();
     logger.debug("WagmiEventHandler: Cleaning up subscriptions");
 
     if (!this.disposed) {
