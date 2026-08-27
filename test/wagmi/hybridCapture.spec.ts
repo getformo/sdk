@@ -540,6 +540,55 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("discards an out-of-order resolution from a superseded wrap kick", async () => {
+    // Two wrap kicks race: the FIRST getProvider() resolves LAST, with a
+    // provider from the earlier session. The epoch must discard it - it
+    // must neither be wrapped nor steal the chain-report target from the
+    // provider the newer kick installed.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const providerOld: any = bare();
+    const providerNew: any = bare();
+    let call = 0;
+    const subscriptions: Subscription[] = [];
+    const state = makeState(providerNew, 1);
+    state.connections.get("c1").connector.getProvider = () => {
+      call += 1;
+      return call === 1
+        ? new Promise((resolve) => setTimeout(() => resolve(providerOld), 60))
+        : Promise.resolve(providerNew);
+    };
+    const { formo, sent } = await setup(true, { provider: providerNew, state, subscriptions });
+
+    // Second kick, resolving immediately with the new session's provider.
+    fireStoreUpdate(subscriptions, state, () => {
+      replaceConnection(state, "c1", {
+        accounts: ["0x88C0224CEABF6D559d7B622F2918b308285280DE"],
+      });
+    });
+    // Let the FIRST kick's slow resolution arrive after the second.
+    await new Promise((r) => setTimeout(r, 90));
+
+    // Chain reports must land on the NEW provider...
+    fireStoreUpdate(subscriptions, state, () => {
+      state.chainId = 42;
+      replaceConnection(state, "c1", { chainId: 42 });
+    });
+    await settle();
+    await providerNew.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    // ...and the old provider must not have been wrapped at all.
+    await providerOld.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    expect(chains, "only the new provider is captured, on the live chain").to.deep.equal([42, 42]);
+    formo.cleanup?.();
+  });
+
   it("retries the wrap after the tracker refuses a provider", async () => {
     // registerRequestListeners reports refusals (a frozen provider, an
     // unrebindable wrapper) by returning false, not by throwing. The
