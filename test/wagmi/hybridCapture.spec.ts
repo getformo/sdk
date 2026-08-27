@@ -631,10 +631,10 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
-  it("recovers the older pending resolution when the newer kick fails", async () => {
+  it("recovers with a fresh retry when the newer kick fails", async () => {
     // Kick 2 supersedes kick 1's epoch, then fails. Kick 1's provider is
-    // valid and arrives later; discarding it would leave capture off for
-    // the whole session even though the connection is healthy.
+    // valid but epoch-discarded; a bounded fresh retry must re-resolve,
+    // or capture stays off even though the connection is healthy.
     const good: any = {
       on: () => undefined,
       removeListener: () => undefined,
@@ -648,7 +648,7 @@ describe("wagmi hybrid capture", () => {
       call += 1;
       return call === 2
         ? Promise.reject(new Error("transport hiccup"))
-        : new Promise((resolve) => setTimeout(() => resolve(good), 60));
+        : new Promise((resolve) => setTimeout(() => resolve(good), 10));
     };
     const { formo, sent } = await setup(true, { provider: good, state, subscriptions });
 
@@ -658,7 +658,7 @@ describe("wagmi hybrid capture", () => {
         accounts: ["0x88C0224CEABF6D559d7B622F2918b308285280DE"],
       });
     });
-    await new Promise((r) => setTimeout(r, 90));
+    await new Promise((r) => setTimeout(r, 120));
 
     await good.request({ method: "personal_sign", params: ["0x68", ADDR] });
     await settle();
@@ -667,6 +667,79 @@ describe("wagmi hybrid capture", () => {
       sent.filter((e) => e.type === "signature").length,
       "kick 1's provider still gets wrapped"
     ).to.equal(2);
+    formo.cleanup?.();
+  });
+
+  it("recovers even when the older kick resolved BEFORE the newer kick failed", async () => {
+    // Ordering variant: kick 1 resolves a valid provider and is
+    // epoch-discarded, THEN kick 2 rejects. No rollback can resurrect the
+    // already-returned continuation; only a fresh retry can recover.
+    const good: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    };
+    let call = 0;
+    const subscriptions: Subscription[] = [];
+    const state = makeState(good, 1);
+    state.connections.get("c1").connector.getProvider = () => {
+      call += 1;
+      if (call === 1) return new Promise((resolve) => setTimeout(() => resolve(good), 10));
+      if (call === 2)
+        return new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("late transport failure")), 40)
+        );
+      return Promise.resolve(good);
+    };
+    const { formo, sent } = await setup(true, { provider: good, state, subscriptions });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      replaceConnection(state, "c1", {
+        accounts: ["0x88C0224CEABF6D559d7B622F2918b308285280DE"],
+      });
+    });
+    await new Promise((r) => setTimeout(r, 130));
+
+    await good.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      sent.filter((e) => e.type === "signature").length,
+      "the retry after the late failure re-wraps"
+    ).to.equal(2);
+    formo.cleanup?.();
+  });
+
+  it("bounds automatic retries for a persistently failing connector", async () => {
+    // The retry budget stops a connector whose getProvider always fails
+    // from looping. A real store update resets the budget and tries
+    // again.
+    let calls = 0;
+    const dead: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async () => null,
+    };
+    const subscriptions: Subscription[] = [];
+    const state = makeState(dead, 1);
+    state.connections.get("c1").connector.getProvider = () => {
+      calls += 1;
+      return Promise.reject(new Error("always down"));
+    };
+    const { formo } = await setup(true, { provider: dead, state, subscriptions });
+    await new Promise((r) => setTimeout(r, 250));
+
+    // Seed kick plus at most 3 automatic retries.
+    expect(calls, "automatic retries are bounded").to.be.at.most(4);
+
+    fireStoreUpdate(subscriptions, state, () => {
+      replaceConnection(state, "c1", {
+        accounts: ["0x88C0224CEABF6D559d7B622F2918b308285280DE"],
+      });
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    expect(calls, "a real store update re-arms recovery").to.be.greaterThan(4);
     formo.cleanup?.();
   });
 

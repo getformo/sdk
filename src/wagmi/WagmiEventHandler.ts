@@ -2887,6 +2887,9 @@ export class WagmiEventHandler {
    */
   private wrapEpochs = new WeakMap<object, number>();
 
+  /** Consecutive automatic wrap retries per connector; see below. */
+  private wrapRetryCounts = new WeakMap<object, number>();
+
   /** The active connector this instance wrapped, and its provider, for
    * chain updates. Kept as a pair so a chain report is only ever applied
    * to the provider of the connector it describes. Keyed by connector,
@@ -2895,7 +2898,7 @@ export class WagmiEventHandler {
   private fallbackConnector?: object;
   private fallbackProvider?: unknown;
 
-  private wrapActiveConnectorProvider(state: WagmiState): void {
+  private wrapActiveConnectorProvider(state: WagmiState, isRetry = false): void {
     // OPT-IN only. Wagmi mode's baseline never touches the signing
     // transport; instrumenting the provider is an explicit integrator
     // decision (options.wagmi.eip1193Fallback), made auditable in
@@ -2918,15 +2921,30 @@ export class WagmiEventHandler {
     }
     const epoch = (this.wrapEpochs.get(connector as object) ?? 0) + 1;
     this.wrapEpochs.set(connector as object, epoch);
-    // A failed attempt must not leave a superseded-but-pending older
-    // resolution locked out: roll the epoch back so the immediately prior
-    // kick can still apply. Without this, a fast-failing second kick
-    // discards the first kick's perfectly good provider and capture stays
-    // off until the next store update.
-    const releaseEpochOnFailure = () => {
-      if (this.wrapEpochs.get(connector as object) === epoch) {
-        this.wrapEpochs.set(connector as object, epoch - 1);
+    // A store-driven kick resets the retry budget; automatic retries
+    // (below) spend it.
+    if (!isRetry) {
+      this.wrapRetryCounts.delete(connector as object);
+    }
+    // When the NEWEST attempt fails, older in-flight resolutions have
+    // been epoch-discarded (they may describe an earlier session) and
+    // nothing else would wrap the provider until the next store update.
+    // Recover by re-kicking fresh with live state, bounded so a
+    // persistently failing connector cannot loop: after the budget is
+    // spent, recovery waits for a real store update, which resets it.
+    const retryAfterFailure = () => {
+      if (this.wrapEpochs.get(connector as object) !== epoch) {
+        // Superseded: the newer attempt owns recovery.
+        return;
       }
+      const failures = (this.wrapRetryCounts.get(connector as object) ?? 0) + 1;
+      this.wrapRetryCounts.set(connector as object, failures);
+      if (failures > 3) return;
+      setTimeout(() => {
+        if (this.wrapEpochs.get(connector as object) === epoch) {
+          this.wrapActiveConnectorProvider(this.getState(), true);
+        }
+      }, 25 * failures);
     };
     let resolution: Promise<unknown>;
     try {
@@ -2935,7 +2953,7 @@ export class WagmiEventHandler {
       // A synchronous throw must not escape into the subscription
       // callback: address-change handling runs after this kick and a
       // propagated throw would silently skip it.
-      releaseEpochOnFailure();
+      retryAfterFailure();
       return;
     }
     resolution
@@ -2974,16 +2992,17 @@ export class WagmiEventHandler {
         );
         if (wrapped !== true) {
           // The provider was refused (invalid shape, frozen provider,
-          // torn-down SDK). The next kick simply retries.
-          releaseEpochOnFailure();
+          // torn-down SDK).
+          retryAfterFailure();
           return;
         }
+        this.wrapRetryCounts.delete(connector as object);
         this.fallbackConnector = connector as object;
         this.fallbackProvider = provider;
       })
       .catch(() => {
-        // Mutation-only capture remains; the next kick retries.
-        releaseEpochOnFailure();
+        // Mutation-only capture remains.
+        retryAfterFailure();
       });
   }
 
