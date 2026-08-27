@@ -55,6 +55,7 @@ export const computeOptionsKey = (options?: Options): string => {
     maxQueueSize: options.maxQueueSize,
     logger: options.logger,
     referral: options.referral,
+    evm: options.evm,
     // For complex objects, just track their presence, not their content
     hasProvider: !!options.provider,
     hasWagmi: !!options.wagmi,

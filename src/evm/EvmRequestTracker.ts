@@ -170,6 +170,26 @@ export class EvmRequestTracker {
    * never retry it, and every signature and transaction from that wallet
    * would be missed for the rest of the session.
    */
+  /** Monotonic creation stamp; owner precedence is decided by it. */
+  private static nextCreationSeq = 0;
+  readonly creationSeq = EvmRequestTracker.nextCreationSeq++;
+
+  /**
+   * Put this tracker into an owner list at its CREATION-ORDER position.
+   * Registration can arrive out of order - an older instance's async wrap
+   * kick may resolve after a newer instance's - and dispatch picks from
+   * the END of the list, so append-on-registration would let resolution
+   * order decide which instance owns capture. Creation order is what the
+   * newest-live contract promises.
+   */
+  private insertBySeniority(owners: EvmRequestTracker[]): void {
+    const idx = owners.indexOf(this);
+    if (idx !== -1) owners.splice(idx, 1);
+    const insertAt = owners.findIndex((o) => o.creationSeq > this.creationSeq);
+    if (insertAt === -1) owners.push(this);
+    else owners.splice(insertAt, 0, this);
+  }
+
   registerRequestListeners(provider: EIP1193Provider): boolean {
     logger.info("registerRequestListeners");
     if (!provider) {
@@ -195,9 +215,7 @@ export class EvmRequestTracker {
         logger.warn("wrapped without owner list; cannot rebind");
         return false;
       }
-      const idx = owners.indexOf(this);
-      if (idx !== -1) owners.splice(idx, 1);
-      owners.push(this);
+      this.insertBySeniority(owners);
       this.wrappedProviders.add(provider);
       logger.info(
         "Provider already wrapped; rebinding the wrapper to this instance."
@@ -248,9 +266,7 @@ export class EvmRequestTracker {
       const slot = provider as unknown as Record<symbol, unknown>;
       const prior = slot[WRAPPED_REQUEST_OWNER_SYMBOL];
       const owners: EvmRequestTracker[] = Array.isArray(prior) ? prior : [];
-      const idx = owners.indexOf(this);
-      if (idx !== -1) owners.splice(idx, 1);
-      owners.push(this);
+      this.insertBySeniority(owners);
       if (!Array.isArray(prior)) {
         slot[WRAPPED_REQUEST_OWNER_SYMBOL] = owners;
       }

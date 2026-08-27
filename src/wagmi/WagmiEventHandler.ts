@@ -2918,8 +2918,27 @@ export class WagmiEventHandler {
     }
     const epoch = (this.wrapEpochs.get(connector as object) ?? 0) + 1;
     this.wrapEpochs.set(connector as object, epoch);
-    connector
-      .getProvider()
+    // A failed attempt must not leave a superseded-but-pending older
+    // resolution locked out: roll the epoch back so the immediately prior
+    // kick can still apply. Without this, a fast-failing second kick
+    // discards the first kick's perfectly good provider and capture stays
+    // off until the next store update.
+    const releaseEpochOnFailure = () => {
+      if (this.wrapEpochs.get(connector as object) === epoch) {
+        this.wrapEpochs.set(connector as object, epoch - 1);
+      }
+    };
+    let resolution: Promise<unknown>;
+    try {
+      resolution = connector.getProvider();
+    } catch {
+      // A synchronous throw must not escape into the subscription
+      // callback: address-change handling runs after this kick and a
+      // propagated throw would silently skip it.
+      releaseEpochOnFailure();
+      return;
+    }
+    resolution
       .then((provider) => {
         if (this.wrapEpochs.get(connector as object) !== epoch) {
           // A newer kick is in flight or already resolved; this answer may
@@ -2940,9 +2959,13 @@ export class WagmiEventHandler {
         const stillActive =
           live.current !== undefined &&
           live.connections.get(live.current)?.connector === connector;
-        const chainId = stillActive
-          ? this.getActiveConnectionChainId(live) ?? live.chainId
-          : undefined;
+        if (!stillActive) {
+          // The user moved on while getProvider was in flight. Wrapping
+          // now would instrument a provider whose chain nobody feeds -
+          // its requests would report chain 0. Switching back re-kicks.
+          return;
+        }
+        const chainId = this.getActiveConnectionChainId(live) ?? live.chainId;
         const wrapped = (this.formo as unknown as {
           _wrapWagmiProvider?: (p: unknown, chainId?: number) => boolean;
         })._wrapWagmiProvider?.(
@@ -2952,15 +2975,15 @@ export class WagmiEventHandler {
         if (wrapped !== true) {
           // The provider was refused (invalid shape, frozen provider,
           // torn-down SDK). The next kick simply retries.
+          releaseEpochOnFailure();
           return;
         }
-        if (stillActive) {
-          this.fallbackConnector = connector as object;
-          this.fallbackProvider = provider;
-        }
+        this.fallbackConnector = connector as object;
+        this.fallbackProvider = provider;
       })
       .catch(() => {
         // Mutation-only capture remains; the next kick retries.
+        releaseEpochOnFailure();
       });
   }
 

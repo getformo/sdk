@@ -589,6 +589,142 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("does not wrap a provider that resolves after its connector went inactive", async () => {
+    // Nobody feeds an inactive connector's chain, so wrapping its late
+    // resolution would capture its requests with chain 0. Skip it; the
+    // switch back re-kicks the wrap with the right chain.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const providerA: any = bare();
+    const providerB: any = bare();
+    const subscriptions: Subscription[] = [];
+    const state = makeState(providerA, 137);
+    state.connections.get("c1").connector.getProvider = () =>
+      new Promise((resolve) => setTimeout(() => resolve(providerA), 60));
+    const { formo, sent } = await setup(true, { provider: providerA, state, subscriptions });
+
+    state.connections.set("c2", {
+      accounts: [ADDR],
+      chainId: 10,
+      connector: {
+        id: "rabby", name: "Rabby", type: "injected", uid: "2",
+        getProvider: async () => providerB,
+      },
+    });
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c2";
+      state.chainId = 10;
+    });
+    await new Promise((r) => setTimeout(r, 90));
+
+    await providerA.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      sent.filter((e) => e.type === "signature"),
+      "the inactive connector's provider stays uninstrumented"
+    ).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("recovers the older pending resolution when the newer kick fails", async () => {
+    // Kick 2 supersedes kick 1's epoch, then fails. Kick 1's provider is
+    // valid and arrives later; discarding it would leave capture off for
+    // the whole session even though the connection is healthy.
+    const good: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    };
+    let call = 0;
+    const subscriptions: Subscription[] = [];
+    const state = makeState(good, 1);
+    state.connections.get("c1").connector.getProvider = () => {
+      call += 1;
+      return call === 2
+        ? Promise.reject(new Error("transport hiccup"))
+        : new Promise((resolve) => setTimeout(() => resolve(good), 60));
+    };
+    const { formo, sent } = await setup(true, { provider: good, state, subscriptions });
+
+    // Kick 2, which fails fast.
+    fireStoreUpdate(subscriptions, state, () => {
+      replaceConnection(state, "c1", {
+        accounts: ["0x88C0224CEABF6D559d7B622F2918b308285280DE"],
+      });
+    });
+    await new Promise((r) => setTimeout(r, 90));
+
+    await good.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      sent.filter((e) => e.type === "signature").length,
+      "kick 1's provider still gets wrapped"
+    ).to.equal(2);
+    formo.cleanup?.();
+  });
+
+  it("keeps capture on the newest instance even when the older one re-registers late", async () => {
+    // Owner precedence is CREATION order. An async wrap kick from the
+    // older instance may resolve (or re-fire) after the newer instance
+    // registered; that must not move the older instance to the head of
+    // the dispatch order.
+    const first = await setup();
+    const second = await setup(true, { provider: first.provider, state: first.state });
+
+    // The older instance's late registration.
+    (first.formo as any)._wrapWagmiProvider(first.provider);
+
+    await second.provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      second.sent.filter((e) => e.type === "signature").length,
+      "the newest instance still captures"
+    ).to.equal(2);
+    expect(
+      first.sent.filter((e) => e.type === "signature").length,
+      "the older instance does not steal the events"
+    ).to.equal(0);
+    second.formo.cleanup?.();
+    first.formo.cleanup?.();
+  });
+
+  it("still tracks the address change when getProvider throws synchronously", async () => {
+    // The wrap kick runs first in the connection subscription. A connector
+    // whose getProvider throws synchronously must not abort the address
+    // handling that follows it.
+    const ADDR2 = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
+    const subscriptions: Subscription[] = [];
+    const { formo, sent, state } = await setup(true, { subscriptions });
+
+    state.connections.set("c2", {
+      accounts: [ADDR2],
+      chainId: 1,
+      connector: {
+        id: "broken", name: "Broken", type: "injected", uid: "2",
+        getProvider: () => { throw new Error("no provider"); },
+      },
+    });
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c2";
+    });
+    await settle();
+
+    const connects = sent.filter(
+      (e) => e.type === "connect" &&
+        String(e.address ?? "").toLowerCase() === ADDR2.toLowerCase()
+    );
+    expect(connects.length, "the switch to the new wallet is still tracked").to.be.greaterThan(0);
+    formo.cleanup?.();
+  });
+
   it("retries the wrap after the tracker refuses a provider", async () => {
     // registerRequestListeners reports refusals (a frozen provider, an
     // unrebindable wrapper) by returning false, not by throwing. The

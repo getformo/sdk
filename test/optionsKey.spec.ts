@@ -32,6 +32,12 @@ describe("computeOptionsKey", () => {
     );
   });
 
+  it("changes when evm tracking flips", () => {
+    expect(computeOptionsKey({ evm: false } as Options)).to.not.equal(
+      computeOptionsKey({} as Options)
+    );
+  });
+
   it("handles absent options", () => {
     expect(computeOptionsKey(undefined)).to.equal("undefined");
   });
