@@ -1757,10 +1757,10 @@ export class WagmiEventHandler {
     // to the old provider would mislabel that wallet's events.
     if (this.fallbackProvider !== undefined) {
       const live = this.getState();
-      const activeConnection = live.current
-        ? live.connections.get(live.current)
+      const activeConnector = live.current
+        ? live.connections.get(live.current)?.connector
         : undefined;
-      if (activeConnection === this.fallbackConnection) {
+      if (activeConnector === this.fallbackConnector) {
         try {
           (this.formo as unknown as {
             _rememberWagmiProviderChain?: (p: unknown, c: number | undefined) => void;
@@ -2876,12 +2876,18 @@ export class WagmiEventHandler {
    * write-key instance from ever registering. Re-wrapping is safe and
    * cheap: the request tracker rebinds ownership of an intact wrapper.
    */
-  private wrappedConnections = new WeakSet<object>();
+  private wrappedConnectors = new WeakSet<object>();
 
-  /** The active connection this instance wrapped, and its provider, for
+  /** Resolved provider per wrapped connector, so switching BACK to an
+   * already-wrapped connector can repoint the fallback synchronously. */
+  private wrappedProviderByConnector = new WeakMap<object, unknown>();
+
+  /** The active connector this instance wrapped, and its provider, for
    * chain updates. Kept as a pair so a chain report is only ever applied
-   * to the provider of the connection it describes. */
-  private fallbackConnection?: object;
+   * to the provider of the connector it describes. Keyed by connector,
+   * not by connection record: wagmi REPLACES the connection object on
+   * every account or chain update, so record identity is not stable. */
+  private fallbackConnector?: object;
   private fallbackProvider?: unknown;
 
   private wrapActiveConnectorProvider(state: WagmiState): void {
@@ -2902,14 +2908,21 @@ export class WagmiEventHandler {
     const connector = connection?.connector as
       | { getProvider?: () => Promise<unknown> }
       | undefined;
-    if (
-      !connection ||
-      typeof connector?.getProvider !== "function" ||
-      this.wrappedConnections.has(connection as object)
-    ) {
+    if (!connection || typeof connector?.getProvider !== "function") {
       return;
     }
-    this.wrappedConnections.add(connection as object);
+    if (this.wrappedConnectors.has(connector as object)) {
+      // Already wrapped - but the user may be switching BACK to this
+      // connector, and chain reports must follow the switch. Repoint the
+      // fallback pair from the resolved-provider map.
+      const known = this.wrappedProviderByConnector.get(connector as object);
+      if (known !== undefined) {
+        this.fallbackConnector = connector as object;
+        this.fallbackProvider = known;
+      }
+      return;
+    }
+    this.wrappedConnectors.add(connector as object);
     connector
       .getProvider()
       .then((provider) => {
@@ -2921,10 +2934,12 @@ export class WagmiEventHandler {
         // asynchronous resolution: a switch that lands while getProvider is
         // in flight fires handleChainChange before fallbackProvider exists,
         // so a pre-resolution snapshot would stick as the recorded chain.
+        // Activity is judged by CONNECTOR identity: wagmi replaces the
+        // connection record itself on every account or chain update.
         const live = this.getState();
         const stillActive =
           live.current !== undefined &&
-          live.connections.get(live.current) === connection;
+          live.connections.get(live.current)?.connector === connector;
         const chainId = stillActive
           ? this.getActiveConnectionChainId(live) ?? live.chainId
           : undefined;
@@ -2934,20 +2949,22 @@ export class WagmiEventHandler {
           provider,
           typeof chainId === "number" ? chainId : undefined
         );
-        if (wrapped === false) {
-          // The provider was refused (invalid shape, torn-down SDK). Leave
-          // the connection unguarded so a later resolution can retry.
-          this.wrappedConnections.delete(connection as object);
+        if (wrapped !== true) {
+          // The provider was refused (invalid shape, frozen provider,
+          // torn-down SDK). Leave the connector unguarded so a later
+          // resolution can retry.
+          this.wrappedConnectors.delete(connector as object);
           return;
         }
+        this.wrappedProviderByConnector.set(connector as object, provider);
         if (stillActive) {
-          this.fallbackConnection = connection as object;
+          this.fallbackConnector = connector as object;
           this.fallbackProvider = provider;
         }
       })
       .catch(() => {
         // Mutation-only capture remains; retry on the next connection.
-        this.wrappedConnections.delete(connection as object);
+        this.wrappedConnectors.delete(connector as object);
       });
   }
 

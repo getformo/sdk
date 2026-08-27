@@ -163,6 +163,29 @@ describe("wagmi hybrid capture", () => {
 
   const settle = () => new Promise((r) => setTimeout(r, 40));
 
+  /**
+   * Apply a store mutation the way wagmi/zustand reports it: run every
+   * subscription's selector before and after, and notify ONLY the
+   * subscriptions whose selected value actually changed.
+   */
+  function fireStoreUpdate(
+    subscriptions: Subscription[],
+    state: any,
+    mutate: () => void
+  ) {
+    const prev = subscriptions.map((s) => s.selector(state));
+    mutate();
+    subscriptions.forEach((s, i) => {
+      const next = s.selector(state);
+      if (next !== prev[i]) s.listener(next, prev[i]);
+    });
+  }
+
+  /** Replace a connection record wholesale, as wagmi does on updates. */
+  function replaceConnection(state: any, id: string, patch: Record<string, unknown>) {
+    state.connections.set(id, { ...state.connections.get(id), ...patch });
+  }
+
   it("does NOT instrument the provider unless explicitly opted in", async () => {
     // Wagmi mode's baseline contract: observe state and caches, never
     // touch the signing transport. Instrumentation is opt-in.
@@ -276,12 +299,11 @@ describe("wagmi hybrid capture", () => {
       subscriptions,
     });
 
-    // The store switches chains: mutate state, then fire every subscriber
-    // the way wagmi would, with (selected(next), selected(prev)).
-    const prev = subscriptions.map((s) => s.selector(state));
-    state.chainId = 10;
-    state.connections.get("c1").chainId = 10;
-    subscriptions.forEach((s, i) => s.listener(s.selector(state), prev[i]));
+    // The store switches chains. Wagmi REPLACES the connection record.
+    fireStoreUpdate(subscriptions, state, () => {
+      state.chainId = 10;
+      replaceConnection(state, "c1", { chainId: 10 });
+    });
     await settle();
 
     await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
@@ -309,11 +331,12 @@ describe("wagmi hybrid capture", () => {
     const subscriptions: Subscription[] = [];
     const { formo, sent } = await setup(true, { provider, state, subscriptions });
 
-    // The wrap is still pending. Switch chains under it.
-    const prev = subscriptions.map((s) => s.selector(state));
-    state.chainId = 10;
-    state.connections.get("c1").chainId = 10;
-    subscriptions.forEach((s, i) => s.listener(s.selector(state), prev[i]));
+    // The wrap is still pending. Switch chains under it - as a record
+    // replacement, which is how wagmi reports every update.
+    fireStoreUpdate(subscriptions, state, () => {
+      state.chainId = 10;
+      replaceConnection(state, "c1", { chainId: 10 });
+    });
     await new Promise((r) => setTimeout(r, 80));
 
     await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
@@ -355,10 +378,10 @@ describe("wagmi hybrid capture", () => {
       },
     });
 
-    const prev = subscriptions.map((s) => s.selector(state));
-    state.current = "c2";
-    state.chainId = 10;
-    subscriptions.forEach((s, i) => s.listener(s.selector(state), prev[i]));
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c2";
+      state.chainId = 10;
+    });
     await settle();
 
     await providerB.request({ method: "personal_sign", params: ["0x68", ADDR] });
@@ -369,6 +392,101 @@ describe("wagmi hybrid capture", () => {
     // Two from provider B on ITS chain, then two from provider A still on
     // the chain it was wrapped with - B's report must not bleed onto A.
     expect(chains).to.deep.equal([10, 10, 137, 137]);
+    formo.cleanup?.();
+  });
+
+  it("follows the chain again after switching BACK to a wrapped connector", async () => {
+    // Switching back re-enters wrapActiveConnectorProvider with a
+    // connector that is already wrapped. The chain-report target must be
+    // repointed to it, or its later chain switches are silently dropped.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const providerA: any = bare();
+    const providerB: any = bare();
+    const subscriptions: Subscription[] = [];
+    const { formo, sent, state } = await setup(true, {
+      provider: providerA,
+      chainId: 137,
+      subscriptions,
+    });
+    state.connections.set("c2", {
+      accounts: [ADDR],
+      chainId: 10,
+      connector: {
+        id: "rabby", name: "Rabby", type: "injected", uid: "2",
+        getProvider: async () => providerB,
+      },
+    });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c2";
+      state.chainId = 10;
+    });
+    await settle();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.current = "c1";
+      state.chainId = 137;
+    });
+    await settle();
+    // Connector A, active again, switches chains.
+    fireStoreUpdate(subscriptions, state, () => {
+      state.chainId = 42;
+      replaceConnection(state, "c1", { chainId: 42 });
+    });
+    await settle();
+
+    await providerA.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    expect(chains).to.deep.equal([42, 42]);
+    formo.cleanup?.();
+  });
+
+  it("retries the wrap after the tracker refuses a provider", async () => {
+    // registerRequestListeners reports refusals (a frozen provider, an
+    // unrebindable wrapper) by returning false, not by throwing. The
+    // connector guard must be dropped on refusal, or the connector can
+    // never be wrapped for the rest of the session.
+    const good: any = {
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    };
+    const frozen: any = Object.freeze({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async () => null,
+    });
+    let resolutions = 0;
+    const subscriptions: Subscription[] = [];
+    const provider: any = good;
+    const state = makeState(provider, 1);
+    state.connections.get("c1").connector.getProvider = async () =>
+      resolutions++ === 0 ? frozen : good;
+    const { formo, sent } = await setup(true, { provider, state, subscriptions });
+
+    // First resolution handed over the frozen provider; the wrap refused.
+    // A later connection update must retry, not be guard-blocked.
+    fireStoreUpdate(subscriptions, state, () => {
+      replaceConnection(state, "c1", {
+        accounts: ["0x88C0224CEABF6D559d7B622F2918b308285280DE"],
+      });
+    });
+    await settle();
+
+    await good.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(
+      sent.filter((e) => e.type === "signature").length,
+      "the retried wrap captures"
+    ).to.equal(2);
     formo.cleanup?.();
   });
 

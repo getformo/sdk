@@ -1717,7 +1717,12 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): boolean {
     if (this.isCleanedUp || !isValidProvider(provider)) return false;
     try {
-      this.evmRequests.registerRequestListeners(provider);
+      // The tracker reports refusals (frozen provider, unrebindable
+      // wrapper) by returning false rather than throwing; treat those as
+      // failures too so the caller can retry later.
+      if (!this.evmRequests.registerRequestListeners(provider)) {
+        return false;
+      }
       if (chainId !== undefined) {
         this.evm.rememberChain(provider, chainId);
       }
