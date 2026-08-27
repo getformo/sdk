@@ -363,10 +363,10 @@ describe("EventQueue", () => {
         expect((eventQueue as any).queue, "the newer entry still suppresses").to.have.length(1);
       });
 
-      it("does not release a same-instant re-acceptance after clear() when the old send fails", async () => {
-        // clear() (consent withdrawn) and a re-accept can land in the same
-        // millisecond as the original acceptance, so the release token must
-        // be unique per acceptance, not derived from time.
+      it("keeps a delivered event's fingerprint across an opt-out / opt-in round trip", async () => {
+        // clear() runs on consent withdrawal while a spliced batch is still
+        // in flight. That batch reaches the wire, so a copy sent after
+        // consent returns is a duplicate, and must still be dropped.
         let allowed = true;
         eventQueue = new EventQueue("test-key", {
           apiHost: "https://api.example.com",
@@ -379,23 +379,34 @@ describe("EventQueue", () => {
 
         let settle: (r: Response) => void = () => undefined;
         fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
-        const event = createMockEvent({ properties: { n: 2 } });
-        await eventQueue.enqueue(event);
+        const inFlightEvent = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(inFlightEvent);
         const inFlight = eventQueue.flush();
         await clock.tickAsync(0);
 
-        // Opt out and back in with no time passing; same event accepted anew.
+        // Buffered behind the in-flight batch, then abandoned by clear().
+        const bufferedEvent = createMockEvent({ properties: { n: 3 } });
+        await eventQueue.enqueue(bufferedEvent);
         allowed = false;
         eventQueue.clear();
         allowed = true;
-        await eventQueue.enqueue({ ...event });
-        expect((eventQueue as any).queue).to.have.length(1);
 
-        settle(makeResponse(400, "Bad Request"));
+        settle(makeResponse(200, "OK"));
         await inFlight;
 
-        await eventQueue.enqueue({ ...event });
-        expect((eventQueue as any).queue, "the newer acceptance still suppresses").to.have.length(1);
+        await eventQueue.enqueue({ ...inFlightEvent });
+        expect((eventQueue as any).queue, "the delivered event still suppresses").to.have.length(0);
+        await eventQueue.enqueue({ ...bufferedEvent });
+        expect((eventQueue as any).queue, "the abandoned event is accepted again").to.have.length(1);
+      });
+
+      it("forgets everything on close()", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        expect((eventQueue as any).payloadHashes.size).to.equal(1);
+        eventQueue.close();
+        expect((eventQueue as any).payloadHashes.size).to.equal(0);
       });
 
       it("releases the fingerprints of batches abandoned when consent is withdrawn mid-flush", async () => {
@@ -1029,9 +1040,17 @@ describe("EventQueue", () => {
       await suspended;
 
       expect((eventQueue as any).queue, "nothing buffered").to.have.length(0);
-      expect((eventQueue as any).payloadHashes.size, "nothing remembered").to.equal(0);
+      expect(
+        (eventQueue as any).payloadHashes.size,
+        "only the delivered first event is remembered"
+      ).to.equal(1);
       await eventQueue.flush();
       expect(fetchStub.called).to.be.false;
+
+      // Consent returns: the withheld event was never accepted, so it goes.
+      allowed = true;
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      expect((eventQueue as any).queue, "accepted once consent is back").to.have.length(1);
     });
 
     it("enqueue is a no-op once canSend() is false", async () => {

@@ -201,9 +201,13 @@ export class EventQueue implements IEventQueue {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    // Only what is being abandoned is forgotten. Fingerprints of delivered
+    // and in-flight events stay: a copy of an event that reached the wire is
+    // still a duplicate after an opt-out / opt-in round trip inside the
+    // window. They hold no identity, only a hash, and expire on their own.
+    this.releaseFingerprints(this.queue);
     this.queue = [];
     this.queueByteSize = 0;
-    this.payloadHashes.clear();
   }
 
   /**
@@ -226,6 +230,8 @@ export class EventQueue implements IEventQueue {
   close(): void {
     this.closed = true;
     this.clear();
+    // Terminal: nothing can be accepted again, so nothing needs suppressing.
+    this.payloadHashes.clear();
     if (this.disposePageLeave) {
       safeCall(this.disposePageLeave);
       this.disposePageLeave = null;
