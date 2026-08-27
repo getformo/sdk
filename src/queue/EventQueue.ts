@@ -17,9 +17,11 @@ const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...
 type QueueItem = {
   message: IFormoEventPayload;
   callback: (...args: any) => any;
-  // Key under which this event is remembered for duplicate suppression, so
-  // a failed send can release it. See isDuplicate.
+  // Key under which this event is remembered for duplicate suppression, and
+  // the expiry recorded for it, so a failed send can release exactly its own
+  // entry and not a newer one for the same key. See releaseFingerprints.
   dedupKey: string;
+  dedupExpiresAt: number;
   // Serialized size of this item, computed once at enqueue so the queue
   // byte total can be tracked incrementally (avoids an O(n) re-serialize
   // of the whole queue on every enqueue → O(n^2) overall).
@@ -273,6 +275,7 @@ export class EventQueue implements IEventQueue {
       message: { ...event, message_id },
       callback,
       dedupKey,
+      dedupExpiresAt: this.payloadHashes.get(dedupKey) as number,
       byteSize: 0,
     };
     // Measure once here (message only — JSON.stringify drops the
@@ -451,12 +454,19 @@ export class EventQueue implements IEventQueue {
   private async sendBatches(batches: Batch[], allData: IFormoEventFlushPayload[]): Promise<Error | undefined> {
     let firstError: Error | undefined;
 
-    for (const batch of batches) {
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
       // Consent can be withdrawn while a flush is already in flight:
       // batches were spliced before opt-out, and split batches / retry
       // backoff span seconds. Re-check before every send and abandon
-      // the remaining batches if consent was revoked mid-flush.
-      if (this.canSend && !this.canSend()) break;
+      // the remaining batches if consent was revoked mid-flush. They were
+      // never sent, so they must not count as accepted either.
+      if (this.canSend && !this.canSend()) {
+        for (let j = i; j < batches.length; j++) {
+          this.releaseFingerprints(batches[j].items);
+        }
+        break;
+      }
       try {
         const body = JSON.stringify(batch.data);
         const response = await fetch(`${this.apiHost}`, {
@@ -480,7 +490,7 @@ export class EventQueue implements IEventQueue {
         // retryable. Release its fingerprints so the app can send the same
         // event again after the error callback, instead of having that
         // retry classified as a double-fire and dropped for a minute.
-        batch.items.forEach(({ dedupKey }) => this.payloadHashes.delete(dedupKey));
+        this.releaseFingerprints(batch.items);
         batch.items.forEach(({ message, callback: cb }) => safeCall(cb, err, message, allData));
       }
     }
@@ -518,6 +528,24 @@ export class EventQueue implements IEventQueue {
 
     this.payloadHashes.set(dedupKey, now + DEDUP_WINDOW_MS);
     return false;
+  }
+
+  /**
+   * Forget that these events were accepted, so identical ones are taken
+   * again. For items that were never delivered.
+   *
+   * Only an item's OWN entry is released. A send can outlive the window
+   * through retry backoff; by the time it fails, the same event may have
+   * expired, been accepted again and be in flight under the same key. The
+   * recorded expiry tells the two apart: a newer acceptance necessarily
+   * carries a later one.
+   */
+  private releaseFingerprints(items: QueueItem[]): void {
+    for (const item of items) {
+      if (this.payloadHashes.get(item.dedupKey) === item.dedupExpiresAt) {
+        this.payloadHashes.delete(item.dedupKey);
+      }
+    }
   }
 
   /**

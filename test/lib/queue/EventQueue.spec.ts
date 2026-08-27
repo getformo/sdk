@@ -337,6 +337,68 @@ describe("EventQueue", () => {
         expect((eventQueue as any).queue, "the retry is accepted").to.have.length(1);
       });
 
+      it("does not release a newer fingerprint when an old send fails after the window", async () => {
+        // Retry backoff can keep a send in flight past the window. If the
+        // same event is accepted again meanwhile, the old failure must not
+        // release the NEW entry, or a third copy slips through.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        const event = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(event);
+        const inFlight = eventQueue.flush();
+        await clock.tickAsync(0);
+
+        // Window passes while the send hangs; the same event is accepted anew.
+        clock.tick(60_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "re-accepted after expiry").to.have.length(1);
+
+        settle(makeResponse(400, "Bad Request"));
+        await inFlight;
+
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "the newer entry still suppresses").to.have.length(1);
+      });
+
+      it("releases the fingerprints of batches abandoned when consent is withdrawn mid-flush", async () => {
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        const largeProps: Record<string, string> = {};
+        for (let i = 0; i < 50; i++) largeProps[`field_${i}`] = "x".repeat(200);
+        const events = Array.from({ length: 8 }, (_, i) =>
+          createMockEvent({ properties: { ...largeProps, index: i } })
+        );
+        for (const e of events) await eventQueue.enqueue(e);
+        await (eventQueue as any).pendingFlush; // the first event's own flush
+        fetchStub.resetHistory();
+
+        // The remaining seven exceed 64KB and split. Consent goes away as the
+        // first split batch is sent; the rest are abandoned unsent.
+        fetchStub.callsFake(async () => { allowed = false; return makeResponse(200, "OK"); });
+        await eventQueue.flush();
+        expect(fetchStub.calledOnce).to.be.true;
+        const sent = new Set(
+          JSON.parse(fetchStub.firstCall.args[1].body).map((e: any) => e.properties.index)
+        );
+        const abandoned = events.find((e) => (e.properties as any).index !== 0 && !sent.has((e.properties as any).index))!;
+        const delivered = events.find((e) => sent.has((e.properties as any).index))!;
+        expect(abandoned, "some batch was abandoned").to.exist;
+
+        allowed = true;
+        await eventQueue.enqueue({ ...abandoned });
+        expect((eventQueue as any).queue, "an abandoned event can be sent again").to.have.length(1);
+        await eventQueue.enqueue({ ...delivered });
+        expect((eventQueue as any).queue, "a delivered one is still a duplicate").to.have.length(1);
+      });
+
       it("keeps the fingerprint of an event whose send succeeded", async () => {
         const event = createMockEvent({ properties: { n: 1 } });
         await eventQueue.enqueue(event);
