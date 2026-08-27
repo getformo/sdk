@@ -472,6 +472,24 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("attributes signatures and transactions to the wallet behind the transport", async () => {
+    // The live-test rows had provider_name EMPTY on every signature and
+    // transaction; per-wallet activity was unanswerable in the warehouse.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    formo.registerProvider(provider);
+    await settle();
+    sent.length = 0;
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const sig = sent.find((e) => e.type === "signature");
+    expect(sig?.properties?.providerName).to.equal(PEER);
+    expect(sig?.properties?.rdns).to.equal("com.walletconnect");
+    formo.cleanup?.();
+  });
+
   it("refuses in wagmi mode, where the connector system already tracks the session", async () => {
     const wagmiConfig: any = {
       subscribe: () => () => undefined,

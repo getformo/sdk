@@ -19,6 +19,7 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
   let sandbox: sinon.SinonSandbox;
   let mockFormo: any;
   let statusListener: ((s: WagmiState["status"], p: WagmiState["status"]) => void) | null;
+  let mutationListener: ((event: unknown) => void) | null = null;
   let handler: WagmiEventHandler | undefined;
 
   const makeConnector = (peerName?: string) => ({
@@ -103,7 +104,12 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
       },
     };
     const queryClient: QueryClient = {
-      getMutationCache: () => ({ subscribe: () => () => undefined }),
+      getMutationCache: () => ({
+        subscribe: (l: any) => {
+          mutationListener = l;
+          return () => undefined;
+        },
+      }),
       getQueryCache: () => ({ subscribe: () => () => undefined }),
     } as any;
     handler = new WagmiEventHandler(mockFormo, config, queryClient);
@@ -179,6 +185,29 @@ describe("WagmiEventHandler WalletConnect peer naming", () => {
     await flush();
 
     expect(mockFormo.connect.lastCall.args[1]?.providerName).to.equal("WalletConnect");
+  });
+
+  it("names the peer on mid-session events once resolved", async () => {
+    // The cache's observable consumer: signatures fire after the lookup
+    // has settled, so the WalletConnect connector's signature events name
+    // the actual signer even though its connect stayed generic.
+    const connector = makeConnector("Ledger Live");
+    const setState = mount();
+    setState(stateWith(connector));
+    await statusListener?.("connected", "disconnected");
+    await flush();
+
+    mutationListener?.({
+      type: "updated",
+      mutation: {
+        mutationId: 900,
+        options: { mutationKey: ["signMessage"] },
+        state: { status: "success", data: "0xsig", variables: { message: "hi" } },
+      },
+    } as any);
+
+    expect(mockFormo.signature.called).to.equal(true);
+    expect(mockFormo.signature.lastCall.args[1]?.providerName).to.equal("Ledger Live");
   });
 
   it("never blocks emission on the lookup", async () => {

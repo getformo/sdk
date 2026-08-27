@@ -225,6 +225,9 @@ const walletConnectPeerLatest = new WeakMap<object, object>();
 /** Details of a broadcast we are waiting on a receipt for. */
 type PendingTransaction = {
   address: string;
+  /** Wallet attribution captured at broadcast; the receipt reuses it so a
+   * connection change in between cannot relabel the confirmation. */
+  providerName?: string;
   /**
    * Chain the transaction was broadcast on. Stored because a mutation may
    * name an explicit `chainId`, and the active chain can change between
@@ -267,6 +270,8 @@ const pendingTransactionsByDestination = new Map<
  */
 type PendingBatch = {
   address: string;
+  /** Wallet attribution captured at broadcast, reused at settlement. */
+  providerName?: string;
   chainId?: number;
   /**
    * Whether the caller named the chain. An explicit chain outranks the one
@@ -2050,6 +2055,9 @@ export class WagmiEventHandler {
             batch_size: pending.calls.length,
             batch_index: index,
             batch_id: batchId,
+            ...(pending.providerName
+              ? { providerName: pending.providerName }
+              : {}),
           }
         );
       });
@@ -2171,7 +2179,12 @@ export class WagmiEventHandler {
           ...(pendingTx?.function_args && { function_args: pendingTx.function_args }),
         },
         // Spread function args as additional properties (only colliding keys are prefixed)
-        pendingTx?.safeFunctionArgs
+        {
+          ...(pendingTx?.providerName
+            ? { providerName: pendingTx.providerName }
+            : this.mutationAttribution()),
+          ...pendingTx?.safeFunctionArgs,
+        }
       );
 
       // Clean up the pending transaction after confirmation
@@ -2251,6 +2264,22 @@ export class WagmiEventHandler {
   /**
    * Handle signature mutations (signMessage, signTypedData)
    */
+  /**
+   * Wallet attribution for mutation- and query-derived events.
+   *
+   * Mid-session events (signatures, transactions) fire after the peer
+   * lookup has resolved, so a WalletConnect connector names its actual
+   * signer here - the first observable consumer of the peer cache.
+   */
+  private mutationAttribution(): { providerName: string } | undefined {
+    try {
+      const name = this.getConnectorName(this.getState());
+      return name ? { providerName: name } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private handleSignatureMutation(
     mutationType: WagmiMutationKey,
     mutation: any
@@ -2322,7 +2351,8 @@ export class WagmiEventHandler {
           chainId,
           address,
           message,
-        }
+        },
+        this.mutationAttribution()
       );
     } catch (error) {
       logger.error("WagmiEventHandler: Error handling signature mutation:", error);
@@ -2441,6 +2471,7 @@ export class WagmiEventHandler {
         const normalizedHash = transactionHash.toLowerCase();
         const txDetails = {
           address: userAddress,
+          ...(this.mutationAttribution() ?? {}),
           // Record the chain this was broadcast on either way, and remember
           // whether the caller named it. The common `sendTransaction({ to })`
           // has no explicit chain, so storing nothing meant a network switch
@@ -2484,7 +2515,7 @@ export class WagmiEventHandler {
           ...(function_args && { function_args }),
         },
         // Spread function args as additional properties (only colliding keys are prefixed)
-        safeFunctionArgs
+        { ...this.mutationAttribution(), ...safeFunctionArgs }
       );
     } catch (error) {
       logger.error(
@@ -2543,6 +2574,7 @@ export class WagmiEventHandler {
         })
       );
 
+      const attribution = this.mutationAttribution();
       const emitAll = (
         status: TransactionStatus,
         extra?: Record<string, unknown>
@@ -2564,6 +2596,7 @@ export class WagmiEventHandler {
               {
                 batch_size: calls.length,
                 batch_index: index,
+                ...attribution,
                 ...extra,
               }
             );
@@ -2586,6 +2619,7 @@ export class WagmiEventHandler {
         if (batchId) {
           this.pendingBatches.set(batchId, {
             address: userAddress,
+            ...(attribution ?? {}),
             ...(chainId !== undefined && { chainId }),
             chainIdWasExplicit: explicitChainId !== undefined,
             calls,

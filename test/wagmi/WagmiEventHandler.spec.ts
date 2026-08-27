@@ -558,7 +558,7 @@ describe("WagmiEventHandler", () => {
       // Verify function args are also passed as additional properties (second argument)
       // 'repayAmount' doesn't collide with any built-in field, so no prefix needed
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({ repayAmount: "3300000" });
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask", repayAmount: "3300000" });
     });
 
     it("should track writeContract mutation with multiple args", async () => {
@@ -621,7 +621,7 @@ describe("WagmiEventHandler", () => {
       // 'to' collides with transaction 'to' field, so it gets prefixed
       // 'amount' doesn't collide, so it stays unprefixed
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         arg_to: "0xrecipient123",
         amount: "1000000000000000000",
       });
@@ -670,9 +670,9 @@ describe("WagmiEventHandler", () => {
       expect(txCall.function_name).to.be.undefined;
       expect(txCall.function_args).to.be.undefined;
 
-      // Properties (second argument) should be undefined for sendTransaction
+      // Properties carry only the wallet attribution for sendTransaction
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.be.undefined;
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask" });
     });
 
     it("should not track transaction when autocapture is disabled", async () => {
@@ -768,7 +768,7 @@ describe("WagmiEventHandler", () => {
       // - 'to' prefixed to 'arg_to' (collision with transaction field)
       // - 'amount' unprefixed (no collision)
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         arg_to: "0xRecipientAddress",
         amount: "1000000000000000000",
       });
@@ -851,7 +851,7 @@ describe("WagmiEventHandler", () => {
       // 'order' doesn't collide with any built-in field, so no prefix needed
       // Nested struct fields are also flattened for easier querying
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         order: {
           maker: "0xMakerAddress",
           price: "1000000000000000000",
@@ -939,7 +939,7 @@ describe("WagmiEventHandler", () => {
 
       // 'transfers' doesn't collide with any built-in field, so no prefix
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         transfers: [
           { to: "0xRecipient1", amount: "100" },
           { to: "0xRecipient2", amount: "200" },
@@ -1048,7 +1048,7 @@ describe("WagmiEventHandler", () => {
       // 'params' doesn't collide with any built-in field, so no prefix
       // Nested struct fields are also flattened for easier querying
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         params: {
           input: {
             token: "0xUSDC",
@@ -1131,7 +1131,7 @@ describe("WagmiEventHandler", () => {
       // - 'data' prefixed to 'arg_data' (collides with transaction data field)
       // - 'value' prefixed to 'arg_value' (collides with transaction value field)
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         target: "0xTargetContract",
         arg_data: "0xcalldata123",
         arg_value: "1000000000000000000",
@@ -1211,7 +1211,7 @@ describe("WagmiEventHandler", () => {
 
       // Properties: 'to' becomes 'arg_to' due to collision, flattened fields follow
       const txProperties = mockFormo.transaction.firstCall.args[1];
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         arg_to: {
           recipient: "0xRecipientAddress",
           chainId: "137",
@@ -1282,7 +1282,7 @@ describe("WagmiEventHandler", () => {
       const txProperties = mockFormo.transaction.firstCall.args[1];
 
       // Arrays should be preserved as arrays, not expanded
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         swap: {
           paths: ["0xToken1", "0xToken2", "0xToken3"],
           amounts: ["100", "200", "300"],
@@ -1367,7 +1367,7 @@ describe("WagmiEventHandler", () => {
       const txProperties = mockFormo.transaction.firstCall.args[1];
 
       // 'data' collides, so it becomes 'arg_data', and flattening follows that prefix
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         arg_data: {
           level1: {
             level2: {
@@ -1440,7 +1440,7 @@ describe("WagmiEventHandler", () => {
       const txProperties = mockFormo.transaction.firstCall.args[1];
 
       // Primitives stay flat, nested struct gets flattened
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         id: "123",
         config: { enabled: true, threshold: "1000" },
         config_enabled: true,
@@ -1507,7 +1507,7 @@ describe("WagmiEventHandler", () => {
 
       // config_value should keep its original value (999), not be overwritten by config.value (123)
       // config_other should be added since it doesn't collide
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         config_value: "999", // Original top-level arg preserved
         config: { value: "123", other: "456" },
         // config_value would collide, so it's skipped
@@ -1574,7 +1574,7 @@ describe("WagmiEventHandler", () => {
 
       // Even though struct comes first in ABI, top-level arg should win
       // config_value should be 999 (from top-level arg), not 123 (from flattened struct)
-      expect(txProperties).to.deep.equal({
+      expect(txProperties).to.deep.equal({ providerName: "MetaMask",
         config: { value: "123", other: "456" },
         config_value: "999", // Top-level arg takes precedence
         config_other: "456",
@@ -2130,7 +2130,7 @@ describe("WagmiEventHandler", () => {
       // Verify safeFunctionArgs are also passed as additional properties (second argument)
       // 'to' collides with transaction 'to' field, so it gets prefixed to 'arg_to'
       const confirmedProperties = mockFormo.transaction.firstCall.args[1];
-      expect(confirmedProperties).to.deep.equal({
+      expect(confirmedProperties).to.deep.equal({ providerName: "MetaMask",
         arg_to: "0xRecipient",
         amount: "1000000000000000000",
       });
