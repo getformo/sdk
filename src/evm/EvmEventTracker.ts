@@ -68,6 +68,40 @@ export interface EvmEventTrackerDeps {
  * deciding when a connect has to be reported, when a switch is stale, and
  * when a provider has stopped being the one we follow.
  */
+/**
+ * A registered provider's current accounts, from its synchronous state.
+ *
+ * `provider.accounts` first - but a LIVE MetaMask Mobile session over
+ * WalletConnect has been observed with `accounts` EMPTY while the session's
+ * namespaces held the approved account ("eip155:11155111:0xabc..."), which
+ * silently defeated adoption. The namespaces are the session's ground
+ * truth, so they are the fallback. Still purely synchronous property
+ * reads; nothing goes on the wallet transport.
+ */
+function readProviderAccounts(provider: EIP1193Provider): string[] {
+  const direct = (provider as unknown as { accounts?: unknown }).accounts;
+  if (
+    Array.isArray(direct) &&
+    direct.length > 0 &&
+    direct.every((a) => typeof a === "string")
+  ) {
+    return direct as string[];
+  }
+  const session = (provider as unknown as {
+    session?: { namespaces?: Record<string, { accounts?: unknown }> };
+  }).session;
+  const out: string[] = [];
+  for (const ns of Object.values(session?.namespaces ?? {})) {
+    if (!Array.isArray(ns?.accounts)) continue;
+    for (const entry of ns.accounts) {
+      if (typeof entry !== "string") continue;
+      const address = entry.split(":")[2];
+      if (address && !out.includes(address)) out.push(address);
+    }
+  }
+  return out;
+}
+
 export class EvmEventTracker {
   /**
    * Providers adopted through `registerProvider` rather than discovered.
@@ -293,13 +327,9 @@ export class EvmEventTracker {
       { ...detail, info: { ...detail.info, ...this.registry.infoFor(provider) } },
     ]);
 
-    const accounts = (provider as unknown as { accounts?: unknown }).accounts;
-    if (
-      Array.isArray(accounts) &&
-      accounts.length > 0 &&
-      accounts.every((a) => typeof a === "string")
-    ) {
-      void this.onAccountsChanged(provider, accounts as string[]);
+    const accounts = readProviderAccounts(provider);
+    if (accounts.length > 0) {
+      void this.onAccountsChanged(provider, accounts);
     }
     return true;
   }

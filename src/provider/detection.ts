@@ -110,6 +110,39 @@ export function detectInjectedProviderInfo(
 }
 
 /**
+ * Was this error the USER declining, whatever transport delivered it?
+ *
+ * Three dialects say "the user said no":
+ * - EIP-1193: code 4001 (UserRejectedRequest).
+ * - WalletConnect sdkErrors: codes 5000-5005 (USER_REJECTED and its
+ *   variants). A LIVE MetaMask Mobile session rejecting a transaction
+ *   produced one of these and the SDK's 4001-only match reported nothing -
+ *   every WalletConnect rejection was silently uncounted.
+ * - viem: a typed UserRejectedRequestError, sometimes without the numeric
+ *   code surviving the wrapping.
+ *
+ * The real code often hides under `cause` (viem nests, WC wraps), so the
+ * chain is walked a few levels.
+ */
+export function isUserRejectionError(error: unknown): boolean {
+  let cursor = error as
+    | { code?: unknown; name?: unknown; cause?: unknown }
+    | undefined;
+  for (let depth = 0; cursor && depth < 5; depth++) {
+    const code = cursor.code;
+    if (
+      code === 4001 ||
+      (typeof code === "number" && code >= 5000 && code <= 5005) ||
+      cursor.name === "UserRejectedRequestError"
+    ) {
+      return true;
+    }
+    cursor = cursor.cause as typeof cursor;
+  }
+  return false;
+}
+
+/**
  * The wallet on the far side of a WalletConnect session.
  *
  * WalletConnect is a transport, not a wallet: the signing wallet (Ledger

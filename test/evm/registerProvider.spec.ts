@@ -358,6 +358,54 @@ describe("registerProvider", () => {
     b.formo.cleanup?.();
   });
 
+  it("adopts a session whose accounts live only in the namespaces", async () => {
+    // Observed live with MetaMask Mobile: provider.accounts EMPTY while the
+    // session namespaces held "eip155:11155111:0x...". The namespaces are
+    // the session's ground truth and adoption must read them.
+    const provider = makeWcProvider({ peer: PEER });
+    provider.accounts = [];
+    provider.session = {
+      peer: { metadata: { name: PEER } },
+      namespaces: { eip155: { accounts: [`eip155:11155111:${ADDR}`, `eip155:1:${ADDR}`] } },
+    };
+    const { formo, sent } = await setup();
+
+    formo.registerProvider(provider);
+    await settle();
+
+    const connect = sent.find((e) => e.type === "connect");
+    expect(connect?.address?.toLowerCase()).to.equal(ADDR.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("reports a WalletConnect-style rejection (code 5000) as rejected", async () => {
+    // Live finding: WalletConnect wallets reject with sdkError USER_REJECTED
+    // {code: 5000}, not EIP-1193's 4001 - and a 4001-only match reported
+    // NOTHING for every WalletConnect rejection.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    provider.request = async ({ method }: { method: string }) => {
+      if (method === "personal_sign") {
+        const e = new Error("User rejected.");
+        (e as any).code = 5000;
+        throw e;
+      }
+      if (method === "eth_accounts") return provider.accounts;
+      return null;
+    };
+    const { formo, sent } = await setup();
+    formo.registerProvider(provider);
+    await settle();
+
+    await provider
+      .request({ method: "personal_sign", params: ["0x68", ADDR] })
+      .catch(() => undefined);
+    await settle();
+
+    const statuses = sent.filter((e) => e.type === "signature").map((e) => e.status);
+    expect(statuses).to.deep.equal(["requested", "rejected"]);
+    formo.cleanup?.();
+  });
+
   it("refuses in wagmi mode, where the connector system already tracks the session", async () => {
     const wagmiConfig: any = {
       subscribe: () => () => undefined,

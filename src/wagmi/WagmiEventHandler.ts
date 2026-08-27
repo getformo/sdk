@@ -9,7 +9,7 @@
 import { FormoAnalytics } from "../FormoAnalytics";
 import { SignatureStatus, TransactionStatus } from "../types/events";
 import { logger } from "../logger";
-import { readWalletConnectPeer } from "../provider";
+import { readWalletConnectPeer, isUserRejectionError } from "../provider";
 import {
   readBatchId,
   readBatchStatusCode,
@@ -180,25 +180,11 @@ const ownerKey = (writeKey: string, config: WagmiConfig): string => {
   return `${writeKey}:${id}`;
 };
 
-/**
- * Was this mutation error the user dismissing the wallet prompt?
- *
- * Matches the EIP-1193 path's rule (code 4001), but a wagmi mutation error
- * arrives wrapped: viem nests the RPC error under `cause`, sometimes twice.
- * Walk the chain rather than trusting the top level, and accept viem's
- * `UserRejectedRequestError` by name for wallets that map the rejection to a
- * typed error without preserving the numeric code.
- */
-function isUserRejection(error: unknown): boolean {
-  let cursor = error as { code?: unknown; name?: unknown; cause?: unknown } | undefined;
-  for (let depth = 0; cursor && depth < 5; depth++) {
-    if (cursor.code === 4001 || cursor.name === "UserRejectedRequestError") {
-      return true;
-    }
-    cursor = cursor.cause as typeof cursor;
-  }
-  return false;
-}
+// User-rejection detection is shared with the EIP-1193 path (4001, the
+// WalletConnect 5000-family, and viem's typed error): see
+// provider/detection.ts for the dialects and why 4001 alone missed every
+// WalletConnect rejection.
+const isUserRejection = isUserRejectionError;
 
 /**
  * Real wallet names behind WalletConnect connectors, resolved lazily.

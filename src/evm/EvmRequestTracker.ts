@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { isUserRejectionError } from "../provider";
 import { parseChainId } from "../utils/chain";
 import { validateAndChecksumAddress } from "../utils/address";
 import {
@@ -394,7 +395,7 @@ export class EvmRequestTracker {
           return response;
         } catch (error) {
           const rpcError = error as RPCError;
-          if (rpcError?.code === 4001) {
+          if (isUserRejectionError(rpcError)) {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
@@ -492,7 +493,7 @@ export class EvmRequestTracker {
           return transactionHash as unknown as T;
         } catch (error) {
           const rpcError = error as RPCError;
-          if (rpcError?.code === 4001) {
+          if (isUserRejectionError(rpcError)) {
             // Use the already cast rpcError to avoid duplication
             (async () => {
               try {
@@ -768,7 +769,7 @@ export class EvmRequestTracker {
       return result;
     } catch (error) {
       const rpcError = error as RPCError;
-      if (rpcError?.code === 4001) {
+      if (isUserRejectionError(rpcError)) {
         // One rejection dismisses the whole prompt, so every call in it is
         // rejected. Reporting only the first would undercount.
         for (const p of payloads) {
