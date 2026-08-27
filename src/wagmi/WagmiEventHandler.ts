@@ -1036,6 +1036,24 @@ export class WagmiEventHandler {
     status: WagmiState["status"],
     prevStatus: WagmiState["status"]
   ): Promise<void> {
+    if (status === "disconnected") {
+      // The wrapped session is over. This must run for EVERY observed
+      // disconnect - before the processing lock and regardless of whether
+      // a wallet was being tracked - or a rapid same-connector reconnect
+      // retains the old provider and the chain callback writes the new
+      // session's chain onto it. Bumping the epoch also invalidates any
+      // wrap still in flight from the ended session, which could
+      // otherwise land after the reconnect and pass the connected check.
+      const endedConnector = this.fallbackConnector;
+      if (endedConnector) {
+        this.wrapEpochs.set(
+          endedConnector,
+          (this.wrapEpochs.get(endedConnector) ?? 0) + 1
+        );
+      }
+      this.fallbackConnector = undefined;
+      this.fallbackProvider = undefined;
+    }
 
     // Prevent concurrent processing
     if (this.trackingState.isProcessing) {
@@ -1107,13 +1125,6 @@ export class WagmiEventHandler {
         this.trackingState.lastChainId = undefined;
         this.pendingChainId = undefined;
         this.missedDisconnect = false;
-        // The session the fallback pair described is over. A reconnect
-        // through the SAME connector may hand out a replacement provider;
-        // keeping the old pair would let the chain callback, racing the
-        // new wrap's resolution, write the new session's chain onto the
-        // old provider and mislabel requests still flowing through it.
-        this.fallbackConnector = undefined;
-        this.fallbackProvider = undefined;
         // A real disconnect ends the adoption, so a genuine reconnect later in
         // this same page load emits again.
         announcedConnections.delete(
