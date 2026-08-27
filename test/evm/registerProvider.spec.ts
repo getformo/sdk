@@ -490,6 +490,44 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("adopts a Safe Apps provider session and names it Safe (#370)", async () => {
+    // The Safe Apps provider has NO accounts array, NO namespaces, and NO
+    // lifecycle events - the iframe is connected from the first instant,
+    // so nothing ever fires. Shape verified against the published package:
+    // the identity lives at provider.safe.safeAddress.
+    const handlers: Record<string, unknown[]> = {};
+    const provider: any = {
+      get chainId() {
+        return "0x1";
+      },
+      safe: { safeAddress: ADDR, chainId: 1 },
+      request: async ({ method }: { method: string }) => {
+        if (method === "eth_chainId") return "0x1";
+        if (method === "personal_sign") return "0xsigned";
+        return null;
+      },
+      on: (ev: string, fn: unknown) => { (handlers[ev] ??= []).push(fn); },
+      removeListener: () => undefined,
+    };
+    const { formo, sent } = await setup();
+
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+
+    const detect = sent.find((e) => e.type === "detect");
+    expect(detect?.providerName).to.equal("Safe");
+    expect(detect?.rdns).to.equal("global.safe");
+    const connect = sent.find((e) => e.type === "connect");
+    expect(connect?.address?.toLowerCase(), "session adopted with no events ever firing").to.equal(ADDR.toLowerCase());
+
+    // Request capture works through the wrapper as usual.
+    sent.length = 0;
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(sent.filter((e) => e.type === "signature").length).to.equal(2);
+    formo.cleanup?.();
+  });
+
   it("refuses in wagmi mode, where the connector system already tracks the session", async () => {
     const wagmiConfig: any = {
       subscribe: () => () => undefined,
