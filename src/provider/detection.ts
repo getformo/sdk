@@ -101,12 +101,6 @@ export function detectInjectedProviderInfo(
     }
   }
 
-  // The Safe Apps provider carries no flags; its shape is the signal.
-  if (name === "Injected Provider" && readSafeAppAccount(provider as EIP1193Provider)) {
-    name = "Safe";
-    rdns = "global.safe";
-  }
-
   return {
     name,
     rdns,
@@ -146,22 +140,6 @@ export function isUserRejectionError(error: unknown): boolean {
     cursor = cursor.cause as typeof cursor;
   }
   return false;
-}
-
-/**
- * The Safe address of a Safe Apps provider, when this is one.
- *
- * `@safe-global/safe-apps-provider` exposes no flags, no `accounts` array,
- * and NO lifecycle events - the iframe context is connected from the first
- * instant, so nothing ever fires. Its identity lives at
- * `provider.safe.safeAddress` (verified against the published package).
- * Synchronous property read only.
- */
-export function readSafeAppAccount(provider: EIP1193Provider): string | undefined {
-  const address = (provider as unknown as {
-    safe?: { safeAddress?: unknown };
-  }).safe?.safeAddress;
-  return typeof address === "string" && address.length > 0 ? address : undefined;
 }
 
 /**
