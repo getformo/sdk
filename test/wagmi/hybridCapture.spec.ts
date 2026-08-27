@@ -636,6 +636,58 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("a wrap still unresolved at disconnect cannot land after the reconnect", async () => {
+    // The first session's wrap is IN FLIGHT when the session ends: no
+    // fallback pair exists yet, so no per-connector record can be
+    // invalidated. The session generation must stop that resolution from
+    // wrapping the ended provider with the NEW session's chain.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const provider1: any = bare();
+    const provider2: any = bare();
+    let session = provider1;
+    let slow = true; // the FIRST wrap resolves late
+    const subscriptions: Subscription[] = [];
+    const state = makeState(provider1, 1);
+    state.connections.get("c1").connector.getProvider = () =>
+      slow
+        ? new Promise((resolve) => setTimeout(() => resolve(session), 40))
+        : Promise.resolve(session);
+    const { formo, sent } = await setup(true, { provider: provider1, state, subscriptions });
+
+    // Disconnect while the seed wrap is pending, dropped by the lock so
+    // no replay path can help.
+    const handler: any = (formo as any).wagmiHandler;
+    handler.trackingState.isProcessing = true;
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "disconnected";
+    });
+    handler.trackingState.isProcessing = false;
+
+    session = provider2;
+    slow = false;
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "connected";
+      state.chainId = 137;
+      replaceConnection(state, "c1", { chainId: 137 });
+    });
+    // Let the ended session's slow resolution arrive.
+    await new Promise((r) => setTimeout(r, 80));
+
+    await provider2.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await provider1.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    // Only the new session's provider is instrumented.
+    expect(chains).to.deep.equal([137, 137]);
+    formo.cleanup?.();
+  });
+
   it("discards an out-of-order resolution from a superseded wrap kick", async () => {
     // Two wrap kicks race: the FIRST getProvider() resolves LAST, with a
     // provider from the earlier session. The epoch must discard it - it

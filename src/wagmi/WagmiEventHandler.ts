@@ -1041,16 +1041,9 @@ export class WagmiEventHandler {
       // disconnect - before the processing lock and regardless of whether
       // a wallet was being tracked - or a rapid same-connector reconnect
       // retains the old provider and the chain callback writes the new
-      // session's chain onto it. Bumping the epoch also invalidates any
-      // wrap still in flight from the ended session, which could
-      // otherwise land after the reconnect and pass the connected check.
-      const endedConnector = this.fallbackConnector;
-      if (endedConnector) {
-        this.wrapEpochs.set(
-          endedConnector,
-          (this.wrapEpochs.get(endedConnector) ?? 0) + 1
-        );
-      }
+      // session's chain onto it. The generation bump invalidates every
+      // wrap still in flight from the ended session, resolved or not.
+      this.wrapSessionGeneration += 1;
       this.fallbackConnector = undefined;
       this.fallbackProvider = undefined;
     }
@@ -2911,6 +2904,15 @@ export class WagmiEventHandler {
   /** Pending retry timers, cancelled by cleanup(). */
   private wrapRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 
+  /**
+   * Bumped on every observed disconnect. Every wrap attempt captures it
+   * at kick time and its resolution stands down on a mismatch, so a
+   * disconnect invalidates ALL pending wraps at once - including ones
+   * whose getProvider() had not resolved yet, which no per-connector
+   * bookkeeping can reach because nothing has been recorded for them.
+   */
+  private wrapSessionGeneration = 0;
+
   /** The active connector this instance wrapped, and its provider, for
    * chain updates. Kept as a pair so a chain report is only ever applied
    * to the provider of the connector it describes. Keyed by connector,
@@ -2931,6 +2933,11 @@ export class WagmiEventHandler {
     if (!optedIn) {
       return;
     }
+    if (state.status !== "connected") {
+      // Status kicks run for every transition; only a connected snapshot
+      // describes a session worth wrapping.
+      return;
+    }
     const connection = state.current
       ? state.connections.get(state.current)
       : undefined;
@@ -2942,6 +2949,7 @@ export class WagmiEventHandler {
     }
     const epoch = (this.wrapEpochs.get(connector as object) ?? 0) + 1;
     this.wrapEpochs.set(connector as object, epoch);
+    const session = this.wrapSessionGeneration;
     // A store-driven kick resets the retry budget; automatic retries
     // (below) spend it.
     if (!isRetry) {
@@ -3014,6 +3022,7 @@ export class WagmiEventHandler {
         // disconnected would re-point the fallback pair at a provider
         // whose session is over.
         const stillActive =
+          this.wrapSessionGeneration === session &&
           live.status === "connected" &&
           live.current !== undefined &&
           live.connections.get(live.current)?.connector === connector;
