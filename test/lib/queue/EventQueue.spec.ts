@@ -500,6 +500,69 @@ describe("EventQueue", () => {
         expect(JSON.parse(fetchStub.firstCall.args[1].body)).to.have.length(1);
       });
 
+      it("drops the buffer when consent goes away while flush waits on a pending flush", async () => {
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } })); // in flight
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } })); // buffered
+        const cb = sinon.spy();
+        const waiting = eventQueue.flush(cb);
+        allowed = false;
+        settle(makeResponse(200, "OK"));
+        await waiting;
+
+        expect(fetchStub.calledOnce, "the buffered event was not sent").to.be.true;
+        expect((eventQueue as any).queue, "and was dropped").to.have.length(0);
+        expect(cb.calledOnce, "the flush callback still fires").to.be.true;
+      });
+
+      it("times the window from the wall clock alone where performance.now is unavailable", async () => {
+        const saved = Object.getOwnPropertyDescriptor(global, "performance");
+        Object.defineProperty(global, "performance", { value: undefined, configurable: true, writable: true });
+        try {
+          eventQueue = new EventQueue("test-key", {
+            apiHost: "https://api.example.com",
+            flushAt: 5,
+            flushInterval: 30000,
+          });
+          const event = createMockEvent({ properties: { n: 1 } });
+          await eventQueue.enqueue(event);
+          await (eventQueue as any).pendingFlush;
+
+          clock.tick(30_000);
+          await eventQueue.enqueue({ ...event });
+          expect((eventQueue as any).queue, "inside the window").to.have.length(0);
+          clock.tick(30_001);
+          await eventQueue.enqueue({ ...event });
+          expect((eventQueue as any).queue, "after the window").to.have.length(1);
+        } finally {
+          if (saved) Object.defineProperty(global, "performance", saved);
+          else delete (global as any).performance;
+        }
+      });
+
+      it("drains everything without waiting on a pending flush when the page is leaving", async () => {
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.onFirstCall().callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        fetchStub.onSecondCall().resolves(makeResponse(200, "OK"));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } })); // in flight, unsettled
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
+
+        const drain = eventQueue.flush(undefined, true);
+        expect(fetchStub.calledTwice, "the drain did not wait for the in-flight send").to.be.true;
+        expect(JSON.parse(fetchStub.secondCall.args[1].body)).to.have.length(2);
+        settle(makeResponse(200, "OK"));
+        await drain;
+      });
+
       it("keeps the fingerprint of an event whose send succeeded", async () => {
         const event = createMockEvent({ properties: { n: 1 } });
         await eventQueue.enqueue(event);
