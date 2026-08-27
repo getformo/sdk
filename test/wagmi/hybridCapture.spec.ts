@@ -697,6 +697,51 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("a reconnecting cycle also ends the wrapped session", async () => {
+    // connected -> reconnecting -> connected never passes through
+    // "disconnected". The pair must still be cleared at "reconnecting",
+    // or a chain update inside the cycle writes the new session's chain
+    // onto the previous provider before its replacement resolves.
+    const bare = () => ({
+      on: () => undefined,
+      removeListener: () => undefined,
+      request: async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xsigned" : null,
+    });
+    const provider1: any = bare();
+    const provider2: any = bare();
+    let call = 0;
+    const subscriptions: Subscription[] = [];
+    const state = makeState(provider1, 1);
+    state.connections.get("c1").connector.getProvider = () => {
+      call += 1;
+      return call === 1
+        ? Promise.resolve(provider1)
+        : new Promise((resolve) => setTimeout(() => resolve(provider2), 40));
+    };
+    const { formo, sent } = await setup(true, { provider: provider1, state, subscriptions });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "reconnecting";
+      state.chainId = 137;
+      replaceConnection(state, "c1", { chainId: 137 });
+    });
+    await settle();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.status = "connected";
+    });
+    // Sign through the OLD provider while the replacement wrap resolves.
+    await provider1.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await new Promise((r) => setTimeout(r, 80));
+    await provider2.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    const chains = sent.filter((e) => e.type === "signature").map((e) => e.chainId);
+    // The old provider keeps its own chain; only the new one carries 137.
+    expect(chains).to.deep.equal([1, 1, 137, 137]);
+    formo.cleanup?.();
+  });
+
   it("discards an out-of-order resolution from a superseded wrap kick", async () => {
     // Two wrap kicks race: the FIRST getProvider() resolves LAST, with a
     // provider from the earlier session. The epoch must discard it - it

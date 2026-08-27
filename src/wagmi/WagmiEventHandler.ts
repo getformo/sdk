@@ -1036,13 +1036,15 @@ export class WagmiEventHandler {
     status: WagmiState["status"],
     prevStatus: WagmiState["status"]
   ): Promise<void> {
-    if (status === "disconnected") {
-      // The wrapped session is over. This must run for EVERY observed
-      // disconnect - before the processing lock and regardless of whether
-      // a wallet was being tracked - or a rapid same-connector reconnect
-      // retains the old provider and the chain callback writes the new
-      // session's chain onto it. The generation bump invalidates every
-      // wrap still in flight from the ended session, resolved or not.
+    if (status === "disconnected" || status === "reconnecting") {
+      // The wrapped session is over - or, for "reconnecting", about to be
+      // replaced without ever passing through "disconnected". This must
+      // run for EVERY such transition, before the processing lock and
+      // regardless of whether a wallet was being tracked, or a rapid
+      // same-connector reconnect retains the old provider and the chain
+      // callback writes the new session's chain onto it. The generation
+      // bump invalidates every wrap still in flight from the ended
+      // session, resolved or not. The "connected" that follows re-wraps.
       this.wrapSessionGeneration += 1;
       this.fallbackConnector = undefined;
       this.fallbackProvider = undefined;
