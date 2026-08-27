@@ -1358,8 +1358,10 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   public optInTracking(): void {
     // A provider registered while the visitor was opted out had its
-    // session adoption refused; nothing else retries it.
+    // session adoption refused; nothing else retries it. Guarded: a
+    // cleanup() racing this timer must not drive the torn-down tracker.
     setTimeout(() => {
+      if (this.isCleanedUp) return;
       try {
         this.evmEvents.retryExternalAdoptions();
       } catch {
@@ -1473,10 +1475,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     // A route change can end path-based suppression; a provider registered
     // while suppressed gets its refused session adoption retried here.
     // Idempotent and cheap when nothing is pending.
-    try {
-      this.evmEvents.retryExternalAdoptions();
-    } catch {
-      /* never let the retry break a page hit */
+    if (!this.isCleanedUp) {
+      try {
+        this.evmEvents.retryExternalAdoptions();
+      } catch {
+        /* never let the retry break a page hit */
+      }
     }
 
     if (!this.shouldTrack()) {

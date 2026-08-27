@@ -2,7 +2,7 @@ import { EIP6963ProviderDetail, createStore } from "mipd";
 import { logger } from "../logger";
 import { parseChainId } from "../utils/chain";
 import { validateAndChecksumAddress } from "../utils/address";
-import { detectInjectedProviderInfo, isValidProvider } from "../provider";
+import { detectInjectedProviderInfo, isValidProvider, DEFAULT_PROVIDER_ICON } from "../provider";
 import {
   Address,
   ChainID,
@@ -98,10 +98,13 @@ function readProviderAccounts(provider: EIP1193Provider): string[] {
   // chain actually authorized.
   const ns = session?.namespaces?.eip155;
   const chainId = (provider as unknown as { chainId?: unknown }).chainId;
-  const activePrefix =
-    typeof chainId === "number" || typeof chainId === "string"
-      ? `eip155:${parseInt(String(chainId), typeof chainId === "string" && String(chainId).startsWith("0x") ? 16 : 10)}:`
-      : undefined;
+  const parsed =
+    typeof chainId === "number"
+      ? chainId
+      : typeof chainId === "string"
+        ? parseChainId(chainId)
+        : undefined;
+  const activePrefix = parsed ? `eip155:${parsed}:` : undefined;
   const forChain: string[] = [];
   const others: string[] = [];
   if (Array.isArray(ns?.accounts)) {
@@ -363,6 +366,24 @@ export class EvmEventTracker {
    */
   retryExternalAdoptions(): void {
     this.externallyRegistered.forEach((provider) => {
+      // A flagless provider registered BEFORE pairing detected as the
+      // generic injected identity; once the session's peer exists, the
+      // live identity differs and the corrected detect fires. The
+      // session-scoped rdns dedup keeps this from repeating.
+      const live = this.registry.infoFor(provider);
+      if (live.rdns === "com.walletconnect") {
+        void this.detectWallets([
+          {
+            info: {
+              name: live.name,
+              rdns: live.rdns,
+              uuid: "corrected-com-walletconnect",
+              icon: DEFAULT_PROVIDER_ICON,
+            },
+            provider: provider as never,
+          },
+        ]);
+      }
       const accounts = readProviderAccounts(provider);
       if (accounts.length > 0) {
         void this.onAccountsChanged(provider, accounts);
