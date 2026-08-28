@@ -2833,6 +2833,39 @@ export class WagmiEventHandler {
 
 
   /**
+   * The active connector's name and rdns, for the fallback-wrapped
+   * provider's request-derived events.
+   *
+   * The CONNECTOR's own name, not the peer-resolved one `getConnectorName`
+   * serves: the registry resolves a WalletConnect peer live on every read,
+   * so a session that changes wallets behind the same connector renames
+   * without a re-wrap. The rdns is the connector's when wagmi knows it
+   * (EIP-6963 discovered connectors carry theirs); otherwise the registry
+   * keeps the sniffed one.
+   */
+  private connectorAttribution(
+    state: WagmiState
+  ): { name: string; rdns?: string } | undefined {
+    const connector = state.current
+      ? (state.connections.get(state.current)?.connector as
+          | { name?: unknown; rdns?: unknown }
+          | undefined)
+      : undefined;
+    const name = connector?.name;
+    if (typeof name !== "string" || name.length === 0) {
+      return undefined;
+    }
+    const raw = connector?.rdns;
+    const rdns =
+      typeof raw === "string"
+        ? raw
+        : Array.isArray(raw) && typeof raw[0] === "string"
+          ? raw[0]
+          : undefined;
+    return { name, ...(rdns && { rdns }) };
+  }
+
+  /**
    * Get the connector name from Wagmi state
    */
   private getConnectorName(state: WagmiState): string | undefined {
@@ -3037,10 +3070,15 @@ export class WagmiEventHandler {
         }
         const chainId = this.getActiveConnectionChainId(live) ?? live.chainId;
         const wrapped = (this.formo as unknown as {
-          _wrapWagmiProvider?: (p: unknown, chainId?: number) => boolean;
+          _wrapWagmiProvider?: (
+            p: unknown,
+            chainId?: number,
+            attribution?: { name: string; rdns?: string }
+          ) => boolean;
         })._wrapWagmiProvider?.(
           provider,
-          typeof chainId === "number" ? chainId : undefined
+          typeof chainId === "number" ? chainId : undefined,
+          this.connectorAttribution(live)
         );
         if (wrapped !== true) {
           // The provider was refused (invalid shape, frozen provider,

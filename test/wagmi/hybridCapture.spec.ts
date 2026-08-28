@@ -186,6 +186,75 @@ describe("wagmi hybrid capture", () => {
     state.connections.set(id, { ...state.connections.get(id), ...patch });
   }
 
+  it("names imperative captures after the connector, not after provider flag sniffing", async () => {
+    // The fixture connector is "MetaMask" but its provider carries no
+    // isMetaMask flag, exactly like a custom or embedded connector. Hook
+    // events say "MetaMask"; the request wrapper used to say "Injected
+    // Provider", splitting one wallet's activity across two identities.
+    const { formo, sent, provider } = await setup();
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await provider.request({
+      method: "eth_sendTransaction",
+      params: [{ from: ADDR, to: TO, value: "0x0" }],
+    });
+    await settle();
+
+    const named = sent.filter((e) => e.type === "signature" || e.type === "transaction");
+    expect(named.length).to.be.greaterThan(0);
+    for (const e of named) {
+      expect(e.properties?.providerName, `${e.type}:${e.status}`).to.equal("MetaMask");
+    }
+    formo.cleanup?.();
+  });
+
+  it("carries the connector's rdns when wagmi knows it, else the sniffed one", async () => {
+    const withRdns = makeProvider();
+    const state = makeState(withRdns, 1);
+    state.connections.get("c1").connector.rdns = "io.metamask";
+    const a = await setup(true, { provider: withRdns, state });
+    await withRdns.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(a.sent.find((e) => e.type === "signature")?.properties?.rdns).to.equal("io.metamask");
+    a.formo.cleanup?.();
+
+    const b = await setup();
+    await b.provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    const sig = b.sent.find((e) => e.type === "signature");
+    expect(sig?.properties?.providerName).to.equal("MetaMask");
+    expect(sig?.properties?.rdns).to.equal("io.injected.provider");
+    b.formo.cleanup?.();
+  });
+
+  it("re-attributes captures to the new connector after a connector switch", async () => {
+    const subscriptions: Subscription[] = [];
+    const first = makeProvider();
+    const state = makeState(first, 1);
+    const { formo, sent } = await setup(true, { provider: first, state, subscriptions });
+
+    const second = makeProvider();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => second,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    sent.length = 0;
+
+    await second.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("Rabby");
+    formo.cleanup?.();
+  });
+
   it("does NOT instrument the provider unless explicitly opted in", async () => {
     // Wagmi mode's baseline contract: observe state and caches, never
     // touch the signing transport. Instrumentation is opt-in.

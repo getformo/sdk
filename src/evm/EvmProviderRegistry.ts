@@ -66,6 +66,20 @@ export class EvmProviderRegistry {
   /** The window-injected provider, once detected, so it is not re-wrapped. */
   private injectedDetail?: EIP6963ProviderDetail;
 
+  /**
+   * Attribution supplied by the integration layer for a provider that was
+   * never announced: the wagmi fallback wrap names a connector's provider
+   * after the CONNECTOR, so request-derived events carry the same wallet
+   * name as the hook-driven events from the same connection. Without it
+   * the name came from flag sniffing, and a custom or embedded connector
+   * whose provider exposes no recognised flag split one wallet's activity
+   * between "Injected Provider" and the connector's name.
+   */
+  private attributions = new WeakMap<
+    EIP1193Provider,
+    { name: string; rdns?: string }
+  >();
+
   constructor(private readonly deps: EvmProviderRegistryDeps) {}
 
   // ── the provider set ─────────────────────────────────────────────────────
@@ -128,18 +142,44 @@ export class EvmProviderRegistry {
   }
 
   /**
+   * Record (or, with `undefined`, forget) the integration layer's own
+   * attribution for a provider. See `attributions`.
+   */
+  rememberAttribution(
+    provider: EIP1193Provider | undefined,
+    info: { name: string; rdns?: string } | undefined
+  ): void {
+    if (!provider) return;
+    if (!info?.name) {
+      this.attributions.delete(provider);
+      return;
+    }
+    this.attributions.set(provider, {
+      name: info.name,
+      ...(info.rdns && { rdns: info.rdns }),
+    });
+  }
+
+  /**
    * A provider's display name and rdns.
    *
-   * EIP-6963 metadata is authoritative when we have it; otherwise fall back to
-   * sniffing the injected provider, which is all a pre-6963 wallet offers.
+   * EIP-6963 metadata is authoritative when we have it. A supplied
+   * attribution (the connector a wagmi app connected through) comes next:
+   * it describes the SESSION, which is what the hook-driven events report.
+   * Otherwise fall back to sniffing the injected provider, which is all a
+   * pre-6963 wallet offers; a supplied name without an rdns keeps the
+   * sniffed rdns.
    */
   infoFor(provider: EIP1193Provider): { name: string; rdns: string } {
     const announced = this.details.find((p) => p.provider === provider);
+    const supplied = announced ? undefined : this.attributions.get(provider);
     const info = announced
       ? { name: announced.info.name, rdns: announced.info.rdns }
       : (() => {
           const injected = detectInjectedProviderInfo(provider);
-          return { name: injected.name, rdns: injected.rdns };
+          return supplied
+            ? { name: supplied.name, rdns: supplied.rdns ?? injected.rdns }
+            : { name: injected.name, rdns: injected.rdns };
         })();
 
     // WalletConnect names the TRANSPORT; the session's peer names the
@@ -150,8 +190,14 @@ export class EvmProviderRegistry {
     // is included because a flagless WalletConnect-compatible provider
     // registered BEFORE its session exists detects as nothing at all;
     // the peer appearing later is itself the proof of what it was, so
-    // the rdns upgrades with it.
-    if (info.name === "WalletConnect" || info.name === "Injected Provider") {
+    // the rdns upgrades with it. A SUPPLIED name is always replaceable:
+    // the hook path names a connector's live peer over the connector, and
+    // the request path must agree with it.
+    if (
+      supplied !== undefined ||
+      info.name === "WalletConnect" ||
+      info.name === "Injected Provider"
+    ) {
       const peer = readWalletConnectPeer(provider);
       if (peer?.name) {
         return {
