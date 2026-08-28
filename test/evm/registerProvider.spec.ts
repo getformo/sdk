@@ -713,11 +713,12 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
-  it("settles a refused session that turns out to be the active wallet's own address", async () => {
+  it("stops probing for a refused session that turns out to be the active wallet's own address", async () => {
     // B's session (refused while opted out) has the same address as the
-    // active wallet A. The replay is ignored by design; it must also be
-    // settled, or every later page hit replays it again and probes A's
-    // accounts over the wallet transport.
+    // active wallet A. The replay is ignored by design; B loses its
+    // refusal marker (it stays pending, unprivileged), or every later page
+    // hit would replay it again and probe A's accounts over the wallet
+    // transport.
     const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
     const { formo, sent } = await setup();
     expect(formo.registerProvider(a)).to.equal(true);
@@ -953,6 +954,34 @@ describe("registerProvider", () => {
     expect(formo.currentAddress?.toLowerCase(), "B learned").to.equal(ADDR.toLowerCase());
     expect((formo as any).wallet.provider === b, "B is the active provider").to.equal(true);
     formo.cleanup?.();
+  });
+
+  it("does not let a replay in flight resume into a cleaned-up instance", async () => {
+    // Opt-in starts replaying B, which parks on the active wallet's
+    // accounts probe. The app unmounts and calls cleanup() meanwhile. The
+    // continuation must not commit B on the torn-down instance.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const realRequest = a.request;
+    a.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 60))
+        : realRequest(args);
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    sent.length = 0;
+
+    formo.optInTracking();
+    await settle(10);
+    formo.cleanup?.();
+    await settle(150);
+
+    expect((formo as any).wallet.provider === b, "B not installed after cleanup").to.equal(false);
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
   });
 
   it("does not re-adopt already adopted providers on every page hit", async () => {

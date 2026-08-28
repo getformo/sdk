@@ -250,6 +250,12 @@ export class EvmEventTracker {
 
   /** Stop listening for wallet announcements. Called from SDK teardown. */
   cleanup(): void {
+    // A replay in flight (awaiting the active wallet's accounts) must not
+    // resume into a torn-down instance and commit a session there.
+    this.disposed = true;
+    this.pendingAdoptions.clear();
+    this.refusedSignals.clear();
+    this.retryRequested = false;
     try {
       this.unsubscribeDiscovery?.();
     } catch (e) {
@@ -257,6 +263,9 @@ export class EvmEventTracker {
     }
     this.unsubscribeDiscovery = undefined;
   }
+
+  /** Set by `cleanup()`; every awaited continuation checks it. */
+  private disposed = false;
 
   /** Drop a provider's reported connect. Called when it stops being active. */
   forgetAnnouncedConnect(provider: EIP1193Provider): void {
@@ -484,7 +493,11 @@ export class EvmEventTracker {
       }
     });
 
-    if (this.pendingAdoptions.size === 0 || this.deps.isTrackingSuppressed()) {
+    if (
+      this.disposed ||
+      this.pendingAdoptions.size === 0 ||
+      this.deps.isTrackingSuppressed()
+    ) {
       // Nothing to finish, or still suppressed: adopting now would be
       // refused again, and the entry must survive for the next chance.
       return;
@@ -508,7 +521,7 @@ export class EvmEventTracker {
         do {
           this.retryRequested = false;
           for (const provider of Array.from(this.pendingAdoptions)) {
-            if (this.deps.isTrackingSuppressed()) break;
+            if (this.disposed || this.deps.isTrackingSuppressed()) break;
             const accounts = readProviderAccounts(provider);
             if (accounts.length === 0) {
               // No session yet: stays pending, at no cost.
@@ -530,7 +543,11 @@ export class EvmEventTracker {
               /* stays pending */
             }
           }
-        } while (this.retryRequested && !this.deps.isTrackingSuppressed());
+        } while (
+          this.retryRequested &&
+          !this.disposed &&
+          !this.deps.isTrackingSuppressed()
+        );
       } finally {
         this.retryInFlight = false;
         this.retryRequested = false;
@@ -672,6 +689,7 @@ export class EvmEventTracker {
       // Check if current active provider still has accounts
       try {
         const activeProviderAccounts = await this.registry.accountsOf(this.wallet.provider);
+        if (this.disposed) return;
 
         // The probe is asynchronous too, so check before issuing anything.
         // Every branch below reads the CURRENT evm state, so a switch that
@@ -1150,6 +1168,7 @@ export class EvmEventTracker {
       // Record it for this provider before anything can bail out below.
       this.registry.rememberChain(provider, chainId);
       const address = await this.registry.addressOf(provider);
+      if (this.disposed) return;
 
       // A newer signal arrived while we were resolving the address. Claiming
       // the namespace now would write this stale view over it, and would make
