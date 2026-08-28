@@ -520,7 +520,17 @@ export class EvmEventTracker {
       try {
         do {
           this.retryRequested = false;
-          for (const provider of Array.from(this.pendingAdoptions)) {
+          // The ACTIVE provider goes first. An opt-out purges the address
+          // but keeps the provider; judged before it is re-learned, every
+          // other pending provider looks like "another wallet with
+          // accounts" and is ignored, then never revisited in this scan.
+          const active = this.wallet.provider;
+          const queue = Array.from(this.pendingAdoptions);
+          const ordered =
+            active && this.pendingAdoptions.has(active)
+              ? [active, ...queue.filter((p) => p !== active)]
+              : queue;
+          for (const provider of ordered) {
             if (this.disposed || this.deps.isTrackingSuppressed()) break;
             const accounts = readProviderAccounts(provider);
             if (accounts.length === 0) {

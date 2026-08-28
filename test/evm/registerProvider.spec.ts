@@ -1012,6 +1012,31 @@ describe("registerProvider", () => {
     expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
   });
 
+  it("re-learns the active wallet first, whatever the registration order", async () => {
+    // B registered before A; A active. Opt-out purges the address but
+    // keeps A as the provider. B signals while opted out (refused). On
+    // opt-in the scan must restore A before judging B, or B is ignored as
+    // "another wallet with accounts" and never revisited.
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup();
+    expect(formo.registerProvider(b)).to.equal(true);
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    formo.optOutTracking();
+    b.accounts = [OTHER];
+    b.emit("accountsChanged", [OTHER]);
+    await settle();
+
+    formo.optInTracking();
+    await settle(120);
+
+    expect(formo.currentAddress?.toLowerCase(), "B adopted at opt-in, no page hit needed").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two
