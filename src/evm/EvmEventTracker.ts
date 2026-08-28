@@ -630,6 +630,8 @@ export class EvmEventTracker {
               chainId: this.wallet.evmChainId,
               address: this.wallet.evmAddress,
             });
+            // Torn down during the emission: nothing below may run.
+            if (this.disposed) return;
             // Provider remains tracked to allow for reconnection scenarios
           } catch (error) {
             logger.error(
@@ -734,6 +736,8 @@ export class EvmEventTracker {
                 chainId: this.wallet.evmChainId,
                 address: this.wallet.evmAddress,
               });
+              // Torn down during the emission: nothing below may run.
+              if (this.disposed) return;
             } else {
               logger.debug("OnAccountsChanged: Disconnect event skipped during provider switch (autocapture.disconnect: false)");
               // Still clear state even if not tracking the event
@@ -792,6 +796,8 @@ export class EvmEventTracker {
               chainId: this.wallet.evmChainId,
               address: this.wallet.evmAddress,
             });
+            // Torn down during the emission: nothing below may run.
+            if (this.disposed) return;
           } else {
             logger.debug("OnAccountsChanged: Disconnect event skipped for old provider (autocapture.disconnect: false)");
             // Still clear state even if not tracking the event
@@ -826,6 +832,8 @@ export class EvmEventTracker {
             chainId: this.wallet.evmChainId,
             address: this.wallet.evmAddress,
           });
+          // Torn down during the emission: nothing below may run.
+          if (this.disposed) return;
         } else {
           logger.debug("OnAccountsChanged: Disconnect event skipped for failed provider check (autocapture.disconnect: false)");
           // Still clear state even if not tracking the event
@@ -1126,6 +1134,8 @@ export class EvmEventTracker {
             chainId: this.wallet.evmChainId,
             address: this.wallet.evmAddress,
           });
+          // Torn down during the emission: nothing below may run.
+          if (this.disposed) return;
           // Provider remains tracked to allow for reconnection scenarios
         } catch (e) {
           logger.error("Error during disconnect in disconnect listener", e);

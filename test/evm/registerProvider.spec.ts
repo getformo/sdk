@@ -984,6 +984,34 @@ describe("registerProvider", () => {
     expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
   });
 
+  it("does not let a replay resume into a cleaned-up instance from the disconnect emission either", async () => {
+    // The replay of B has passed the accounts probe and is awaiting the
+    // emission of A's disconnect when cleanup() runs. The continuation
+    // must not install B afterwards.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    // Slow down the disconnect emission only.
+    (formo as any).eventManager.addEvent.callsFake(async (e: any) => {
+      sent.push(e);
+      if (e.type === "disconnect") await new Promise((r) => setTimeout(r, 60));
+    });
+    sent.length = 0;
+
+    formo.optInTracking();
+    await settle(20);
+    formo.cleanup?.();
+    await settle(150);
+
+    expect((formo as any).wallet.provider === b, "B not installed after cleanup").to.equal(false);
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two
