@@ -2839,9 +2839,10 @@ export class WagmiEventHandler {
    * The CONNECTOR's own name, not the peer-resolved one `getConnectorName`
    * serves: the registry resolves a WalletConnect peer live on every read,
    * so a session that changes wallets behind the same connector renames
-   * without a re-wrap. The rdns is the connector's when wagmi knows it
-   * (EIP-6963 discovered connectors carry theirs); otherwise the registry
-   * keeps the sniffed one.
+   * without a re-wrap. The rdns is the connector's when wagmi knows it as
+   * ONE value (EIP-6963 discovered connectors carry theirs); a connector
+   * that matches several rdns values does not say which one this provider
+   * is, so nothing is passed and the registry keeps the sniffed one.
    */
   private connectorAttribution(
     state: WagmiState
@@ -2855,12 +2856,7 @@ export class WagmiEventHandler {
       return undefined;
     }
     const raw: unknown = connector?.rdns;
-    const rdns =
-      typeof raw === "string"
-        ? raw
-        : Array.isArray(raw) && typeof raw[0] === "string"
-          ? raw[0]
-          : undefined;
+    const rdns = typeof raw === "string" && raw.length > 0 ? raw : undefined;
     return { name, ...(rdns && { rdns }) };
   }
 

@@ -225,6 +225,61 @@ describe("wagmi hybrid capture", () => {
     expect(sig?.properties?.providerName).to.equal("MetaMask");
     expect(sig?.properties?.rdns).to.equal("io.injected.provider");
     b.formo.cleanup?.();
+
+    // A connector matching SEVERAL rdns values does not say which one this
+    // provider is; guessing the first would mislabel the others.
+    const multi = makeProvider();
+    const multiState = makeState(multi, 1);
+    multiState.connections.get("c1").connector.rdns = ["io.metamask", "io.metamask.mobile"];
+    const c = await setup(true, { provider: multi, state: multiState });
+    await multi.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(c.sent.find((e) => e.type === "signature")?.properties?.rdns).to.equal("io.injected.provider");
+    c.formo.cleanup?.();
+  });
+
+  it("holds one wallet name for a request whose connector changes while the prompt is open", async () => {
+    // Two connectors share one provider. A switch while a signature prompt
+    // is open must not split REQUESTED and CONFIRMED between two names.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    let release: (v: unknown) => void = () => undefined;
+    const gate = new Promise((r) => { release = r; });
+    const inner = shared.request;
+    shared.request = async (args: { method: string }) => {
+      if (args.method === "personal_sign") { await gate; return "0xsigned"; }
+      return inner(args);
+    };
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    const pending = shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    release(undefined);
+    await pending;
+    await settle();
+
+    const names = sent.filter((e) => e.type === "signature").map((e) => `${e.status}:${e.properties?.providerName}`);
+    expect(names).to.deep.equal(["requested:MetaMask", "confirmed:MetaMask"]);
+
+    // The NEXT request belongs to the new connector.
+    sent.length = 0;
+    await shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("Rabby");
+    formo.cleanup?.();
   });
 
   it("re-attributes the SAME provider when a different connector takes it over", async () => {
