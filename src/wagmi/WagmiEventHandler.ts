@@ -52,10 +52,11 @@ const RESERVED_FIELDS = new Set([
   // Wallet attribution. Function args are spread AFTER the attribution
   // properties, so an ABI input named `providerName` would silently
   // relabel the wallet on every broadcast and receipt event. `rdns` is
-  // reserved with it even though the mutation path emits only the name:
-  // it is the SDK's wallet-identity key on connect events and on every
-  // request-derived event, so an ABI input by that name would land in the
-  // same warehouse column as real wallet identities.
+  // reserved with it even though THIS path (wagmi mutation attribution)
+  // emits only the name: elsewhere in the SDK - the EIP-1193 request path
+  // and connect events - `rdns` is the wallet-identity key, so an ABI
+  // input by that name would land in the same warehouse column as real
+  // wallet identities.
   "providerName",
   "rdns",
 ]);
