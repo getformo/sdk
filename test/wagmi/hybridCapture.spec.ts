@@ -226,6 +226,16 @@ describe("wagmi hybrid capture", () => {
     expect(sig?.properties?.rdns).to.equal("io.injected.provider");
     b.formo.cleanup?.();
 
+    // A ONE-element list is one value.
+    const single = makeProvider();
+    const singleState = makeState(single, 1);
+    singleState.connections.get("c1").connector.rdns = ["io.metamask"];
+    const d = await setup(true, { provider: single, state: singleState });
+    await single.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(d.sent.find((e) => e.type === "signature")?.properties?.rdns).to.equal("io.metamask");
+    d.formo.cleanup?.();
+
     // A connector matching SEVERAL rdns values does not say which one this
     // provider is; guessing the first would mislabel the others.
     const multi = makeProvider();
@@ -367,11 +377,13 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
-  it("labels a request issued in the same tick as a connector switch with the new connector", async () => {
-    // The re-wrap resolves through getProvider()'s microtask; a request
-    // issued synchronously after the store switch must not carry the old
-    // connector. Attribution is resolved live from the store, as the hook
-    // path's is.
+  it("keeps the previous label for a request in the same tick as a switch, then rebinds the shared provider", async () => {
+    // Attribution is bound to the connector whose getProvider resolved to
+    // the wrapped provider. A shared provider is re-bound when the NEW
+    // connector's resolution lands (one microtask); a request inside that
+    // gap keeps the previous label. The alternative, reading the current
+    // connector live, mislabels a request over a previous connector's
+    // provider, which real apps do issue through retained wallet clients.
     const subscriptions: Subscription[] = [];
     const shared = makeProvider();
     const state = makeState(shared, 1);
@@ -393,7 +405,12 @@ describe("wagmi hybrid capture", () => {
     await settle();
 
     const names = sent.filter((e) => e.type === "signature").map((e) => e.properties?.providerName);
-    expect(names).to.deep.equal(["Rabby", "Rabby"]);
+    expect(names, "same tick: previous label, consistently").to.deep.equal(["MetaMask", "MetaMask"]);
+
+    sent.length = 0;
+    await shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName, "rebound").to.equal("Rabby");
     formo.cleanup?.();
   });
 
@@ -648,6 +665,10 @@ describe("wagmi hybrid capture", () => {
     // Two from provider B on ITS chain, then two from provider A still on
     // the chain it was wrapped with - B's report must not bleed onto A.
     expect(chains).to.deep.equal([10, 10, 137, 137]);
+    // Same for the wallet name: a request over provider A belongs to the
+    // connector that handed A out, not to the connector now current.
+    const names = sent.filter((e) => e.type === "signature").map((e) => e.properties?.providerName);
+    expect(names).to.deep.equal(["Rabby", "Rabby", "MetaMask", "MetaMask"]);
     formo.cleanup?.();
   });
 
