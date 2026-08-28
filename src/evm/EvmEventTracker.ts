@@ -127,10 +127,25 @@ export class EvmEventTracker {
    * Announcement-driven cleanup must not touch them: they are never in an
    * announcement list, so "missing from the announcement" is their normal
    * state, not evidence of removal. A Set rather than a WeakSet because
-   * suppressed adoptions retry from it; the registry holds these providers
-   * strongly anyway, and untrack removes them.
+   * the corrected-detect pass iterates it; the registry holds these
+   * providers strongly anyway, and untrack removes them.
    */
   private externallyRegistered = new Set<EIP1193Provider>();
+
+  /**
+   * Registered providers whose session adoption was REFUSED because
+   * tracking was suppressed at registration (opt-out, excluded route).
+   *
+   * Only these are retried. Re-running adoption for every registered
+   * provider looked idempotent but was not: adoption is the same path a
+   * live `accountsChanged` takes, and that path treats a provider with a
+   * different address from the active one as a wallet switch. With two
+   * registered providers, or one registered next to a discovered wallet,
+   * every page hit emitted a disconnect and a connect that no user action
+   * caused. An entry leaves this set the first time its accounts are
+   * adopted unsuppressed, or when the provider is untracked.
+   */
+  private pendingAdoptions = new Set<EIP1193Provider>();
 
   /**
    * The connect this SDK has already reported for a provider.
@@ -349,20 +364,30 @@ export class EvmEventTracker {
 
     const accounts = readProviderAccounts(provider);
     if (accounts.length > 0) {
+      if (this.deps.isTrackingSuppressed()) {
+        // The adoption below is refused while suppressed, and a session
+        // that already exists may never emit another accountsChanged.
+        // Remember it so the retry can finish the job once suppression ends.
+        this.pendingAdoptions.add(provider);
+      }
       void this.onAccountsChanged(provider, accounts);
     }
     return true;
   }
 
   /**
-   * Re-run session adoption for every registered external provider.
+   * Finish what registration could not.
    *
    * Registration while tracking was suppressed (opt-out, excluded route)
    * reached the adoption path and was refused - and a provider whose
    * session already exists may never emit another accountsChanged, so
    * nothing would ever retry. Called when suppression can have ended
-   * (opt-in, page navigation). Idempotent: an already-adopted wallet is
-   * deduplicated by the same state and markers as any repeated signal.
+   * (opt-in, page navigation).
+   *
+   * Adoption is retried ONLY for providers whose adoption was refused
+   * (`pendingAdoptions`), and only once suppression has actually ended.
+   * The corrected-detect pass below runs for every registered provider:
+   * it is deduplicated per session by rdns, so repeating it is free.
    */
   retryExternalAdoptions(): void {
     this.externallyRegistered.forEach((provider) => {
@@ -384,6 +409,15 @@ export class EvmEventTracker {
           },
         ]);
       }
+    });
+
+    if (this.pendingAdoptions.size === 0 || this.deps.isTrackingSuppressed()) {
+      // Nothing to finish, or still suppressed: adopting now would be
+      // refused again, and the entry must survive for the next chance.
+      return;
+    }
+    this.pendingAdoptions.forEach((provider) => {
+      this.pendingAdoptions.delete(provider);
       const accounts = readProviderAccounts(provider);
       if (accounts.length > 0) {
         void this.onAccountsChanged(provider, accounts);
@@ -669,6 +703,9 @@ export class EvmEventTracker {
       this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
     } else {
       this.wallet.set('evm', { address, chainId: nextChainId });
+      // Adopted unsuppressed, whichever path got here first: a retry for
+      // this provider would now be a repeat, not a completion.
+      this.pendingAdoptions.delete(provider);
     }
 
     // Conditionally emit connect event based on tracking configuration
@@ -1244,6 +1281,8 @@ export class EvmEventTracker {
   }
 
   untrackProvider(provider: EIP1193Provider): void {
+    // An untracked provider has nothing left to finish.
+    this.pendingAdoptions.delete(provider);
     try {
       this.registry.removeListeners(provider);
 

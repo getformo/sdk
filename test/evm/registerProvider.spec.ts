@@ -19,6 +19,7 @@ import { WRAPPED_REQUEST_OWNER_SYMBOL } from "../../src/types";
  */
 describe("registerProvider", () => {
   const ADDR = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
+  const OTHER = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
   const PEER = "Ledger Live";
 
   let sandbox: sinon.SinonSandbox;
@@ -469,6 +470,76 @@ describe("registerProvider", () => {
       sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()),
       "adoption retried after opt-in"
     ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("keeps a suppressed adoption pending across page hits until suppression ends", async () => {
+    // A page hit while still opted out must neither adopt (it would be
+    // refused again) nor forget the provider (nothing else would retry).
+    const { formo, sent } = await setup();
+    formo.optOutTracking();
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    formo.registerProvider(provider);
+    await settle();
+
+    await formo.page();
+    await settle(60);
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle(60);
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()).length,
+      "adopted exactly once, after opt-in"
+    ).to.equal(1);
+    formo.cleanup?.();
+  });
+
+  it("retries an adoption refused on an excluded path once the visitor navigates away", async () => {
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/"] } });
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()),
+      "adoption retried on the first trackable page hit"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("does not re-adopt already adopted providers on every page hit", async () => {
+    // Adoption is the accountsChanged path, and that path treats a provider
+    // with a different address from the active one as a wallet switch. Two
+    // registered providers therefore produced a disconnect and a connect
+    // on EVERY page hit, with no user action behind either.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    // Real switches: A reported, B replaces it, the user goes back to A.
+    a.emit("accountsChanged", [ADDR]);
+    await settle();
+    expect(sent.filter((e) => e.type === "connect").length, "A, B, A").to.equal(3);
+    sent.length = 0;
+
+    await formo.page();
+    await settle(60);
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.filter((e) => e.type === "connect" || e.type === "disconnect"),
+      "no lifecycle events from a page hit"
+    ).to.deep.equal([]);
     formo.cleanup?.();
   });
 
