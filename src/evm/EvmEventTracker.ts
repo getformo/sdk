@@ -153,7 +153,10 @@ export class EvmEventTracker {
    * provider's SYNCHRONOUS accounts only - no RPC - so a registered
    * provider whose session never fires `accountsChanged` (a wallet that
    * signals `connect` alone while `autocapture.connect` is off, which
-   * installs a chain-only observer) is still adopted on the next hit.
+   * installs a chain-only observer) is still adopted on the next hit. "No
+   * RPC" holds for the pending provider itself; the handler's switch
+   * arbitration may still ask the ACTIVE provider for its accounts, as it
+   * does for any live signal.
    *
    * Replay goes through the accounts handler, which has live wallet-switch
    * semantics: a different provider with a different address is a switch.
@@ -195,6 +198,18 @@ export class EvmEventTracker {
   private settleAdoption(provider: EIP1193Provider): void {
     this.pendingAdoptions.delete(provider);
     this.refusedSignals.delete(provider);
+  }
+
+  /**
+   * A registered provider's session has ended. Its NEXT session is not
+   * yet learned, and may announce itself in a way no handler adopts (a
+   * `connect` alone while `autocapture.connect` is off installs a
+   * chain-only observer), so it is pending again for the page-hit retry.
+   */
+  private reopenAdoption(provider: EIP1193Provider): void {
+    if (this.externallyRegistered.has(provider)) {
+      this.pendingAdoptions.add(provider);
+    }
   }
 
   /**
@@ -552,6 +567,7 @@ export class EvmEventTracker {
     observation: Observation
   ): Promise<void> {
     if (accounts.length === 0) {
+      this.reopenAdoption(provider);
       // Handle wallet disconnect for active provider only
       if (this.wallet.provider === provider) {
         logger.info("OnAccountsChanged: Detecting disconnect, current state:", {
@@ -1019,6 +1035,7 @@ export class EvmEventTracker {
   private registerDisconnectListener(provider: EIP1193Provider): void {
     logger.info("registerDisconnectListener");
     const listener = async (_error?: unknown) => {
+      this.reopenAdoption(provider);
       if (this.wallet.provider !== provider) return;
       // As in the accountsChanged disconnect path: the reported connect ends
       // with the connection.

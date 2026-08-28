@@ -745,6 +745,35 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("re-adopts a registered wallet that disconnects and reconnects with connect alone", async () => {
+    // Adopted once, settled. Its session ends, then a new one announces
+    // itself with `connect` only while connect autocapture is off, which
+    // no handler adopts. The session end must reopen the pending entry.
+    const { formo } = await setup({
+      tracking: true,
+      autocapture: { connect: false, signature: true },
+    });
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    provider.accounts = [];
+    provider.emit("accountsChanged", []);
+    await settle();
+    expect(formo.currentAddress, "session ended").to.equal(undefined);
+
+    provider.accounts = [OTHER];
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress, "connect alone adopts nothing").to.equal(undefined);
+
+    await formo.page();
+    await settle(60);
+    expect(formo.currentAddress?.toLowerCase(), "re-adopted on the page hit").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two
