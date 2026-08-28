@@ -19,14 +19,15 @@ import {
   BatchStatusResult,
 } from "../evm/batch";
 import {
-  WagmiConfig,
-  WagmiState,
-  QueryClient,
   MutationCacheEvent,
   QueryCacheEvent,
+  QueryClient,
   UnsubscribeFn,
-  WagmiTrackingState,
+  WagmiConfig,
+  WagmiConnector,
   WagmiMutationKey,
+  WagmiState,
+  WagmiTrackingState,
 } from "./types";
 import {
   encodeWriteContractData,
@@ -2843,6 +2844,83 @@ export class WagmiEventHandler {
 
 
   /**
+   * A specific connector's name and rdns, for the fallback-wrapped
+   * provider's request-derived events.
+   *
+   * The NAME is exactly what the hook path emits for that connector
+   * (`getConnectorName`: the live WalletConnect peer for a WalletConnect
+   * connector, the connector's own name otherwise), so a branded connector
+   * keeps its name on both paths and a session that changes wallets
+   * renames on both. The rdns is the connector's when wagmi knows it as
+   * ONE value (EIP-6963 discovered connectors carry theirs, some as a
+   * one-element list); a connector that matches several rdns values does
+   * not say which one this provider is, so nothing is passed and the
+   * registry keeps the sniffed one.
+   */
+  private attributionForConnector(
+    connector: WagmiConnector,
+    state: WagmiState
+  ): { name: string; rdns?: string } | undefined {
+    const name = this.nameForConnector(connector, state);
+    if (!name) {
+      return undefined;
+    }
+    const raw: unknown = connector.rdns;
+    const rdns =
+      typeof raw === "string" && raw.length > 0
+        ? raw
+        : Array.isArray(raw) && raw.length === 1 && typeof raw[0] === "string" && raw[0].length > 0
+          ? raw[0]
+          : undefined;
+    return { name, ...(rdns && { rdns }) };
+  }
+
+  /**
+   * Resolver handed to the registry at wrap time, read at each request
+   * start. BOUND to the connector whose `getProvider` resolved to the
+   * wrapped provider, not to whichever connector is current: an app can
+   * keep a wallet client over a previous connector's provider and issue a
+   * request through it after switching, and that request belongs to the
+   * wallet that handles it. The peer name is still read live. A provider
+   * SHARED by two connectors is re-bound when the new connector's
+   * resolution lands (one microtask for an injected connector); a request
+   * issued inside that gap keeps the previous label.
+   */
+  private boundConnectorAttribution(
+    connector: WagmiConnector
+  ): () => { name: string; rdns?: string } | undefined {
+    return () => {
+      if (this.disposed) return undefined;
+      try {
+        return this.attributionForConnector(connector, this.getState());
+      } catch {
+        return undefined;
+      }
+    };
+  }
+
+  /** `getConnectorName` for a SPECIFIC connector, current or not. */
+  private nameForConnector(
+    connector: WagmiConnector,
+    state: WagmiState
+  ): string | undefined {
+    const cached = walletConnectPeerNames.get(connector as object);
+    if (cached) {
+      return cached;
+    }
+    const current = state.current
+      ? state.connections.get(state.current)?.connector
+      : undefined;
+    if (current === connector) {
+      // Backstop kick, as in getConnectorName; only the current connection
+      // has a session to look up.
+      this.kickWalletConnectPeerLookup(state);
+    }
+    const name: unknown = connector.name;
+    return typeof name === "string" && name.length > 0 ? name : undefined;
+  }
+
+  /**
    * Get the connector name from Wagmi state
    */
   private getConnectorName(state: WagmiState): string | undefined {
@@ -3047,10 +3125,15 @@ export class WagmiEventHandler {
         }
         const chainId = this.getActiveConnectionChainId(live) ?? live.chainId;
         const wrapped = (this.formo as unknown as {
-          _wrapWagmiProvider?: (p: unknown, chainId?: number) => boolean;
+          _wrapWagmiProvider?: (
+            p: unknown,
+            chainId?: number,
+            attribution?: () => { name: string; rdns?: string } | undefined
+          ) => boolean;
         })._wrapWagmiProvider?.(
           provider,
-          typeof chainId === "number" ? chainId : undefined
+          typeof chainId === "number" ? chainId : undefined,
+          this.boundConnectorAttribution(connector as WagmiConnector)
         );
         if (wrapped !== true) {
           // The provider was refused (invalid shape, frozen provider,

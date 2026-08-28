@@ -1710,10 +1710,17 @@ export class FormoAnalytics implements IFormoAnalytics {
    * gap. Lifecycle (connect/chain/disconnect) stays store-driven: only the
    * request wrapper installs here. Double counting is prevented in the
    * wrapper via `shouldSkipRequestCapture`.
+   *
+   * `attribution` resolves, live, the name and rdns of the connector this
+   * provider was wrapped for. Request-derived events are named from the
+   * registry, which for an unannounced provider falls back to flag
+   * sniffing; recording the connector's resolver here keeps them in
+   * agreement with the hook-driven events for that connector.
    */
   public _wrapWagmiProvider(
     provider: EIP1193Provider,
-    chainId?: number
+    chainId?: number,
+    attribution?: () => { name: string; rdns?: string } | undefined
   ): boolean {
     if (this.isCleanedUp || !isValidProvider(provider)) return false;
     try {
@@ -1723,6 +1730,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       if (!this.evmRequests.registerRequestListeners(provider)) {
         return false;
       }
+      this.evm.rememberAttribution(provider, attribution);
       if (chainId !== undefined) {
         this.evm.rememberChain(provider, chainId);
       }

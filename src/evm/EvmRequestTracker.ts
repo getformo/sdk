@@ -375,8 +375,11 @@ export class EvmRequestTracker {
 
         // One synchronous snapshot for the whole lifecycle of this call, taken
         // before the wallet can change anything. No RPC: see
-        // resolveChainIdForProvider.
+        // resolveChainIdForProvider. Attribution likewise: two connectors can
+        // share one provider, and a switch while the prompt is open must not
+        // split one signature between two wallet names.
         const capturedChainId = this.registry.resolveChainId(provider);
+        const attribution = this.attributionFor(provider);
         // Fire-and-forget tracking
         (async () => {
           try {
@@ -389,7 +392,7 @@ export class EvmRequestTracker {
                 capturedChainId,
                 provider
               ),
-            }, this.attributionFor(provider));
+            }, attribution);
           } catch (e) {
             logger.error("Formo: Failed to track signature request", e);
           }
@@ -410,7 +413,7 @@ export class EvmRequestTracker {
                     capturedChainId,
                     provider
                   ),
-                }, this.attributionFor(provider));
+                }, attribution);
               } catch (e) {
                 logger.error(
                   "Formo: Failed to track signature confirmation",
@@ -435,7 +438,7 @@ export class EvmRequestTracker {
                     capturedChainId,
                     provider
                   ),
-                }, this.attributionFor(provider));
+                }, attribution);
               } catch (e) {
                 logger.error("Formo: Failed to track signature rejection", e);
               }
@@ -482,8 +485,10 @@ export class EvmRequestTracker {
 
         // One snapshot for the whole lifecycle of this call. Resolving per
         // status would let a network switch made while the prompt is open
-        // split STARTED and BROADCASTED across different chains.
+        // split STARTED and BROADCASTED across different chains. The same
+        // holds for the wallet name, receipt included.
         const txChainId = this.registry.resolveChainId(provider);
+        const attribution = this.attributionFor(provider);
 
         (async () => {
           try {
@@ -492,7 +497,7 @@ export class EvmRequestTracker {
               provider,
               txChainId
             );
-            await this.deps.transaction({ status: TransactionStatus.STARTED, ...payload }, this.attributionFor(provider));
+            await this.deps.transaction({ status: TransactionStatus.STARTED, ...payload }, attribution);
           } catch (e) {
             logger.error("Formo: Failed to track transaction start", e);
           }
@@ -512,10 +517,10 @@ export class EvmRequestTracker {
                 status: TransactionStatus.BROADCASTED,
                 ...payload,
                 transactionHash,
-              }, this.attributionFor(provider));
+              }, attribution);
 
               // Start async polling for transaction receipt
-              this.pollTransactionReceipt(provider, transactionHash, payload);
+              this.pollTransactionReceipt(provider, transactionHash, payload, attribution);
             } catch (e) {
               logger.error("Formo: Failed to track transaction broadcast", e);
             }
@@ -536,7 +541,7 @@ export class EvmRequestTracker {
                 await this.deps.transaction({
                   status: TransactionStatus.REJECTED,
                   ...payload,
-                }, this.attributionFor(provider));
+                }, attribution);
               } catch (e) {
                 logger.error("Formo: Failed to track transaction rejection", e);
               }
@@ -552,10 +557,15 @@ export class EvmRequestTracker {
   /**
    * Wallet attribution for request-derived events.
    *
-   * Live per read through the registry, so a WalletConnect session names
-   * its actual signer ("MetaMask Wallet", "Ledger Live") - the live-test
-   * rows had provider_name EMPTY on every signature and transaction, which
-   * made per-wallet activity unanswerable in the warehouse.
+   * Resolved through the registry at the START of each request and held
+   * for that request's whole lifecycle, receipt included. Reading it per
+   * status let a connector switch (two connectors sharing one provider) or
+   * a session change made while a prompt was open split one operation
+   * between two wallet names. Still live across requests: a WalletConnect
+   * session names its actual signer ("MetaMask Wallet", "Ledger Live") -
+   * the live-test rows had provider_name EMPTY on every signature and
+   * transaction, which made per-wallet activity unanswerable in the
+   * warehouse.
    */
   private attributionFor(provider: EIP1193Provider): IFormoEventProperties {
     const info = this.registry.infoFor(provider);
@@ -655,6 +665,9 @@ export class EvmRequestTracker {
     provider: EIP1193Provider,
     transactionHash: string,
     payload: any,
+    // Snapshot from the broadcast: a connector or session change during
+    // the poll window must not relabel the receipt.
+    attribution: IFormoEventProperties,
     maxAttempts = 10,
     intervalMs = 3000
   ) {
@@ -676,7 +689,7 @@ export class EvmRequestTracker {
                 status: TransactionStatus.CONFIRMED,
                 ...payload,
                 transactionHash,
-              }, this.attributionFor(provider))
+              }, attribution)
               .catch((e) =>
                 logger.error("Formo: Failed to track transaction confirmation", e)
               );
@@ -687,7 +700,7 @@ export class EvmRequestTracker {
                 status: TransactionStatus.REVERTED,
                 ...payload,
                 transactionHash,
-              }, this.attributionFor(provider))
+              }, attribution)
               .catch((e) =>
                 logger.error("Formo: Failed to track transaction revert", e)
               );
