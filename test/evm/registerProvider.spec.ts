@@ -712,6 +712,39 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("settles a refused session that turns out to be the active wallet's own address", async () => {
+    // B's session (refused while opted out) has the same address as the
+    // active wallet A. The replay is ignored by design; it must also be
+    // settled, or every later page hit replays it again and probes A's
+    // accounts over the wallet transport.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [ADDR], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    const probes = sandbox.spy(a, "request");
+    sent.length = 0;
+    await formo.page();
+    await settle(80);
+    await formo.page();
+    await settle(80);
+
+    expect(
+      probes.getCalls().filter((c) => c.args[0]?.method === "eth_accounts").length,
+      "no eth_accounts probe on the active wallet from a page hit"
+    ).to.equal(0);
+    expect(sent.filter((e) => e.type === "connect" || e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

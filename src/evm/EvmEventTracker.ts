@@ -682,6 +682,18 @@ export class EvmEventTracker {
             // Clear state and let the new provider become active
             this.wallet.clearProvider();
           } else {
+            // The same address on another provider is a session this SDK
+            // already knows; nothing is pending for it. (A merely UNKNOWN
+            // stored address - identity purged by an opt-out - is not the
+            // same thing: that provider stays pending for the replay that
+            // runs once the active wallet is known or gone.)
+            if (
+              newProviderAddress &&
+              currentStoredAddress &&
+              newProviderAddress === currentStoredAddress
+            ) {
+              this.settleAdoption(provider);
+            }
             logger.info(
               "OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider",
               {
