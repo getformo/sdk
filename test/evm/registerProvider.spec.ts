@@ -651,6 +651,40 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("keeps a still-connected registered wallet adoptable after the restored active one disconnects", async () => {
+    // Two registered wallets, B active. Opt-out purges identity and marks
+    // both pending; opt-in re-learns B and ignores A (another wallet is
+    // active). A must stay pending: when B later disconnects and A
+    // signals nothing, the next page hit is the only way to learn A.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(OTHER.toLowerCase());
+
+    formo.optOutTracking();
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B restored").to.equal(OTHER.toLowerCase());
+
+    b.accounts = [];
+    b.emit("accountsChanged", []);
+    await settle();
+    expect(formo.currentAddress, "B gone").to.equal(undefined);
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A learned").to.equal(ADDR.toLowerCase());
+    expect(sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase())).to.equal(true);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

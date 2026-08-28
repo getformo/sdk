@@ -447,19 +447,29 @@ export class EvmEventTracker {
       // refused again, and the entry must survive for the next chance.
       return;
     }
-    this.pendingAdoptions.forEach((provider) => {
-      const accounts = readProviderAccounts(provider);
-      if (accounts.length === 0) {
-        // No session yet: stays pending, at no cost.
-        return;
+    // Sequential, and the entry is NOT removed here: only a handler that
+    // commits the session removes it. Fired concurrently, the second call
+    // made the first one's observation stale, and a stale return dropped
+    // a provider whose session was never learned - a live session lost
+    // for the rest of the page load once the active wallet went away.
+    // A provider the handler ignores (another wallet is active) stays
+    // pending and is looked at again on the next hit, from synchronous
+    // state; it is adopted once that wallet is gone.
+    void (async () => {
+      for (const provider of Array.from(this.pendingAdoptions)) {
+        if (this.deps.isTrackingSuppressed()) return;
+        const accounts = readProviderAccounts(provider);
+        if (accounts.length === 0) {
+          // No session yet: stays pending, at no cost.
+          continue;
+        }
+        try {
+          await this.onAccountsChanged(provider, accounts);
+        } catch {
+          /* stays pending */
+        }
       }
-      // Handed to the handler once; a refusal re-adds it, a commit does
-      // not. Leaving it here would retry a provider the handler ignores
-      // (same address as the active one) on every hit, and that check
-      // reads the ACTIVE provider's accounts.
-      this.pendingAdoptions.delete(provider);
-      void this.onAccountsChanged(provider, accounts);
-    });
+    })();
   }
 
   private registerAccountsChangedListener(provider: EIP1193Provider): void {
@@ -719,6 +729,8 @@ export class EvmEventTracker {
 
     // If both the provider and address are the same, no-op
     if (this.wallet.provider === provider && address === this.wallet.evmAddress) {
+      // This session is the one already known; nothing is pending for it.
+      this.pendingAdoptions.delete(provider);
       return;
     }
 
