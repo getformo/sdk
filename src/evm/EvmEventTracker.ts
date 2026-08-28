@@ -154,8 +154,18 @@ export class EvmEventTracker {
    * provider whose session never fires `accountsChanged` (a wallet that
    * signals `connect` alone while `autocapture.connect` is off, which
    * installs a chain-only observer) is still adopted on the next hit.
+   *
+   * Replay goes through the accounts handler, which has live wallet-switch
+   * semantics: a different provider with a different address is a switch.
+   * So a pending provider is replayed only while no OTHER wallet is active
+   * and known - it waits, at no cost, until that wallet is gone - unless
+   * its own signal was refused (`refusedSignals`): then the replay does
+   * exactly what the live signal would have done, switch included.
    */
   private pendingAdoptions = new Set<EIP1193Provider>();
+
+  /** Pending providers whose own live signal was refused while suppressed. */
+  private refusedSignals = new Set<EIP1193Provider>();
 
   /**
    * An opt-out purges wallet identity. Every registered session is then
@@ -177,7 +187,14 @@ export class EvmEventTracker {
       this.externallyRegistered.has(provider)
     ) {
       this.pendingAdoptions.add(provider);
+      this.refusedSignals.add(provider);
     }
+  }
+
+  /** A handler has learned this provider's session; nothing is pending. */
+  private settleAdoption(provider: EIP1193Provider): void {
+    this.pendingAdoptions.delete(provider);
+    this.refusedSignals.delete(provider);
   }
 
   /**
@@ -463,6 +480,16 @@ export class EvmEventTracker {
           // No session yet: stays pending, at no cost.
           continue;
         }
+        const otherWalletActive =
+          this.wallet.provider !== undefined &&
+          this.wallet.provider !== provider &&
+          this.wallet.evmAddress !== undefined;
+        if (otherWalletActive && !this.refusedSignals.has(provider)) {
+          // Never signalled, merely connected: replaying it now would be
+          // reported as a wallet switch nobody made. Waits for that
+          // wallet to go.
+          continue;
+        }
         try {
           await this.onAccountsChanged(provider, accounts);
         } catch {
@@ -730,7 +757,7 @@ export class EvmEventTracker {
     // If both the provider and address are the same, no-op
     if (this.wallet.provider === provider && address === this.wallet.evmAddress) {
       // This session is the one already known; nothing is pending for it.
-      this.pendingAdoptions.delete(provider);
+      this.settleAdoption(provider);
       return;
     }
 
@@ -760,7 +787,7 @@ export class EvmEventTracker {
       this.wallet.set('evm', { address, chainId: nextChainId });
       // Adopted unsuppressed, whichever path got here first: a retry for
       // this provider would now be a repeat, not a completion.
-      this.pendingAdoptions.delete(provider);
+      this.settleAdoption(provider);
     }
 
     // Conditionally emit connect event based on tracking configuration
@@ -1114,7 +1141,7 @@ export class EvmEventTracker {
               chainId,
               address: validateAndChecksumAddress(address) || undefined,
             });
-            this.pendingAdoptions.delete(provider);
+            this.settleAdoption(provider);
           }
         }
 
@@ -1344,7 +1371,7 @@ export class EvmEventTracker {
 
   untrackProvider(provider: EIP1193Provider): void {
     // An untracked provider has nothing left to finish.
-    this.pendingAdoptions.delete(provider);
+    this.settleAdoption(provider);
     try {
       this.registry.removeListeners(provider);
 

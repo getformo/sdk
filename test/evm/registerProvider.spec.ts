@@ -410,7 +410,6 @@ describe("registerProvider", () => {
   it("prefers the active chain's account when the session differs per chain", async () => {
     // WalletConnect permits different accounts per chain; the adopted
     // address must be the one the ACTIVE chain authorized.
-    const OTHER = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
     const provider = makeWcProvider({ peer: PEER });
     provider.accounts = [];
     provider.chainId = "0x1";
@@ -682,6 +681,34 @@ describe("registerProvider", () => {
 
     expect(formo.currentAddress?.toLowerCase(), "A learned").to.equal(ADDR.toLowerCase());
     expect(sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase())).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("leaves a merely connected registered wallet alone while another wallet is active", async () => {
+    // Opt-in re-learns B (active) and leaves A pending, ignored. A never
+    // signalled; replaying it on a later page hit would be reported as a
+    // switch nobody made. It waits until B is gone.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optOutTracking();
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B restored").to.equal(OTHER.toLowerCase());
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+    await formo.page();
+    await settle(80);
+
+    expect(sent.filter((e) => e.type === "connect" || e.type === "disconnect")).to.deep.equal([]);
+    expect(formo.currentAddress?.toLowerCase(), "still B").to.equal(OTHER.toLowerCase());
     formo.cleanup?.();
   });
 
