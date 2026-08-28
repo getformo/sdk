@@ -572,6 +572,60 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("retries a connect-only session that arrived on an excluded path while another wallet was active", async () => {
+    // The connect handler adopts only the ACTIVE provider; a registered
+    // provider connecting behind another wallet never reaches its
+    // suppressed commit. The refusal must be noted on entry instead.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())
+    ).to.deep.equal([]);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "B adopted once the route is allowed"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("retries a second registered wallet whose accounts arrived while opted out", async () => {
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())
+    ).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle(80);
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "B adopted after opt-in"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

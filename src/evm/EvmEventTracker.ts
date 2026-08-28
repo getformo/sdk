@@ -143,14 +143,38 @@ export class EvmEventTracker {
    * registered providers, or one registered next to a discovered wallet,
    * every page hit emitted a disconnect and a connect that no user action
    * caused. An entry is added at the point of refusal itself, inside the
-   * accounts and connect handlers: suppression is checked there after an
+   * accounts and connect handlers, both on entry and again at the
+   * suppressed commit: the handlers gate on the ACTIVE provider and can
+   * return early for another one, and suppression is re-checked after an
    * await, so a visitor who opts out while that await is in flight
    * refuses an adoption that looked allowed when it started. An entry
-   * leaves this
-   * set the first time its accounts are adopted unsuppressed, or when the
-   * provider is untracked.
+   * leaves this set the first time the provider is adopted unsuppressed,
+   * or when it is untracked.
    */
   private pendingAdoptions = new Set<EIP1193Provider>();
+
+  /**
+   * An opt-out purges wallet identity. Every registered session is then
+   * unknown again, exactly as if its adoption had been refused, and the
+   * opt-in retry must re-learn all of them: with the active wallet's
+   * address gone, the accounts handler cannot even tell a second wallet's
+   * accounts apart from the active one's, and would ignore them.
+   */
+  markRegisteredAdoptionsPending(): void {
+    this.externallyRegistered.forEach((provider) =>
+      this.pendingAdoptions.add(provider)
+    );
+  }
+
+  /** Remember a registered provider's signal that suppression refuses. */
+  private noteRefusalIfSuppressed(provider: EIP1193Provider): void {
+    if (
+      this.deps.isTrackingSuppressed() &&
+      this.externallyRegistered.has(provider)
+    ) {
+      this.pendingAdoptions.add(provider);
+    }
+  }
 
   /**
    * The connect this SDK has already reported for a provider.
@@ -530,6 +554,10 @@ export class EvmEventTracker {
       logger.warn("onAccountsChanged: Invalid address received", accounts[0]);
       return;
     }
+    // Before the active-provider gates below: a registered provider that
+    // is not the active one can return early without ever reaching the
+    // suppressed commit, and its session may never signal again.
+    this.noteRefusalIfSuppressed(provider);
 
     // Handle provider switching: if we have an active provider but a different provider
     // is connecting with accounts, check if the current provider is still connected
@@ -703,11 +731,8 @@ export class EvmEventTracker {
     // events.)
     if (this.deps.isTrackingSuppressed()) {
       this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
-      // A registered provider's session may never signal again; remember
-      // the refusal so the retry can adopt it once suppression ends.
-      if (this.externallyRegistered.has(provider)) {
-        this.pendingAdoptions.add(provider);
-      }
+      // Again after the await: suppression may have begun mid-flight.
+      this.noteRefusalIfSuppressed(provider);
     } else {
       this.wallet.set('evm', { address, chainId: nextChainId });
       // Adopted unsuppressed, whichever path got here first: a retry for
@@ -1039,6 +1064,10 @@ export class EvmEventTracker {
       if (chainId && address) {
         // Check if this is a connection event (transition from no address to having an address)
         const wasDisconnected = !this.wallet.evmAddress;
+        // Same refusal as the accounts path, and before the active-provider
+        // gate: a registered provider that connects while another one is
+        // active is not adopted here, and may never signal again.
+        this.noteRefusalIfSuppressed(provider);
 
         // Set provider if none exists
         if (!this.wallet.provider) {
@@ -1055,11 +1084,8 @@ export class EvmEventTracker {
         if (isActiveProvider) {
           if (this.deps.isTrackingSuppressed()) {
             this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
-            // Same refusal as the accounts path: a registered session
-            // that connected while suppressed may never signal again.
-            if (this.externallyRegistered.has(provider)) {
-              this.pendingAdoptions.add(provider);
-            }
+            // Again after the await: suppression may have begun mid-flight.
+            this.noteRefusalIfSuppressed(provider);
           } else {
             this.wallet.set('evm', {
               chainId,

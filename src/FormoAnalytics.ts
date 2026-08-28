@@ -1352,6 +1352,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Drop anything already buffered so a pending timer/pagehide flush
     // cannot ship events after consent withdrawal.
     this.eventManager.clear();
+    // Identity is purged below; registered sessions must be re-learned
+    // on opt-in, and nothing else would retry an already-adopted one.
+    this.evmEvents.markRegisteredAdoptionsPending();
     this.reset();
 
     logger.info("Successfully opted out of tracking");
