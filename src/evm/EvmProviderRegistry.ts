@@ -75,12 +75,13 @@ export class EvmProviderRegistry {
    * whose provider exposes no recognised flag split one wallet's activity
    * between "Injected Provider" and the connector's name.
    *
-   * A RESOLVER, read at each `infoFor`, not a value: two connectors can
-   * share one provider, and a request issued right after a connector
-   * switch - before the asynchronous re-wrap has settled - must already
-   * carry the new connector's name, exactly as a hook-driven event at
-   * that moment would. The integration layer supplies the same function
-   * its hook path names events with, so the two paths cannot disagree.
+   * A RESOLVER, read at each `infoFor`, not a value: the name is live for
+   * the connector the integration layer bound it to (a WalletConnect
+   * session that resolves or changes its peer renames without a re-wrap),
+   * and the integration layer names events on its hook path with the same
+   * function, so the two paths cannot disagree. Which connector a
+   * provider is bound to is the integration layer's decision; it is not
+   * necessarily the connector that is current when the request runs.
    */
   private attributions = new WeakMap<
     EIP1193Provider,
