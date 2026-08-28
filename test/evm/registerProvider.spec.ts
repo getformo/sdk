@@ -1136,6 +1136,28 @@ describe("registerProvider", () => {
     }
   });
 
+  it("ignores signals from a listener that could not be removed at cleanup", async () => {
+    // removeListener throwing keeps the SDK's listeners attached by
+    // design (so a later attempt can retry). Their handlers must not
+    // mutate the torn-down instance when the wallet signals afterwards.
+    const provider = makeWcProvider({ peer: PEER });
+    provider.removeListener = () => { throw new Error("cannot remove"); };
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    formo.cleanup?.();
+    sent.length = 0;
+
+    provider.accounts = [ADDR];
+    provider.emit("accountsChanged", [ADDR]);
+    provider.emit("connect", { chainId: "0x1" });
+    provider.emit("chainChanged", "0x89");
+    await settle();
+
+    expect(formo.currentAddress, "no identity learned after cleanup").to.equal(undefined);
+    expect(sent, "nothing emitted after cleanup").to.deep.equal([]);
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

@@ -611,6 +611,10 @@ export class EvmEventTracker {
     provider: EIP1193Provider,
     accounts: string[]
   ): Promise<void> {
+    // A listener that could not be removed at cleanup (its provider's
+    // removeListener threw) still fires; it must not touch a torn-down
+    // instance.
+    if (this.disposed) return;
     logger.info("onAccountsChanged", accounts);
 
     // Only a signal that can actually CLAIM the namespace takes a ticket.
@@ -1006,6 +1010,10 @@ export class EvmEventTracker {
     provider: EIP1193Provider,
     chainIdHex: string
   ): Promise<void> {
+    // A listener that could not be removed at cleanup (its provider's
+    // removeListener threw) still fires; it must not touch a torn-down
+    // instance.
+    if (this.disposed) return;
     logger.info("onChainChanged", chainIdHex);
 
     const nextChainId = parseChainId(chainIdHex);
@@ -1161,6 +1169,7 @@ export class EvmEventTracker {
   private registerDisconnectListener(provider: EIP1193Provider): void {
     logger.info("registerDisconnectListener");
     const listener = async (_error?: unknown) => {
+      if (this.disposed) return;
       this.reopenAdoption(provider);
       if (this.wallet.provider !== provider) return;
       // As in the accountsChanged disconnect path: the reported connect ends
@@ -1206,6 +1215,10 @@ export class EvmEventTracker {
     provider: EIP1193Provider,
     connection: ConnectInfo
   ): Promise<void> {
+    // A listener that could not be removed at cleanup (its provider's
+    // removeListener threw) still fires; it must not touch a torn-down
+    // instance.
+    if (this.disposed) return;
     logger.info("onConnected", connection);
 
     // Taken before any await. A connect handler asks a narrower question
