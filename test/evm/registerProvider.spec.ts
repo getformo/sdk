@@ -1207,6 +1207,95 @@ describe("registerProvider", () => {
     expect((formo as any).evm.chainIdOf(provider), "no chain recorded after cleanup").to.equal(1);
   });
 
+  it("keeps a connect refusal whose account lookup outlives the suppression", async () => {
+    // B connects on an excluded path; its account lookup is slow; the
+    // visitor navigates to an allowed route before it resolves. The
+    // refusal must have been noted BEFORE the lookup, or B looks like an
+    // unsuppressed non-active connect and stays behind A forever.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const realRequest = b.request;
+    b.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 80))
+        : realRequest(args);
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle(10);
+    (global as any).window.history.pushState({}, "", "/app");
+    await settle(150);
+
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B adopted").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not replay stale accounts a provider keeps after its disconnect", async () => {
+    // Some providers keep synchronous `accounts` after emitting
+    // `disconnect`. The ended session must not be re-installed from that
+    // stale state on the next page hit; a new session signal lifts it.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    provider.emit("disconnect", { code: 4900 });
+    await settle();
+    expect(formo.currentAddress, "session over").to.equal(undefined);
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress, "stale accounts not replayed").to.equal(undefined);
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress?.toLowerCase(), "new session adopted").to.equal(ADDR.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let an accountless connect displace an adoptable refusal", async () => {
+    // Connect autocapture off (chain-only observer). B's accounts were
+    // refused on an excluded path; C then emits `connect` with no accounts
+    // yet. C must not take the replay privilege from B.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup({
+      tracking: { excludePaths: ["/admin"] },
+      autocapture: { connect: false, signature: true },
+    });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const c = makeWcProvider({ peer: "Zerion" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    expect(formo.registerProvider(c)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    c.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress?.toLowerCase(), "A still active while excluded").to.equal(ADDR.toLowerCase());
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B adopted").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

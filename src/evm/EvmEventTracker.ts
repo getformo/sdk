@@ -195,20 +195,42 @@ export class EvmEventTracker {
     );
   }
 
-  /** Remember a registered provider's signal that suppression refuses. */
+  /**
+   * Remember a registered provider's signal that suppression refuses.
+   *
+   * Replay privilege (`latestRefused`) goes only to a provider whose
+   * session the replay can actually read - synchronous accounts - so an
+   * accountless `connect` (a chain-only observation, or a session still
+   * pairing) cannot displace an earlier refusal that is adoptable.
+   */
   private noteRefusalIfSuppressed(provider: EIP1193Provider): void {
     if (
       this.deps.isTrackingSuppressed() &&
       this.externallyRegistered.has(provider)
     ) {
       this.pendingAdoptions.add(provider);
-      this.latestRefused = provider;
+      let adoptable = false;
+      try {
+        adoptable = readProviderAccounts(provider).length > 0;
+      } catch {
+        /* unreadable state: pending, not privileged */
+      }
+      if (adoptable) this.latestRefused = provider;
     }
   }
+
+  /**
+   * Registered providers whose session ended and have not signalled a
+   * new one. Some providers keep stale synchronous `accounts` after a
+   * disconnect; replaying those would re-install a session that is over.
+   * Any later session signal (connect, accountsChanged) lifts this.
+   */
+  private awaitingNewSession = new Set<EIP1193Provider>();
 
   /** A handler has learned this provider's session; nothing is pending. */
   private settleAdoption(provider: EIP1193Provider): void {
     this.pendingAdoptions.delete(provider);
+    this.awaitingNewSession.delete(provider);
     this.dropRefusal(provider);
   }
 
@@ -221,6 +243,7 @@ export class EvmEventTracker {
   private reopenAdoption(provider: EIP1193Provider): void {
     if (this.externallyRegistered.has(provider)) {
       this.pendingAdoptions.add(provider);
+      this.awaitingNewSession.add(provider);
       // A lookup still in flight for the session that just ended must not
       // record a refusal for it when it resolves.
       this.sessionGenerations.set(
@@ -270,6 +293,7 @@ export class EvmEventTracker {
     // resume into a torn-down instance and commit a session there.
     this.disposed = true;
     this.pendingAdoptions.clear();
+    this.awaitingNewSession.clear();
     this.latestRefused = undefined;
     this.retryRequested = false;
     try {
@@ -566,8 +590,9 @@ export class EvmEventTracker {
               // nor surface as an unhandled rejection from this task.
               continue;
             }
-            if (accounts.length === 0) {
-              // No session yet: stays pending, at no cost.
+            if (accounts.length === 0 || this.awaitingNewSession.has(provider)) {
+              // No session yet, or none since the last one ended: stays
+              // pending, at no cost.
               continue;
             }
             const otherWalletActive =
@@ -710,6 +735,7 @@ export class EvmEventTracker {
     // Before the active-provider gates below: a registered provider that
     // is not the active one can return early without ever reaching the
     // suppressed commit, and its session may never signal again.
+    this.awaitingNewSession.delete(provider);
     this.noteRefusalIfSuppressed(provider);
     const session = this.sessionGeneration(provider);
 
@@ -1109,6 +1135,7 @@ export class EvmEventTracker {
       if (this.disposed) return;
       if (typeof connection?.chainId !== "string") return;
       this.registry.rememberChain(provider, parseChainId(connection.chainId));
+      this.awaitingNewSession.delete(provider);
       // This observer adopts nothing, but a registered provider's connect
       // refused by suppression is still a refused signal: once suppression
       // ends, its replay may switch, as the full handler's would.
@@ -1221,6 +1248,10 @@ export class EvmEventTracker {
     // instance.
     if (this.disposed) return;
     logger.info("onConnected", connection);
+    // A session signal, and BEFORE the account lookup below: suppression
+    // that ends while the lookup is in flight must not lose the refusal.
+    this.awaitingNewSession.delete(provider);
+    this.noteRefusalIfSuppressed(provider);
 
     // Taken before any await. A connect handler asks a narrower question
     // than a switch does: not "am I still the newest signal?" but "did the
