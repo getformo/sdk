@@ -926,6 +926,35 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("keeps a same-address registered wallet adoptable after the active one disconnects", async () => {
+    // B's session (refused while opted out) has the active wallet's own
+    // address. It is ignored on replay and not probed again, but it is
+    // still a live session: when A disconnects and B signals nothing, the
+    // next page hit must learn B.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [ADDR], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    a.accounts = [];
+    a.emit("accountsChanged", []);
+    await settle();
+    expect(formo.currentAddress, "A gone").to.equal(undefined);
+
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B learned").to.equal(ADDR.toLowerCase());
+    expect((formo as any).wallet.provider === b, "B is the active provider").to.equal(true);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

@@ -723,31 +723,28 @@ export class EvmEventTracker {
             }
 
             if (!this.wallet.isCurrent(observation)) {
-
               // Superseded: this signal's refusal, if noted, no longer describes
-
               // a session the replay may switch to.
-
               this.refusedSignals.delete(provider);
-
               return;
-
             }
 
             // Clear state and let the new provider become active
             this.wallet.clearProvider();
           } else {
-            // The same address on another provider is a session this SDK
-            // already knows; nothing is pending for it. (A merely UNKNOWN
-            // stored address - identity purged by an opt-out - is not the
-            // same thing: that provider stays pending for the replay that
-            // runs once the active wallet is known or gone.)
+            // The same address on another provider: the address is known,
+            // but THIS provider's session is not adopted. It stays pending
+            // without its refusal marker, so it is not probed again while
+            // the active wallet stands, and is adopted once that wallet is
+            // gone. (A merely UNKNOWN stored address - identity purged by an
+            // opt-out - keeps the marker: that replay runs once the active
+            // wallet is known or gone.)
             if (
               newProviderAddress &&
               currentStoredAddress &&
               newProviderAddress === currentStoredAddress
             ) {
-              this.settleAdoption(provider);
+              this.refusedSignals.delete(provider);
             }
             logger.info(
               "OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider",
@@ -784,15 +781,10 @@ export class EvmEventTracker {
           }
 
           if (!this.wallet.isCurrent(observation)) {
-
             // Superseded: this signal's refusal, if noted, no longer describes
-
             // a session the replay may switch to.
-
             this.refusedSignals.delete(provider);
-
             return;
-
           }
         }
       } catch (error) {
@@ -823,15 +815,10 @@ export class EvmEventTracker {
         }
 
         if (!this.wallet.isCurrent(observation)) {
-
           // Superseded: this signal's refusal, if noted, no longer describes
-
           // a session the replay may switch to.
-
           this.refusedSignals.delete(provider);
-
           return;
-
         }
       }
     }
