@@ -209,8 +209,16 @@ export class EvmEventTracker {
   private reopenAdoption(provider: EIP1193Provider): void {
     if (this.externallyRegistered.has(provider)) {
       this.pendingAdoptions.add(provider);
+      // The refusal marker described the session that just ended. Left
+      // standing, a later connect-only session would inherit it and be
+      // replayed as a switch away from another active wallet.
+      this.refusedSignals.delete(provider);
     }
   }
+
+  /** One retry scan at a time; a call during a scan queues one more. */
+  private retryInFlight = false;
+  private retryRequested = false;
 
   /**
    * The connect this SDK has already reported for a provider.
@@ -479,37 +487,51 @@ export class EvmEventTracker {
       // refused again, and the entry must survive for the next chance.
       return;
     }
-    // Sequential, and the entry is NOT removed here: only a handler that
-    // commits the session removes it. Fired concurrently, the second call
-    // made the first one's observation stale, and a stale return dropped
-    // a provider whose session was never learned - a live session lost
-    // for the rest of the page load once the active wallet went away.
-    // A provider the handler ignores (another wallet is active) stays
-    // pending and is looked at again on the next hit, from synchronous
-    // state; it is adopted once that wallet is gone.
+    // ONE scan at a time, providers awaited in turn, and the entry is NOT
+    // removed here: only a handler that commits the session removes it.
+    // Fired concurrently - two overlapping scans from repeated page hits,
+    // or two providers within one - the later call made the earlier
+    // one's observation stale; a stale return dropped a provider whose
+    // session was never learned, and a second scan replayed a provider
+    // the first was still switching to, emitting the old wallet's
+    // disconnect twice. A call that lands during a scan queues exactly
+    // one more scan, so nothing that changed meanwhile is missed.
+    if (this.retryInFlight) {
+      this.retryRequested = true;
+      return;
+    }
+    this.retryInFlight = true;
     void (async () => {
-      for (const provider of Array.from(this.pendingAdoptions)) {
-        if (this.deps.isTrackingSuppressed()) return;
-        const accounts = readProviderAccounts(provider);
-        if (accounts.length === 0) {
-          // No session yet: stays pending, at no cost.
-          continue;
-        }
-        const otherWalletActive =
-          this.wallet.provider !== undefined &&
-          this.wallet.provider !== provider &&
-          this.wallet.evmAddress !== undefined;
-        if (otherWalletActive && !this.refusedSignals.has(provider)) {
-          // Never signalled, merely connected: replaying it now would be
-          // reported as a wallet switch nobody made. Waits for that
-          // wallet to go.
-          continue;
-        }
-        try {
-          await this.onAccountsChanged(provider, accounts);
-        } catch {
-          /* stays pending */
-        }
+      try {
+        do {
+          this.retryRequested = false;
+          for (const provider of Array.from(this.pendingAdoptions)) {
+            if (this.deps.isTrackingSuppressed()) break;
+            const accounts = readProviderAccounts(provider);
+            if (accounts.length === 0) {
+              // No session yet: stays pending, at no cost.
+              continue;
+            }
+            const otherWalletActive =
+              this.wallet.provider !== undefined &&
+              this.wallet.provider !== provider &&
+              this.wallet.evmAddress !== undefined;
+            if (otherWalletActive && !this.refusedSignals.has(provider)) {
+              // Never signalled, merely connected: replaying it now would
+              // be reported as a wallet switch nobody made. Waits for
+              // that wallet to go.
+              continue;
+            }
+            try {
+              await this.onAccountsChanged(provider, accounts);
+            } catch {
+              /* stays pending */
+            }
+          }
+        } while (this.retryRequested && !this.deps.isTrackingSuppressed());
+      } finally {
+        this.retryInFlight = false;
+        this.retryRequested = false;
       }
     })();
   }

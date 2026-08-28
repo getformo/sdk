@@ -774,6 +774,85 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("does not let a refused session's marker survive its own end", async () => {
+    // B's session was refused while opted out, then ended. A later session
+    // of B that announces itself unsuppressed but unadopted, behind active
+    // wallet A, must NOT inherit the refusal and be replayed as a switch
+    // away from A on the next page hit.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    b.accounts = [];
+    b.emit("accountsChanged", []);
+    await settle();
+
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "A restored").to.equal(ADDR.toLowerCase());
+    // The new session announces itself UNSUPPRESSED but unadopted: the
+    // connect handler does not switch to a non-active provider.
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A stays active").to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("coalesces overlapping retries so a pending provider is replayed once", async () => {
+    // Page hits can land while a retry scan is still awaiting the active
+    // wallet's accounts. Overlapping scans replayed the same provider
+    // concurrently, each probing the active wallet's accounts; a call
+    // during a scan now queues one more scan instead.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const realRequest = a.request;
+    a.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 40))
+        : realRequest(args);
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    sent.length = 0;
+    const replays = sandbox.spy((formo as any).evmEvents, "onAccountsChanged");
+
+    formo.optInTracking();
+    await settle(5);
+    void formo.page();
+    void formo.page();
+    await settle(200);
+
+    expect(
+      replays.getCalls().filter((c) => c.args[0] === b).length,
+      "B replayed through the handler once"
+    ).to.equal(1);
+    expect(
+      sent.filter((e) => e.type === "disconnect" && e.address?.toLowerCase() === ADDR.toLowerCase()).length,
+      "A disconnected once"
+    ).to.equal(1);
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()).length,
+      "B connected once"
+    ).to.equal(1);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two
