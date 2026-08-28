@@ -1066,6 +1066,76 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("does not record a refusal from a lookup that resolves after the session ended", async () => {
+    // B (not active) connects on an excluded path; its account lookup is
+    // slow; B disconnects before it resolves. The former account arriving
+    // afterwards must not privilege B: the next trackable page hit must
+    // not switch away from A.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const realRequest = b.request;
+    b.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 60))
+        : realRequest(args);
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle(10);
+    b.emit("disconnect", { code: 4900 });
+    await settle(120);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    sent.length = 0;
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A stays").to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("keeps scanning past a registered wallet whose state getters throw", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+      const { formo } = await setup();
+      expect(formo.registerProvider(a)).to.equal(true);
+      await settle();
+
+      formo.optOutTracking();
+      const broken = makeWcProvider({ peer: "Broken" });
+      expect(formo.registerProvider(broken)).to.equal(true);
+      // Its transport goes away: reading state now throws.
+      Object.defineProperty(broken, "accounts", {
+        get() { throw new Error("transport disposed"); },
+        configurable: true,
+      });
+      const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+      expect(formo.registerProvider(b)).to.equal(true);
+      await settle();
+
+      formo.optInTracking();
+      await settle(120);
+      await formo.page();
+      await settle(80);
+
+      expect(formo.currentAddress?.toLowerCase(), "the healthy wallet is still adopted").to.equal(OTHER.toLowerCase());
+      expect(rejections, "no unhandled rejection").to.deep.equal([]);
+      formo.cleanup?.();
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

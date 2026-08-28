@@ -221,6 +221,12 @@ export class EvmEventTracker {
   private reopenAdoption(provider: EIP1193Provider): void {
     if (this.externallyRegistered.has(provider)) {
       this.pendingAdoptions.add(provider);
+      // A lookup still in flight for the session that just ended must not
+      // record a refusal for it when it resolves.
+      this.sessionGenerations.set(
+        provider,
+        (this.sessionGenerations.get(provider) ?? 0) + 1
+      );
       // The refusal marker described the session that just ended. Left
       // standing, a later connect-only session would inherit it and be
       // replayed as a switch away from another active wallet.
@@ -276,6 +282,13 @@ export class EvmEventTracker {
 
   /** Set by `cleanup()`; every awaited continuation checks it. */
   private disposed = false;
+
+  /** Bumped when a registered provider's session ends. See reopenAdoption. */
+  private sessionGenerations = new WeakMap<EIP1193Provider, number>();
+
+  private sessionGeneration(provider: EIP1193Provider): number {
+    return this.sessionGenerations.get(provider) ?? 0;
+  }
 
   /** Drop a provider's reported connect. Called when it stops being active. */
   forgetAnnouncedConnect(provider: EIP1193Provider): void {
@@ -544,7 +557,15 @@ export class EvmEventTracker {
           );
           for (const provider of ordered) {
             if (this.disposed || this.deps.isTrackingSuppressed()) break;
-            const accounts = readProviderAccounts(provider);
+            let accounts: string[];
+            try {
+              accounts = readProviderAccounts(provider);
+            } catch {
+              // A wallet whose state getters throw (transport disposed)
+              // stays pending; it must not abort the scan for the others,
+              // nor surface as an unhandled rejection from this task.
+              continue;
+            }
             if (accounts.length === 0) {
               // No session yet: stays pending, at no cost.
               continue;
@@ -687,6 +708,7 @@ export class EvmEventTracker {
     // is not the active one can return early without ever reaching the
     // suppressed commit, and its session may never signal again.
     this.noteRefusalIfSuppressed(provider);
+    const session = this.sessionGeneration(provider);
 
     // Handle provider switching: if we have an active provider but a different provider
     // is connecting with accounts, check if the current provider is still connected
@@ -714,6 +736,12 @@ export class EvmEventTracker {
       try {
         const activeProviderAccounts = await this.registry.accountsOf(this.wallet.provider);
         if (this.disposed) return;
+        if (this.sessionGeneration(provider) !== session) {
+          // This provider's session ended during the probe: the signal
+          // describes nothing that still exists, refusal included.
+          this.dropRefusal(provider);
+          return;
+        }
 
         // The probe is asynchronous too, so check before issuing anything.
         // Every branch below reads the CURRENT evm state, so a switch that
@@ -1199,8 +1227,15 @@ export class EvmEventTracker {
       const chainId = parseChainId(connection.chainId);
       // Record it for this provider before anything can bail out below.
       this.registry.rememberChain(provider, chainId);
+      const session = this.sessionGeneration(provider);
       const address = await this.registry.addressOf(provider);
       if (this.disposed) return;
+      if (this.sessionGeneration(provider) !== session) {
+        // Disconnected while the lookup was in flight: a former account
+        // arriving now must not record a refusal for an ended session.
+        this.dropRefusal(provider);
+        return;
+      }
 
       // A newer signal arrived while we were resolving the address. Claiming
       // the namespace now would write this stale view over it, and would make
