@@ -172,7 +172,8 @@ export class EvmEventTracker {
 
   /**
    * An opt-out purges wallet identity. Every registered session is then
-   * unknown again, exactly as if its adoption had been refused, and the
+   * unknown again (pending, though its last signal is NOT marked refused:
+   * the opt-in replay must not switch wallets), and the
    * opt-in retry must re-learn all of them: with the active wallet's
    * address gone, the accounts handler cannot even tell a second wallet's
    * accounts apart from the active one's, and would ignore them.
@@ -1000,6 +1001,10 @@ export class EvmEventTracker {
       const connection = args[0] as { chainId?: unknown } | undefined;
       if (typeof connection?.chainId !== "string") return;
       this.registry.rememberChain(provider, parseChainId(connection.chainId));
+      // This observer adopts nothing, but a registered provider's connect
+      // refused by suppression is still a refused signal: once suppression
+      // ends, its replay may switch, as the full handler's would.
+      this.noteRefusalIfSuppressed(provider);
     };
     provider.on("connect", listener);
     this.registry.addListener(provider, "connect", listener);

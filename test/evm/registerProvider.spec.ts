@@ -853,6 +853,36 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("retries a connect-only session refused on an excluded path behind another wallet, with connect autocapture off", async () => {
+    // Connect autocapture off installs the chain-only observer in place of
+    // the connect handler. A registered provider's connect refused there is
+    // still a refused signal, or the replay would wait behind wallet A
+    // forever.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup({
+      tracking: { excludePaths: ["/admin"] },
+      autocapture: { connect: false, signature: true },
+    });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress?.toLowerCase(), "still A while excluded").to.equal(ADDR.toLowerCase());
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "B adopted once trackable").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two
