@@ -1296,34 +1296,12 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
-  it("re-adopts a session that reconnected while its disconnect was still being emitted", async () => {
+  it("keeps a session that reconnected while its disconnect was still being emitted", async () => {
     // The disconnect handler awaits the emission; a connect-only reconnect
-    // lands meanwhile and is committed, then the older disconnect clears
-    // that state. The next page hit must re-adopt the live session.
-    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
-    const { formo, sent } = await setup();
-    expect(formo.registerProvider(provider)).to.equal(true);
-    await settle();
-    (formo as any).eventManager.addEvent.callsFake(async (e: any) => {
-      sent.push(e);
-      if (e.type === "disconnect") await new Promise((r) => setTimeout(() => r(undefined), 60));
-    });
-
-    provider.emit("disconnect", { code: 4900 });
-    await settle(10);
-    provider.emit("connect", { chainId: "0x1" });
-    await settle(120);
-
-    await formo.page();
-    await settle(80);
-    expect(formo.currentAddress?.toLowerCase(), "live session re-adopted").to.equal(ADDR.toLowerCase());
-    formo.cleanup?.();
-  });
-
-  it("re-adopts a session that reconnected while its disconnect was still being emitted", async () => {
-    // The disconnect handler awaits the emission; a connect-only reconnect
-    // lands meanwhile and is committed, then the older disconnect clears
-    // that state. The next page hit must re-adopt the live session.
+    // lands meanwhile and is committed. The older disconnect's clear is
+    // observation-guarded and does not wipe the restored state, and the
+    // next page hit finds nothing to redo. Pinned because a review
+    // suspected otherwise.
     const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
     const { formo, sent } = await setup();
     expect(formo.registerProvider(provider)).to.equal(true);
