@@ -547,6 +547,31 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("retries a session that connected via `connect` alone while on an excluded path", async () => {
+    // Registered before pairing, so nothing to adopt; the wallet then
+    // connects while the route is excluded and signals only `connect`
+    // (eth_accounts answers), never `accountsChanged`. That refusal must
+    // be recorded too, or the session is invisible until it signals again.
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/"] } });
+    const provider = makeWcProvider({ peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    provider.accounts = [ADDR];
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()),
+      "connect-only session adopted after leaving the excluded path"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

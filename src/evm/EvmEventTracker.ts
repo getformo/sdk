@@ -127,8 +127,8 @@ export class EvmEventTracker {
    * Announcement-driven cleanup must not touch them: they are never in an
    * announcement list, so "missing from the announcement" is their normal
    * state, not evidence of removal. A Set rather than a WeakSet because
-   * the corrected-detect pass iterates it; the registry holds these
-   * providers strongly anyway, and untrack removes them.
+   * the corrected-detect pass iterates it; the registry's detail list
+   * holds these providers strongly for the instance's life anyway.
    */
   private externallyRegistered = new Set<EIP1193Provider>();
 
@@ -143,9 +143,10 @@ export class EvmEventTracker {
    * registered providers, or one registered next to a discovered wallet,
    * every page hit emitted a disconnect and a connect that no user action
    * caused. An entry is added at the point of refusal itself, inside the
-   * accounts handler: suppression is checked there after an await, so a
-   * visitor who opts out while that await is in flight refuses an
-   * adoption that looked allowed when it started. An entry leaves this
+   * accounts and connect handlers: suppression is checked there after an
+   * await, so a visitor who opts out while that await is in flight
+   * refuses an adoption that looked allowed when it started. An entry
+   * leaves this
    * set the first time its accounts are adopted unsuppressed, or when the
    * provider is untracked.
    */
@@ -1054,11 +1055,17 @@ export class EvmEventTracker {
         if (isActiveProvider) {
           if (this.deps.isTrackingSuppressed()) {
             this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
+            // Same refusal as the accounts path: a registered session
+            // that connected while suppressed may never signal again.
+            if (this.externallyRegistered.has(provider)) {
+              this.pendingAdoptions.add(provider);
+            }
           } else {
             this.wallet.set('evm', {
               chainId,
               address: validateAndChecksumAddress(address) || undefined,
             });
+            this.pendingAdoptions.delete(provider);
           }
         }
 
