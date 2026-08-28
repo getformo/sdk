@@ -513,6 +513,40 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("retries an adoption refused by an opt-out that landed mid-adoption", async () => {
+    // Adoption checks suppression AFTER awaiting the active provider's
+    // accounts. An opt-out that lands during that await refuses an
+    // adoption that looked allowed when registration started; the refusal
+    // itself must record the provider, or nothing ever retries it.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    // A is active. Make its eth_accounts slow so B's adoption parks on it.
+    const realRequest = a.request;
+    a.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 40))
+        : realRequest(args);
+
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    formo.optOutTracking();
+    await settle(80);
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "refused while opted out"
+    ).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle(80);
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "adopted after opt-in"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

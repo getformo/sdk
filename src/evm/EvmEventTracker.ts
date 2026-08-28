@@ -142,8 +142,12 @@ export class EvmEventTracker {
    * different address from the active one as a wallet switch. With two
    * registered providers, or one registered next to a discovered wallet,
    * every page hit emitted a disconnect and a connect that no user action
-   * caused. An entry leaves this set the first time its accounts are
-   * adopted unsuppressed, or when the provider is untracked.
+   * caused. An entry is added at the point of refusal itself, inside the
+   * accounts handler: suppression is checked there after an await, so a
+   * visitor who opts out while that await is in flight refuses an
+   * adoption that looked allowed when it started. An entry leaves this
+   * set the first time its accounts are adopted unsuppressed, or when the
+   * provider is untracked.
    */
   private pendingAdoptions = new Set<EIP1193Provider>();
 
@@ -364,12 +368,9 @@ export class EvmEventTracker {
 
     const accounts = readProviderAccounts(provider);
     if (accounts.length > 0) {
-      if (this.deps.isTrackingSuppressed()) {
-        // The adoption below is refused while suppressed, and a session
-        // that already exists may never emit another accountsChanged.
-        // Remember it so the retry can finish the job once suppression ends.
-        this.pendingAdoptions.add(provider);
-      }
+      // Refused while suppressed: the handler records the refusal in
+      // `pendingAdoptions`, and the retry finishes the job once
+      // suppression ends.
       void this.onAccountsChanged(provider, accounts);
     }
     return true;
@@ -701,6 +702,11 @@ export class EvmEventTracker {
     // events.)
     if (this.deps.isTrackingSuppressed()) {
       this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
+      // A registered provider's session may never signal again; remember
+      // the refusal so the retry can adopt it once suppression ends.
+      if (this.externallyRegistered.has(provider)) {
+        this.pendingAdoptions.add(provider);
+      }
     } else {
       this.wallet.set('evm', { address, chainId: nextChainId });
       // Adopted unsuppressed, whichever path got here first: a retry for
