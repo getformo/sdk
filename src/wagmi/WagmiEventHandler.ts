@@ -49,6 +49,11 @@ const RESERVED_FIELDS = new Set([
   "transactionHash",
   "function_name",
   "function_args",
+  // Wallet attribution. Function args are spread AFTER the attribution
+  // properties, so an ABI input named `providerName` or `rdns` would
+  // silently relabel the wallet on every broadcast and receipt event.
+  "providerName",
+  "rdns",
 ]);
 
 /**
