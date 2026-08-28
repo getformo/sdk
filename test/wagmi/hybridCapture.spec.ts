@@ -227,6 +227,37 @@ describe("wagmi hybrid capture", () => {
     b.formo.cleanup?.();
   });
 
+  it("re-attributes the SAME provider when a different connector takes it over", async () => {
+    // Two wagmi connectors can hand out one provider (both target
+    // window.ethereum). The wrapper is already installed, so the wrap
+    // path rebinds rather than reinstalls; the attribution must still
+    // follow the connector the user actually chose.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    sent.length = 0;
+
+    await shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("Rabby");
+    formo.cleanup?.();
+  });
+
   it("re-attributes captures to the new connector after a connector switch", async () => {
     const subscriptions: Subscription[] = [];
     const first = makeProvider();

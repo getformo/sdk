@@ -34,6 +34,8 @@ export interface WagmiConnector {
   name: string;
   type: string;
   uid: string;
+  /** Wagmi carries the EIP-6963 rdns for discovered connectors. */
+  rdns?: string | readonly string[];
 }
 
 /**

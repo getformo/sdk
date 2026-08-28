@@ -2847,15 +2847,14 @@ export class WagmiEventHandler {
     state: WagmiState
   ): { name: string; rdns?: string } | undefined {
     const connector = state.current
-      ? (state.connections.get(state.current)?.connector as
-          | { name?: unknown; rdns?: unknown }
-          | undefined)
+      ? state.connections.get(state.current)?.connector
       : undefined;
     const name = connector?.name;
+    // Typed as string, but this is host-supplied state: defend anyway.
     if (typeof name !== "string" || name.length === 0) {
       return undefined;
     }
-    const raw = connector?.rdns;
+    const raw: unknown = connector?.rdns;
     const rdns =
       typeof raw === "string"
         ? raw
