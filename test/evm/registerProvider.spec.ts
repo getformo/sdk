@@ -1037,6 +1037,35 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("replays only the LATEST refused signal, so the newest wallet signal wins", async () => {
+    // Opted out: B signals, then the active wallet A signals again. Live,
+    // the newer signal would have won and A would end active. The opt-in
+    // replay must reach the same state, not switch to B afterwards.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    b.accounts = [OTHER];
+    b.emit("accountsChanged", [OTHER]);
+    await settle();
+    a.emit("accountsChanged", [ADDR]);
+    await settle();
+    sent.length = 0;
+
+    formo.optInTracking();
+    await settle(120);
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A stays active").to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

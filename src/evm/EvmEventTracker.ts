@@ -162,13 +162,23 @@ export class EvmEventTracker {
    * semantics: a different provider with a different address is a switch.
    * So a pending provider is replayed only while no OTHER wallet is active
    * and known - it waits, at no cost, until that wallet is gone - unless
-   * its own signal was refused (`refusedSignals`): then the replay does
+   * its own signal was refused (`latestRefused`): then the replay does
    * exactly what the live signal would have done, switch included.
    */
   private pendingAdoptions = new Set<EIP1193Provider>();
 
-  /** Pending providers whose own live signal was refused while suppressed. */
-  private refusedSignals = new Set<EIP1193Provider>();
+  /**
+   * The pending provider whose own live signal was refused while
+   * suppressed, LATEST only. The SDK follows one active wallet and the
+   * newest signal wins, so replaying only the last refused signal reaches
+   * the state the live signals would have reached, without the switches
+   * in between; an earlier refused provider stays pending, unprivileged.
+   */
+  private latestRefused?: EIP1193Provider;
+
+  private dropRefusal(provider: EIP1193Provider): void {
+    if (this.latestRefused === provider) this.latestRefused = undefined;
+  }
 
   /**
    * An opt-out purges wallet identity. Every registered session is then
@@ -192,14 +202,14 @@ export class EvmEventTracker {
       this.externallyRegistered.has(provider)
     ) {
       this.pendingAdoptions.add(provider);
-      this.refusedSignals.add(provider);
+      this.latestRefused = provider;
     }
   }
 
   /** A handler has learned this provider's session; nothing is pending. */
   private settleAdoption(provider: EIP1193Provider): void {
     this.pendingAdoptions.delete(provider);
-    this.refusedSignals.delete(provider);
+    this.dropRefusal(provider);
   }
 
   /**
@@ -214,7 +224,7 @@ export class EvmEventTracker {
       // The refusal marker described the session that just ended. Left
       // standing, a later connect-only session would inherit it and be
       // replayed as a switch away from another active wallet.
-      this.refusedSignals.delete(provider);
+      this.dropRefusal(provider);
     }
   }
 
@@ -254,7 +264,7 @@ export class EvmEventTracker {
     // resume into a torn-down instance and commit a session there.
     this.disposed = true;
     this.pendingAdoptions.clear();
-    this.refusedSignals.clear();
+    this.latestRefused = undefined;
     this.retryRequested = false;
     try {
       this.unsubscribeDiscovery?.();
@@ -520,16 +530,18 @@ export class EvmEventTracker {
       try {
         do {
           this.retryRequested = false;
-          // The ACTIVE provider goes first. An opt-out purges the address
-          // but keeps the provider; judged before it is re-learned, every
-          // other pending provider looks like "another wallet with
-          // accounts" and is ignored, then never revisited in this scan.
-          const active = this.wallet.provider;
-          const queue = Array.from(this.pendingAdoptions);
-          const ordered =
-            active && this.pendingAdoptions.has(active)
-              ? [active, ...queue.filter((p) => p !== active)]
-              : queue;
+          // The ACTIVE provider goes first: an opt-out purges the address
+          // but keeps the provider, and judged before it is re-learned,
+          // every other pending provider looks like "another wallet with
+          // accounts" and is ignored. The latest refused signal goes
+          // next, as the newest signal it is; the rest follow, and are
+          // skipped while another wallet stands.
+          const first = [this.wallet.provider, this.latestRefused].filter(
+            (p): p is EIP1193Provider => !!p && this.pendingAdoptions.has(p)
+          );
+          const ordered = Array.from(
+            new Set([...first, ...Array.from(this.pendingAdoptions)])
+          );
           for (const provider of ordered) {
             if (this.disposed || this.deps.isTrackingSuppressed()) break;
             const accounts = readProviderAccounts(provider);
@@ -541,7 +553,7 @@ export class EvmEventTracker {
               this.wallet.provider !== undefined &&
               this.wallet.provider !== provider &&
               this.wallet.evmAddress !== undefined;
-            if (otherWalletActive && !this.refusedSignals.has(provider)) {
+            if (otherWalletActive && this.latestRefused !== provider) {
               // Never signalled, merely connected: replaying it now would
               // be reported as a wallet switch nobody made. Waits for
               // that wallet to go.
@@ -710,7 +722,7 @@ export class EvmEventTracker {
         if (!this.wallet.isCurrent(observation)) {
           // Superseded: this signal's refusal, if noted, no longer describes
           // a session the replay may switch to.
-          this.refusedSignals.delete(provider);
+          this.dropRefusal(provider);
           return;
         }
 
@@ -757,7 +769,7 @@ export class EvmEventTracker {
             if (!this.wallet.isCurrent(observation)) {
               // Superseded: this signal's refusal, if noted, no longer describes
               // a session the replay may switch to.
-              this.refusedSignals.delete(provider);
+              this.dropRefusal(provider);
               return;
             }
 
@@ -776,7 +788,7 @@ export class EvmEventTracker {
               currentStoredAddress &&
               newProviderAddress === currentStoredAddress
             ) {
-              this.refusedSignals.delete(provider);
+              this.dropRefusal(provider);
             }
             logger.info(
               "OnAccountsChanged: Current provider still has accounts and same address, ignoring new provider",
@@ -817,7 +829,7 @@ export class EvmEventTracker {
           if (!this.wallet.isCurrent(observation)) {
             // Superseded: this signal's refusal, if noted, no longer describes
             // a session the replay may switch to.
-            this.refusedSignals.delete(provider);
+            this.dropRefusal(provider);
             return;
           }
         }
@@ -853,7 +865,7 @@ export class EvmEventTracker {
         if (!this.wallet.isCurrent(observation)) {
           // Superseded: this signal's refusal, if noted, no longer describes
           // a session the replay may switch to.
-          this.refusedSignals.delete(provider);
+          this.dropRefusal(provider);
           return;
         }
       }
@@ -1199,7 +1211,7 @@ export class EvmEventTracker {
         logger.info(
           "onConnected: The wallet disconnected after this observation began; dropping it"
         );
-        this.refusedSignals.delete(provider);
+        this.dropRefusal(provider);
         return;
       }
 
@@ -1227,7 +1239,7 @@ export class EvmEventTracker {
         logger.info(
           "onConnected: A newer signal from this provider has overtaken this connect observation; dropping it"
         );
-        this.refusedSignals.delete(provider);
+        this.dropRefusal(provider);
         return;
       }
 
