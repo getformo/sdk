@@ -2836,29 +2836,44 @@ export class WagmiEventHandler {
    * The active connector's name and rdns, for the fallback-wrapped
    * provider's request-derived events.
    *
-   * The CONNECTOR's own name, not the peer-resolved one `getConnectorName`
-   * serves: the registry resolves a WalletConnect peer live on every read,
-   * so a session that changes wallets behind the same connector renames
-   * without a re-wrap. The rdns is the connector's when wagmi knows it as
-   * ONE value (EIP-6963 discovered connectors carry theirs); a connector
-   * that matches several rdns values does not say which one this provider
-   * is, so nothing is passed and the registry keeps the sniffed one.
+   * The NAME is exactly what the hook path emits (`getConnectorName`: the
+   * live WalletConnect peer for a WalletConnect connector, the connector's
+   * own name otherwise), so a branded connector keeps its name on both
+   * paths and a session that changes wallets renames on both. The rdns is
+   * the connector's when wagmi knows it as ONE value (EIP-6963 discovered
+   * connectors carry theirs); a connector that matches several rdns values
+   * does not say which one this provider is, so nothing is passed and the
+   * registry keeps the sniffed one.
    */
   private connectorAttribution(
     state: WagmiState
   ): { name: string; rdns?: string } | undefined {
-    const connector = state.current
-      ? state.connections.get(state.current)?.connector
-      : undefined;
-    const name = connector?.name;
-    // Typed as string, but this is host-supplied state: defend anyway.
-    if (typeof name !== "string" || name.length === 0) {
+    const name = this.getConnectorName(state);
+    if (!name) {
       return undefined;
     }
-    const raw: unknown = connector?.rdns;
+    const raw: unknown = state.current
+      ? state.connections.get(state.current)?.connector?.rdns
+      : undefined;
     const rdns = typeof raw === "string" && raw.length > 0 ? raw : undefined;
     return { name, ...(rdns && { rdns }) };
   }
+
+  /**
+   * Resolver handed to the registry at wrap time, read at each request
+   * start, so a request issued right after a connector switch (before the
+   * asynchronous re-wrap settles) already carries the new connector.
+   */
+  private liveConnectorAttribution = ():
+    | { name: string; rdns?: string }
+    | undefined => {
+    if (this.disposed) return undefined;
+    try {
+      return this.connectorAttribution(this.getState());
+    } catch {
+      return undefined;
+    }
+  };
 
   /**
    * Get the connector name from Wagmi state
@@ -3068,12 +3083,12 @@ export class WagmiEventHandler {
           _wrapWagmiProvider?: (
             p: unknown,
             chainId?: number,
-            attribution?: { name: string; rdns?: string }
+            attribution?: () => { name: string; rdns?: string } | undefined
           ) => boolean;
         })._wrapWagmiProvider?.(
           provider,
           typeof chainId === "number" ? chainId : undefined,
-          this.connectorAttribution(live)
+          this.liveConnectorAttribution
         );
         if (wrapped !== true) {
           // The provider was refused (invalid shape, frozen provider,

@@ -367,6 +367,53 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("labels a request issued in the same tick as a connector switch with the new connector", async () => {
+    // The re-wrap resolves through getProvider()'s microtask; a request
+    // issued synchronously after the store switch must not carry the old
+    // connector. Attribution is resolved live from the store, as the hook
+    // path's is.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    const pending = shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await pending;
+    await settle();
+
+    const names = sent.filter((e) => e.type === "signature").map((e) => e.properties?.providerName);
+    expect(names).to.deep.equal(["Rabby", "Rabby"]);
+    formo.cleanup?.();
+  });
+
+  it("keeps a branded WalletConnect-backed connector's name, as the hook path does", async () => {
+    // The hook path resolves a session peer only for connectors named
+    // WalletConnect. A branded connector over the same transport keeps its
+    // own name there; the request path must not split it.
+    const branded = makeProvider();
+    branded.session = { peer: { metadata: { name: "Ledger Live", url: "https://ledger.com" } } };
+    const state = makeState(branded, 1);
+    state.connections.get("c1").connector.name = "AppKit";
+    const { formo, sent } = await setup(true, { provider: branded, state });
+
+    await branded.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("AppKit");
+    formo.cleanup?.();
+  });
+
   it("re-attributes captures to the new connector after a connector switch", async () => {
     const subscriptions: Subscription[] = [];
     const first = makeProvider();

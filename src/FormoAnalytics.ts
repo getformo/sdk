@@ -1711,15 +1711,16 @@ export class FormoAnalytics implements IFormoAnalytics {
    * request wrapper installs here. Double counting is prevented in the
    * wrapper via `shouldSkipRequestCapture`.
    *
-   * `attribution` is the connector's name and rdns. Request-derived events
-   * are named from the registry, which for an unannounced provider falls
-   * back to flag sniffing; recording the connector here keeps them in
-   * agreement with the hook-driven events from the same connection.
+   * `attribution` resolves the active connector's name and rdns, live.
+   * Request-derived events are named from the registry, which for an
+   * unannounced provider falls back to flag sniffing; recording the
+   * connector's resolver here keeps them in agreement with the
+   * hook-driven events from the same connection at the same moment.
    */
   public _wrapWagmiProvider(
     provider: EIP1193Provider,
     chainId?: number,
-    attribution?: { name: string; rdns?: string }
+    attribution?: () => { name: string; rdns?: string } | undefined
   ): boolean {
     if (this.isCleanedUp || !isValidProvider(provider)) return false;
     try {

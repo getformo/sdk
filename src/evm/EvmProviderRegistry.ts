@@ -74,10 +74,17 @@ export class EvmProviderRegistry {
    * the name came from flag sniffing, and a custom or embedded connector
    * whose provider exposes no recognised flag split one wallet's activity
    * between "Injected Provider" and the connector's name.
+   *
+   * A RESOLVER, read at each `infoFor`, not a value: two connectors can
+   * share one provider, and a request issued right after a connector
+   * switch - before the asynchronous re-wrap has settled - must already
+   * carry the new connector's name, exactly as a hook-driven event at
+   * that moment would. The integration layer supplies the same function
+   * its hook path names events with, so the two paths cannot disagree.
    */
   private attributions = new WeakMap<
     EIP1193Provider,
-    { name: string; rdns?: string }
+    () => { name: string; rdns?: string } | undefined
   >();
 
   constructor(private readonly deps: EvmProviderRegistryDeps) {}
@@ -143,21 +150,32 @@ export class EvmProviderRegistry {
 
   /**
    * Record (or, with `undefined`, forget) the integration layer's own
-   * attribution for a provider. See `attributions`.
+   * attribution resolver for a provider. See `attributions`.
    */
   rememberAttribution(
     provider: EIP1193Provider | undefined,
-    info: { name: string; rdns?: string } | undefined
+    resolve: (() => { name: string; rdns?: string } | undefined) | undefined
   ): void {
     if (!provider) return;
-    if (!info?.name) {
+    if (!resolve) {
       this.attributions.delete(provider);
       return;
     }
-    this.attributions.set(provider, {
-      name: info.name,
-      ...(info.rdns && { rdns: info.rdns }),
-    });
+    this.attributions.set(provider, resolve);
+  }
+
+  /** The supplied attribution for a provider, if any resolves right now. */
+  private suppliedAttributionFor(
+    provider: EIP1193Provider
+  ): { name: string; rdns?: string } | undefined {
+    const resolve = this.attributions.get(provider);
+    if (!resolve) return undefined;
+    try {
+      const info = resolve();
+      return info?.name ? info : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -172,7 +190,9 @@ export class EvmProviderRegistry {
    */
   infoFor(provider: EIP1193Provider): { name: string; rdns: string } {
     const announced = this.details.find((p) => p.provider === provider);
-    const supplied = announced ? undefined : this.attributions.get(provider);
+    const supplied = announced
+      ? undefined
+      : this.suppliedAttributionFor(provider);
     const info = announced
       ? { name: announced.info.name, rdns: announced.info.rdns }
       : (() => {
@@ -190,14 +210,11 @@ export class EvmProviderRegistry {
     // is included because a flagless WalletConnect-compatible provider
     // registered BEFORE its session exists detects as nothing at all;
     // the peer appearing later is itself the proof of what it was, so
-    // the rdns upgrades with it. A SUPPLIED name is always replaceable:
-    // the hook path names a connector's live peer over the connector, and
-    // the request path must agree with it.
-    if (
-      supplied !== undefined ||
-      info.name === "WalletConnect" ||
-      info.name === "Injected Provider"
-    ) {
+    // the rdns upgrades with it. A supplied name gets the same treatment
+    // and no more: the integration layer resolves its own peer names
+    // where it wants them, and a branded connector must keep its name on
+    // both paths.
+    if (info.name === "WalletConnect" || info.name === "Injected Provider") {
       const peer = readWalletConnectPeer(provider);
       if (peer?.name) {
         return {
