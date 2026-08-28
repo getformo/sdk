@@ -313,6 +313,60 @@ describe("wagmi hybrid capture", () => {
     formo.cleanup?.();
   });
 
+  it("holds one wallet name across started, broadcasted and confirmed when the connector changes mid-transaction", async () => {
+    // The transaction path snapshots separately from the signature path,
+    // and the receipt poll runs long after the request returned. A switch
+    // while the wallet prompt is open, and another while the receipt is
+    // still pending, must not relabel any status.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    let releaseTx: (v: unknown) => void = () => undefined;
+    let releaseReceipt: (v: unknown) => void = () => undefined;
+    const txGate = new Promise((r) => { releaseTx = r; });
+    const receiptGate = new Promise((r) => { releaseReceipt = r; });
+    const inner = shared.request;
+    shared.request = async (args: { method: string }) => {
+      if (args.method === "eth_sendTransaction") { await txGate; return "0x" + "ab".repeat(32); }
+      if (args.method === "eth_getTransactionReceipt") { await receiptGate; return { status: "0x1", blockNumber: "0x1" }; }
+      return inner(args);
+    };
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    const pending = shared.request({
+      method: "eth_sendTransaction",
+      params: [{ from: ADDR, to: TO, value: "0x0" }],
+    });
+    await settle();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    releaseTx(undefined);
+    await pending;
+    await settle();
+    releaseReceipt(undefined);
+    await settle();
+
+    const names = sent
+      .filter((e) => e.type === "transaction")
+      .map((e) => `${e.status}:${e.properties?.providerName}`);
+    expect(names).to.deep.equal([
+      "started:MetaMask",
+      "broadcasted:MetaMask",
+      "confirmed:MetaMask",
+    ]);
+    formo.cleanup?.();
+  });
+
   it("re-attributes captures to the new connector after a connector switch", async () => {
     const subscriptions: Subscription[] = [];
     const first = makeProvider();
