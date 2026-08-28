@@ -172,8 +172,9 @@ export class EvmEventTracker {
 
   /**
    * An opt-out purges wallet identity. Every registered session is then
-   * unknown again (pending, though its last signal is NOT marked refused:
-   * the opt-in replay must not switch wallets), and the
+   * unknown again (pending; no refusal is ADDED, so the opt-in replay of a
+   * merely connected wallet does not switch, while a refusal already
+   * standing from an excluded route keeps its meaning), and the
    * opt-in retry must re-learn all of them: with the active wallet's
    * address gone, the accounts handler cannot even tell a second wallet's
    * accounts apart from the active one's, and would ignore them.
@@ -676,7 +677,12 @@ export class EvmEventTracker {
         // Every branch below reads the CURRENT evm state, so a switch that
         // went stale during the probe would emit a false disconnect for
         // whoever claimed the namespace, and clear them.
-        if (!this.wallet.isCurrent(observation)) return;
+        if (!this.wallet.isCurrent(observation)) {
+          // Superseded: this signal's refusal, if noted, no longer describes
+          // a session the replay may switch to.
+          this.refusedSignals.delete(provider);
+          return;
+        }
 
         logger.info("OnAccountsChanged: Checking current provider accounts", {
           activeProvider: this.registry.infoFor(this.wallet.provider).name,
@@ -716,7 +722,17 @@ export class EvmEventTracker {
               this.wallet.clear('evm');
             }
 
-            if (!this.wallet.isCurrent(observation)) return;
+            if (!this.wallet.isCurrent(observation)) {
+
+              // Superseded: this signal's refusal, if noted, no longer describes
+
+              // a session the replay may switch to.
+
+              this.refusedSignals.delete(provider);
+
+              return;
+
+            }
 
             // Clear state and let the new provider become active
             this.wallet.clearProvider();
@@ -767,7 +783,17 @@ export class EvmEventTracker {
             this.wallet.clear('evm');
           }
 
-          if (!this.wallet.isCurrent(observation)) return;
+          if (!this.wallet.isCurrent(observation)) {
+
+            // Superseded: this signal's refusal, if noted, no longer describes
+
+            // a session the replay may switch to.
+
+            this.refusedSignals.delete(provider);
+
+            return;
+
+          }
         }
       } catch (error) {
         logger.warn(
@@ -796,7 +822,17 @@ export class EvmEventTracker {
           this.wallet.clear('evm');
         }
 
-        if (!this.wallet.isCurrent(observation)) return;
+        if (!this.wallet.isCurrent(observation)) {
+
+          // Superseded: this signal's refusal, if noted, no longer describes
+
+          // a session the replay may switch to.
+
+          this.refusedSignals.delete(provider);
+
+          return;
+
+        }
       }
     }
 
@@ -1137,6 +1173,7 @@ export class EvmEventTracker {
         logger.info(
           "onConnected: The wallet disconnected after this observation began; dropping it"
         );
+        this.refusedSignals.delete(provider);
         return;
       }
 
@@ -1164,6 +1201,7 @@ export class EvmEventTracker {
         logger.info(
           "onConnected: A newer signal from this provider has overtaken this connect observation; dropping it"
         );
+        this.refusedSignals.delete(provider);
         return;
       }
 

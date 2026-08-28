@@ -20,6 +20,7 @@ import { WRAPPED_REQUEST_OWNER_SYMBOL } from "../../src/types";
 describe("registerProvider", () => {
   const ADDR = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
   const OTHER = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
+  const THIRD = "0x1111111111111111111111111111111111111111";
   const PEER = "Ledger Live";
 
   let sandbox: sinon.SinonSandbox;
@@ -880,6 +881,48 @@ describe("registerProvider", () => {
     await settle(80);
 
     expect(formo.currentAddress?.toLowerCase(), "B adopted once trackable").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("drops a refusal marker when the refused signal is superseded before it settles", async () => {
+    // B signals on an excluded path (refusal noted on entry) and parks on
+    // the active wallet's accounts probe. The route becomes allowed and C
+    // connects first. B resumes stale; its marker must go with it, or the
+    // next page hit replays B as a switch away from C that nobody made.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const c = makeWcProvider({ peer: "Zerion" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    expect(formo.registerProvider(c)).to.equal(true);
+    await settle();
+    // A's accounts probe: slow for the first caller (B), fast for the next (C).
+    const realRequest = a.request;
+    let probes = 0;
+    a.request = async (args: { method: string }) => {
+      if (args.method !== "eth_accounts") return realRequest(args);
+      const delay = probes++ === 0 ? 80 : 5;
+      return new Promise((r) => setTimeout(() => r(realRequest(args)), delay));
+    };
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("accountsChanged", [OTHER]);
+    await settle(5);
+    (global as any).window.history.pushState({}, "", "/app");
+    c.accounts = [THIRD];
+    c.emit("accountsChanged", [THIRD]);
+    await settle(150);
+    expect(formo.currentAddress?.toLowerCase(), "C won").to.equal(THIRD.toLowerCase());
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "C stays").to.equal(THIRD.toLowerCase());
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
     formo.cleanup?.();
   });
 
