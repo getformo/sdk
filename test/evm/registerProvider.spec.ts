@@ -626,6 +626,31 @@ describe("registerProvider", () => {
     formo.cleanup?.();
   });
 
+  it("adopts a connect-only session on the next page hit when connect autocapture is off", async () => {
+    // With autocapture.connect off the SDK installs a chain-only observer
+    // in place of the connect handler, so a wallet that signals `connect`
+    // alone never reaches adoption. The registered provider exposes its
+    // accounts synchronously; the next page hit must read them.
+    const { formo, sent } = await setup({
+      tracking: true,
+      autocapture: { connect: false, signature: true },
+    });
+    const provider = makeWcProvider({ peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    provider.accounts = [ADDR];
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress, "not learned from connect alone").to.equal(undefined);
+
+    await formo.page();
+    await settle(60);
+
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "connect"), "connect autocapture is off").to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two

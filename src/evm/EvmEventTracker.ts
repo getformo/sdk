@@ -133,23 +133,27 @@ export class EvmEventTracker {
   private externallyRegistered = new Set<EIP1193Provider>();
 
   /**
-   * Registered providers whose session adoption was REFUSED because
-   * tracking was suppressed at registration (opt-out, excluded route).
+   * Registered providers whose session this SDK has NOT yet learned.
    *
-   * Only these are retried. Re-running adoption for every registered
-   * provider looked idempotent but was not: adoption is the same path a
-   * live `accountsChanged` takes, and that path treats a provider with a
-   * different address from the active one as a wallet switch. With two
-   * registered providers, or one registered next to a discovered wallet,
-   * every page hit emitted a disconnect and a connect that no user action
-   * caused. An entry is added at the point of refusal itself, inside the
-   * accounts and connect handlers, both on entry and again at the
-   * suppressed commit: the handlers gate on the ACTIVE provider and can
-   * return early for another one, and suppression is re-checked after an
-   * await, so a visitor who opts out while that await is in flight
-   * refuses an adoption that looked allowed when it started. An entry
-   * leaves this set the first time the provider is adopted unsuppressed,
-   * or when it is untracked.
+   * Only these are retried on page hits and opt-in. Re-running adoption for
+   * every registered provider looked idempotent but was not: adoption is
+   * the same path a live `accountsChanged` takes, and that path treats a
+   * provider with a different address from the active one as a wallet
+   * switch. With two registered providers, or one registered next to a
+   * discovered wallet, every page hit emitted a disconnect and a connect
+   * that no user action caused.
+   *
+   * A provider enters at registration (it may have no session yet, or be
+   * refused because tracking is suppressed), again whenever a handler
+   * refuses its signal while suppressed (noted on entry AND at the
+   * suppressed commit, since the handlers gate on the active provider and
+   * re-check suppression after an await), and again for all of them when
+   * an opt-out purges identity. It leaves the first time a handler commits
+   * its session unsuppressed, or when it is untracked. Retrying reads the
+   * provider's SYNCHRONOUS accounts only - no RPC - so a registered
+   * provider whose session never fires `accountsChanged` (a wallet that
+   * signals `connect` alone while `autocapture.connect` is off, which
+   * installs a chain-only observer) is still adopted on the next hit.
    */
   private pendingAdoptions = new Set<EIP1193Provider>();
 
@@ -391,11 +395,11 @@ export class EvmEventTracker {
       { ...detail, info: { ...detail.info, ...this.registry.infoFor(provider) } },
     ]);
 
+    // Pending until a handler commits its session unsuppressed: the
+    // session may not exist yet, or adoption may be refused right below.
+    this.pendingAdoptions.add(provider);
     const accounts = readProviderAccounts(provider);
     if (accounts.length > 0) {
-      // Refused while suppressed: the handler records the refusal in
-      // `pendingAdoptions`, and the retry finishes the job once
-      // suppression ends.
       void this.onAccountsChanged(provider, accounts);
     }
     return true;
@@ -404,16 +408,17 @@ export class EvmEventTracker {
   /**
    * Finish what registration could not.
    *
-   * Registration while tracking was suppressed (opt-out, excluded route)
-   * reached the adoption path and was refused - and a provider whose
-   * session already exists may never emit another accountsChanged, so
-   * nothing would ever retry. Called when suppression can have ended
-   * (opt-in, page navigation).
+   * A registered provider's session may not have existed at registration,
+   * or its adoption was refused because tracking was suppressed (opt-out,
+   * excluded route) - and an existing session may never emit another
+   * accountsChanged, so nothing else would ever retry. Called when
+   * suppression can have ended (opt-in, page navigation).
    *
-   * Adoption is retried ONLY for providers whose adoption was refused
-   * (`pendingAdoptions`), and only once suppression has actually ended.
-   * The corrected-detect pass below runs for every registered provider:
-   * it is deduplicated per session by rdns, so repeating it is free.
+   * Adoption is retried ONLY for providers not yet adopted
+   * (`pendingAdoptions`), only from their synchronous accounts, and only
+   * once suppression has actually ended. The corrected-detect pass below
+   * runs for every registered provider: it is deduplicated per session by
+   * rdns, so repeating it is free.
    */
   retryExternalAdoptions(): void {
     this.externallyRegistered.forEach((provider) => {
@@ -443,11 +448,17 @@ export class EvmEventTracker {
       return;
     }
     this.pendingAdoptions.forEach((provider) => {
-      this.pendingAdoptions.delete(provider);
       const accounts = readProviderAccounts(provider);
-      if (accounts.length > 0) {
-        void this.onAccountsChanged(provider, accounts);
+      if (accounts.length === 0) {
+        // No session yet: stays pending, at no cost.
+        return;
       }
+      // Handed to the handler once; a refusal re-adds it, a commit does
+      // not. Leaving it here would retry a provider the handler ignores
+      // (same address as the active one) on every hit, and that check
+      // reads the ACTIVE provider's accounts.
+      this.pendingAdoptions.delete(provider);
+      void this.onAccountsChanged(provider, accounts);
     });
   }
 
