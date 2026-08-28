@@ -19,6 +19,8 @@ import { WRAPPED_REQUEST_OWNER_SYMBOL } from "../../src/types";
  */
 describe("registerProvider", () => {
   const ADDR = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
+  const OTHER = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
+  const THIRD = "0x1111111111111111111111111111111111111111";
   const PEER = "Ledger Live";
 
   let sandbox: sinon.SinonSandbox;
@@ -409,7 +411,6 @@ describe("registerProvider", () => {
   it("prefers the active chain's account when the session differs per chain", async () => {
     // WalletConnect permits different accounts per chain; the adopted
     // address must be the one the ACTIVE chain authorized.
-    const OTHER = "0x88C0224CEABF6D559d7B622F2918b308285280DE";
     const provider = makeWcProvider({ peer: PEER });
     provider.accounts = [];
     provider.chainId = "0x1";
@@ -469,6 +470,885 @@ describe("registerProvider", () => {
       sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()),
       "adoption retried after opt-in"
     ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("keeps a suppressed adoption pending across page hits until suppression ends", async () => {
+    // A page hit while still opted out must neither adopt (it would be
+    // refused again) nor forget the provider (nothing else would retry).
+    const { formo, sent } = await setup();
+    formo.optOutTracking();
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    formo.registerProvider(provider);
+    await settle();
+
+    await formo.page();
+    await settle(60);
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle(60);
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()).length,
+      "adopted exactly once, after opt-in"
+    ).to.equal(1);
+    formo.cleanup?.();
+  });
+
+  it("retries an adoption refused on an excluded path once the visitor navigates away", async () => {
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/"] } });
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()),
+      "adoption retried on the first trackable page hit"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("retries an adoption refused by an opt-out that landed mid-adoption", async () => {
+    // Adoption checks suppression AFTER awaiting the active provider's
+    // accounts. An opt-out that lands during that await refuses an
+    // adoption that looked allowed when registration started; the refusal
+    // itself must record the provider, or nothing ever retries it.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    // A is active. Make its eth_accounts slow so B's adoption parks on it.
+    const realRequest = a.request;
+    a.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 40))
+        : realRequest(args);
+
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    formo.optOutTracking();
+    await settle(80);
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "refused while opted out"
+    ).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle(80);
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "adopted after opt-in"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("retries a session that connected via `connect` alone while on an excluded path", async () => {
+    // Registered before pairing, so nothing to adopt; the wallet then
+    // connects while the route is excluded and signals only `connect`
+    // (eth_accounts answers), never `accountsChanged`. That refusal must
+    // be recorded too, or the session is invisible until it signals again.
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/"] } });
+    const provider = makeWcProvider({ peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    provider.accounts = [ADDR];
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase()),
+      "connect-only session adopted after leaving the excluded path"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("retries a connect-only session that arrived on an excluded path while another wallet was active", async () => {
+    // The connect handler adopts only the ACTIVE provider; a registered
+    // provider connecting behind another wallet never reaches its
+    // suppressed commit. The refusal must be noted on entry instead.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())
+    ).to.deep.equal([]);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "B adopted once the route is allowed"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("retries a second registered wallet whose accounts arrived while opted out", async () => {
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())
+    ).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle(80);
+    expect(
+      sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()),
+      "B adopted after opt-in"
+    ).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("adopts a connect-only session on the next page hit when connect autocapture is off", async () => {
+    // With autocapture.connect off the SDK installs a chain-only observer
+    // in place of the connect handler, so a wallet that signals `connect`
+    // alone never reaches adoption. The registered provider exposes its
+    // accounts synchronously; the next page hit must read them.
+    const { formo, sent } = await setup({
+      tracking: true,
+      autocapture: { connect: false, signature: true },
+    });
+    const provider = makeWcProvider({ peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    provider.accounts = [ADDR];
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress, "not learned from connect alone").to.equal(undefined);
+
+    await formo.page();
+    await settle(60);
+
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "connect"), "connect autocapture is off").to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("keeps a still-connected registered wallet adoptable after the restored active one disconnects", async () => {
+    // Two registered wallets, B active. Opt-out purges identity and marks
+    // both pending; opt-in re-learns B and ignores A (another wallet is
+    // active). A must stay pending: when B later disconnects and A
+    // signals nothing, the next page hit is the only way to learn A.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(OTHER.toLowerCase());
+
+    formo.optOutTracking();
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B restored").to.equal(OTHER.toLowerCase());
+
+    b.accounts = [];
+    b.emit("accountsChanged", []);
+    await settle();
+    expect(formo.currentAddress, "B gone").to.equal(undefined);
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A learned").to.equal(ADDR.toLowerCase());
+    expect(sent.some((e) => e.type === "connect" && e.address?.toLowerCase() === ADDR.toLowerCase())).to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("leaves a merely connected registered wallet alone while another wallet is active", async () => {
+    // Opt-in re-learns B (active) and leaves A pending, ignored. A never
+    // signalled; replaying it on a later page hit would be reported as a
+    // switch nobody made. It waits until B is gone.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optOutTracking();
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B restored").to.equal(OTHER.toLowerCase());
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+    await formo.page();
+    await settle(80);
+
+    expect(sent.filter((e) => e.type === "connect" || e.type === "disconnect")).to.deep.equal([]);
+    expect(formo.currentAddress?.toLowerCase(), "still B").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("stops probing for a refused session that turns out to be the active wallet's own address", async () => {
+    // B's session (refused while opted out) has the same address as the
+    // active wallet A. The replay is ignored by design; B loses its
+    // refusal marker (it stays pending, unprivileged), or every later page
+    // hit would replay it again and probe A's accounts over the wallet
+    // transport.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [ADDR], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    const probes = sandbox.spy(a, "request");
+    sent.length = 0;
+    await formo.page();
+    await settle(80);
+    await formo.page();
+    await settle(80);
+
+    expect(
+      probes.getCalls().filter((c) => c.args[0]?.method === "eth_accounts").length,
+      "no eth_accounts probe on the active wallet from a page hit"
+    ).to.equal(0);
+    expect(sent.filter((e) => e.type === "connect" || e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("re-adopts a registered wallet that disconnects and reconnects with connect alone", async () => {
+    // Adopted once, settled. Its session ends, then a new one announces
+    // itself with `connect` only while connect autocapture is off, which
+    // no handler adopts. The session end must reopen the pending entry.
+    const { formo } = await setup({
+      tracking: true,
+      autocapture: { connect: false, signature: true },
+    });
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    provider.accounts = [];
+    provider.emit("accountsChanged", []);
+    await settle();
+    expect(formo.currentAddress, "session ended").to.equal(undefined);
+
+    provider.accounts = [OTHER];
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress, "connect alone adopts nothing").to.equal(undefined);
+
+    await formo.page();
+    await settle(60);
+    expect(formo.currentAddress?.toLowerCase(), "re-adopted on the page hit").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let a refused session's marker survive its own end", async () => {
+    // B's session was refused while opted out, then ended. A later session
+    // of B that announces itself unsuppressed but unadopted, behind active
+    // wallet A, must NOT inherit the refusal and be replayed as a switch
+    // away from A on the next page hit.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    b.accounts = [];
+    b.emit("accountsChanged", []);
+    await settle();
+
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "A restored").to.equal(ADDR.toLowerCase());
+    // The new session announces itself UNSUPPRESSED but unadopted: the
+    // connect handler does not switch to a non-active provider.
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A stays active").to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("coalesces overlapping retries so a pending provider is replayed once", async () => {
+    // Page hits can land while a retry scan is still awaiting the active
+    // wallet's accounts. Overlapping scans replayed the same provider
+    // concurrently, each probing the active wallet's accounts; a call
+    // during a scan now queues one more scan instead.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const realRequest = a.request;
+    a.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 40))
+        : realRequest(args);
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    sent.length = 0;
+    const replays = sandbox.spy((formo as any).evmEvents, "onAccountsChanged");
+
+    formo.optInTracking();
+    await settle(5);
+    void formo.page();
+    void formo.page();
+    await settle(200);
+
+    expect(
+      replays.getCalls().filter((c) => c.args[0] === b).length,
+      "B replayed through the handler once"
+    ).to.equal(1);
+    expect(
+      sent.filter((e) => e.type === "disconnect" && e.address?.toLowerCase() === ADDR.toLowerCase()).length,
+      "A disconnected once"
+    ).to.equal(1);
+    expect(
+      sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase()).length,
+      "B connected once"
+    ).to.equal(1);
+    formo.cleanup?.();
+  });
+
+  it("retries a connect-only session refused on an excluded path behind another wallet, with connect autocapture off", async () => {
+    // Connect autocapture off installs the chain-only observer in place of
+    // the connect handler. A registered provider's connect refused there is
+    // still a refused signal, or the replay would wait behind wallet A
+    // forever.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup({
+      tracking: { excludePaths: ["/admin"] },
+      autocapture: { connect: false, signature: true },
+    });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress?.toLowerCase(), "still A while excluded").to.equal(ADDR.toLowerCase());
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "B adopted once trackable").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("drops a refusal marker when the refused signal is superseded before it settles", async () => {
+    // B signals on an excluded path (refusal noted on entry) and parks on
+    // the active wallet's accounts probe. The route becomes allowed and C
+    // connects first. B resumes stale; its marker must go with it, or the
+    // next page hit replays B as a switch away from C that nobody made.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const c = makeWcProvider({ peer: "Zerion" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    expect(formo.registerProvider(c)).to.equal(true);
+    await settle();
+    // A's accounts probe: slow for the first caller (B), fast for the next (C).
+    const realRequest = a.request;
+    let probes = 0;
+    a.request = async (args: { method: string }) => {
+      if (args.method !== "eth_accounts") return realRequest(args);
+      const delay = probes++ === 0 ? 80 : 5;
+      return new Promise((r) => setTimeout(() => r(realRequest(args)), delay));
+    };
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("accountsChanged", [OTHER]);
+    await settle(5);
+    (global as any).window.history.pushState({}, "", "/app");
+    c.accounts = [THIRD];
+    c.emit("accountsChanged", [THIRD]);
+    await settle(150);
+    expect(formo.currentAddress?.toLowerCase(), "C won").to.equal(THIRD.toLowerCase());
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "C stays").to.equal(THIRD.toLowerCase());
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("keeps a same-address registered wallet adoptable after the active one disconnects", async () => {
+    // B's session (refused while opted out) has the active wallet's own
+    // address. It is ignored on replay and not probed again, but it is
+    // still a live session: when A disconnects and B signals nothing, the
+    // next page hit must learn B.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [ADDR], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    a.accounts = [];
+    a.emit("accountsChanged", []);
+    await settle();
+    expect(formo.currentAddress, "A gone").to.equal(undefined);
+
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B learned").to.equal(ADDR.toLowerCase());
+    expect((formo as any).wallet.provider === b, "B is the active provider").to.equal(true);
+    formo.cleanup?.();
+  });
+
+  it("does not let a replay in flight resume into a cleaned-up instance", async () => {
+    // Opt-in starts replaying B, which parks on the active wallet's
+    // accounts probe. The app unmounts and calls cleanup() meanwhile. The
+    // continuation must not commit B on the torn-down instance.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const realRequest = a.request;
+    a.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 60))
+        : realRequest(args);
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    sent.length = 0;
+
+    formo.optInTracking();
+    await settle(10);
+    formo.cleanup?.();
+    await settle(150);
+
+    expect((formo as any).wallet.provider === b, "B not installed after cleanup").to.equal(false);
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
+  });
+
+  it("does not let a replay resume into a cleaned-up instance from the disconnect emission either", async () => {
+    // The replay of B has passed the accounts probe and is awaiting the
+    // emission of A's disconnect when cleanup() runs. The continuation
+    // must not install B afterwards.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    // Slow down the disconnect emission only.
+    (formo as any).eventManager.addEvent.callsFake(async (e: any) => {
+      sent.push(e);
+      if (e.type === "disconnect") await new Promise((r) => setTimeout(r, 60));
+    });
+    sent.length = 0;
+
+    formo.optInTracking();
+    await settle(20);
+    formo.cleanup?.();
+    await settle(150);
+
+    expect((formo as any).wallet.provider === b, "B not installed after cleanup").to.equal(false);
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
+  });
+
+  it("re-learns the active wallet first, whatever the registration order", async () => {
+    // B registered before A; A active. Opt-out purges the address but
+    // keeps A as the provider. B signals while opted out (refused). On
+    // opt-in the scan must restore A before judging B, or B is ignored as
+    // "another wallet with accounts" and never revisited.
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup();
+    expect(formo.registerProvider(b)).to.equal(true);
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    formo.optOutTracking();
+    b.accounts = [OTHER];
+    b.emit("accountsChanged", [OTHER]);
+    await settle();
+
+    formo.optInTracking();
+    await settle(120);
+
+    expect(formo.currentAddress?.toLowerCase(), "B adopted at opt-in, no page hit needed").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("replays only the LATEST refused signal, so the newest wallet signal wins", async () => {
+    // Opted out: B signals, then the active wallet A signals again. Live,
+    // the newer signal would have won and A would end active. The opt-in
+    // replay must reach the same state, not switch to B afterwards.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    formo.optOutTracking();
+    b.accounts = [OTHER];
+    b.emit("accountsChanged", [OTHER]);
+    await settle();
+    a.emit("accountsChanged", [ADDR]);
+    await settle();
+    sent.length = 0;
+
+    formo.optInTracking();
+    await settle(120);
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A stays active").to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "connect" && e.address?.toLowerCase() === OTHER.toLowerCase())).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("does not record a refusal from a lookup that resolves after the session ended", async () => {
+    // B (not active) connects on an excluded path; its account lookup is
+    // slow; B disconnects before it resolves. The former account arriving
+    // afterwards must not privilege B: the next trackable page hit must
+    // not switch away from A.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const realRequest = b.request;
+    b.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 60))
+        : realRequest(args);
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle(10);
+    b.emit("disconnect", { code: 4900 });
+    await settle(120);
+
+    (global as any).window.history.pushState({}, "", "/app");
+    sent.length = 0;
+    await formo.page();
+    await settle(80);
+
+    expect(formo.currentAddress?.toLowerCase(), "A stays").to.equal(ADDR.toLowerCase());
+    expect(sent.filter((e) => e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("keeps scanning past a registered wallet whose state getters throw", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+      const { formo } = await setup();
+      expect(formo.registerProvider(a)).to.equal(true);
+      await settle();
+
+      formo.optOutTracking();
+      const broken = makeWcProvider({ peer: "Broken" });
+      expect(formo.registerProvider(broken)).to.equal(true);
+      // Its transport goes away: reading state now throws.
+      Object.defineProperty(broken, "accounts", {
+        get() { throw new Error("transport disposed"); },
+        configurable: true,
+      });
+      const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+      expect(formo.registerProvider(b)).to.equal(true);
+      await settle();
+
+      formo.optInTracking();
+      await settle(120);
+      await formo.page();
+      await settle(80);
+
+      expect(formo.currentAddress?.toLowerCase(), "the healthy wallet is still adopted").to.equal(OTHER.toLowerCase());
+      expect(rejections, "no unhandled rejection").to.deep.equal([]);
+      formo.cleanup?.();
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
+  it("ignores signals from a listener that could not be removed at cleanup", async () => {
+    // removeListener throwing keeps the SDK's listeners attached by
+    // design (so a later attempt can retry). Their handlers must not
+    // mutate the torn-down instance when the wallet signals afterwards.
+    const provider = makeWcProvider({ peer: PEER });
+    provider.removeListener = () => { throw new Error("cannot remove"); };
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    formo.cleanup?.();
+    sent.length = 0;
+
+    provider.accounts = [ADDR];
+    provider.emit("accountsChanged", [ADDR]);
+    provider.emit("connect", { chainId: "0x1" });
+    provider.emit("chainChanged", "0x89");
+    await settle();
+
+    expect(formo.currentAddress, "no identity learned after cleanup").to.equal(undefined);
+    expect(sent, "nothing emitted after cleanup").to.deep.equal([]);
+  });
+
+  it("stops probing a discovered active wallet whose identity an opt-out purged", async () => {
+    // The active wallet A was discovered, not registered, so nothing
+    // re-learns its address after an opt-out. A registered B refused
+    // while opted out is replayed at opt-in and ignored, exactly as a live
+    // signal would be while A's address is unknown; that must not turn
+    // into an eth_accounts probe on A at every later page hit.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    (formo as any).evmEvents.registerAccountsChangedListener(a);
+    (formo as any).evmEvents.registerDisconnectListener(a);
+    (formo as any).evm.markTracked(a);
+    a.emit("accountsChanged", [ADDR]);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    const probes = sandbox.spy(a, "request");
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+    await formo.page();
+    await settle(80);
+
+    expect(probes.getCalls().filter((c) => c.args[0]?.method === "eth_accounts").length, "no probes from page hits").to.equal(0);
+    expect(sent.filter((e) => e.type === "connect" || e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("ignores a connect after cleanup with connect autocapture off", async () => {
+    const provider = makeWcProvider({ peer: PEER });
+    provider.removeListener = () => { throw new Error("cannot remove"); };
+    const { formo } = await setup({ tracking: true, autocapture: { connect: false, signature: true } });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    formo.cleanup?.();
+
+    expect((formo as any).evm.chainIdOf(provider), "chain seeded at registration").to.equal(1);
+    provider.emit("connect", { chainId: "0x89" });
+    await settle();
+
+    expect((formo as any).evm.chainIdOf(provider), "no chain recorded after cleanup").to.equal(1);
+  });
+
+  it("keeps a connect refusal whose account lookup outlives the suppression", async () => {
+    // B connects on an excluded path; its account lookup is slow; the
+    // visitor navigates to an allowed route before it resolves. The
+    // refusal must have been noted BEFORE the lookup, or B looks like an
+    // unsuppressed non-active connect and stays behind A forever.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup({ tracking: { excludePaths: ["/admin"] } });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const realRequest = b.request;
+    b.request = async (args: { method: string }) =>
+      args.method === "eth_accounts"
+        ? new Promise((r) => setTimeout(() => r(realRequest(args)), 80))
+        : realRequest(args);
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle(10);
+    (global as any).window.history.pushState({}, "", "/app");
+    await settle(150);
+
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B adopted").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not replay stale accounts a provider keeps after its disconnect", async () => {
+    // Some providers keep synchronous `accounts` after emitting
+    // `disconnect`. The ended session must not be re-installed from that
+    // stale state on the next page hit; a new session signal lifts it.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    provider.emit("disconnect", { code: 4900 });
+    await settle();
+    expect(formo.currentAddress, "session over").to.equal(undefined);
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress, "stale accounts not replayed").to.equal(undefined);
+    expect(sent.filter((e) => e.type === "connect")).to.deep.equal([]);
+
+    provider.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress?.toLowerCase(), "new session adopted").to.equal(ADDR.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not let an accountless connect displace an adoptable refusal", async () => {
+    // Connect autocapture off (chain-only observer). B's accounts were
+    // refused on an excluded path; C then emits `connect` with no accounts
+    // yet. C must not take the replay privilege from B.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo } = await setup({
+      tracking: { excludePaths: ["/admin"] },
+      autocapture: { connect: false, signature: true },
+    });
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    const b = makeWcProvider({ peer: "Rainbow" });
+    const c = makeWcProvider({ peer: "Zerion" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    expect(formo.registerProvider(c)).to.equal(true);
+    await settle();
+
+    (global as any).window.history.pushState({}, "", "/admin");
+    b.accounts = [OTHER];
+    b.emit("connect", { chainId: "0x1" });
+    await settle();
+    c.emit("connect", { chainId: "0x1" });
+    await settle();
+    expect(formo.currentAddress?.toLowerCase(), "A still active while excluded").to.equal(ADDR.toLowerCase());
+
+    (global as any).window.history.pushState({}, "", "/app");
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "B adopted").to.equal(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("keeps a session that reconnected while its disconnect was still being emitted", async () => {
+    // The disconnect handler awaits the emission; a connect-only reconnect
+    // lands meanwhile and is committed. The older disconnect's clear is
+    // observation-guarded and does not wipe the restored state, and the
+    // next page hit finds nothing to redo. Pinned because a review
+    // suspected otherwise.
+    const provider = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    (formo as any).eventManager.addEvent.callsFake(async (e: any) => {
+      sent.push(e);
+      if (e.type === "disconnect") await new Promise((r) => setTimeout(() => r(undefined), 60));
+    });
+
+    provider.emit("disconnect", { code: 4900 });
+    await settle(10);
+    provider.emit("connect", { chainId: "0x1" });
+    await settle(120);
+
+    await formo.page();
+    await settle(80);
+    expect(formo.currentAddress?.toLowerCase(), "live session re-adopted").to.equal(ADDR.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("does not re-adopt already adopted providers on every page hit", async () => {
+    // Adoption is the accountsChanged path, and that path treats a provider
+    // with a different address from the active one as a wallet switch. Two
+    // registered providers therefore produced a disconnect and a connect
+    // on EVERY page hit, with no user action behind either.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    const { formo, sent } = await setup();
+    expect(formo.registerProvider(a)).to.equal(true);
+    await settle();
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    // Real switches: A reported, B replaces it, the user goes back to A.
+    a.emit("accountsChanged", [ADDR]);
+    await settle();
+    expect(sent.filter((e) => e.type === "connect").length, "A, B, A").to.equal(3);
+    sent.length = 0;
+
+    await formo.page();
+    await settle(60);
+    await formo.page();
+    await settle(60);
+
+    expect(
+      sent.filter((e) => e.type === "connect" || e.type === "disconnect"),
+      "no lifecycle events from a page hit"
+    ).to.deep.equal([]);
     formo.cleanup?.();
   });
 
