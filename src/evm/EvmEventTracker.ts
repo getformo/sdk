@@ -572,8 +572,7 @@ export class EvmEventTracker {
             }
             const otherWalletActive =
               this.wallet.provider !== undefined &&
-              this.wallet.provider !== provider &&
-              this.wallet.evmAddress !== undefined;
+              this.wallet.provider !== provider;
             if (otherWalletActive && this.latestRefused !== provider) {
               // Never signalled, merely connected: replaying it now would
               // be reported as a wallet switch nobody made. Waits for
@@ -808,18 +807,19 @@ export class EvmEventTracker {
             // Clear state and let the new provider become active
             this.wallet.clearProvider();
           } else {
-            // The same address on another provider: the address is known,
-            // but THIS provider's session is not adopted. It stays pending
-            // without its refusal marker, so it is not probed again while
-            // the active wallet stands, and is adopted once that wallet is
-            // gone. (A merely UNKNOWN stored address - identity purged by an
-            // opt-out - keeps the marker: that replay runs once the active
-            // wallet is known or gone.)
-            if (
-              newProviderAddress &&
-              currentStoredAddress &&
-              newProviderAddress === currentStoredAddress
-            ) {
+            // Ignored: the active wallet has accounts and this signal's
+            // address is the same, or the active address is unknown (a
+            // discovered wallet whose identity an opt-out purged; a
+            // registered one is re-learned before this point). THIS
+            // provider's session is not adopted; it stays pending without
+            // its refusal marker, so it is not probed again on every page
+            // hit while the active wallet stands, and is adopted once that
+            // wallet is gone. A live signal is ignored here in exactly the
+            // same way, so the replay changes nothing about who is active.
+            // While SUPPRESSED this is the refusal itself, not a verdict:
+            // the marker stands for the replay that runs once suppression
+            // ends.
+            if (!this.deps.isTrackingSuppressed()) {
               this.dropRefusal(provider);
             }
             logger.info(
@@ -1106,6 +1106,7 @@ export class EvmEventTracker {
   private registerConnectChainObserver(provider: EIP1193Provider): void {
     const listener = (...args: unknown[]) => {
       const connection = args[0] as { chainId?: unknown } | undefined;
+      if (this.disposed) return;
       if (typeof connection?.chainId !== "string") return;
       this.registry.rememberChain(provider, parseChainId(connection.chainId));
       // This observer adopts nothing, but a registered provider's connect

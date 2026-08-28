@@ -1158,6 +1158,55 @@ describe("registerProvider", () => {
     expect(sent, "nothing emitted after cleanup").to.deep.equal([]);
   });
 
+  it("stops probing a discovered active wallet whose identity an opt-out purged", async () => {
+    // The active wallet A was discovered, not registered, so nothing
+    // re-learns its address after an opt-out. A registered B refused
+    // while opted out is replayed at opt-in and ignored, exactly as a live
+    // signal would be while A's address is unknown; that must not turn
+    // into an eth_accounts probe on A at every later page hit.
+    const a = makeWcProvider({ accounts: [ADDR], peer: PEER });
+    const { formo, sent } = await setup();
+    (formo as any).evmEvents.registerAccountsChangedListener(a);
+    (formo as any).evmEvents.registerDisconnectListener(a);
+    (formo as any).evm.markTracked(a);
+    a.emit("accountsChanged", [ADDR]);
+    await settle();
+    expect(formo.currentAddress?.toLowerCase()).to.equal(ADDR.toLowerCase());
+
+    formo.optOutTracking();
+    const b = makeWcProvider({ accounts: [OTHER], peer: "Rainbow" });
+    expect(formo.registerProvider(b)).to.equal(true);
+    await settle();
+    formo.optInTracking();
+    await settle(80);
+    const probes = sandbox.spy(a, "request");
+    sent.length = 0;
+
+    await formo.page();
+    await settle(80);
+    await formo.page();
+    await settle(80);
+
+    expect(probes.getCalls().filter((c) => c.args[0]?.method === "eth_accounts").length, "no probes from page hits").to.equal(0);
+    expect(sent.filter((e) => e.type === "connect" || e.type === "disconnect")).to.deep.equal([]);
+    formo.cleanup?.();
+  });
+
+  it("ignores a connect after cleanup with connect autocapture off", async () => {
+    const provider = makeWcProvider({ peer: PEER });
+    provider.removeListener = () => { throw new Error("cannot remove"); };
+    const { formo } = await setup({ tracking: true, autocapture: { connect: false, signature: true } });
+    expect(formo.registerProvider(provider)).to.equal(true);
+    await settle();
+    formo.cleanup?.();
+
+    expect((formo as any).evm.chainIdOf(provider), "chain seeded at registration").to.equal(1);
+    provider.emit("connect", { chainId: "0x89" });
+    await settle();
+
+    expect((formo as any).evm.chainIdOf(provider), "no chain recorded after cleanup").to.equal(1);
+  });
+
   it("does not re-adopt already adopted providers on every page hit", async () => {
     // Adoption is the accountsChanged path, and that path treats a provider
     // with a different address from the active one as a wallet switch. Two
