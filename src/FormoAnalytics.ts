@@ -15,6 +15,7 @@ import {
   getIdentityCookieSecurity,
 } from "./storage/cookiePolicy";
 import { EventManager, IEventManager } from "./event";
+import { clearAnonymousId } from "./event/utils";
 import { EventQueue } from "./queue";
 import { logger, Logger } from "./logger";
 import {
@@ -373,7 +374,20 @@ export class FormoAnalytics implements IFormoAnalytics {
       await analytics.evmEvents.detectWallets(discovered);
       analytics.evmEvents.trackProviders(discovered);
     } else {
-      logger.info("FormoAnalytics: Skipping provider detection (Wagmi mode)");
+      // Wagmi owns connect / transaction capture, so discovered providers
+      // are not wrapped. Discovery still runs for the `detect` event: which
+      // wallets are installed must read the same in every integration mode.
+      // Skipping it here silently zeroed detect for every wagmi customer.
+      // Best-effort: detect must never stop wagmi capture from coming up.
+      try {
+        const discovered = await analytics.evmEvents.getProviders();
+        await analytics.evmEvents.detectWallets(discovered);
+        logger.info(
+          "FormoAnalytics: Discovered providers for detect only (Wagmi mode owns capture)"
+        );
+      } catch (error) {
+        logger.warn("FormoAnalytics: Provider discovery failed in Wagmi mode", error);
+      }
     }
 
     return analytics;
@@ -403,7 +417,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Reset the current user session.
+   * Reset the current user session: forget the user id, the active wallet
+   * and the per-session identity flags. The anonymous id is kept; it is the
+   * browser id, not the user id. Use `optOutTracking()` to clear it too.
    * @returns {void}
    */
   public reset(): void {
@@ -416,7 +432,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     // EVM provider reference so tracking can resume on the next connect.
     this.wallet.reset();
 
-    cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
+    // The anonymous id stays. It identifies the browser, not the user, and
+    // it is the Visitors denominator and the anon-to-wallet stitch key.
+    // Apps call reset() on every wallet switch (often as an effect cleanup
+    // right before the next identify()); dropping the id there turned one
+    // visitor into one per switch. Only optOutTracking() clears it.
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
@@ -1356,6 +1376,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     // on opt-in, and nothing else would retry an already-adopted one.
     this.evmEvents.markRegisteredAdoptionsPending();
     this.reset();
+    // Consent withdrawal is the one case where the browser id must go too.
+    clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     logger.info("Successfully opted out of tracking");
   }

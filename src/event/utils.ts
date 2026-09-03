@@ -6,12 +6,21 @@ import {
   getIdentityCookieSecurity,
 } from "../storage/cookiePolicy";
 
+/**
+ * The anonymous id held for this page lifetime when the cookie write does not
+ * stick. Browsers reject the write in a few contexts: a cross-site iframe
+ * (SameSite=Lax is refused there), cookies blocked by policy, or a partitioned
+ * third-party context. Without this, every event would mint a fresh id and
+ * one session would look like hundreds of visitors.
+ */
+let volatileAnonymousId: AnonymousID | undefined;
+
 const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): AnonymousID => {
   const storedAnonymousId = cookie().get(key);
   const anonymousId = (
     storedAnonymousId && typeof storedAnonymousId === "string"
       ? storedAnonymousId
-      : generateNativeUUID()
+      : volatileAnonymousId ?? generateNativeUUID()
   ) as AnonymousID;
   const domain = getIdentityCookieDomain(crossSubdomainCookies);
   // Re-set the cookie with the configured scope. When crossSubdomainCookies
@@ -28,7 +37,22 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
     ...getIdentityCookieSecurity(),
     ...(domain ? { domain } : {}),
   });
+  // Read back. A rejected write leaves nothing to read, so keep the id in
+  // memory and hand out the same one for the rest of the page lifetime.
+  volatileAnonymousId =
+    cookie().get(key) === anonymousId ? undefined : anonymousId;
   return anonymousId;
 };
 
-export { generateAnonymousId };
+/**
+ * Forget the anonymous id everywhere: the cookie and the in-memory fallback.
+ * The next event mints a new one. Reserved for consent withdrawal; a plain
+ * `reset()` keeps the anonymous id because it identifies the browser, not
+ * the user, and dropping it turns one visitor into many.
+ */
+const clearAnonymousId = (key: string): void => {
+  cookie().remove(key);
+  volatileAnonymousId = undefined;
+};
+
+export { generateAnonymousId, clearAnonymousId };

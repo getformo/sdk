@@ -1440,6 +1440,17 @@ export class EvmEventTracker {
     }
   }
 
+  /**
+   * Whether discovered providers get lifecycle listeners and the request
+   * wrapper. In wagmi mode wagmi owns connect / transaction capture, so a
+   * wrapped provider would report everything twice. Discovery itself still
+   * runs there for the `detect` event: which wallets are installed is
+   * measured the same way in every mode.
+   */
+  private tracksDiscovered(): boolean {
+    return !this.deps.isWagmiMode();
+  }
+
   async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
     let providers = store.getProviders();
@@ -1464,12 +1475,19 @@ export class EvmEventTracker {
         return !!p && !this.registry.isTracked(p);
       });
 
-      if (newDetails.length > 0) {
+      // Untracked-but-seen providers get a tracking retry on the next
+      // announcement. Where nothing is ever tracked, "untracked" is every
+      // provider, so detect only what this announcement added.
+      const toDetect = this.tracksDiscovered() ? newDetails : newlyAddedDetails;
+
+      if (this.tracksDiscovered() && newDetails.length > 0) {
         this.trackProviders(newDetails);
+      }
+      if (toDetect.length > 0) {
         // Detect newly discovered wallets (session de-dupes) with error handling
         (async () => {
           try {
-            await this.detectWallets(newDetails);
+            await this.detectWallets(toDetect);
           } catch (e) {
             logger.error("Formo: Failed to detect wallets", e);
           }
@@ -1493,7 +1511,7 @@ export class EvmEventTracker {
           this.registry.injected.provider === injected
         ) {
           // Ensure it's tracked
-          if (!this.registry.isTracked(injected)) {
+          if (this.tracksDiscovered() && !this.registry.isTracked(injected)) {
             this.trackEIP1193Provider(injected);
           }
           // Merge with existing providers instead of overwriting
@@ -1502,7 +1520,7 @@ export class EvmEventTracker {
         }
 
         // Re-check if the injected provider is already tracked just before tracking
-        if (!this.registry.isTracked(injected)) {
+        if (this.tracksDiscovered() && !this.registry.isTracked(injected)) {
           this.trackEIP1193Provider(injected);
         }
 
