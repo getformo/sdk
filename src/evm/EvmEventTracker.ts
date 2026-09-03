@@ -280,6 +280,12 @@ export class EvmEventTracker {
    * had already replaced.
    */
   private unsubscribeDiscovery?: () => void;
+  /**
+   * The mipd store behind discovery. `subscribe()` only detaches our
+   * listener; the window `eip6963:announceProvider` listener the store
+   * installs is released by `destroy()`, so cleanup must keep the store.
+   */
+  private discoveryStore?: ReturnType<typeof createStore>;
 
   constructor(
     private readonly wallet: WalletStateStore,
@@ -298,10 +304,12 @@ export class EvmEventTracker {
     this.retryRequested = false;
     try {
       this.unsubscribeDiscovery?.();
+      this.discoveryStore?.destroy();
     } catch (e) {
       logger.warn("Failed to unsubscribe from provider discovery", e);
     }
     this.unsubscribeDiscovery = undefined;
+    this.discoveryStore = undefined;
   }
 
   /** Set by `cleanup()`; every awaited continuation checks it. */
@@ -1453,6 +1461,7 @@ export class EvmEventTracker {
 
   async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
+    this.discoveryStore = store;
     let providers = store.getProviders();
 
     this.unsubscribeDiscovery = store.subscribe((providerDetails) => {

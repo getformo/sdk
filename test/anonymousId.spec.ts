@@ -114,7 +114,7 @@ describe("Anonymous id stability", () => {
       await a.track("Swap Confirmed");
 
       const ids = Array.from(new Set(anonIdsOf(sent).filter(Boolean)));
-      expect(sent.callCount).to.be.greaterThan(0);
+      expect(sent.callCount, "identify, identify, track").to.be.at.least(3);
       expect(ids.length, `anonymous ids seen: ${ids.join(",")}`).to.equal(1);
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(ids[0]);
       a.cleanup();
@@ -202,11 +202,20 @@ describe("Anonymous id stability", () => {
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(first);
     });
 
-    it("a working cookie still wins over the fallback", () => {
-      const first = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
-      const second = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
-      expect(second).to.equal(first);
-      expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(first);
+    it("a readable cookie wins over a held id", () => {
+      // Hold an id while writes are refused...
+      const setStub = sandbox.stub(cookie(), "set");
+      const getStub = sandbox.stub(cookie(), "get").returns(null);
+      const held = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+      setStub.restore();
+      getStub.restore();
+
+      // ...then another tab has written the real cookie meanwhile.
+      cookie().set(LOCAL_ANONYMOUS_ID_KEY, "id-from-other-tab", { path: "/" });
+      const next = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+
+      expect(next).to.equal("id-from-other-tab");
+      expect(next).to.not.equal(held);
     });
   });
 });

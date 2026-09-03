@@ -24,7 +24,7 @@ describe("detect in wagmi mode", () => {
   let savedGlobals: Map<string, PropertyDescriptor | undefined>;
 
   const GLOBAL_KEYS = [
-    "window","document","location","navigator","localStorage","sessionStorage",
+    "window","globalThis","document","location","navigator","localStorage","sessionStorage",
     "Event","CustomEvent","addEventListener","removeEventListener","dispatchEvent","crypto",
   ] as const;
 
@@ -153,7 +153,7 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
-  it("detects each wallet once per session across repeated announcements", async () => {
+  it("detects a wallet once even when re-announced with the session mark gone", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({
       tracking: true,
@@ -163,11 +163,47 @@ describe("detect in wagmi mode", () => {
 
     announce(provider);
     await settle();
+    // Nothing is tracked in wagmi mode, so "untracked" would be every
+    // provider on every announcement. Drop the session de-dup so a
+    // regression to that selection shows up as a second detect.
+    cookie().remove(SESSION_WALLET_DETECTED_KEY);
     announce(provider);
     await settle();
 
     expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
     formo.cleanup();
+  });
+
+  it("does not identify a never-connected wallet on a no-arg identify()", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+    announce(makeInjected());
+    await settle();
+
+    // The registry now holds a wallet with an authorized account that wagmi
+    // never connected. Auto-identify must not pick it up from eth_accounts.
+    await formo.identify();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "identify")).to.deep.equal([]);
+    formo.cleanup();
+  });
+
+  it("releases the discovery listener on cleanup", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+    formo.cleanup();
+
+    announce(makeInjected());
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect")).to.deep.equal([]);
   });
 
   it("still wraps announced wallets outside wagmi mode", async () => {

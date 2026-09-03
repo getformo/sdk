@@ -1053,6 +1053,15 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
       if (!params) {
+        // Discovery runs in wagmi mode for detect only, so the registry
+        // holds wallets wagmi never connected. Identifying those from
+        // eth_accounts would attribute a wallet the user never chose. Before
+        // discovery ran here the registry was empty, so this is a no-op as
+        // before.
+        if (this.isWagmiMode) {
+          logger.info("identify() without params is a no-op in Wagmi mode");
+          return;
+        }
         // If no params provided, auto-identify
         logger.info(
           "Auto-identifying with providers:",

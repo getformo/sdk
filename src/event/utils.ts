@@ -14,6 +14,9 @@ import {
  * one session would look like hundreds of visitors.
  */
 let volatileAnonymousId: AnonymousID | undefined;
+// Module-level on purpose: the storage manager is keyed once per page
+// (`initStorageManager` no-ops after the first call), so every instance on
+// the page shares one cookie key and therefore one browser id.
 
 const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): AnonymousID => {
   const storedAnonymousId = cookie().get(key);
