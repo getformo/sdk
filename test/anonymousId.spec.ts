@@ -28,6 +28,15 @@ describe("Anonymous id stability", () => {
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
   let uuidCounter = 0;
+  // Original global descriptors, restored verbatim in afterEach. Deleting
+  // is wrong for keys Node itself defines (crypto, navigator, globalThis):
+  // it would remove the built-in for every later spec in the process.
+  let savedGlobals: Map<string, PropertyDescriptor | undefined>;
+
+  const GLOBAL_KEYS = [
+    "window", "document", "location", "globalThis", "navigator",
+    "localStorage", "sessionStorage", "crypto", "history",
+  ] as const;
 
   const ADDRESS_A = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
   const ADDRESS_B = "0x82827Bc8342a16b681AfbA6B979E3D1aE5F28a0e";
@@ -51,6 +60,9 @@ describe("Anonymous id stability", () => {
   beforeEach(() => {
     sandbox = sinon.createSandbox();
     uuidCounter = 0;
+    savedGlobals = new Map(
+      GLOBAL_KEYS.map((k) => [k, Object.getOwnPropertyDescriptor(global, k)])
+    );
 
     // A real two-label host so the apex-domain cookie path is exercised, as
     // on a customer domain. `localhost` would skip the domain attribute.
@@ -77,15 +89,10 @@ describe("Anonymous id stability", () => {
   afterEach(() => {
     clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
     sandbox.restore();
-    delete (global as any).window;
-    delete (global as any).document;
-    delete (global as any).location;
-    delete (global as any).globalThis;
-    delete (global as any).navigator;
-    delete (global as any).localStorage;
-    delete (global as any).sessionStorage;
-    delete (global as any).crypto;
-    delete (global as any).history;
+    savedGlobals.forEach((desc, k) => {
+      if (desc) Object.defineProperty(global, k, desc);
+      else delete (global as any)[k];
+    });
     if (jsdom) jsdom.window.close();
   });
 
@@ -176,6 +183,23 @@ describe("Anonymous id stability", () => {
 
       expect(persisted).to.equal(held);
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(held);
+    });
+
+    it("falls back to a host-only cookie when only the domain-scoped write is rejected", () => {
+      // The apex-domain write is refused (e.g. a mis-detected public suffix)
+      // while a host-only write still sticks. set() must not have thrown the
+      // legacy host-only cookie away for nothing.
+      const realSet = cookie().set.bind(cookie());
+      sandbox.stub(cookie(), "set").callsFake((key, value, options) => {
+        if (options?.domain) return;
+        realSet(key, value, options);
+      });
+
+      const first = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+      const second = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+
+      expect(second).to.equal(first);
+      expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(first);
     });
 
     it("a working cookie still wins over the fallback", () => {

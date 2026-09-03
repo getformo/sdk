@@ -37,7 +37,17 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
     ...getIdentityCookieSecurity(),
     ...(domain ? { domain } : {}),
   });
-  // Read back. A rejected write leaves nothing to read, so keep the id in
+  // Read back. A rejected domain-scoped write leaves nothing to read (and
+  // set() has already expired any host-only cookie), so retry host-only
+  // before giving up on persistence.
+  if (domain && cookie().get(key) !== anonymousId) {
+    cookie().set(key, anonymousId, {
+      expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toUTCString(),
+      path: "/",
+      ...getIdentityCookieSecurity(),
+    });
+  }
+  // Still nothing (cross-site iframe, cookies blocked): keep the id in
   // memory and hand out the same one for the rest of the page lifetime.
   volatileAnonymousId =
     cookie().get(key) === anonymousId ? undefined : anonymousId;
