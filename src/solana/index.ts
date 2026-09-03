@@ -1,17 +1,21 @@
 /**
  * Solana integration module
  *
- * Provides automatic event capture for Solana wallets via framework-kit's
- * zustand store. Connect/disconnect and transaction events are tracked
- * automatically. Signature events (signMessage/signTransaction) require
- * explicit tracking via formo.signature() since framework-kit
- * doesn't track these in store state.
+ * Wallets are discovered through the Wallet Standard and their connect /
+ * disconnect events captured automatically, for every wallet library.
+ * Framework-kit apps can additionally pass their zustand store for
+ * transaction lifecycle events. Signature events (signMessage /
+ * signTransaction) require explicit tracking via formo.signature(), since
+ * neither source reports them.
  *
+ * @see https://github.com/wallet-standard/wallet-standard
  * @see https://github.com/solana-foundation/framework-kit
  */
 
 export { SolanaStoreHandler } from "./SolanaStoreHandler";
+export { SolanaWalletStandardRegistry } from "./SolanaWalletStandardRegistry";
 export { SolanaManager } from "./SolanaManager";
 export * from "./types";
 export * from "./storeTypes";
+export * from "./walletStandardTypes";
 export * from "./address";

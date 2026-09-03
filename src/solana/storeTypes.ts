@@ -94,7 +94,15 @@ export interface SolanaWalletConnectorMetadata {
 export interface SolanaClusterState {
   readonly endpoint: string;
   readonly commitment?: string;
-  readonly status: "idle" | "connecting" | "ready" | "error";
+  /**
+   * An object, not a bare string: framework-kit's `ClusterStatus` is a
+   * discriminated union such as `{ status: 'ready', latencyMs?: number }`.
+   * Typing it as a string made `client.store` unassignable to
+   * `SolanaClientStore`, which is why the example app needed an `as any`.
+   */
+  readonly status: {
+    readonly status: "idle" | "connecting" | "ready" | "error";
+  };
 }
 
 /**

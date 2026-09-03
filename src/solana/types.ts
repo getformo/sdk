@@ -67,15 +67,32 @@ export interface SolanaPublicKey {
 export type UnsubscribeFn = () => void;
 
 /**
- * Solana options for FormoAnalytics
+ * The rdns reported for a Solana wallet.
+ *
+ * The Wallet Standard has no reverse-domain identifier, so one is derived
+ * from the wallet's name. Both Solana paths (Wallet Standard discovery and
+ * the framework-kit store) derive it the same way, so a wallet's `detect`
+ * and its `connect` share one rdns whichever path reported each.
+ */
+export function solanaWalletRdns(walletName: string): string {
+  return `sol.wallet.${walletName.toLowerCase().replace(/\s+/g, "")}`;
+}
+
+/**
+ * Solana options for FormoAnalytics.
+ *
+ * Wallet discovery through the Wallet Standard is on by default and needs
+ * none of these. They add framework-kit's store, or name the cluster.
  */
 export interface SolanaOptions {
   /**
-   * The framework-kit client store (client.store) for automatic event tracking.
-   * When provided, wallet connect/disconnect and transaction events are tracked
-   * automatically by subscribing to zustand store state changes.
+   * The framework-kit client store (client.store).
+   * When provided, transaction lifecycle events and cluster switches are
+   * tracked from the store, and connect/disconnect come from the store
+   * rather than from Wallet Standard discovery.
    *
-   * This is the recommended approach for apps using framework-kit.
+   * Only for apps using framework-kit (`@solana/client`). Every other wallet
+   * library is covered by Wallet Standard discovery without this.
    *
    * @example
    * ```tsx
@@ -87,10 +104,15 @@ export interface SolanaOptions {
   store?: import("./storeTypes").SolanaClientStore;
 
   /**
-   * The Solana cluster/network.
-   * Usually auto-detected from the store's endpoint URL.
-   * Only needed for custom RPC URLs that don't contain a recognizable cluster name.
-   * @default auto-detected, or "mainnet-beta" if detection fails
+   * The Solana cluster/network the app is on.
+   *
+   * With a store, usually auto-detected from its endpoint URL; only needed
+   * for custom RPC URLs that don't contain a recognizable cluster name.
+   * Without a store, the Wallet Standard cannot say which cluster the app
+   * uses, so a devnet or testnet app should set this (or call
+   * `formo.solana.setCluster()`); otherwise connections are reported on
+   * mainnet-beta.
+   * @default auto-detected from the store, else "mainnet-beta"
    */
   cluster?: SolanaCluster;
 }

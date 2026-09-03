@@ -56,6 +56,13 @@ export const computeOptionsKey = (options?: Options): string => {
     logger: options.logger,
     referral: options.referral,
     evm: options.evm,
+    // `solana` is a boolean or an options object; the object's store is
+    // tracked by presence, its cluster by value.
+    solana: typeof options.solana === "object" ? undefined : options.solana,
+    hasSolanaStore:
+      typeof options.solana === "object" && !!options.solana.store,
+    solanaCluster:
+      typeof options.solana === "object" ? options.solana.cluster : undefined,
     // For complex objects, just track their presence, not their content
     hasProvider: !!options.provider,
     hasWagmi: !!options.wagmi,

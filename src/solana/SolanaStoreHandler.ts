@@ -21,7 +21,12 @@ import {
   SolanaTransactionRecord,
   SolanaWalletStatus,
 } from "./storeTypes";
-import { SOLANA_CHAIN_IDS, SolanaCluster, UnsubscribeFn } from "./types";
+import {
+  SOLANA_CHAIN_IDS,
+  SolanaCluster,
+  UnsubscribeFn,
+  solanaWalletRdns,
+} from "./types";
 import { isBlockedSolanaAddress } from "./address";
 
 /**
@@ -191,7 +196,7 @@ export class SolanaStoreHandler {
             { chainId: this.chainId, address },
             {
               providerName: connectorName,
-              rdns: `sol.wallet.${connectorName.toLowerCase().replace(/\s+/g, "")}`,
+              rdns: solanaWalletRdns(connectorName),
             }
           ).catch((error) => {
             logger.error("SolanaStoreHandler: Error emitting initial connect", error);
@@ -263,7 +268,7 @@ export class SolanaStoreHandler {
         { chainId, address },
         {
           providerName: connectorName,
-          rdns: `sol.wallet.${connectorName.toLowerCase().replace(/\s+/g, "")}`,
+          rdns: solanaWalletRdns(connectorName),
         }
       ).catch((error) => {
         logger.error("SolanaStoreHandler: Error emitting connect", error);

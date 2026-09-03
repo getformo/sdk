@@ -311,16 +311,26 @@ export interface Options {
    */
   wagmi?: WagmiOptions;
   /**
-   * Solana integration configuration.
-   * Pass `store: client.store` from framework-kit for automatic tracking of
-   * wallet connect/disconnect and transaction events.
+   * Solana wallet tracking.
+   *
+   * On by default: wallets are discovered through the Wallet Standard, the
+   * Solana analogue of EIP-6963, so connect and disconnect are autocaptured
+   * for `@solana/wallet-adapter`, Privy, Dynamic, Reown, framework-kit and
+   * custom integrations alike, with no configuration.
+   *
+   * - `false`: disable Solana wallet discovery and tracking entirely.
+   * - `SolanaOptions`: additionally pass `store: client.store` from
+   *   framework-kit for transaction lifecycle events and cluster switches,
+   *   or `cluster` to name the network a non-mainnet app is on.
    *
    * For signMessage/signTransaction, use formo.signature() directly
-   * (framework-kit doesn't track these in the store).
+   * (neither the Wallet Standard nor framework-kit's store reports these).
    *
+   * @see https://github.com/wallet-standard/wallet-standard
    * @see https://github.com/solana-foundation/framework-kit
+   * @default true
    */
-  solana?: SolanaOptions;
+  solana?: boolean | SolanaOptions;
   /**
    * Custom API host for sending events through your own domain to bypass ad blockers
    * - If not provided, events are sent directly to events.formo.so
