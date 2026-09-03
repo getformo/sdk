@@ -382,11 +382,8 @@ export class FormoAnalytics implements IFormoAnalytics {
       try {
         const discovered = await analytics.evmEvents.getProviders();
         await analytics.evmEvents.detectWallets(discovered);
-        logger.info(
-          "FormoAnalytics: Discovered providers for detect only (Wagmi mode owns capture)"
-        );
       } catch (error) {
-        logger.warn("FormoAnalytics: Provider discovery failed in Wagmi mode", error);
+        logger.warn("FormoAnalytics: Provider discovery failed", error);
       }
     }
 
