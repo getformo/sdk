@@ -3,9 +3,9 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
-import { initStorageManager, cookie } from "../src/storage";
+import { initStorageManager, cookie, local } from "../src/storage";
 import { LOCAL_ANONYMOUS_ID_KEY } from "../src/constants";
-import { generateAnonymousId, clearAnonymousId } from "../src/event/utils";
+import { generateAnonymousId, clearAnonymousId, __resetAnonymousIdMemory } from "../src/event/utils";
 
 /**
  * The anonymous id is the browser id: the Visitors denominator and the key
@@ -22,7 +22,8 @@ import { generateAnonymousId, clearAnonymousId } from "../src/event/utils";
  *
  * 2. When the browser rejects the cookie write (cross-site iframe under
  *    SameSite=Lax, cookies blocked), every event generated a fresh id. The
- *    id is now held in memory for the page lifetime.
+ *    id now falls back to Web Storage, which is partitioned by the embedding
+ *    site but survives reloads, and then to memory for the page lifetime.
  */
 describe("Anonymous id stability", () => {
   let sandbox: sinon.SinonSandbox;
@@ -149,6 +150,7 @@ describe("Anonymous id stability", () => {
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.satisfy(
         (v: any) => v === undefined || v === null || v === ""
       );
+      expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(null);
 
       a.optInTracking();
       const after = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
@@ -183,6 +185,36 @@ describe("Anonymous id stability", () => {
 
       expect(persisted).to.equal(held);
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(held);
+    });
+
+    it("keeps the id across page loads through Web Storage when cookies are refused", () => {
+      sandbox.stub(cookie(), "set");
+      sandbox.stub(cookie(), "get").returns(null);
+
+      const first = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+      expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(first);
+
+      // A new page load in the same embedded context: memory is gone,
+      // cookies still refused, Web Storage still there.
+      __resetAnonymousIdMemory();
+      const nextLoad = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+
+      expect(nextLoad).to.equal(first);
+    });
+
+    it("drops the Web Storage copy once the cookie is writable again", () => {
+      const setStub = sandbox.stub(cookie(), "set");
+      const getStub = sandbox.stub(cookie(), "get").returns(null);
+      const held = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+      expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(held);
+      setStub.restore();
+      getStub.restore();
+
+      const persisted = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+
+      expect(persisted).to.equal(held);
+      expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(held);
+      expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(null);
     });
 
     it("falls back to a host-only cookie when only the domain-scoped write is rejected", () => {

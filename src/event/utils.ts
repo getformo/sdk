@@ -1,6 +1,6 @@
 import { AnonymousID } from "../types";
 import { generateNativeUUID } from "../utils";
-import { cookie } from "../storage";
+import { cookie, local } from "../storage";
 import {
   getIdentityCookieDomain,
   getIdentityCookieSecurity,
@@ -18,12 +18,27 @@ let volatileAnonymousId: AnonymousID | undefined;
 // (`initStorageManager` no-ops after the first call), so every instance on
 // the page shares one cookie key and therefore one browser id.
 
+/**
+ * The rung between the cookie and memory. Where the cookie is refused
+ * (a cross-site iframe, cookies blocked) Web Storage is partitioned by the
+ * embedding site but survives reloads, so an embedded visitor stays one
+ * visitor per embedding site instead of one per page load.
+ */
+const readLocal = (key: string): string | undefined => {
+  try {
+    const value = local().get(key);
+    return typeof value === "string" && value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): AnonymousID => {
   const storedAnonymousId = cookie().get(key);
   const anonymousId = (
     storedAnonymousId && typeof storedAnonymousId === "string"
       ? storedAnonymousId
-      : volatileAnonymousId ?? generateNativeUUID()
+      : readLocal(key) ?? volatileAnonymousId ?? generateNativeUUID()
   ) as AnonymousID;
   const domain = getIdentityCookieDomain(crossSubdomainCookies);
   // Re-set the cookie with the configured scope. When crossSubdomainCookies
@@ -50,10 +65,27 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
       ...getIdentityCookieSecurity(),
     });
   }
-  // Still nothing (cross-site iframe, cookies blocked): keep the id in
-  // memory and hand out the same one for the rest of the page lifetime.
-  volatileAnonymousId =
-    cookie().get(key) === anonymousId ? undefined : anonymousId;
+  if (cookie().get(key) === anonymousId) {
+    // The cookie is the source of truth again; a stale fallback copy would
+    // otherwise resurface the moment a cookie expires.
+    volatileAnonymousId = undefined;
+    if (readLocal(key)) {
+      try {
+        local().remove(key);
+      } catch {
+        // Nothing to do: the copy is only ever read when the cookie misses.
+      }
+    }
+    return anonymousId;
+  }
+  // Still nothing (cross-site iframe, cookies blocked): persist to Web
+  // Storage for the next load and keep the id in memory for this one.
+  try {
+    local().set(key, anonymousId);
+  } catch {
+    // Storage refused too (sandboxed frame, quota); memory is the last rung.
+  }
+  volatileAnonymousId = anonymousId;
   return anonymousId;
 };
 
@@ -65,7 +97,17 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
  */
 const clearAnonymousId = (key: string): void => {
   cookie().remove(key);
+  try {
+    local().remove(key);
+  } catch {
+    // Storage refused; there is nothing of ours in it then.
+  }
   volatileAnonymousId = undefined;
 };
 
-export { generateAnonymousId, clearAnonymousId };
+/** Test hook: forget the page-lifetime memory, as a new page load would. */
+const __resetAnonymousIdMemory = (): void => {
+  volatileAnonymousId = undefined;
+};
+
+export { generateAnonymousId, clearAnonymousId, __resetAnonymousIdMemory };
