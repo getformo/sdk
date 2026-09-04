@@ -27,7 +27,7 @@ describe("SolanaStoreHandler", () => {
     const defaultState: SolanaClientState = {
       transactions: {},
       wallet: { status: "disconnected" },
-      cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+      cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       lastUpdatedAt: Date.now(),
       ...initialState,
     };
@@ -113,6 +113,15 @@ describe("SolanaStoreHandler", () => {
   // -- Constructor --
 
   describe("Constructor", () => {
+    it("accepts the legacy string cluster status", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+      handler.cleanup();
+    });
+
     it("should auto-detect cluster from store endpoint", () => {
       const store = createMockStore(); // default endpoint is devnet
       const handler = new SolanaStoreHandler(mockFormo as any, store);
@@ -122,7 +131,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should default to mainnet-beta when endpoint is unrecognized", () => {
       const store = createMockStore({
-        cluster: { endpoint: "https://custom-rpc.example.com", status: "ready" },
+        cluster: { endpoint: "https://custom-rpc.example.com", status: { status: "ready" } },
       });
       const handler = new SolanaStoreHandler(mockFormo as any, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
@@ -566,7 +575,7 @@ describe("SolanaStoreHandler", () => {
   describe("Cluster Detection", () => {
     it("should detect devnet from store endpoint", () => {
       const store = createMockStore({
-        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
       const handler = new SolanaStoreHandler(mockFormo as any, store);
 
@@ -577,7 +586,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should detect testnet from store endpoint", () => {
       const store = createMockStore({
-        cluster: { endpoint: "https://api.testnet.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.testnet.solana.com", status: { status: "ready" } },
       });
       const handler = new SolanaStoreHandler(mockFormo as any, store);
 
@@ -588,7 +597,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should detect localnet from localhost endpoint", () => {
       const store = createMockStore({
-        cluster: { endpoint: "http://localhost:8899", status: "ready" },
+        cluster: { endpoint: "http://localhost:8899", status: { status: "ready" } },
       });
       const handler = new SolanaStoreHandler(mockFormo as any, store);
 
@@ -599,7 +608,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should prefer explicit cluster option over auto-detection", () => {
       const store = createMockStore({
-        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
       const handler = new SolanaStoreHandler(mockFormo as any, store, {
         cluster: "mainnet-beta",
@@ -612,7 +621,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should react to cluster endpoint changes in the store", () => {
       const store = createMockStore({
-        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
         wallet: {
           status: "connected",
           connectorId: "phantom",
@@ -628,7 +637,7 @@ describe("SolanaStoreHandler", () => {
 
       // Switch to mainnet
       store._setState({
-        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: { status: "ready" } },
       });
 
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
@@ -641,12 +650,12 @@ describe("SolanaStoreHandler", () => {
 
     it("should not emit chain event when not connected", () => {
       const store = createMockStore({
-        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
       const handler = new SolanaStoreHandler(mockFormo as any, store);
 
       store._setState({
-        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: { status: "ready" } },
       });
 
       // chainId should update but no event emitted
@@ -658,7 +667,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should use correct chainId when wallet and cluster change in same update", () => {
       const store = createMockStore({
-        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
       const handler = new SolanaStoreHandler(mockFormo as any, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
@@ -674,7 +683,7 @@ describe("SolanaStoreHandler", () => {
             disconnect: async () => {},
           },
         },
-        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: "ready" },
+        cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: { status: "ready" } },
       });
 
       // Connect event should use mainnet chainId, not stale devnet
