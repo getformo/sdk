@@ -28,6 +28,7 @@ describe("SolanaWalletStandardRegistry", () => {
   let deps: sinon.SinonStubbedInstance<SolanaWalletStandardRegistryDeps>;
   let ownsWalletEvents: boolean;
   let autocapture: Record<string, boolean>;
+  let willTrack: boolean;
   let originalGlobals: Map<PropertyKey, PropertyDescriptor | undefined>;
   const registries: SolanaWalletStandardRegistry[] = [];
 
@@ -137,8 +138,10 @@ describe("SolanaWalletStandardRegistry", () => {
     }
     ownsWalletEvents = true;
     autocapture = {};
+    willTrack = true;
     deps = {
       isAutocaptureEnabled: sandbox.stub().callsFake((t: string) => autocapture[t] !== false),
+      willTrackEvent: sandbox.stub().callsFake(() => willTrack),
       detect: sandbox.stub().resolves(),
       connect: sandbox.stub().resolves(),
       disconnect: sandbox.stub().resolves(),
@@ -413,6 +416,19 @@ describe("SolanaWalletStandardRegistry", () => {
       wallet.setAccounts([]);
       expect(deps.connect.called).to.be.false;
       expect(deps.disconnect.called).to.be.false;
+    });
+
+    it("does not mark a suppressed connect as reported for store handoff", () => {
+      const wallet = makeWallet("Phantom");
+      const registry = makeRegistry();
+      installWalletAfterApp(wallet);
+      willTrack = false;
+
+      wallet.setAccounts([account(ADDRESS)]);
+
+      expect(
+        registry.takeReportedConnection(ADDRESS, "sol.wallet.Phantom")
+      ).to.equal(undefined);
     });
 
     it("keeps reporting after a rejected emit", () => {

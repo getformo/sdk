@@ -86,6 +86,7 @@ export class SolanaStoreHandler {
   private beforeWalletConnect?: (connection: {
     address: string;
     chainId: number;
+    rdns: string;
   }) => boolean;
 
   constructor(
@@ -96,6 +97,7 @@ export class SolanaStoreHandler {
       beforeWalletConnect?: (connection: {
         address: string;
         chainId: number;
+        rdns: string;
       }) => boolean;
     }
   ) {
@@ -201,15 +203,20 @@ export class SolanaStoreHandler {
           chainId: this.chainId,
         });
 
+        const connectorName = wallet.session.connector?.name || wallet.connectorId;
+        const rdns = solanaWalletRdns(connectorName);
         const shouldEmit =
-          this.beforeWalletConnect?.({ address, chainId: this.chainId }) ?? true;
+          this.beforeWalletConnect?.({
+            address,
+            chainId: this.chainId,
+            rdns,
+          }) ?? true;
         if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
-          const connectorName = wallet.session.connector?.name || wallet.connectorId;
           this.formo.connect(
             { chainId: this.chainId, address },
             {
               providerName: connectorName,
-              rdns: solanaWalletRdns(connectorName),
+              rdns,
             }
           ).catch((error) => {
             logger.error("SolanaStoreHandler: Error emitting initial connect", error);
@@ -275,15 +282,16 @@ export class SolanaStoreHandler {
       connector: wallet.connectorId,
     });
 
+    const connectorName = wallet.session.connector?.name || wallet.connectorId;
+    const rdns = solanaWalletRdns(connectorName);
     const shouldEmit =
-      this.beforeWalletConnect?.({ address, chainId }) ?? true;
+      this.beforeWalletConnect?.({ address, chainId, rdns }) ?? true;
     if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
-      const connectorName = wallet.session.connector?.name || wallet.connectorId;
       this.formo.connect(
         { chainId, address },
         {
           providerName: connectorName,
-          rdns: solanaWalletRdns(connectorName),
+          rdns,
         }
       ).catch((error) => {
         logger.error("SolanaStoreHandler: Error emitting connect", error);

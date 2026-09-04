@@ -66,6 +66,7 @@ const CLUSTER_BY_CHAIN: Record<string, SolanaCluster> = {
 /** What the registry needs from the SDK that owns it. */
 export interface SolanaWalletStandardRegistryDeps {
   isAutocaptureEnabled(eventType: AutocaptureEventType): boolean;
+  willTrackEvent(chainId: number): boolean;
   detect(params: { providerName: string; rdns: string }): Promise<void>;
   connect(
     params: { chainId: number; address: string },
@@ -381,6 +382,11 @@ export class SolanaWalletStandardRegistry {
     });
 
     if (!this.deps.isAutocaptureEnabled("connect")) return;
+    // FormoAnalytics.connect() deliberately resolves without enqueueing when
+    // tracking is suppressed or this chain is excluded. Only a connect that
+    // can actually be accepted may suppress the authoritative store event
+    // that can follow.
+    if (!this.deps.willTrackEvent(chainId)) return;
     tracked.connectWasReported = true;
     this.deps
       .connect(
@@ -485,12 +491,14 @@ export class SolanaWalletStandardRegistry {
    * a second time when framework-kit's store catches up.
    */
   takeReportedConnection(
-    address: string
+    address: string,
+    rdns: string
   ): { address: string; chainId: number } | undefined {
     for (const tracked of Array.from(this.wallets.values())) {
       if (
         tracked.connectWasReported &&
-        tracked.connected?.address === address
+        tracked.connected?.address === address &&
+        tracked.rdns === rdns
       ) {
         tracked.connectWasReported = false;
         return tracked.connected;

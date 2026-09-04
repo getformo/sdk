@@ -68,6 +68,7 @@ export class SolanaManager {
     this.registry = new SolanaWalletStandardRegistry(
       {
         isAutocaptureEnabled: (t) => this.formo.isAutocaptureEnabled(t),
+        willTrackEvent: (chainId) => this.formo.willTrackEvent(chainId),
         detect: (params) => this.formo.detect(params),
         connect: (params, properties) =>
           this.formo.connect(params, properties),
@@ -91,10 +92,18 @@ export class SolanaManager {
     this.storeHandler = new SolanaStoreHandler(this.formo, store, {
       cluster,
       beforeWalletConnect: (connection) => {
+        // The store's cluster is authoritative even when chain autocapture is
+        // disabled. Keep central attribution correct without manufacturing a
+        // chain event in that mode.
+        this.formo.syncWalletState({
+          address: connection.address,
+          chainId: connection.chainId,
+        });
         if (this.storeOwnsWalletEvents) return true;
 
         const reported = this.registry?.takeReportedConnection(
-          connection.address
+          connection.address,
+          connection.rdns
         );
         this.storeOwnsWalletEvents = true;
 

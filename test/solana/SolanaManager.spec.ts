@@ -161,6 +161,8 @@ describe("SolanaManager", () => {
       transaction: sandbox.stub().resolves(),
       signature: sandbox.stub().resolves(),
       isAutocaptureEnabled: sandbox.stub().returns(true),
+      willTrackEvent: sandbox.stub().returns(true),
+      syncWalletState: sandbox.stub(),
     } as any;
   });
 
@@ -298,6 +300,45 @@ describe("SolanaManager", () => {
       phantom.setAccounts([]);
 
       expect(mockFormo.disconnect.calledOnce).to.be.true;
+    });
+
+    it("does not adopt another wallet merely because its address matches", () => {
+      const manager = makeManager();
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:mainnet"] }]);
+
+      manager.setStore(
+        makeStore({ wallet: connectedWallet("solflare", "Solflare") })
+      );
+
+      expect(mockFormo.connect.callCount).to.equal(2);
+      expect(mockFormo.connect.getCall(1)?.args[1]?.providerName).to.equal(
+        "Solflare"
+      );
+    });
+
+    it("corrects central cluster state during handoff when chain capture is off", () => {
+      mockFormo.isAutocaptureEnabled.callsFake(
+        (eventType) => eventType !== "chain"
+      );
+      const manager = makeManager();
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:mainnet"] }]);
+
+      manager.setStore(
+        makeStore({ wallet: connectedWallet("phantom", "Phantom") })
+      );
+
+      expect(
+        mockFormo.syncWalletState.calledWith({
+          address: ADDRESS,
+          chainId: SOLANA_CHAIN_IDS.devnet,
+        })
+      ).to.be.true;
+      expect(mockFormo.chain.called).to.be.false;
+      expect(mockFormo.connect.calledOnce).to.be.true;
     });
   });
 
