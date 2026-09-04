@@ -380,9 +380,7 @@ class EventFactory implements IEventFactory {
     shouldContinue?: EventCreationGuard
   ): Promise<IFormoEventContext> {
     const browserName = await detectBrowser();
-    // detectBrowser() is asynchronous. Consent may have been withdrawn while
-    // it was resolving; stop before traffic attribution or identity storage is
-    // touched. The manager also checks again before enqueueing.
+    // Consent may change while browser detection is pending.
     if (shouldContinue && !shouldContinue()) {
       throw EVENT_CREATION_CANCELLED;
     }

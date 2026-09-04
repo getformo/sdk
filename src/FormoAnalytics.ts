@@ -407,9 +407,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Reset the current user session: forget the user id, the active wallet
-   * and the per-session identity flags. The anonymous id is kept; it is the
-   * browser id, not the user id. Use `optOutTracking()` to clear it too.
+   * Reset user and wallet state while preserving the browser's anonymous id.
+   * Use `optOutTracking()` to clear the anonymous id.
    * @returns {void}
    */
   public reset(): void {
@@ -422,11 +421,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     // EVM provider reference so tracking can resume on the next connect.
     this.wallet.reset();
 
-    // The anonymous id stays. It identifies the browser, not the user, and
-    // it is the Visitors denominator and the anon-to-wallet stitch key.
-    // Apps call reset() on every wallet switch (often as an effect cleanup
-    // right before the next identify()); dropping the id there turned one
-    // visitor into one per switch. Only optOutTracking() clears it.
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
@@ -1046,11 +1040,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
       if (!params) {
-        // Discovery runs in wagmi mode for detect only, so the registry
-        // holds wallets wagmi never connected. Identifying those from
-        // eth_accounts would attribute a wallet the user never chose. Before
-        // discovery ran here the registry was empty, so this is a no-op as
-        // before.
+        // Wagmi owns wallet identification.
         if (this.isWagmiMode) {
           logger.info("identify() without params is a no-op in Wagmi mode");
           return;
@@ -1375,7 +1365,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // on opt-in, and nothing else would retry an already-adopted one.
     this.evmEvents.markRegisteredAdoptionsPending();
     this.reset();
-    // Consent withdrawal is the one case where the browser id must go too.
+    // Consent withdrawal also clears the browser id.
     clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
     logger.info("Successfully opted out of tracking");

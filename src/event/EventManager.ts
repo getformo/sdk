@@ -56,9 +56,7 @@ class EventManager implements IEventManager {
       throw error;
     }
 
-    // Consent can change after enrichment resolves but before this continuation
-    // runs. A clear also advances the generation, so opting back in cannot
-    // revive work that began before the opt-out.
+    // Reject work invalidated while enrichment was pending.
     if (!shouldContinue()) return;
 
     // Check if the final event has a blocked address - don't queue it

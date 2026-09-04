@@ -6,24 +6,10 @@ import {
   getIdentityCookieSecurity,
 } from "../storage/cookiePolicy";
 
-/**
- * The anonymous id held for this page lifetime when the cookie write does not
- * stick. Browsers reject the write in a few contexts: a cross-site iframe
- * (SameSite=Lax is refused there), cookies blocked by policy, or a partitioned
- * third-party context. Without this, every event would mint a fresh id and
- * one session would look like hundreds of visitors.
- */
+/** Page-lifetime fallback when persistent storage is unavailable. */
 let volatileAnonymousId: AnonymousID | undefined;
-// Module-level on purpose: the storage manager is keyed once per page
-// (`initStorageManager` no-ops after the first call), so every instance on
-// the page shares one cookie key and therefore one browser id.
 
-/**
- * The rung between the cookie and memory. Where the cookie is refused
- * (a cross-site iframe, cookies blocked) Web Storage is partitioned by the
- * embedding site but survives reloads, so an embedded visitor stays one
- * visitor per embedding site instead of one per page load.
- */
+/** Persistent fallback when cookies are unavailable. */
 const readLocal = (key: string): string | undefined => {
   try {
     const value = local().get(key);
@@ -55,9 +41,7 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
     ...getIdentityCookieSecurity(),
     ...(domain ? { domain } : {}),
   });
-  // Read back. A rejected domain-scoped write leaves nothing to read (and
-  // set() has already expired any host-only cookie), so retry host-only
-  // before giving up on persistence.
+  // Retry host-only when a domain-scoped write is rejected.
   if (domain && cookie().get(key) !== anonymousId) {
     cookie().set(key, anonymousId, {
       expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toUTCString(),
@@ -66,41 +50,34 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
     });
   }
   if (cookie().get(key) === anonymousId) {
-    // The cookie is the source of truth again; a stale fallback copy would
-    // otherwise resurface the moment a cookie expires.
+    // Prefer the cookie and discard the fallback copy.
     volatileAnonymousId = undefined;
     if (readLocal(key)) {
       try {
         local().remove(key);
       } catch {
-        // Nothing to do: the copy is only ever read when the cookie misses.
+        // Storage is unavailable.
       }
     }
     return anonymousId;
   }
-  // Still nothing (cross-site iframe, cookies blocked): persist to Web
-  // Storage for the next load and keep the id in memory for this one.
+  // Persist across embedded page loads when cookies are blocked.
   try {
     local().set(key, anonymousId);
   } catch {
-    // Storage refused too (sandboxed frame, quota); memory is the last rung.
+    // Memory remains the last fallback.
   }
   volatileAnonymousId = anonymousId;
   return anonymousId;
 };
 
-/**
- * Forget the anonymous id everywhere: the cookie and the in-memory fallback.
- * The next event mints a new one. Reserved for consent withdrawal; a plain
- * `reset()` keeps the anonymous id because it identifies the browser, not
- * the user, and dropping it turns one visitor into many.
- */
+/** Clear the anonymous id from every storage layer. */
 const clearAnonymousId = (key: string): void => {
   cookie().remove(key);
   try {
     local().remove(key);
   } catch {
-    // Storage refused; there is nothing of ours in it then.
+    // Storage is unavailable.
   }
   volatileAnonymousId = undefined;
 };
