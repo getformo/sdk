@@ -408,7 +408,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Reset user and wallet state while preserving the browser's anonymous id.
-   * Use `optOutTracking()` to clear the anonymous id.
+   * Use `optOutTracking()` to clear the anonymous id and the attribution.
    * @returns {void}
    */
   public reset(): void {
@@ -425,11 +425,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(ACTIVE_WALLET_KEY);
-
-    // Stored traffic-source attribution (referrer/UTM) is tracking data;
-    // clear it too so reset()/optOutTracking() don't leave it to be
-    // re-attached to the next session's events.
-    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+    // Traffic-source attribution (referrer / UTM) describes the visit, not
+    // the user, so it stays: a wallet identified after a switch or logout is
+    // still attributed to what brought the browser here.
   }
 
   /**
@@ -1365,8 +1363,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // on opt-in, and nothing else would retry an already-adopted one.
     this.evmEvents.markRegisteredAdoptionsPending();
     this.reset();
-    // Consent withdrawal also clears the browser id.
+    // Consent withdrawal also clears the browser id and the attribution.
     clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
 
     logger.info("Successfully opted out of tracking");
   }

@@ -3,8 +3,8 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
-import { initStorageManager, cookie, local } from "../src/storage";
-import { LOCAL_ANONYMOUS_ID_KEY } from "../src/constants";
+import { initStorageManager, cookie, local, session } from "../src/storage";
+import { LOCAL_ANONYMOUS_ID_KEY, SESSION_TRAFFIC_SOURCE_KEY } from "../src/constants";
 import { generateAnonymousId, clearAnonymousId, __resetAnonymousIdMemory } from "../src/event/utils";
 
 /** Anonymous IDs stay stable across resets and storage failures. */
@@ -99,6 +99,22 @@ describe("Anonymous id stability", () => {
       a.cleanup();
     });
 
+    it("keeps the visit's traffic-source attribution", async () => {
+      const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+      const a = await FormoAnalytics.init("test-write-key", {
+        wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+      });
+      session().set(SESSION_TRAFFIC_SOURCE_KEY, { utm_source: "x", referrer: "dexscreener.com" });
+
+      a.reset();
+
+      expect(session().get(SESSION_TRAFFIC_SOURCE_KEY)).to.deep.equal({
+        utm_source: "x",
+        referrer: "dexscreener.com",
+      });
+      a.cleanup();
+    });
+
     it("still forgets the user id and the active wallet", async () => {
       const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
       const a = await FormoAnalytics.init("test-write-key", {
@@ -123,12 +139,14 @@ describe("Anonymous id stability", () => {
       });
       const before = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(before);
+      session().set(SESSION_TRAFFIC_SOURCE_KEY, { utm_source: "x" });
 
       a.optOutTracking();
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.satisfy(
         (v: any) => v === undefined || v === null || v === ""
       );
       expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(null);
+      expect(session().get(SESSION_TRAFFIC_SOURCE_KEY)).to.equal(null);
 
       a.optInTracking();
       const after = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
