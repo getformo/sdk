@@ -1396,10 +1396,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       void this.evmEvents.detectWallets(this.providers);
     }
 
-    // A wallet connected while opted out was declined by syncWalletState, and
-    // an unchanged wagmi connection produces no status or chain update to
-    // retry on. Without this, opting back in leaves that wallet invisible for
-    // the rest of the page load.
+    // Retry wallet adoption skipped while opted out.
     this.wagmiHandler?.retryAdoption();
 
     logger.info("Successfully opted back into tracking");

@@ -82,7 +82,7 @@ export const SCENARIOS = [
   { name: "api: nothing leaves while opted out, including an autocaptured signature", mode: "api",
     expect: { optedOut: [] } },
   { name: "api: opting back in resumes tracking with identity PURGED, not restored", mode: "api",
-    expect: { optedIn: ["track(after_opt_in)@-/-"] } },
+    expect: { optedIn: ["detect@-/-", "track(after_opt_in)@-/-"] } },
   { name: "api: reset clears wallet and user identity", mode: "api",
     expect: { afterReset: ["track(after_reset)@-/-"] }, state: { afterReset: { address: null, userId: null } } },
   { name: "api: a new instance restores the active wallet from the cookie before any wallet event", mode: "api",
