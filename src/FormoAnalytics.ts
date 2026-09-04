@@ -1392,7 +1392,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Remove opt-out flag
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
 
-    void this.evmEvents.detectWallets(this.providers);
+    if (!this.isCleanedUp) {
+      void this.evmEvents.detectWallets(this.providers);
+    }
 
     // A wallet connected while opted out was declined by syncWalletState, and
     // an unchanged wagmi connection produces no status or chain update to
