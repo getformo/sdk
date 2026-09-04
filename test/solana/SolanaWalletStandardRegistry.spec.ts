@@ -169,7 +169,7 @@ describe("SolanaWalletStandardRegistry", () => {
       expect(deps.detect.calledOnce).to.be.true;
       expect(deps.detect.firstCall.args[0]).to.deep.equal({
         providerName: "Phantom",
-        rdns: "sol.wallet.Phantom",
+        rdns: "sol.wallet.phantom",
       });
     });
 
@@ -187,21 +187,30 @@ describe("SolanaWalletStandardRegistry", () => {
       makeRegistry();
       installWalletAfterApp(makeWallet("Magic Eden Wallet"));
       expect(deps.detect.firstCall.args[0].rdns).to.equal(
-        "sol.wallet.Magic%20Eden%20Wallet"
+        "sol.wallet.magicedenwallet"
       );
     });
 
-    it("keeps case and whitespace distinct in the synthetic rdns", () => {
+    it("preserves the historical lowercase, whitespace-free rdns", () => {
       makeRegistry();
       installWalletAfterApp(makeWallet("Magic Wallet"));
       installWalletAfterApp(makeWallet("magicwallet"));
 
       expect(deps.detect.callCount).to.equal(2);
       expect(deps.detect.firstCall.args[0].rdns).to.equal(
-        "sol.wallet.Magic%20Wallet"
+        "sol.wallet.magicwallet"
       );
       expect(deps.detect.secondCall.args[0].rdns).to.equal(
         "sol.wallet.magicwallet"
+      );
+    });
+
+    it("encodes cookie delimiters after normalizing the wallet name", () => {
+      makeRegistry();
+      installWalletAfterApp(makeWallet("Comma, Wallet"));
+
+      expect(deps.detect.firstCall.args[0].rdns).to.equal(
+        "sol.wallet.comma%2Cwallet"
       );
     });
 
@@ -289,7 +298,7 @@ describe("SolanaWalletStandardRegistry", () => {
       });
       expect(deps.connect.firstCall.args[1]).to.deep.equal({
         providerName: "Phantom",
-        rdns: "sol.wallet.Phantom",
+        rdns: "sol.wallet.phantom",
       });
     });
 
@@ -427,7 +436,7 @@ describe("SolanaWalletStandardRegistry", () => {
       wallet.setAccounts([account(ADDRESS)]);
 
       expect(
-        registry.takeReportedConnection(ADDRESS, "sol.wallet.Phantom")
+        registry.takeReportedConnection(ADDRESS, "sol.wallet.phantom")
       ).to.equal(undefined);
     });
 

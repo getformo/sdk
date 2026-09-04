@@ -239,7 +239,7 @@ describe("SolanaManager", () => {
       expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["devnet"]);
       expect(mockFormo.connect.firstCall.args[1]).to.deep.equal({
         providerName: "Phantom",
-        rdns: "sol.wallet.Phantom",
+        rdns: "sol.wallet.phantom",
       });
     });
 
@@ -261,7 +261,7 @@ describe("SolanaManager", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));
       expect(mockFormo.detect.calledOnce).to.be.true;
-      expect(mockFormo.detect.firstCall.args[0].rdns).to.equal("sol.wallet.Phantom");
+      expect(mockFormo.detect.firstCall.args[0].rdns).to.equal("sol.wallet.phantom");
     });
 
     it("hands connect reporting to a store attached later", () => {
