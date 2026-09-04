@@ -13,9 +13,10 @@
  *     Opt-in through `solana: { store }` or `formo.solana.setStore()`.
  *
  * Both observe the same Wallet Standard connection when a framework-kit app
- * connects, so while a store handler is attached the registry leaves connect
- * and disconnect to it. One connect per connection, whichever path an app is
- * on.
+ * connects. A store supplied at initialization owns wallet events; a store
+ * attached later takes ownership when it observes its first connection and
+ * adopts any connect the registry already reported. One connect per
+ * connection, whichever path an app is on.
  *
  * For signMessage/signTransaction tracking (not captured by either path),
  * use formo.signature() directly with the address and chainId.
@@ -28,49 +29,99 @@ import { FormoAnalytics } from "../FormoAnalytics";
 import { logger } from "../logger";
 import { SolanaStoreHandler } from "./SolanaStoreHandler";
 import { SolanaWalletStandardRegistry } from "./SolanaWalletStandardRegistry";
-import { SolanaCluster, SolanaOptions } from "./types";
+import {
+  SOLANA_CLUSTERS_BY_ID,
+  SolanaCluster,
+  SolanaOptions,
+} from "./types";
 import { SolanaClientStore } from "./storeTypes";
 
 export class SolanaManager {
   private storeHandler?: SolanaStoreHandler;
   private registry?: SolanaWalletStandardRegistry;
   private pendingCluster?: SolanaCluster;
+  private storeOwnsWalletEvents = false;
 
   /**
    * @param formo - The SDK instance events are reported to.
    * @param options - `options.solana` as passed to the SDK, if an object.
-   * @param discover - Whether to discover wallets through the Wallet
-   *   Standard. False only when the host app passed `solana: false`.
+   * @param enabled - Whether Solana tracking is enabled. False only when the
+   *   host app passed `solana: false`; both discovery and stores then stay off.
    */
   constructor(
     private formo: FormoAnalytics,
     options?: SolanaOptions,
-    discover = true
+    private readonly enabled = true
   ) {
-    if (options?.store) {
-      logger.info("SolanaManager: Initializing store-based Solana tracking");
-      this.storeHandler = new SolanaStoreHandler(formo, options.store, {
-        cluster: options.cluster,
-      });
-    } else if (options?.cluster) {
+    if (!enabled) return;
+
+    if (options?.cluster) {
       // Store pending cluster for when setStore is called later
       this.pendingCluster = options.cluster;
     }
 
-    if (discover) {
-      this.registry = new SolanaWalletStandardRegistry(
-        {
-          isAutocaptureEnabled: (t) => this.formo.isAutocaptureEnabled(t),
-          detect: (params) => this.formo.detect(params),
-          connect: (params, properties) =>
-            this.formo.connect(params, properties),
-          disconnect: (params) => this.formo.disconnect(params),
-          chain: (params) => this.formo.chain(params),
-          ownsWalletEvents: () => !this.storeHandler,
-        },
-        { cluster: options?.cluster }
-      );
+    // A store supplied at initialization owns wallet events from the outset:
+    // unlike a store attached later, it has not missed any prior registry
+    // state and it knows the cluster more precisely.
+    this.storeOwnsWalletEvents = !!options?.store;
+
+    this.registry = new SolanaWalletStandardRegistry(
+      {
+        isAutocaptureEnabled: (t) => this.formo.isAutocaptureEnabled(t),
+        detect: (params) => this.formo.detect(params),
+        connect: (params, properties) =>
+          this.formo.connect(params, properties),
+        disconnect: (params) => this.formo.disconnect(params),
+        chain: (params) => this.formo.chain(params),
+        ownsWalletEvents: () => !this.storeOwnsWalletEvents,
+      },
+      { cluster: options?.cluster }
+    );
+
+    if (options?.store) {
+      logger.info("SolanaManager: Initializing store-based Solana tracking");
+      this.attachStore(options.store, options.cluster);
     }
+  }
+
+  private attachStore(
+    store: SolanaClientStore,
+    cluster?: SolanaCluster
+  ): void {
+    this.storeHandler = new SolanaStoreHandler(this.formo, store, {
+      cluster,
+      beforeWalletConnect: (connection) => {
+        if (this.storeOwnsWalletEvents) return true;
+
+        const reported = this.registry?.takeReportedConnection(
+          connection.address
+        );
+        this.storeOwnsWalletEvents = true;
+
+        // If Wallet Standard got there first, the store adopts that live
+        // connection instead of emitting it again. Correct its cluster if
+        // the store has more precise information.
+        if (!reported) return true;
+        if (
+          reported.chainId !== connection.chainId &&
+          this.formo.isAutocaptureEnabled("chain")
+        ) {
+          this.formo.chain(connection).catch((error) => {
+            logger.error(
+              "SolanaManager: Error correcting cluster during store handoff",
+              error
+            );
+          });
+        }
+        return false;
+      },
+    });
+
+    // Keep the registry's snapshot on the store's detected cluster. This is
+    // silent once the store owns events; during a late handoff it corrects a
+    // registry-reported connection before the store adopts it.
+    const detectedCluster = SOLANA_CLUSTERS_BY_ID[this.storeHandler.getChainId()];
+    if (detectedCluster) this.registry?.setCluster(detectedCluster);
   }
 
   /**
@@ -90,10 +141,14 @@ export class SolanaManager {
    * ```
    */
   setStore(store: SolanaClientStore, options?: { cluster?: SolanaCluster }): void {
+    if (!this.enabled) {
+      logger.warn("SolanaManager: Ignoring setStore because Solana is disabled");
+      return;
+    }
     this.storeHandler?.cleanup();
-    this.storeHandler = new SolanaStoreHandler(this.formo, store, {
-      cluster: options?.cluster || this.pendingCluster,
-    });
+    this.storeHandler = undefined;
+    this.storeOwnsWalletEvents = false;
+    this.attachStore(store, options?.cluster || this.pendingCluster);
     this.pendingCluster = undefined;
   }
 
@@ -106,6 +161,7 @@ export class SolanaManager {
    * Standard connections are on, since the standard itself cannot say.
    */
   setCluster(cluster: SolanaCluster): void {
+    if (!this.enabled) return;
     if (this.storeHandler) {
       this.storeHandler.setCluster(cluster);
     } else {
@@ -122,6 +178,7 @@ export class SolanaManager {
   cleanup(): void {
     this.storeHandler?.cleanup();
     this.storeHandler = undefined;
+    this.storeOwnsWalletEvents = false;
     this.registry?.cleanup();
     this.registry = undefined;
   }

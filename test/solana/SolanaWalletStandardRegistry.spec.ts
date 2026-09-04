@@ -28,6 +28,7 @@ describe("SolanaWalletStandardRegistry", () => {
   let deps: sinon.SinonStubbedInstance<SolanaWalletStandardRegistryDeps>;
   let ownsWalletEvents: boolean;
   let autocapture: Record<string, boolean>;
+  let originalGlobals: Map<PropertyKey, PropertyDescriptor | undefined>;
   const registries: SolanaWalletStandardRegistry[] = [];
 
   const ADDRESS = "FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn";
@@ -122,12 +123,16 @@ describe("SolanaWalletStandardRegistry", () => {
     jsdom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
       url: "https://example.com",
     });
-    for (const [k, v] of [
+    const globals = [
       ["window", jsdom.window],
       ["document", jsdom.window.document],
       ["Event", jsdom.window.Event],
       ["CustomEvent", jsdom.window.CustomEvent],
-    ] as const) {
+    ] as const;
+    originalGlobals = new Map(
+      globals.map(([key]) => [key, Object.getOwnPropertyDescriptor(global, key)])
+    );
+    for (const [k, v] of globals) {
       Object.defineProperty(global, k, { value: v, writable: true, configurable: true });
     }
     ownsWalletEvents = true;
@@ -145,8 +150,9 @@ describe("SolanaWalletStandardRegistry", () => {
   afterEach(() => {
     while (registries.length) registries.pop()?.cleanup();
     sandbox.restore();
-    for (const k of ["window", "document", "Event", "CustomEvent"]) {
-      delete (global as any)[k];
+    for (const [key, descriptor] of Array.from(originalGlobals)) {
+      if (descriptor) Object.defineProperty(global, key, descriptor);
+      else delete (global as any)[key];
     }
     jsdom.window.close();
   });
@@ -160,7 +166,7 @@ describe("SolanaWalletStandardRegistry", () => {
       expect(deps.detect.calledOnce).to.be.true;
       expect(deps.detect.firstCall.args[0]).to.deep.equal({
         providerName: "Phantom",
-        rdns: "sol.wallet.phantom",
+        rdns: "sol.wallet.Phantom",
       });
     });
 
@@ -177,7 +183,23 @@ describe("SolanaWalletStandardRegistry", () => {
       installWalletAfterApp(makeWallet("Magic Eden Wallet"));
       makeRegistry();
       installWalletAfterApp(makeWallet("Magic Eden Wallet"));
-      expect(deps.detect.firstCall.args[0].rdns).to.equal("sol.wallet.magicedenwallet");
+      expect(deps.detect.firstCall.args[0].rdns).to.equal(
+        "sol.wallet.Magic%20Eden%20Wallet"
+      );
+    });
+
+    it("keeps case and whitespace distinct in the synthetic rdns", () => {
+      makeRegistry();
+      installWalletAfterApp(makeWallet("Magic Wallet"));
+      installWalletAfterApp(makeWallet("magicwallet"));
+
+      expect(deps.detect.callCount).to.equal(2);
+      expect(deps.detect.firstCall.args[0].rdns).to.equal(
+        "sol.wallet.Magic%20Wallet"
+      );
+      expect(deps.detect.secondCall.args[0].rdns).to.equal(
+        "sol.wallet.magicwallet"
+      );
     });
 
     it("registers each wallet object once", () => {
@@ -264,7 +286,7 @@ describe("SolanaWalletStandardRegistry", () => {
       });
       expect(deps.connect.firstCall.args[1]).to.deep.equal({
         providerName: "Phantom",
-        rdns: "sol.wallet.phantom",
+        rdns: "sol.wallet.Phantom",
       });
     });
 

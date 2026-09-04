@@ -60,9 +60,10 @@ The Solana analogue of `EvmProviderRegistry` + EIP-6963.
 - **Connect / disconnect**: subscribes to each wallet's `standard:events`
   `change` event and diffs its `accounts`. None to some is a connect, some to
   none a disconnect, a different first account is a disconnect then a
-  connect. A wallet that is already authorized when discovered is reported as
-  connected at once. On a multichain wallet only accounts whose `chains`
-  include a Solana chain are considered.
+  connect. Without a configured framework-kit store, a wallet that is already
+  authorized when discovered is reported as connected at once. With a store,
+  the store reports that initial connection instead. On a multichain wallet
+  only accounts whose `chains` include a Solana chain are considered.
 - **Cluster**: the Wallet Standard lists the clusters a wallet supports, not
   the one the app is on. The registry uses `options.solana.cluster` when
   given, else mainnet-beta when supported, else the first Solana cluster
@@ -80,11 +81,12 @@ CONFIRMED, `failed` → REJECTED or REVERTED).
 
 ### `SolanaManager` (`src/solana/SolanaManager.ts`)
 
-Owns both. While a store handler is attached, the registry keeps discovering
-wallets and emitting `detect`, but leaves connect and disconnect to the
-store: a framework-kit app connects through the very same Wallet Standard
-wallet, so both would otherwise fire. The store is the better witness there
-because it knows the cluster and the connector.
+Owns both. A store supplied at initialization owns wallet events from the
+outset. A store attached later takes ownership when it observes its first
+connection, adopting any connect the registry already reported. The registry
+continues discovering wallets and emitting `detect`; once the store owns the
+connection, connect and disconnect come from the store because it knows the
+cluster and connector more precisely.
 
 ### Types
 
@@ -136,9 +138,10 @@ Solana has no numeric chain id. Clusters map to reserved ids above 900000:
 ## Wallet Identification
 
 The Wallet Standard has no reverse-domain identifier, so one is derived from
-the wallet name by `solanaWalletRdns()`: `sol.wallet.<name, lowercased, no
-spaces>`. Both sources derive it the same way so a wallet's `detect` and its
-`connect` share one rdns whichever source reported each.
+the wallet name by `solanaWalletRdns()`: `sol.wallet.<URL-encoded name>`.
+Encoding preserves case and whitespace so distinct wallet names cannot share
+a session dedup key. Both sources derive it the same way so a wallet's
+`detect` and its `connect` share one rdns whichever source reported each.
 
 ## Address Handling
 

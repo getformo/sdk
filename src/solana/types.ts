@@ -70,12 +70,15 @@ export type UnsubscribeFn = () => void;
  * The rdns reported for a Solana wallet.
  *
  * The Wallet Standard has no reverse-domain identifier, so one is derived
- * from the wallet's name. Both Solana paths (Wallet Standard discovery and
- * the framework-kit store) derive it the same way, so a wallet's `detect`
- * and its `connect` share one rdns whichever path reported each.
+ * from the wallet's name. Encoding preserves case and whitespace, which are
+ * significant parts of that only available identity, while keeping the
+ * session cookie delimiter out of the value. Both Solana paths (Wallet
+ * Standard discovery and the framework-kit store) derive it the same way,
+ * so a wallet's `detect` and its `connect` share one rdns whichever path
+ * reported each.
  */
 export function solanaWalletRdns(walletName: string): string {
-  return `sol.wallet.${walletName.toLowerCase().replace(/\s+/g, "")}`;
+  return `sol.wallet.${encodeURIComponent(walletName)}`;
 }
 
 /**
@@ -112,7 +115,8 @@ export interface SolanaOptions {
    * uses, so a devnet or testnet app should set this (or call
    * `formo.solana.setCluster()`); otherwise connections are reported on
    * mainnet-beta.
-   * @default auto-detected from the store, else "mainnet-beta"
+   * @default auto-detected from the store; otherwise mainnet-beta when the
+   * wallet supports it, or its first supported Solana cluster
    */
   cluster?: SolanaCluster;
 }

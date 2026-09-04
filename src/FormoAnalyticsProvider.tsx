@@ -34,6 +34,19 @@ const defaultContext: IFormoAnalytics = {
 export const FormoAnalyticsContext =
   createContext<IFormoAnalytics>(defaultContext);
 
+const optionObjectIds = new WeakMap<object, number>();
+let nextOptionObjectId = 1;
+
+const optionObjectId = (value: object | undefined): number | undefined => {
+  if (!value) return undefined;
+  let id = optionObjectIds.get(value);
+  if (id === undefined) {
+    id = nextOptionObjectId++;
+    optionObjectIds.set(value, id);
+  }
+  return id;
+};
+
 /**
  * A stable key over the serializable parts of Options. The provider effect
  * re-initialises the SDK when this key changes; anything that alters SDK
@@ -56,11 +69,14 @@ export const computeOptionsKey = (options?: Options): string => {
     logger: options.logger,
     referral: options.referral,
     evm: options.evm,
-    // `solana` is a boolean or an options object; the object's store is
-    // tracked by presence, its cluster by value.
+    // `solana` is a boolean or an options object. A store is a live event
+    // source, so replacing it must reinitialize the SDK even when both the
+    // old and new options contain a store.
     solana: typeof options.solana === "object" ? undefined : options.solana,
-    hasSolanaStore:
-      typeof options.solana === "object" && !!options.solana.store,
+    solanaStoreId:
+      typeof options.solana === "object"
+        ? optionObjectId(options.solana.store)
+        : undefined,
     solanaCluster:
       typeof options.solana === "object" ? options.solana.cluster : undefined,
     // For complex objects, just track their presence, not their content

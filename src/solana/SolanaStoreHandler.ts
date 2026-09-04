@@ -83,15 +83,26 @@ export class SolanaStoreHandler {
    * When true, auto-detection from the store endpoint is disabled.
    */
   private explicitCluster: boolean;
+  private beforeWalletConnect?: (connection: {
+    address: string;
+    chainId: number;
+  }) => boolean;
 
   constructor(
     formoAnalytics: FormoAnalytics,
     store: SolanaClientStore,
-    options?: { cluster?: SolanaCluster }
+    options?: {
+      cluster?: SolanaCluster;
+      beforeWalletConnect?: (connection: {
+        address: string;
+        chainId: number;
+      }) => boolean;
+    }
   ) {
     this.formo = formoAnalytics;
     this.store = store;
     this.explicitCluster = !!options?.cluster;
+    this.beforeWalletConnect = options?.beforeWalletConnect;
     this.cluster = options?.cluster || this.detectClusterFromStore(store) || "mainnet-beta";
     this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
@@ -190,7 +201,9 @@ export class SolanaStoreHandler {
           chainId: this.chainId,
         });
 
-        if (this.formo.isAutocaptureEnabled("connect")) {
+        const shouldEmit =
+          this.beforeWalletConnect?.({ address, chainId: this.chainId }) ?? true;
+        if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
           const connectorName = wallet.session.connector?.name || wallet.connectorId;
           this.formo.connect(
             { chainId: this.chainId, address },
@@ -262,7 +275,9 @@ export class SolanaStoreHandler {
       connector: wallet.connectorId,
     });
 
-    if (this.formo.isAutocaptureEnabled("connect")) {
+    const shouldEmit =
+      this.beforeWalletConnect?.({ address, chainId }) ?? true;
+    if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
       const connectorName = wallet.session.connector?.name || wallet.connectorId;
       this.formo.connect(
         { chainId, address },

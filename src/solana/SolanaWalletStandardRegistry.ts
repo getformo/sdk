@@ -78,9 +78,9 @@ export interface SolanaWalletStandardRegistryDeps {
    *
    * A framework-kit app connects through the very same Wallet Standard
    * wallet, so its store and this registry both see every connection. The
-   * store is the better witness there (it knows the cluster and the
-   * connector), so while a store handler is attached the registry keeps
-   * discovering wallets and emitting `detect`, and leaves connect and
+   * store is the better witness there (it knows the cluster and connector),
+   * so once it has observed or adopted a connection the registry keeps
+   * discovering wallets and emitting `detect`, but leaves connect and
    * disconnect to the store. Exactly one connect per connection, either way.
    */
   ownsWalletEvents(): boolean;
@@ -99,6 +99,8 @@ interface TrackedWallet {
   unsubscribe?: UnsubscribeFn;
   /** The account this registry currently considers connected, if any. */
   connected?: { address: string; chainId: number };
+  /** Whether this registry, rather than a store, emitted its connect. */
+  connectWasReported: boolean;
 }
 
 /** Whether a chain identifier belongs to the Solana namespace. */
@@ -252,6 +254,7 @@ export class SolanaWalletStandardRegistry {
         wallet,
         name: wallet.name,
         rdns: solanaWalletRdns(wallet.name),
+        connectWasReported: false,
       };
       this.wallets.set(wallet, tracked);
       added.push(tracked);
@@ -358,6 +361,7 @@ export class SolanaWalletStandardRegistry {
       tracked.connected = next
         ? { address: next.address, chainId: this.chainIdFor(tracked) }
         : undefined;
+      tracked.connectWasReported = false;
       return;
     }
 
@@ -368,6 +372,7 @@ export class SolanaWalletStandardRegistry {
   private reportConnect(tracked: TrackedWallet, address: string): void {
     const chainId = this.chainIdFor(tracked);
     tracked.connected = { address, chainId };
+    tracked.connectWasReported = false;
 
     logger.info("SolanaWalletStandardRegistry: Wallet connected", {
       name: tracked.name,
@@ -376,6 +381,7 @@ export class SolanaWalletStandardRegistry {
     });
 
     if (!this.deps.isAutocaptureEnabled("connect")) return;
+    tracked.connectWasReported = true;
     this.deps
       .connect(
         { chainId, address },
@@ -394,6 +400,7 @@ export class SolanaWalletStandardRegistry {
     previous: { address: string; chainId: number }
   ): void {
     tracked.connected = undefined;
+    tracked.connectWasReported = false;
 
     logger.info("SolanaWalletStandardRegistry: Wallet disconnected", {
       name: tracked.name,
@@ -468,6 +475,26 @@ export class SolanaWalletStandardRegistry {
   get connectedAccount(): { address: string; chainId: number } | undefined {
     for (const tracked of Array.from(this.wallets.values())) {
       if (tracked.connected) return tracked.connected;
+    }
+    return undefined;
+  }
+
+  /**
+   * Transfer a connect already emitted by this registry to a store handler.
+   * The state remains connected, but the same transition must not be emitted
+   * a second time when framework-kit's store catches up.
+   */
+  takeReportedConnection(
+    address: string
+  ): { address: string; chainId: number } | undefined {
+    for (const tracked of Array.from(this.wallets.values())) {
+      if (
+        tracked.connectWasReported &&
+        tracked.connected?.address === address
+      ) {
+        tracked.connectWasReported = false;
+        return tracked.connected;
+      }
     }
     return undefined;
   }

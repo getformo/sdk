@@ -21,6 +21,7 @@ describe("SolanaManager", () => {
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
   let mockFormo: sinon.SinonStubbedInstance<FormoAnalytics>;
+  let originalGlobals: Map<PropertyKey, PropertyDescriptor | undefined>;
   const managers: SolanaManager[] = [];
 
   const ADDRESS = "FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn";
@@ -110,7 +111,7 @@ describe("SolanaManager", () => {
     jsdom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
       url: "https://example.com",
     });
-    for (const [k, v] of [
+    const globals = [
       ["window", jsdom.window],
       ["globalThis", jsdom.window],
       ["document", jsdom.window.document],
@@ -120,10 +121,27 @@ describe("SolanaManager", () => {
       ["sessionStorage", jsdom.window.sessionStorage],
       ["Event", jsdom.window.Event],
       ["CustomEvent", jsdom.window.CustomEvent],
-    ] as const) {
+    ] as const;
+    const eventMethods = [
+      "addEventListener",
+      "removeEventListener",
+      "dispatchEvent",
+    ] as const;
+    const overwrittenKeys = [
+      ...globals.map(([key]) => key),
+      ...eventMethods,
+      "crypto",
+    ];
+    originalGlobals = new Map(
+      overwrittenKeys.map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(global, key),
+      ])
+    );
+    for (const [k, v] of globals) {
       Object.defineProperty(global, k, { value: v, writable: true, configurable: true });
     }
-    for (const fn of ["addEventListener", "removeEventListener", "dispatchEvent"] as const) {
+    for (const fn of eventMethods) {
       Object.defineProperty(global, fn, {
         value: (jsdom.window as any)[fn].bind(jsdom.window),
         writable: true,
@@ -149,11 +167,9 @@ describe("SolanaManager", () => {
   afterEach(() => {
     while (managers.length) managers.pop()?.cleanup();
     sandbox.restore();
-    for (const k of [
-      "window", "document", "location", "navigator",
-      "localStorage", "sessionStorage", "crypto",
-    ]) {
-      delete (global as any)[k];
+    for (const [key, descriptor] of Array.from(originalGlobals)) {
+      if (descriptor) Object.defineProperty(global, key, descriptor);
+      else delete (global as any)[key];
     }
     jsdom.window.close();
   });
@@ -221,7 +237,7 @@ describe("SolanaManager", () => {
       expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["devnet"]);
       expect(mockFormo.connect.firstCall.args[1]).to.deep.equal({
         providerName: "Phantom",
-        rdns: "sol.wallet.phantom",
+        rdns: "sol.wallet.Phantom",
       });
     });
 
@@ -243,7 +259,7 @@ describe("SolanaManager", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));
       expect(mockFormo.detect.calledOnce).to.be.true;
-      expect(mockFormo.detect.firstCall.args[0].rdns).to.equal("sol.wallet.phantom");
+      expect(mockFormo.detect.firstCall.args[0].rdns).to.equal("sol.wallet.Phantom");
     });
 
     it("hands connect reporting to a store attached later", () => {
@@ -257,6 +273,31 @@ describe("SolanaManager", () => {
       store.setState({ wallet: connectedWallet("phantom", "Phantom") });
 
       expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
+    it("does not duplicate a connect observed before a connected store is attached", () => {
+      const manager = makeManager();
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:mainnet"] }]);
+
+      manager.setStore(
+        makeStore({ wallet: connectedWallet("phantom", "Phantom") })
+      );
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
+    it("keeps registry ownership while a late-attached store is disconnected", () => {
+      const manager = makeManager();
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:mainnet"] }]);
+
+      manager.setStore(makeStore());
+      phantom.setAccounts([]);
+
+      expect(mockFormo.disconnect.calledOnce).to.be.true;
     });
   });
 
@@ -307,6 +348,21 @@ describe("SolanaManager", () => {
 
     it("does not discover when solana is false", async () => {
       expect(await announcedAppReady({ solana: false })).to.be.false;
+    });
+
+    it("does not allow setStore to bypass solana: false", async () => {
+      const formo = await FormoAnalytics.init("test-write-key", {
+        tracking: true,
+        solana: false,
+      });
+      const connect = sandbox.stub(formo, "connect").resolves();
+      const store = makeStore();
+
+      formo.solana.setStore(store);
+      store.setState({ wallet: connectedWallet("phantom", "Phantom") });
+
+      formo.cleanup();
+      expect(connect.called).to.be.false;
     });
 
     it("reports a wallet-adapter style connection end to end", async () => {

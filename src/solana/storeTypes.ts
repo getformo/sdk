@@ -88,6 +88,13 @@ export interface SolanaWalletConnectorMetadata {
   readonly icon?: string;
 }
 
+/** Cluster health as exposed by framework-kit. */
+export type SolanaClusterStatus =
+  | Readonly<{ status: "idle" }>
+  | Readonly<{ status: "connecting" }>
+  | Readonly<{ status: "ready"; latencyMs?: number }>
+  | Readonly<{ status: "error"; error: unknown }>;
+
 /**
  * Cluster state from the store.
  */
@@ -100,9 +107,7 @@ export interface SolanaClusterState {
    * Typing it as a string made `client.store` unassignable to
    * `SolanaClientStore`, which is why the example app needed an `as any`.
    */
-  readonly status: {
-    readonly status: "idle" | "connecting" | "ready" | "error";
-  };
+  readonly status: SolanaClusterStatus;
 }
 
 /**
