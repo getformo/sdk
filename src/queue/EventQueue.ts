@@ -83,6 +83,7 @@ export class EventQueue implements IEventQueue {
   private pendingFlush: Promise<any> | null;
   private payloadHashes: Set<string> = new Set();
   private canSend?: () => boolean;
+  private generation = 0;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
   private closed = false;
@@ -145,6 +146,7 @@ export class EventQueue implements IEventQueue {
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
+    this.generation++;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -187,6 +189,7 @@ export class EventQueue implements IEventQueue {
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
+    const generation = this.generation;
 
     // A torn-down instance must never buffer, however late the caller
     // arrives. See close().
@@ -200,11 +203,11 @@ export class EventQueue implements IEventQueue {
 
     const message_id = await this.generateMessageId(event);
 
-    // Re-check after the await. A caller that entered before close() is
-    // suspended here, and on a queue that has not flushed yet its event
-    // would push and flush immediately - the exact shape of the bug close()
-    // exists to stop.
-    if (this.closed) return;
+    if (this.closed || generation !== this.generation) return;
+    if (this.canSend && !this.canSend()) {
+      this.clear();
+      return;
+    }
 
     // check if the message already exists
     if (this.isDuplicate(message_id)) {
