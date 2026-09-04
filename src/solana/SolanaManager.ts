@@ -4,7 +4,7 @@
  * Owns the two ways the SDK learns about Solana wallets:
  *
  *  1. `SolanaWalletStandardRegistry`: discovers wallets through the Wallet
- *     Standard and reports detect / connect / disconnect. On by default, so a
+ *     Standard and reports detect / connect / disconnect. On by default, so
  *     compatible wallets registered by Solana Kit, wallet-adapter,
  *     framework-kit, or another host are covered with no configuration,
  *     exactly like EVM wallets through EIP-6963. `solana: false` turns it off.
