@@ -279,6 +279,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       isAutocaptureEnabled: (t) => this.isAutocaptureEnabled(t),
       isTrackingSuppressed: () => this.isTrackingSuppressed(),
       willTrackEvent: (chainId) => this.willTrackEvent(chainId),
+      retryDetection: () => this.retryWalletDetection(),
       isWagmiMode: () => this.isWagmiMode,
       connect: (params, properties) => this.connect(params, properties),
       disconnect: (params) => this.disconnect(params),
@@ -679,6 +680,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     address?: Address;
   }): void {
     this.wallet.syncWalletState(params);
+    this.retryWalletDetection();
+  }
+
+  private retryWalletDetection(): void {
+    if (this.isCleanedUp) return;
+    void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
   }
 
 
@@ -1392,12 +1399,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Remove opt-out flag
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
 
-    if (!this.isCleanedUp) {
-      void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
-    }
-
     // Retry wallet adoption skipped while opted out.
     this.wagmiHandler?.retryAdoption();
+    this.retryWalletDetection();
 
     logger.info("Successfully opted back into tracking");
   }
@@ -1496,7 +1500,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (!this.isCleanedUp && canTrack) {
       try {
         this.evmEvents.retryExternalAdoptions();
-        void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
+        this.retryWalletDetection();
       } catch {
         // Detection retries must not break page tracking.
       }

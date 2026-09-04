@@ -183,6 +183,26 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
+  it("restores the wagmi chain before retrying detection on opt-in", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: { excludeChains: [1] },
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+    formo.optOutTracking();
+    announce(makeInjected());
+    await settle();
+
+    sandbox.stub((formo as any).wagmiHandler, "retryAdoption").callsFake(() => {
+      formo.currentChainId = 1;
+    });
+    formo.optInTracking();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect")).to.be.empty;
+    formo.cleanup();
+  });
+
   it("detects a wallet after leaving an excluded route", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({
@@ -223,7 +243,7 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
-  it("retries detection after leaving an excluded chain", async () => {
+  it("retries detection when wagmi leaves an excluded chain", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({
       tracking: { excludeChains: [1] },
@@ -235,8 +255,26 @@ describe("detect in wagmi mode", () => {
     await settle();
     expect(sent.filter((e) => e.type === "detect")).to.be.empty;
 
-    formo.currentChainId = 137;
-    await formo.page();
+    formo.syncWalletState({ chainId: 137, address: ADDR });
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+    formo.cleanup();
+  });
+
+  it("retries detection when EIP-1193 leaves an excluded chain", async () => {
+    const { formo, sent } = await setup({
+      tracking: { excludeChains: [1] },
+    });
+    const provider = makeInjected();
+    formo.syncWalletState({ chainId: 1, address: ADDR });
+
+    announce(provider);
+    await settle();
+    expect(sent.filter((e) => e.type === "detect")).to.be.empty;
+
+    provider.chainId = "0x89";
+    provider.emit("chainChanged", "0x89");
     await settle();
 
     expect(sent.filter((e) => e.type === "detect").length).to.equal(1);

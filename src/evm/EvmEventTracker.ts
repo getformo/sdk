@@ -29,6 +29,8 @@ export interface EvmEventTrackerDeps {
   isTrackingSuppressed(): boolean;
   /** Whether an event on this chain would actually be sent. */
   willTrackEvent(chainId?: ChainID): boolean;
+  /** Retry detect events after the active chain changes. */
+  retryDetection(): void;
   /** In wagmi mode the SDK does not wrap providers itself. */
   isWagmiMode(): boolean;
 
@@ -1104,6 +1106,7 @@ export class EvmEventTracker {
     }
 
     this.wallet.set('evm', { chainId: nextChainId });
+    this.deps.retryDetection();
 
     try {
       // This is just a chain change since we already confirmed _evmAddress exists
