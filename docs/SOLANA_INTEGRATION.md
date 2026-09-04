@@ -167,11 +167,7 @@ The SDK blocks these non-wallet addresses:
 | Rent Sysvar | `SysvarRent111111111111111111111111111111111` |
 | Clock Sysvar | `SysvarC1ock11111111111111111111111111111111` |
 
-They are exported as `SOLANA_SYSTEM_ADDRESSES`.
-
-The package also exports `isSolanaAddress()`, `getValidSolanaAddress()`,
-`isSolanaSystemAddress()`, `isBlockedSolanaAddress()`,
-`publicKeyToAddress()`, and `areSolanaAddressesEqual()`.
+The list and validation helpers are defined in `src/solana/address.ts`.
 
 ## Limitations
 
