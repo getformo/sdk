@@ -203,6 +203,5 @@ jobs:
           node-version: "22.14.0"
 
       - name: Audit production dependencies
-        # Temporary: report results without blocking on registry timeouts.
+        # Fail on advisories, not registry outages.
         run: pnpm audit --prod --audit-level=high --ignore-registry-errors
-        continue-on-error: true
