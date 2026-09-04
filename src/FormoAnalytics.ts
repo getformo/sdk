@@ -1282,10 +1282,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    // detect() marks wallet detection (a cookie write) before
-    // trackEvent's consent check - gate it for a suppressed visitor or
-    // excluded environment (opt-out / timezone / host / path).
-    if (this.isTrackingSuppressed()) {
+    // Apply all policy checks before persisting the detection marker.
+    if (!this.shouldTrack()) {
       logger.info("detect() skipped: tracking is suppressed for this visitor or environment");
       return;
     }
@@ -1395,7 +1393,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
 
     if (!this.isCleanedUp) {
-      void this.evmEvents.detectWallets(this.providers);
+      void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
     }
 
     // Retry wallet adoption skipped while opted out.
@@ -1498,7 +1496,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     if (!this.isCleanedUp && canTrack) {
       try {
         this.evmEvents.retryExternalAdoptions();
-        void this.evmEvents.detectWallets(this.providers);
+        void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
       } catch {
         // Detection retries must not break page tracking.
       }

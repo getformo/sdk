@@ -1568,6 +1568,20 @@ export class EvmEventTracker {
     }
   }
 
+  detectableProviders(): readonly EIP6963ProviderDetail[] {
+    const available = new Set<EIP1193Provider>();
+    this.discoveryStore?.getProviders().forEach((detail) =>
+      available.add(detail.provider as EIP1193Provider)
+    );
+    const injected =
+      typeof window !== "undefined" ? window.ethereum : undefined;
+    if (injected) available.add(injected);
+    this.externallyRegistered.forEach((provider) => available.add(provider));
+    return this.registry.all.filter((detail) =>
+      available.has(detail.provider as EIP1193Provider)
+    );
+  }
+
   /**
    * Seed a provider's chain from whatever it already exposes synchronously.
    *

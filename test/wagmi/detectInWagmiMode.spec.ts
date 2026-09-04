@@ -202,6 +202,47 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
+  it("does not redetect a provider that is no longer announced", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+
+    announce(makeInjected());
+    await settle();
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+
+    formo.reset();
+    sent.length = 0;
+    sandbox.stub((formo as any).evmEvents.discoveryStore, "getProviders").returns([]);
+    await formo.page();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect")).to.be.empty;
+    formo.cleanup();
+  });
+
+  it("retries detection after leaving an excluded chain", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: { excludeChains: [1] },
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+    formo.currentChainId = 1;
+
+    announce(makeInjected());
+    await settle();
+    expect(sent.filter((e) => e.type === "detect")).to.be.empty;
+
+    formo.currentChainId = 137;
+    await formo.page();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+    formo.cleanup();
+  });
+
   it("does not identify a never-connected wallet on a no-arg identify()", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({
