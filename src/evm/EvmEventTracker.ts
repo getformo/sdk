@@ -280,11 +280,7 @@ export class EvmEventTracker {
    * had already replaced.
    */
   private unsubscribeDiscovery?: () => void;
-  /**
-   * The mipd store behind discovery. `subscribe()` only detaches our
-   * listener; the window `eip6963:announceProvider` listener the store
-   * installs is released by `destroy()`, so cleanup must keep the store.
-   */
+  /** Discovery store retained for complete listener cleanup. */
   private discoveryStore?: ReturnType<typeof createStore>;
 
   constructor(
@@ -1448,13 +1444,7 @@ export class EvmEventTracker {
     }
   }
 
-  /**
-   * Whether discovered providers get lifecycle listeners and the request
-   * wrapper. In wagmi mode wagmi owns connect / transaction capture, so a
-   * wrapped provider would report everything twice. Discovery itself still
-   * runs there for the `detect` event: which wallets are installed is
-   * measured the same way in every mode.
-   */
+  /** Whether Formo owns provider lifecycle tracking. */
   private tracksDiscovered(): boolean {
     return !this.deps.isWagmiMode();
   }
@@ -1484,9 +1474,7 @@ export class EvmEventTracker {
         return !!p && !this.registry.isTracked(p);
       });
 
-      // Untracked-but-seen providers get a tracking retry on the next
-      // announcement. Where nothing is ever tracked, "untracked" is every
-      // provider, so detect only what this announcement added.
+      // Wagmi detects only providers added by this announcement.
       const toDetect = this.tracksDiscovered() ? newDetails : newlyAddedDetails;
 
       if (this.tracksDiscovered() && newDetails.length > 0) {

@@ -7,31 +7,12 @@ import { initStorageManager, cookie, local } from "../src/storage";
 import { LOCAL_ANONYMOUS_ID_KEY } from "../src/constants";
 import { generateAnonymousId, clearAnonymousId, __resetAnonymousIdMemory } from "../src/event/utils";
 
-/**
- * The anonymous id is the browser id: the Visitors denominator and the key
- * that stitches anonymous activity to a wallet. Two regressions turned one
- * visitor into many:
- *
- * 1. `reset()` used to drop the anonymous id. Apps call `reset()` on every
- *    wallet switch, commonly as a React effect cleanup right before the next
- *    `identify()`, so each switch minted a new visitor. Before 1.28.3 the
- *    drop silently failed on real domains (the cookie lived on the apex
- *    domain and `remove()` only expired the host-only one), which is why the
- *    problem surfaced only on upgrade. `reset()` now keeps the id; only
- *    `optOutTracking()` clears it.
- *
- * 2. When the browser rejects the cookie write (cross-site iframe under
- *    SameSite=Lax, cookies blocked), every event generated a fresh id. The
- *    id now falls back to Web Storage, which is partitioned by the embedding
- *    site but survives reloads, and then to memory for the page lifetime.
- */
+/** Anonymous IDs stay stable across resets and storage failures. */
 describe("Anonymous id stability", () => {
   let sandbox: sinon.SinonSandbox;
   let jsdom: JSDOM;
   let uuidCounter = 0;
-  // Original global descriptors, restored verbatim in afterEach. Deleting
-  // is wrong for keys Node itself defines (crypto, navigator, globalThis):
-  // it would remove the built-in for every later spec in the process.
+  // Restore Node globals exactly after each test.
   let savedGlobals: Map<string, PropertyDescriptor | undefined>;
 
   const GLOBAL_KEYS = [
@@ -65,8 +46,7 @@ describe("Anonymous id stability", () => {
       GLOBAL_KEYS.map((k) => [k, Object.getOwnPropertyDescriptor(global, k)])
     );
 
-    // A real two-label host so the apex-domain cookie path is exercised, as
-    // on a customer domain. `localhost` would skip the domain attribute.
+    // Exercise the apex-domain cookie path.
     jsdom = new JSDOM("<!DOCTYPE html><html><head></head><body></body></html>", {
       url: "https://app.example.com",
     });
@@ -103,11 +83,9 @@ describe("Anonymous id stability", () => {
       const a = await FormoAnalytics.init("test-write-key", {
         wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
       });
-      // The enriched event (with anonymous_id) is what reaches the queue.
       const sent = sandbox.stub((a as any).eventManager.eventQueue, "enqueue");
 
-      // The pattern apps use: identify on account change, reset() as the
-      // effect cleanup, then identify the next account.
+      // Match an account-effect cleanup.
       await a.identify({ address: ADDRESS_A });
       a.reset();
       await a.identify({ address: ADDRESS_B });
@@ -165,9 +143,7 @@ describe("Anonymous id stability", () => {
       });
       const enqueue = sandbox.stub((a as any).eventManager.eventQueue, "enqueue");
 
-      // Event enrichment always crosses an async browser-detection boundary.
-      // Withdraw and immediately restore consent before it resumes: checking
-      // only the current flag would let this pre-opt-out event come back alive.
+      // Invalidate work started before a rapid opt-out and opt-in.
       const pending = a.track("started-before-opt-out");
       a.optOutTracking();
       a.optInTracking();
@@ -217,8 +193,7 @@ describe("Anonymous id stability", () => {
       const first = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
       expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(first);
 
-      // A new page load in the same embedded context: memory is gone,
-      // cookies still refused, Web Storage still there.
+      // Simulate a new embedded page load.
       __resetAnonymousIdMemory();
       const nextLoad = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
 
@@ -241,9 +216,7 @@ describe("Anonymous id stability", () => {
     });
 
     it("falls back to a host-only cookie when only the domain-scoped write is rejected", () => {
-      // The apex-domain write is refused (e.g. a mis-detected public suffix)
-      // while a host-only write still sticks. set() must not have thrown the
-      // legacy host-only cookie away for nothing.
+      // Reject only the apex-domain write.
       const realSet = cookie().set.bind(cookie());
       sandbox.stub(cookie(), "set").callsFake((key, value, options) => {
         if (options?.domain) return;

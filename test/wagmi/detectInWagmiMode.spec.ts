@@ -6,15 +6,7 @@ import { FormoAnalytics } from "../../src/FormoAnalytics";
 import { initStorageManager, cookie } from "../../src/storage";
 import { SESSION_WALLET_DETECTED_KEY } from "../../src/session";
 
-/**
- * `detect` (which wallets are installed) must read the same in every
- * integration mode. Wagmi mode used to skip EIP-6963 discovery outright, so
- * a customer switching to wagmi mode went from thousands of detect events a
- * day to zero, with no code change of their own. Discovery now runs in wagmi
- * mode for detect only; the provider is still not wrapped there, because
- * wagmi owns connect / transaction capture and a wrapped provider would
- * report everything twice.
- */
+/** Wagmi discovers wallets for detect without wrapping their providers. */
 describe("detect in wagmi mode", () => {
   const ADDR = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
   const RDNS = "io.metamask";
@@ -59,7 +51,7 @@ describe("detect in wagmi mode", () => {
       value: { randomUUID: () => "mock-uuid" }, writable: true, configurable: true,
     });
     initStorageManager("test-write-key");
-    // detect() de-dupes per session on a cookie; start every case clean.
+    // Start each case without detect deduplication state.
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
   });
 
@@ -163,9 +155,7 @@ describe("detect in wagmi mode", () => {
 
     announce(provider);
     await settle();
-    // Nothing is tracked in wagmi mode, so "untracked" would be every
-    // provider on every announcement. Drop the session de-dup so a
-    // regression to that selection shows up as a second detect.
+    // Expose duplicate selection despite session deduplication.
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     announce(provider);
     await settle();
@@ -183,8 +173,7 @@ describe("detect in wagmi mode", () => {
     announce(makeInjected());
     await settle();
 
-    // The registry now holds a wallet with an authorized account that wagmi
-    // never connected. Auto-identify must not pick it up from eth_accounts.
+    // Do not identify an authorized wallet wagmi never connected.
     await formo.identify();
     await settle();
 

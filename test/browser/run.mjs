@@ -21,8 +21,7 @@ const root = join(here, "..", "..");
 const sdkPath = join(root, "dist/index.umd.min.js");
 
 // ── static server for the harness page ───────────────────────────────────
-// Serves a fixed allowlist by name, so a request path can never reach anything
-// else on disk. Bound to loopback only.
+// Serve a fixed file allowlist on loopback.
 const files = {
   "/harness.html": readFileSync(join(here, "harness.html")),
   "/storage-parent.html": readFileSync(join(here, "storage-parent.html")),
@@ -61,8 +60,7 @@ proc = spawn(chrome, [
   `--user-data-dir=${profile}`,
   "--no-first-run",
   "--disable-gpu",
-  // Exercise the SDK's third-party fallback deterministically even on Chrome
-  // channels where the cookie phase-out is not enabled by default yet.
+  // Block third-party cookies deterministically.
   "--test-third-party-cookie-phaseout",
   "about:blank",
 ], { stdio: ["ignore", "ignore", "pipe"] });
@@ -120,10 +118,7 @@ results.push(await step("disconnect B",     "window.__walletB.__disconnect()"));
 results.push(["sdk-issued rpc", await evaluate("(window.__rpc||[]).filter(m => !/personal_sign|eth_sendTransaction|wallet_sendCalls|wallet_switchEthereumChain|eth_requestAccounts/.test(m))")]);
 results.push(["hasBuffer", await evaluate("typeof Buffer !== 'undefined'")]);
 
-// A different hostname makes the frame cross-site while both origins still
-// resolve to this loopback-only server. The frame is destroyed and recreated,
-// which discards the bundle's module memory and proves persistence comes from
-// partitioned Web Storage rather than the page-lifetime fallback.
+// Recreate a cross-site frame to prove persistence beyond module memory.
 await navigate(`http://localhost:${port}/storage-parent.html`);
 const storage = await evaluate("window.__storageDone");
 results.push(["cross-origin storage", {

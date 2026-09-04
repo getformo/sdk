@@ -1,7 +1,6 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Formo cross-origin storage parent</title></head>
 <body><script>
-// The child uses a different hostname to be cross-site, but it must stay on
-// this loopback test server. Do not let page input choose an arbitrary target.
+// A fixed alternate hostname creates a loopback-only cross-site frame.
 const framePort = location.port;
 
 function loadFrame(run) {
