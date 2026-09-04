@@ -104,7 +104,7 @@ describe("Anonymous id stability", () => {
       const a = await FormoAnalytics.init("test-write-key", {
         wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
       });
-      session().set(SESSION_TRAFFIC_SOURCE_KEY, { utm_source: "x", referrer: "dexscreener.com" });
+      session().set(SESSION_TRAFFIC_SOURCE_KEY, { utm_source: "x", referrer: "dexscreener.com" } as any);
 
       a.reset();
 
@@ -139,7 +139,7 @@ describe("Anonymous id stability", () => {
       });
       const before = generateAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(before);
-      session().set(SESSION_TRAFFIC_SOURCE_KEY, { utm_source: "x" });
+      session().set(SESSION_TRAFFIC_SOURCE_KEY, { utm_source: "x" } as any);
 
       a.optOutTracking();
       expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.satisfy(
