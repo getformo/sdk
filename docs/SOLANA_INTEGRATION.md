@@ -138,9 +138,11 @@ Solana has no numeric chain id. Clusters map to reserved ids above 900000:
 ## Wallet Identification
 
 The Wallet Standard has no reverse-domain identifier, so one is derived from
-the wallet name by `solanaWalletRdns()`: `sol.wallet.<URL-encoded name>`.
-Encoding preserves case and whitespace so distinct wallet names cannot share
-a session dedup key. Both sources derive it the same way so a wallet's
+the wallet name by `solanaWalletRdns()`: lowercase the name, remove whitespace,
+URL-encode the result, and prefix it with `sol.wallet.`. This preserves the
+historical framework-kit identifiers while keeping cookie delimiters safe.
+Names that differ only by case or whitespace intentionally share a session
+dedup key. Both sources derive the identifier the same way so a wallet's
 `detect` and its `connect` share one rdns whichever source reported each.
 
 ## Address Handling
