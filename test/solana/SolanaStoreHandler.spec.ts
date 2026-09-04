@@ -113,6 +113,15 @@ describe("SolanaStoreHandler", () => {
   // -- Constructor --
 
   describe("Constructor", () => {
+    it("accepts the legacy string cluster status", () => {
+      const store = createMockStore({
+        cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
+      });
+      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+      handler.cleanup();
+    });
+
     it("should auto-detect cluster from store endpoint", () => {
       const store = createMockStore(); // default endpoint is devnet
       const handler = new SolanaStoreHandler(mockFormo as any, store);

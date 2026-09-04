@@ -95,6 +95,9 @@ export type SolanaClusterStatus =
   | Readonly<{ status: "ready"; latencyMs?: number }>
   | Readonly<{ status: "error"; error: unknown }>;
 
+/** @deprecated framework-kit emits {@link SolanaClusterStatus} objects. */
+export type LegacySolanaClusterStatus = SolanaClusterStatus["status"];
+
 /**
  * Cluster state from the store.
  */
@@ -102,12 +105,11 @@ export interface SolanaClusterState {
   readonly endpoint: string;
   readonly commitment?: string;
   /**
-   * An object, not a bare string: framework-kit's `ClusterStatus` is a
-   * discriminated union such as `{ status: 'ready', latencyMs?: number }`.
-   * Typing it as a string made `client.store` unassignable to
-   * `SolanaClientStore`, which is why the example app needed an `as any`.
+   * framework-kit's `ClusterStatus` is a discriminated union such as
+   * `{ status: 'ready', latencyMs?: number }`. The pre-1.39 string form is
+   * retained so custom stores and test doubles remain source-compatible.
    */
-  readonly status: SolanaClusterStatus;
+  readonly status: SolanaClusterStatus | LegacySolanaClusterStatus;
 }
 
 /**
