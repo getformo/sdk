@@ -5,9 +5,9 @@
  *
  *  1. `SolanaWalletStandardRegistry`: discovers wallets through the Wallet
  *     Standard and reports detect / connect / disconnect. On by default, so a
- *     `@solana/wallet-adapter`, Privy, Dynamic, Reown or hand-rolled app is
- *     covered with no configuration, exactly like EVM wallets through
- *     EIP-6963. `solana: false` turns it off.
+ *     compatible wallets registered by Solana Kit, wallet-adapter,
+ *     framework-kit, or another host are covered with no configuration,
+ *     exactly like EVM wallets through EIP-6963. `solana: false` turns it off.
  *  2. `SolanaStoreHandler`: subscribes to framework-kit's zustand store for
  *     connect / disconnect / cluster changes AND the transaction lifecycle.
  *     Opt-in through `solana: { store }` or `formo.solana.setStore()`.

@@ -94,8 +94,8 @@ export interface SolanaOptions {
    * tracked from the store, and connect/disconnect come from the store
    * rather than from Wallet Standard discovery.
    *
-   * Only for apps using framework-kit (`@solana/client`). Every other wallet
-   * library is covered by Wallet Standard discovery without this.
+   * Only for apps using framework-kit (`@solana/client`). Other integrations
+   * do not need a store when their wallets register through Wallet Standard.
    *
    * @example
    * ```tsx

@@ -23,7 +23,6 @@ export interface ChainState {
   address?: Address;
   chainId?: ChainID;
 }
-
 export interface EvmChainState extends ChainState {
   provider?: EIP1193Provider;
 }
@@ -315,8 +314,8 @@ export interface Options {
    *
    * On by default: wallets are discovered through the Wallet Standard, the
    * Solana analogue of EIP-6963, so connect and disconnect are autocaptured
-   * for `@solana/wallet-adapter`, Privy, Dynamic, Reown, framework-kit and
-   * custom integrations alike, with no configuration.
+   * for compatible wallets registered with the page, including wallets used
+   * through Solana Kit, wallet-adapter, and framework-kit.
    *
    * - `false`: disable Solana wallet discovery and tracking entirely.
    * - `SolanaOptions`: additionally pass `store: client.store` from
@@ -362,4 +361,3 @@ export interface Options {
   errorHandler?: (err: Error) => void;
   ready?: (formo: IFormoAnalytics) => void;
 }
-

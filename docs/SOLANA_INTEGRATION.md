@@ -4,20 +4,22 @@
 
 The SDK discovers EVM wallets through EIP-6963 and compatible Solana wallets
 through the [Wallet Standard](https://github.com/wallet-standard/wallet-standard).
-This captures wallet events regardless of whether the app uses
-`@solana/wallet-adapter`, framework-kit, Privy, Dynamic, Reown, or a custom
-connector.
+This captures wallet events when a wallet registers with the page, including
+wallets used through Solana Kit, `@solana/wallet-adapter`, and framework-kit.
 
-Apps that use framework-kit (`@solana/client`) can additionally pass its
-zustand store, which adds the transaction lifecycle and cluster switches.
+Solana Kit and framework-kit are separate projects. Solana Kit is the core SDK
+and plugin stack. Apps that use framework-kit (`@solana/client`) can
+additionally pass its zustand store, which adds the transaction lifecycle and
+cluster switches.
 
 ## Design Principles
 
 1. **On by default**: Solana discovery runs unless `solana: false` is passed,
    exactly like EVM discovery runs unless `evm: false` is passed. A customer
-   who never configures Solana still gets their connects. (Before this, Solana
-   capture was opt-in and manual, and a paying customer ran for months with
-   tens of thousands of Solana wallets and zero connect events.)
+   who never configures Solana still gets compatible Wallet Standard connects.
+   (Before this, Solana capture was opt-in and manual, and a paying customer
+   ran for months with tens of thousands of Solana wallets and zero connect
+   events.)
 2. **No wallet library dependency**: the Wallet Standard handshake is a few
    lines of window events, implemented inline and duck-typed. The SDK keeps
    its two runtime dependencies.
@@ -122,6 +124,21 @@ source; call `formo.signature()`.
 The global `autocapture.connect`, `disconnect`, `chain`, and `transaction`
 flags still gate events from both sources.
 
+## Event Coverage
+
+| Event | Wallet Standard | framework-kit store |
+|---|---|---|
+| Detect | registration | registration (still reported by the registry) |
+| Connect | account added | connection state |
+| Disconnect | accounts removed | connection state |
+| Chain change | `setCluster()` | cluster state |
+| Signature | manual | manual |
+| Transaction | manual | recorded store lifecycle |
+
+The store maps its transaction states to `started`, `broadcasted`,
+`confirmed`, `rejected`, and `reverted`. Events that neither source exposes
+remain available through `formo.signature()` and `formo.transaction()`.
+
 ## Chain ID Mapping
 
 Solana has no numeric chain id. Clusters map to reserved ids above 900000:
@@ -204,6 +221,7 @@ dispatching `wallet-standard:register-wallet` with a callback `detail`.
 ## Resources
 
 - [Wallet Standard](https://github.com/wallet-standard/wallet-standard)
+- [Solana Kit](https://github.com/anza-xyz/kit)
 - [framework-kit](https://github.com/solana-foundation/framework-kit)
 - [Solana Wallet Adapter](https://github.com/anza-xyz/wallet-adapter)
 - [Formo docs: Solana integration](https://docs.formo.so/sdks/web#solana-integration)

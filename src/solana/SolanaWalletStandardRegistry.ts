@@ -4,12 +4,11 @@
  * Which Solana wallets exist, and whether each is connected. The Solana
  * analogue of `EvmProviderRegistry` + EIP-6963.
  *
- * Every modern Solana wallet (Phantom, Solflare, Backpack, ...) announces
- * itself through the Wallet Standard's window-event handshake, and
- * `@solana/wallet-adapter`, framework-kit, Privy, Dynamic and Reown all sit
- * on top of that same handshake. Observing it here therefore covers every
- * wallet library at once, with no configuration from the host app: the
- * registry announces `wallet-standard:app-ready`, listens for
+ * Compatible wallets (Phantom, Solflare, Backpack, ...) announce themselves
+ * through the Wallet Standard's window-event handshake. Solana Kit,
+ * wallet-adapter, and framework-kit use these registered wallets. Observing
+ * the handshake covers those wallets without coupling Formo to the host
+ * library: the registry announces `wallet-standard:app-ready`, listens for
  * `wallet-standard:register-wallet`, and subscribes to each wallet's
  * `standard:events` `change` event.
  *

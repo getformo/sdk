@@ -16,11 +16,10 @@ import {
 /**
  * Solana wallet discovery through the Wallet Standard.
  *
- * Regression for P-2416: a `@solana/wallet-adapter` (or Privy, Dynamic,
- * Reown, hand-rolled) app produced no Solana connect events at all, because
- * the only autocapture path was framework-kit's store. Every modern Solana
- * wallet announces itself through the Wallet Standard, so observing that
- * covers them all.
+ * Regression for P-2416: a Wallet Standard app produced no Solana connect
+ * events because the only autocapture path was framework-kit's store.
+ * Compatible Solana wallets announce themselves through the Wallet Standard,
+ * so observing that covers them all.
  */
 describe("SolanaWalletStandardRegistry", () => {
   let sandbox: sinon.SinonSandbox;

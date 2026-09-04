@@ -176,7 +176,7 @@ describe("SolanaManager", () => {
     jsdom.window.close();
   });
 
-  describe("without a store (wallet-adapter, Privy, Dynamic, Reown, custom)", () => {
+  describe("without a store (Wallet Standard)", () => {
     it("reports connect and disconnect from Wallet Standard discovery", () => {
       makeManager();
       const phantom = makeStandardWallet("Phantom");
