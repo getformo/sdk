@@ -366,23 +366,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Skip provider detection in Wagmi mode or when EVM is disabled
     if (analytics.isEvmDisabled) {
       logger.info("FormoAnalytics: Skipping provider detection (EVM disabled)");
-    } else if (!analytics.isWagmiMode) {
-      // Auto-detect wallet provider
-      const discovered = await analytics.evmEvents.getProviders();
-      await analytics.evmEvents.detectWallets(discovered);
-      analytics.evmEvents.trackProviders(discovered);
     } else {
-      // Wagmi owns connect / transaction capture, so discovered providers
-      // are not wrapped. Discovery still runs for the `detect` event: which
-      // wallets are installed must read the same in every integration mode.
-      // Skipping it here silently zeroed detect for every wagmi customer.
-      // Best-effort: detect must never stop wagmi capture from coming up.
       try {
         const discovered = await analytics.evmEvents.getProviders();
         await analytics.evmEvents.detectWallets(discovered);
+        if (!analytics.isWagmiMode) {
+          analytics.evmEvents.trackProviders(discovered);
+        }
       } catch (error) {
         logger.warn("FormoAnalytics: Provider discovery failed", error);
       }
