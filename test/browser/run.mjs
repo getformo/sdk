@@ -23,7 +23,12 @@ const sdkPath = join(root, "dist/index.umd.min.js");
 // ── static server for the harness page ───────────────────────────────────
 // Serves exactly two files, by name, so a request path can never reach
 // anything else on disk. Bound to loopback only.
-const files = { "/harness.html": readFileSync(join(here, "harness.html")), "/sdk.js": readFileSync(sdkPath) };
+const files = {
+  "/harness.html": readFileSync(join(here, "harness.html")),
+  "/storage-parent.html": readFileSync(join(here, "storage-parent.html")),
+  "/storage-frame.html": readFileSync(join(here, "storage-frame.html")),
+  "/sdk.js": readFileSync(sdkPath),
+};
 const server = createServer((req, res) => {
   const path = req.url === "/" ? "/harness.html" : req.url.split("?")[0];
   const body = Object.prototype.hasOwnProperty.call(files, path) ? files[path] : null;
@@ -50,7 +55,17 @@ process.on("exit", teardown);
 // A hung page must not hang CI: every await below is bounded by this.
 const deadline = setTimeout(() => { console.error("test:browser timed out after 90s"); process.exit(3); }, 90_000);
 deadline.unref();
-proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+proc = spawn(chrome, [
+  "--headless=new",
+  "--remote-debugging-port=0",
+  `--user-data-dir=${profile}`,
+  "--no-first-run",
+  "--disable-gpu",
+  // Exercise the SDK's third-party fallback deterministically even on Chrome
+  // channels where the cookie phase-out is not enabled by default yet.
+  "--test-third-party-cookie-phaseout",
+  "about:blank",
+], { stdio: ["ignore", "ignore", "pipe"] });
 const wsUrl = await new Promise((resolve) => { proc.stderr.on("data", (d) => { const m = String(d).match(/ws:\/\/[^\s]+/); if (m) resolve(m[0]); }); });
 ws = new WebSocket(wsUrl);
 await new Promise((r) => (ws.onopen = r));
@@ -65,9 +80,12 @@ const evaluate = async (expression) => {
   return r.result.result.value;
 };
 await send("Page.enable", {}, sessionId);
-const loaded = new Promise((r) => { const h = (m) => { const j = JSON.parse(m.data); if (j.method === "Page.loadEventFired" && j.sessionId === sessionId) { ws.removeEventListener("message", h); r(); } }; ws.addEventListener("message", h); });
-await send("Page.navigate", { url: `http://127.0.0.1:${port}/harness.html` }, sessionId);
-await loaded;
+const navigate = async (url) => {
+  const loaded = new Promise((r) => { const h = (m) => { const j = JSON.parse(m.data); if (j.method === "Page.loadEventFired" && j.sessionId === sessionId) { ws.removeEventListener("message", h); r(); } }; ws.addEventListener("message", h); });
+  await send("Page.navigate", { url }, sessionId);
+  await loaded;
+};
+await navigate(`http://127.0.0.1:${port}/harness.html`);
 await evaluate("window.__ready.then(() => true)");
 
 // ── the scenario ─────────────────────────────────────────────────────────
@@ -102,6 +120,25 @@ results.push(await step("disconnect B",     "window.__walletB.__disconnect()"));
 results.push(["sdk-issued rpc", await evaluate("(window.__rpc||[]).filter(m => !/personal_sign|eth_sendTransaction|wallet_sendCalls|wallet_switchEthereumChain|eth_requestAccounts/.test(m))")]);
 results.push(["hasBuffer", await evaluate("typeof Buffer !== 'undefined'")]);
 
+// A different hostname makes the frame cross-site while both origins still
+// resolve to this loopback-only server. The frame is destroyed and recreated,
+// which discards the bundle's module memory and proves persistence comes from
+// partitioned Web Storage rather than the page-lifetime fallback.
+await navigate(`http://localhost:${port}/storage-parent.html?framePort=${port}`);
+const storage = await evaluate("window.__storageDone");
+results.push(["cross-origin storage", {
+  cookieBlocked: storage.first.cookie === "" && storage.second.cookie === "",
+  oneIdPerLoad:
+    storage.first.ids.length === 2 &&
+    storage.second.ids.length === 2 &&
+    new Set(storage.first.ids).size === 1 &&
+    new Set(storage.second.ids).size === 1,
+  stableAcrossReload: storage.first.ids[0] === storage.second.ids[0],
+  persistedInLocalStorage:
+    storage.first.localId === storage.first.ids[0] &&
+    storage.second.localId === storage.first.ids[0],
+}]);
+
 // ── assertions ───────────────────────────────────────────────────────────
 // Exact expectations, not "non-empty": the point is to catch a missing or
 // duplicated event, which is the shape of every bug in this sequence.
@@ -117,6 +154,12 @@ const expect = {
   "sign on B":         ["signature:requested@31337/0x88C0", "signature:confirmed@31337/0x88C0"],
   "disconnect B":      ["disconnect@31337/0x88C0"],
   "hasBuffer":         false,
+  "cross-origin storage": {
+    cookieBlocked: true,
+    oneIdPerLoad: true,
+    stableAcrossReload: true,
+    persistedInLocalStorage: true,
+  },
 };
 let failed = 0;
 for (const [k, v] of results) {

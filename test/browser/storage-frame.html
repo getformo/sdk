@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Formo cross-origin storage frame</title></head>
+<body><script>
+window.__sent = [];
+window.fetch = async (_url, init) => {
+  try {
+    const body = JSON.parse(init?.body || "[]");
+    for (const event of (Array.isArray(body) ? body : [body])) window.__sent.push(event);
+  } catch {}
+  return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+};
+</script><script src="./sdk.js"></script><script>
+(async () => {
+  const formo = await new Promise((resolve) => {
+    window.formofy("storage-test-key", {
+      tracking: true,
+      evm: false,
+      flushAt: 1,
+      ready: resolve,
+    });
+  });
+  await formo.track("frame-one");
+  await formo.track("frame-two");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  const ids = window.__sent
+    .filter((event) => event.event === "frame-one" || event.event === "frame-two")
+    .map((event) => event.anonymous_id);
+  const localKey = Object.keys(localStorage).find((key) => key.endsWith("anonymous-id"));
+  parent.postMessage({
+    run: new URL(location.href).searchParams.get("run"),
+    ids,
+    cookie: document.cookie,
+    localId: localKey ? localStorage.getItem(localKey) : null,
+  }, "*");
+  formo.cleanup();
+})();
+</script></body></html>

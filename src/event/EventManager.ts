@@ -2,6 +2,7 @@ import { Address, APIEvent, Options } from "../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
 import { EventFactory } from "./EventFactory";
+import { EVENT_CREATION_CANCELLED } from "./cancellation";
 import { IEventFactory, IEventManager } from "./type";
 import { isBlockedAddress } from "../utils/address";
 
@@ -11,13 +12,18 @@ import { isBlockedAddress } from "../utils/address";
 class EventManager implements IEventManager {
   eventQueue: IEventQueue;
   eventFactory: IEventFactory;
+  private generation = 0;
 
   /**
    *
    * @param eventQueue Event queue instance
    * @param options Optional configuration (referral parsing, etc.)
    */
-  constructor(eventQueue: IEventQueue, options?: Options) {
+  constructor(
+    eventQueue: IEventQueue,
+    options?: Options,
+    private readonly canAcceptEvent: () => boolean = () => true
+  ) {
     this.eventQueue = eventQueue;
     this.eventFactory = new EventFactory(options);
   }
@@ -32,7 +38,28 @@ class EventManager implements IEventManager {
     userId?: string
   ): Promise<void> {
     const { callback, ..._event } = event;
-    const formoEvent = await this.eventFactory.create(_event, address, userId);
+    const generation = this.generation;
+    const shouldContinue = () =>
+      generation === this.generation && this.canAcceptEvent();
+    if (!shouldContinue()) return;
+
+    let formoEvent;
+    try {
+      formoEvent = await this.eventFactory.create(
+        _event,
+        address,
+        userId,
+        shouldContinue
+      );
+    } catch (error) {
+      if (error === EVENT_CREATION_CANCELLED) return;
+      throw error;
+    }
+
+    // Consent can change after enrichment resolves but before this continuation
+    // runs. A clear also advances the generation, so opting back in cannot
+    // revive work that began before the opt-out.
+    if (!shouldContinue()) return;
 
     // Check if the final event has a blocked address - don't queue it
     if (formoEvent.address && isBlockedAddress(formoEvent.address)) {
@@ -52,11 +79,13 @@ class EventManager implements IEventManager {
 
   /** Drop any buffered events (consent withdrawal). Recoverable. */
   clear(): void {
+    this.generation++;
     this.eventQueue.clear();
   }
 
   /** Terminal shutdown on teardown: nothing can be sent after this. */
   close(): void {
+    this.generation++;
     this.eventQueue.close();
   }
 }

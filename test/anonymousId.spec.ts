@@ -157,6 +157,29 @@ describe("Anonymous id stability", () => {
       expect(after).to.not.equal(before);
       a.cleanup();
     });
+
+    it("cancels an in-flight event without recreating identity after opt-out", async () => {
+      const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+      const a = await FormoAnalytics.init("test-write-key", {
+        wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+      });
+      const enqueue = sandbox.stub((a as any).eventManager.eventQueue, "enqueue");
+
+      // Event enrichment always crosses an async browser-detection boundary.
+      // Withdraw and immediately restore consent before it resumes: checking
+      // only the current flag would let this pre-opt-out event come back alive.
+      const pending = a.track("started-before-opt-out");
+      a.optOutTracking();
+      a.optInTracking();
+      await pending;
+
+      expect(enqueue.called).to.equal(false);
+      expect(cookie().get(LOCAL_ANONYMOUS_ID_KEY)).to.satisfy(
+        (v: any) => v === undefined || v === null || v === ""
+      );
+      expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(null);
+      a.cleanup();
+    });
   });
 
   describe("when the browser rejects the cookie write", () => {

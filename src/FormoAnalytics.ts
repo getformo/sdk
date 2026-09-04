@@ -309,7 +309,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         // pagehide flush scheduled before opt-out.
         canSend: () => !this.hasOptedOutTracking(),
       }),
-      options
+      options,
+      () => !this.hasOptedOutTracking()
     );
 
     // Check consent status on initialization

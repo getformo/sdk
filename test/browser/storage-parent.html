@@ -1,0 +1,29 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Formo cross-origin storage parent</title></head>
+<body><script>
+const framePort = new URL(location.href).searchParams.get("framePort");
+
+function loadFrame(run) {
+  return new Promise((resolve, reject) => {
+    const frame = document.createElement("iframe");
+    frame.hidden = true;
+    const timeout = setTimeout(() => reject(new Error("storage frame timed out")), 10_000);
+    const receive = (event) => {
+      if (event.origin !== `http://127.0.0.1:${framePort}` || event.data?.run !== run) return;
+      clearTimeout(timeout);
+      removeEventListener("message", receive);
+      resolve({ data: event.data, frame });
+    };
+    addEventListener("message", receive);
+    frame.src = `http://127.0.0.1:${framePort}/storage-frame.html?run=${run}`;
+    document.body.appendChild(frame);
+  });
+}
+
+window.__storageDone = (async () => {
+  const firstLoad = await loadFrame("first");
+  firstLoad.frame.remove();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const secondLoad = await loadFrame("second");
+  return { first: firstLoad.data, second: secondLoad.data };
+})();
+</script></body></html>
