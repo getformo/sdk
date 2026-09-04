@@ -124,7 +124,7 @@ results.push(["hasBuffer", await evaluate("typeof Buffer !== 'undefined'")]);
 // resolve to this loopback-only server. The frame is destroyed and recreated,
 // which discards the bundle's module memory and proves persistence comes from
 // partitioned Web Storage rather than the page-lifetime fallback.
-await navigate(`http://localhost:${port}/storage-parent.html?framePort=${port}`);
+await navigate(`http://localhost:${port}/storage-parent.html`);
 const storage = await evaluate("window.__storageDone");
 results.push(["cross-origin storage", {
   cookieBlocked: storage.first.cookie === "" && storage.second.cookie === "",
