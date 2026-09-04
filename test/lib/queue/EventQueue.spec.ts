@@ -785,6 +785,26 @@ describe("EventQueue", () => {
       expect(fetchStub.calledOnce, "post-clear enqueue still flushes").to.be
         .true;
     });
+
+    it("flushes the first event immediately after clear()", async () => {
+      useUniqueCryptoHashes();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+
+      eventQueue.clear();
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+
+      expect(fetchStub.calledOnce).to.be.true;
+    });
   });
 
   describe("close", () => {

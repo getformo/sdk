@@ -154,6 +154,7 @@ export class EventQueue implements IEventQueue {
     this.queue = [];
     this.queueByteSize = 0;
     this.payloadHashes.clear();
+    this.flushed = false;
   }
 
   /**
