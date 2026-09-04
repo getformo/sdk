@@ -145,6 +145,12 @@ Names that differ only by case or whitespace intentionally share a session
 dedup key. Both sources derive the identifier the same way so a wallet's
 `detect` and its `connect` share one rdns whichever source reported each.
 
+Examples:
+
+- Phantom: `sol.wallet.phantom`
+- Solflare: `sol.wallet.solflare`
+- Backpack: `sol.wallet.backpack`
+
 ## Address Handling
 
 Solana public keys are 32-byte, Base58-encoded values. The SDK accepts 32 to
