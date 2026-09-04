@@ -142,6 +142,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _onPopStateListener?: (e: Event) => void;
   private _onLocationChangeListener?: (e: Event) => void;
   private _pageHooksDisposed = false;
+  private _pageGeneration = 0;
 
   config: Config;
   /**
@@ -1356,6 +1357,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
+    this._pageGeneration++;
     // Drop anything already buffered so a pending timer/pagehide flush
     // cannot ship events after consent withdrawal.
     this.eventManager.clear();
@@ -1492,30 +1494,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    // A route change can end path-based suppression; a provider registered
-    // while suppressed gets its refused session adoption retried here.
-    // Idempotent and cheap when nothing is pending.
-    if (!this.isCleanedUp) {
+    const canTrack = this.shouldTrack();
+    if (!this.isCleanedUp && canTrack) {
       try {
         this.evmEvents.retryExternalAdoptions();
+        void this.evmEvents.detectWallets(this.providers);
       } catch {
-        /* never let the retry break a page hit */
+        // Detection retries must not break page tracking.
       }
     }
 
-    if (!this.shouldTrack()) {
+    if (!canTrack) {
       logger.info(
         "Track page hit: Skipping event due to tracking configuration"
       );
       return;
     }
 
+    const generation = this._pageGeneration;
     setTimeout(() => {
       // Drop in-flight page hits from an SDK instance that was torn down
       // between scheduling and firing (e.g. provider remount in React Strict
       // Mode / HMR). Otherwise the orphan instance would queue a page event
       // here with its stale, never-populated `currentAddress`.
-      if (this._pageHooksDisposed) return;
+      if (this._pageHooksDisposed || generation !== this._pageGeneration) return;
       (async () => {
         try {
           await this.trackEvent(

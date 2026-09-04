@@ -55,6 +55,7 @@ describe("StorageManager", () => {
       const storage = storageManager.getStorage("cookieStorage");
       expect(storage).to.not.be.null;
       expect(storage.isAvailable()).to.be.true;
+      expect(storageManager.getResolvedType("cookieStorage")).to.equal("cookieStorage");
     });
 
     it("should return localStorage when requested and available", () => {
@@ -104,6 +105,13 @@ describe("StorageManager", () => {
       storage.set("key", "value");
       // Prove the value landed in sessionStorage, not memory
       expect(jsdom.window.sessionStorage.getItem(storageKey)).to.equal("value");
+    });
+
+    it("reports when cookie storage resolves to localStorage", () => {
+      delete (global as any).document;
+      const sm = new StorageManager(writeKey);
+
+      expect(sm.getResolvedType("cookieStorage")).to.equal("localStorage");
     });
 
     it("should fall back to sessionStorage when localStorage throws", () => {

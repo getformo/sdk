@@ -183,6 +183,25 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
+  it("detects a wallet after leaving an excluded route", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: { excludePaths: ["/"] },
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+
+    announce(makeInjected());
+    await settle();
+    expect(sent.filter((e) => e.type === "detect")).to.be.empty;
+
+    jsdom.reconfigure({ url: "https://example.com/app" });
+    await formo.page();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+    formo.cleanup();
+  });
+
   it("does not identify a never-connected wallet on a no-arg identify()", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({

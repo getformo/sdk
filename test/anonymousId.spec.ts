@@ -174,6 +174,22 @@ describe("Anonymous id stability", () => {
       expect(local().get(LOCAL_ANONYMOUS_ID_KEY)).to.equal(null);
       a.cleanup();
     });
+
+    it("cancels a delayed page hit across opt-out and opt-in", async () => {
+      const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+      const a = await FormoAnalytics.init("test-write-key", {
+        wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+      });
+      const addEvent = sandbox.stub((a as any).eventManager, "addEvent").resolves();
+
+      await a.page();
+      a.optOutTracking();
+      a.optInTracking();
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      expect(addEvent.getCalls().filter((call) => call.args[0]?.type === "page")).to.be.empty;
+      a.cleanup();
+    });
   });
 
   describe("when the browser rejects the cookie write", () => {

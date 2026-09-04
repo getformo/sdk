@@ -1,6 +1,6 @@
 import { AnonymousID } from "../types";
 import { generateNativeUUID } from "../utils";
-import { cookie, local } from "../storage";
+import { cookie, local, usesCookieStorage } from "../storage";
 import {
   getIdentityCookieDomain,
   getIdentityCookieSecurity,
@@ -52,7 +52,7 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
   if (cookie().get(key) === anonymousId) {
     // Prefer the cookie and discard the fallback copy.
     volatileAnonymousId = undefined;
-    if (readLocal(key)) {
+    if (usesCookieStorage() && readLocal(key)) {
       try {
         local().remove(key);
       } catch {
