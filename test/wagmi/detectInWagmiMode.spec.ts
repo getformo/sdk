@@ -164,6 +164,25 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
+  it("detects a wallet announced while tracking was opted out", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+    formo.optOutTracking();
+
+    announce(makeInjected());
+    await settle();
+    expect(sent.filter((e) => e.type === "detect")).to.deep.equal([]);
+
+    formo.optInTracking();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+    formo.cleanup();
+  });
+
   it("does not identify a never-connected wallet on a no-arg identify()", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({
