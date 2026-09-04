@@ -2,14 +2,11 @@
 
 ## Overview
 
-The SDK tracks Solana wallets the same way it tracks EVM wallets: by
-discovering them, with no configuration from the host app. EVM wallets
-announce themselves through EIP-6963; Solana wallets announce themselves
+The SDK discovers EVM wallets through EIP-6963 and compatible Solana wallets
 through the [Wallet Standard](https://github.com/wallet-standard/wallet-standard).
-Every modern Solana wallet (Phantom, Solflare, Backpack, and the rest)
-implements it, and every Solana wallet library (`@solana/wallet-adapter`,
-framework-kit, Privy, Dynamic, Reown, custom connectors) sits on top of it.
-Observing the standard therefore covers them all at once.
+This captures wallet events regardless of whether the app uses
+`@solana/wallet-adapter`, framework-kit, Privy, Dynamic, Reown, or a custom
+connector.
 
 Apps that use framework-kit (`@solana/client`) can additionally pass its
 zustand store, which adds the transaction lifecycle and cluster switches.
@@ -122,6 +119,9 @@ interface SolanaOptions {
 Signatures (`signMessage`, `signTransaction`) are reported by neither
 source; call `formo.signature()`.
 
+The global `autocapture.connect`, `disconnect`, `chain`, and `transaction`
+flags still gate events from both sources.
+
 ## Chain ID Mapping
 
 Solana has no numeric chain id. Clusters map to reserved ids above 900000:
@@ -147,10 +147,31 @@ dedup key. Both sources derive the identifier the same way so a wallet's
 
 ## Address Handling
 
-Solana addresses are 32 to 44 character Base58 strings and are
-case-sensitive. `connect()` validates the address against the chain id, so
-a Base58 address paired with an EVM chain id is rejected. Known system
-program addresses are blocked (see `SOLANA_SYSTEM_ADDRESSES`).
+Solana public keys are 32-byte, Base58-encoded values. The SDK accepts 32 to
+44 characters from the Base58 alphabet (which excludes `0`, `O`, `I`, and
+`l`) and compares them case-sensitively. For example:
+
+`FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn`
+
+Validation checks format, not Ed25519 curve membership. `connect()` also
+checks the chain id, so a Base58 address paired with an EVM chain is rejected.
+
+The SDK blocks these non-wallet addresses:
+
+| Address | Value |
+|---|---|
+| System Program | `11111111111111111111111111111111` |
+| Token Program | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
+| Token-2022 Program | `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` |
+| Associated Token Program | `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL` |
+| Rent Sysvar | `SysvarRent111111111111111111111111111111111` |
+| Clock Sysvar | `SysvarC1ock11111111111111111111111111111111` |
+
+They are exported as `SOLANA_SYSTEM_ADDRESSES`.
+
+The package also exports `isSolanaAddress()`, `getValidSolanaAddress()`,
+`isSolanaSystemAddress()`, `isBlockedSolanaAddress()`,
+`publicKeyToAddress()`, and `areSolanaAddressesEqual()`.
 
 ## Limitations
 
