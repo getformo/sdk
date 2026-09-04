@@ -21,8 +21,8 @@ const root = join(here, "..", "..");
 const sdkPath = join(root, "dist/index.umd.min.js");
 
 // ── static server for the harness page ───────────────────────────────────
-// Serves exactly two files, by name, so a request path can never reach
-// anything else on disk. Bound to loopback only.
+// Serves a fixed allowlist by name, so a request path can never reach anything
+// else on disk. Bound to loopback only.
 const files = {
   "/harness.html": readFileSync(join(here, "harness.html")),
   "/storage-parent.html": readFileSync(join(here, "storage-parent.html")),
