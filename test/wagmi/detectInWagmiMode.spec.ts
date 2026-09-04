@@ -185,6 +185,26 @@ describe("detect in wagmi mode", () => {
 
   it("restores the wagmi chain before retrying detection on opt-in", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    (mockWagmiConfig as any).state = {
+      status: "connected",
+      connections: new Map([
+        [
+          "connector-1",
+          {
+            accounts: [ADDR],
+            chainId: 1,
+            connector: {
+              id: "metamask",
+              name: "MetaMask",
+              type: "injected",
+              uid: "1",
+            },
+          },
+        ],
+      ]),
+      current: "connector-1",
+      chainId: 1,
+    };
     const { formo, sent } = await setup({
       tracking: { excludeChains: [1] },
       wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
@@ -193,12 +213,10 @@ describe("detect in wagmi mode", () => {
     announce(makeInjected());
     await settle();
 
-    sandbox.stub((formo as any).wagmiHandler, "retryAdoption").callsFake(() => {
-      formo.currentChainId = 1;
-    });
     formo.optInTracking();
     await settle();
 
+    expect(formo.currentChainId).to.equal(1);
     expect(sent.filter((e) => e.type === "detect")).to.be.empty;
     formo.cleanup();
   });
