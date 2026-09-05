@@ -427,9 +427,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(ACTIVE_WALLET_KEY);
-    // Traffic-source attribution (referrer / UTM) describes the visit, not
-    // the user, so it stays: a wallet identified after a switch or logout is
-    // still attributed to what brought the browser here.
+    // Attribution belongs to the visit, so reset preserves it.
   }
 
   /**
