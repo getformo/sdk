@@ -15,6 +15,7 @@ import {
   getIdentityCookieSecurity,
 } from "./storage/cookiePolicy";
 import { EventManager, IEventManager } from "./event";
+import { clearAnonymousId } from "./event/utils";
 import { EventQueue } from "./queue";
 import { logger, Logger } from "./logger";
 import {
@@ -141,6 +142,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _onPopStateListener?: (e: Event) => void;
   private _onLocationChangeListener?: (e: Event) => void;
   private _pageHooksDisposed = false;
+  private _pageGeneration = 0;
 
   config: Config;
   /**
@@ -277,6 +279,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       isAutocaptureEnabled: (t) => this.isAutocaptureEnabled(t),
       isTrackingSuppressed: () => this.isTrackingSuppressed(),
       willTrackEvent: (chainId) => this.willTrackEvent(chainId),
+      retryDetection: () => this.retryWalletDetection(),
       isWagmiMode: () => this.isWagmiMode,
       connect: (params, properties) => this.connect(params, properties),
       disconnect: (params) => this.disconnect(params),
@@ -308,7 +311,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         // pagehide flush scheduled before opt-out.
         canSend: () => !this.hasOptedOutTracking(),
       }),
-      options
+      options,
+      () => !this.hasOptedOutTracking()
     );
 
     // Check consent status on initialization
@@ -364,16 +368,18 @@ export class FormoAnalytics implements IFormoAnalytics {
     initStorageManager(writeKey);
     const analytics = new FormoAnalytics(writeKey, options);
 
-    // Skip provider detection in Wagmi mode or when EVM is disabled
     if (analytics.isEvmDisabled) {
       logger.info("FormoAnalytics: Skipping provider detection (EVM disabled)");
-    } else if (!analytics.isWagmiMode) {
-      // Auto-detect wallet provider
-      const discovered = await analytics.evmEvents.getProviders();
-      await analytics.evmEvents.detectWallets(discovered);
-      analytics.evmEvents.trackProviders(discovered);
     } else {
-      logger.info("FormoAnalytics: Skipping provider detection (Wagmi mode)");
+      try {
+        const discovered = await analytics.evmEvents.getProviders();
+        await analytics.evmEvents.detectWallets(discovered);
+        if (!analytics.isWagmiMode) {
+          analytics.evmEvents.trackProviders(discovered);
+        }
+      } catch (error) {
+        logger.warn("FormoAnalytics: Provider discovery failed", error);
+      }
     }
 
     return analytics;
@@ -403,7 +409,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /**
-   * Reset the current user session.
+   * Reset user and wallet state while preserving the browser's anonymous id.
+   * Use `optOutTracking()` to clear the anonymous id and the attribution.
    * @returns {void}
    */
   public reset(): void {
@@ -416,16 +423,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     // EVM provider reference so tracking can resume on the next connect.
     this.wallet.reset();
 
-    cookie().remove(LOCAL_ANONYMOUS_ID_KEY);
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(ACTIVE_WALLET_KEY);
-
-    // Stored traffic-source attribution (referrer/UTM) is tracking data;
-    // clear it too so reset()/optOutTracking() don't leave it to be
-    // re-attached to the next session's events.
-    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
+    // Attribution belongs to the visit, so reset preserves it.
   }
 
   /**
@@ -676,6 +678,12 @@ export class FormoAnalytics implements IFormoAnalytics {
     address?: Address;
   }): void {
     this.wallet.syncWalletState(params);
+    this.retryWalletDetection();
+  }
+
+  private retryWalletDetection(): void {
+    if (this.isCleanedUp) return;
+    void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
   }
 
 
@@ -1036,6 +1044,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         return;
       }
       if (!params) {
+        // Wagmi owns wallet identification.
+        if (this.isWagmiMode) {
+          logger.info("identify() without params is a no-op in Wagmi mode");
+          return;
+        }
         // If no params provided, auto-identify
         logger.info(
           "Auto-identifying with providers:",
@@ -1274,10 +1287,8 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    // detect() marks wallet detection (a cookie write) before
-    // trackEvent's consent check - gate it for a suppressed visitor or
-    // excluded environment (opt-out / timezone / host / path).
-    if (this.isTrackingSuppressed()) {
+    // Apply all policy checks before persisting the detection marker.
+    if (!this.shouldTrack()) {
       logger.info("detect() skipped: tracking is suppressed for this visitor or environment");
       return;
     }
@@ -1349,6 +1360,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
+    this._pageGeneration++;
     // Drop anything already buffered so a pending timer/pagehide flush
     // cannot ship events after consent withdrawal.
     this.eventManager.clear();
@@ -1356,6 +1368,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // on opt-in, and nothing else would retry an already-adopted one.
     this.evmEvents.markRegisteredAdoptionsPending();
     this.reset();
+    // Consent withdrawal also clears the browser id and the attribution.
+    clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+    session().remove(SESSION_TRAFFIC_SOURCE_KEY);
 
     logger.info("Successfully opted out of tracking");
   }
@@ -1382,11 +1397,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Remove opt-out flag
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
 
-    // A wallet connected while opted out was declined by syncWalletState, and
-    // an unchanged wagmi connection produces no status or chain update to
-    // retry on. Without this, opting back in leaves that wallet invisible for
-    // the rest of the page load.
+    // Retry wallet adoption skipped while opted out.
     this.wagmiHandler?.retryAdoption();
+    this.retryWalletDetection();
 
     logger.info("Successfully opted back into tracking");
   }
@@ -1481,30 +1494,30 @@ export class FormoAnalytics implements IFormoAnalytics {
     context?: IFormoEventContext,
     callback?: (...args: unknown[]) => void
   ): Promise<void> {
-    // A route change can end path-based suppression; a provider registered
-    // while suppressed gets its refused session adoption retried here.
-    // Idempotent and cheap when nothing is pending.
-    if (!this.isCleanedUp) {
+    const canTrack = this.shouldTrack();
+    if (!this.isCleanedUp && canTrack) {
       try {
         this.evmEvents.retryExternalAdoptions();
+        this.retryWalletDetection();
       } catch {
-        /* never let the retry break a page hit */
+        // Detection retries must not break page tracking.
       }
     }
 
-    if (!this.shouldTrack()) {
+    if (!canTrack) {
       logger.info(
         "Track page hit: Skipping event due to tracking configuration"
       );
       return;
     }
 
+    const generation = this._pageGeneration;
     setTimeout(() => {
       // Drop in-flight page hits from an SDK instance that was torn down
       // between scheduling and firing (e.g. provider remount in React Strict
       // Mode / HMR). Otherwise the orphan instance would queue a page event
       // here with its stale, never-populated `currentAddress`.
-      if (this._pageHooksDisposed) return;
+      if (this._pageHooksDisposed || generation !== this._pageGeneration) return;
       (async () => {
         try {
           await this.trackEvent(

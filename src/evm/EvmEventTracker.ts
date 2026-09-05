@@ -29,6 +29,8 @@ export interface EvmEventTrackerDeps {
   isTrackingSuppressed(): boolean;
   /** Whether an event on this chain would actually be sent. */
   willTrackEvent(chainId?: ChainID): boolean;
+  /** Retry detect events after the active chain changes. */
+  retryDetection(): void;
   /** In wagmi mode the SDK does not wrap providers itself. */
   isWagmiMode(): boolean;
 
@@ -280,6 +282,8 @@ export class EvmEventTracker {
    * had already replaced.
    */
   private unsubscribeDiscovery?: () => void;
+  /** Discovery store retained for complete listener cleanup. */
+  private discoveryStore?: ReturnType<typeof createStore>;
 
   constructor(
     private readonly wallet: WalletStateStore,
@@ -298,10 +302,12 @@ export class EvmEventTracker {
     this.retryRequested = false;
     try {
       this.unsubscribeDiscovery?.();
+      this.discoveryStore?.destroy();
     } catch (e) {
       logger.warn("Failed to unsubscribe from provider discovery", e);
     }
     this.unsubscribeDiscovery = undefined;
+    this.discoveryStore = undefined;
   }
 
   /** Set by `cleanup()`; every awaited continuation checks it. */
@@ -1100,6 +1106,7 @@ export class EvmEventTracker {
     }
 
     this.wallet.set('evm', { chainId: nextChainId });
+    this.deps.retryDetection();
 
     try {
       // This is just a chain change since we already confirmed _evmAddress exists
@@ -1440,8 +1447,14 @@ export class EvmEventTracker {
     }
   }
 
+  /** Whether Formo owns provider lifecycle tracking. */
+  private tracksDiscovered(): boolean {
+    return !this.deps.isWagmiMode();
+  }
+
   async getProviders(): Promise<readonly EIP6963ProviderDetail[]> {
     const store = createStore();
+    this.discoveryStore = store;
     let providers = store.getProviders();
 
     this.unsubscribeDiscovery = store.subscribe((providerDetails) => {
@@ -1464,12 +1477,17 @@ export class EvmEventTracker {
         return !!p && !this.registry.isTracked(p);
       });
 
-      if (newDetails.length > 0) {
+      // Wagmi detects only providers added by this announcement.
+      const toDetect = this.tracksDiscovered() ? newDetails : newlyAddedDetails;
+
+      if (this.tracksDiscovered() && newDetails.length > 0) {
         this.trackProviders(newDetails);
+      }
+      if (toDetect.length > 0) {
         // Detect newly discovered wallets (session de-dupes) with error handling
         (async () => {
           try {
-            await this.detectWallets(newDetails);
+            await this.detectWallets(toDetect);
           } catch (e) {
             logger.error("Formo: Failed to detect wallets", e);
           }
@@ -1493,7 +1511,7 @@ export class EvmEventTracker {
           this.registry.injected.provider === injected
         ) {
           // Ensure it's tracked
-          if (!this.registry.isTracked(injected)) {
+          if (this.tracksDiscovered() && !this.registry.isTracked(injected)) {
             this.trackEIP1193Provider(injected);
           }
           // Merge with existing providers instead of overwriting
@@ -1502,7 +1520,7 @@ export class EvmEventTracker {
         }
 
         // Re-check if the injected provider is already tracked just before tracking
-        if (!this.registry.isTracked(injected)) {
+        if (this.tracksDiscovered() && !this.registry.isTracked(injected)) {
           this.trackEIP1193Provider(injected);
         }
 
@@ -1551,6 +1569,20 @@ export class EvmEventTracker {
     } catch (err) {
       logger.error("Error detect all wallets:", err);
     }
+  }
+
+  detectableProviders(): readonly EIP6963ProviderDetail[] {
+    const available = new Set<EIP1193Provider>();
+    this.discoveryStore?.getProviders().forEach((detail) =>
+      available.add(detail.provider as EIP1193Provider)
+    );
+    const injected =
+      typeof window !== "undefined" ? window.ethereum : undefined;
+    if (injected) available.add(injected);
+    this.externallyRegistered.forEach((provider) => available.add(provider));
+    return this.registry.all.filter((detail) =>
+      available.has(detail.provider as EIP1193Provider)
+    );
   }
 
   /**

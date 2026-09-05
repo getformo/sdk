@@ -734,6 +734,30 @@ describe("EventQueue", () => {
       expect(fetchStub.called).to.be.false;
     });
 
+    it("does not revive an enqueue cleared during message-id generation", async () => {
+      let finishHash!: (value: string) => void;
+      const hashPending = new Promise<string>((resolve) => {
+        finishHash = resolve;
+      });
+      let allowed = true;
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 1,
+        canSend: () => allowed,
+      });
+      sinon.stub(eventQueue as any, "generateMessageId").returns(hashPending);
+
+      const pending = eventQueue.enqueue(createMockEvent());
+      allowed = false;
+      eventQueue.clear();
+      allowed = true;
+      finishHash("stale-message-id");
+      await pending;
+      await eventQueue.flush();
+
+      expect(fetchStub.called).to.be.false;
+    });
+
     it("clear() drops buffered events; queue is reusable afterwards", async () => {
       useUniqueCryptoHashes();
       eventQueue = new EventQueue("test-key", {
@@ -760,6 +784,26 @@ describe("EventQueue", () => {
       await eventQueue.flush();
       expect(fetchStub.calledOnce, "post-clear enqueue still flushes").to.be
         .true;
+    });
+
+    it("flushes the first event immediately after clear()", async () => {
+      useUniqueCryptoHashes();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+
+      eventQueue.clear();
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+
+      expect(fetchStub.calledOnce).to.be.true;
     });
   });
 

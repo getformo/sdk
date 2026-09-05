@@ -1,17 +1,30 @@
 import { AnonymousID } from "../types";
 import { generateNativeUUID } from "../utils";
-import { cookie } from "../storage";
+import { cookie, local, usesCookieStorage } from "../storage";
 import {
   getIdentityCookieDomain,
   getIdentityCookieSecurity,
 } from "../storage/cookiePolicy";
+
+/** Page-lifetime fallback when persistent storage is unavailable. */
+let volatileAnonymousId: AnonymousID | undefined;
+
+/** Persistent fallback when cookies are unavailable. */
+const readLocal = (key: string): string | undefined => {
+  try {
+    const value = local().get(key);
+    return typeof value === "string" && value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): AnonymousID => {
   const storedAnonymousId = cookie().get(key);
   const anonymousId = (
     storedAnonymousId && typeof storedAnonymousId === "string"
       ? storedAnonymousId
-      : generateNativeUUID()
+      : readLocal(key) ?? volatileAnonymousId ?? generateNativeUUID()
   ) as AnonymousID;
   const domain = getIdentityCookieDomain(crossSubdomainCookies);
   // Re-set the cookie with the configured scope. When crossSubdomainCookies
@@ -28,7 +41,50 @@ const generateAnonymousId = (key: string, crossSubdomainCookies?: boolean): Anon
     ...getIdentityCookieSecurity(),
     ...(domain ? { domain } : {}),
   });
+  // Retry host-only when a domain-scoped write is rejected.
+  if (domain && cookie().get(key) !== anonymousId) {
+    cookie().set(key, anonymousId, {
+      expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toUTCString(),
+      path: "/",
+      ...getIdentityCookieSecurity(),
+    });
+  }
+  if (cookie().get(key) === anonymousId) {
+    // Prefer the cookie and discard the fallback copy.
+    volatileAnonymousId = undefined;
+    if (usesCookieStorage() && readLocal(key)) {
+      try {
+        local().remove(key);
+      } catch {
+        // Storage is unavailable.
+      }
+    }
+    return anonymousId;
+  }
+  // Persist across embedded page loads when cookies are blocked.
+  try {
+    local().set(key, anonymousId);
+  } catch {
+    // Memory remains the last fallback.
+  }
+  volatileAnonymousId = anonymousId;
   return anonymousId;
 };
 
-export { generateAnonymousId };
+/** Clear the anonymous id from every storage layer. */
+const clearAnonymousId = (key: string): void => {
+  cookie().remove(key);
+  try {
+    local().remove(key);
+  } catch {
+    // Storage is unavailable.
+  }
+  volatileAnonymousId = undefined;
+};
+
+/** Test hook: forget the page-lifetime memory, as a new page load would. */
+const __resetAnonymousIdMemory = (): void => {
+  volatileAnonymousId = undefined;
+};
+
+export { generateAnonymousId, clearAnonymousId, __resetAnonymousIdMemory };
