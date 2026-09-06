@@ -23,6 +23,7 @@ export interface ChainState {
   address?: Address;
   chainId?: ChainID;
 }
+
 export interface EvmChainState extends ChainState {
   provider?: EIP1193Provider;
 }
@@ -361,3 +362,4 @@ export interface Options {
   errorHandler?: (err: Error) => void;
   ready?: (formo: IFormoAnalytics) => void;
 }
+

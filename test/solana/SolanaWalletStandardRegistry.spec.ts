@@ -145,6 +145,7 @@ describe("SolanaWalletStandardRegistry", () => {
       connect: sandbox.stub().resolves(),
       disconnect: sandbox.stub().resolves(),
       chain: sandbox.stub().resolves(),
+      syncWalletState: sandbox.stub(),
       ownsWalletEvents: sandbox.stub().callsFake(() => ownsWalletEvents),
     } as unknown as typeof deps;
   });
@@ -472,12 +473,13 @@ describe("SolanaWalletStandardRegistry", () => {
 
     it("keeps its own picture of the connection so ownership can change", () => {
       const wallet = makeWallet("Phantom");
-      const registry = makeRegistry();
+      makeRegistry();
       installWalletAfterApp(wallet);
       wallet.setAccounts([account(ADDRESS)]);
-      expect(registry.connectedAccount?.address).to.equal(ADDRESS);
+      expect(deps.connect.called).to.be.false;
 
-      // The store handler goes away; the next transition is ours to report.
+      // The store handler goes away; the next transition is ours to report,
+      // and it is judged against the connection the store reported.
       ownsWalletEvents = true;
       wallet.setAccounts([]);
       expect(deps.disconnect.calledOnce).to.be.true;
@@ -528,6 +530,36 @@ describe("SolanaWalletStandardRegistry", () => {
 
       wallet.setAccounts([]);
       expect(deps.disconnect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["devnet"]);
+    });
+
+    it("records the new cluster centrally even when chain capture is off", () => {
+      autocapture.chain = false;
+      const wallet = makeWallet("Phantom");
+      const registry = makeRegistry();
+      installWalletAfterApp(wallet);
+      wallet.setAccounts([account(ADDRESS)]);
+
+      registry.setCluster("devnet");
+
+      expect(deps.chain.called).to.be.false;
+      expect(
+        deps.syncWalletState.calledWith({
+          chainId: SOLANA_CHAIN_IDS["devnet"],
+          address: ADDRESS,
+        })
+      ).to.be.true;
+    });
+
+    it("leaves central state to the store when the store owns wallet events", () => {
+      ownsWalletEvents = false;
+      const wallet = makeWallet("Phantom");
+      const registry = makeRegistry();
+      installWalletAfterApp(wallet);
+      wallet.setAccounts([account(ADDRESS)]);
+
+      registry.setCluster("devnet");
+
+      expect(deps.syncWalletState.called).to.be.false;
     });
 
     it("emits no chain event when nothing is connected or the cluster is unchanged", () => {

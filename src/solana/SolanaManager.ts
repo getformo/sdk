@@ -74,6 +74,7 @@ export class SolanaManager {
           this.formo.connect(params, properties),
         disconnect: (params) => this.formo.disconnect(params),
         chain: (params) => this.formo.chain(params),
+        syncWalletState: (params) => this.formo.syncWalletState(params),
         ownsWalletEvents: () => !this.storeOwnsWalletEvents,
       },
       { cluster: options?.cluster }
@@ -110,7 +111,22 @@ export class SolanaManager {
         // If Wallet Standard got there first, the store adopts that live
         // connection instead of emitting it again. Correct its cluster if
         // the store has more precise information.
-        if (!reported) return true;
+        if (!reported) {
+          // Nothing to adopt. Either the registry never reported this
+          // connection, or it reported it under another identity, in which
+          // case the store is about to emit a second connect for the same
+          // live connection. Both paths derive the rdns from the wallet's
+          // own name, so a mismatch means the store's connector is labelled
+          // differently from the registered wallet.
+          const held = this.registry?.reportedConnectionRdns(connection.address);
+          if (held) {
+            logger.warn(
+              "SolanaManager: Store connector does not match the discovered wallet; the connection is reported twice",
+              { storeRdns: connection.rdns, walletRdns: held }
+            );
+          }
+          return true;
+        }
         if (
           reported.chainId !== connection.chainId &&
           this.formo.isAutocaptureEnabled("chain")
@@ -151,7 +167,9 @@ export class SolanaManager {
    */
   setStore(store: SolanaClientStore, options?: { cluster?: SolanaCluster }): void {
     if (!this.enabled) {
-      logger.warn("SolanaManager: Ignoring setStore because Solana is disabled");
+      logger.warn(
+        "SolanaManager: Ignoring setStore. Solana tracking is off for this instance (solana: false, or the SDK was cleaned up)"
+      );
       return;
     }
     this.storeHandler?.cleanup();

@@ -74,6 +74,16 @@ export interface SolanaWalletStandardRegistryDeps {
   disconnect(params: { chainId: number; address: string }): Promise<void>;
   chain(params: { chainId: number; address: string }): Promise<void>;
   /**
+   * Record wallet and chain state centrally WITHOUT emitting an event.
+   *
+   * Observing a chain is not the same as reporting one: the exclusion gate
+   * keys off the central chain, so a cluster switch has to land there even
+   * when `autocapture.chain` is off. The EVM tracker separates the two the
+   * same way.
+   * @see FormoAnalytics.syncWalletState
+   */
+  syncWalletState(params: { chainId: number; address: string }): void;
+  /**
    * Whether THIS registry reports connections.
    *
    * A framework-kit app connects through the very same Wallet Standard
@@ -457,6 +467,9 @@ export class SolanaWalletStandardRegistry {
       if (!connected || connected.chainId === chainId) continue;
       tracked.connected = { address: connected.address, chainId };
       if (!this.deps.ownsWalletEvents()) continue;
+      // Central state moves first, so a suppressed chain event still leaves
+      // the SDK on the cluster the wallet is actually on.
+      this.deps.syncWalletState({ chainId, address: connected.address });
       if (!this.deps.isAutocaptureEnabled("chain")) continue;
       this.deps
         .chain({ chainId, address: connected.address })
@@ -476,10 +489,18 @@ export class SolanaWalletStandardRegistry {
     return Array.from(this.wallets.values()).map((t) => t.name);
   }
 
-  /** The first connected wallet's account, if any. */
-  get connectedAccount(): { address: string; chainId: number } | undefined {
+  /**
+   * The rdns this registry reported a still-live connect for `address`
+   * under, if any. Lets a failed store adoption name both identities.
+   */
+  reportedConnectionRdns(address: string): string | undefined {
     for (const tracked of Array.from(this.wallets.values())) {
-      if (tracked.connected) return tracked.connected;
+      if (
+        tracked.connectWasReported &&
+        tracked.connected?.address === address
+      ) {
+        return tracked.rdns;
+      }
     }
     return undefined;
   }
