@@ -88,13 +88,28 @@ export interface SolanaWalletConnectorMetadata {
   readonly icon?: string;
 }
 
+/** Cluster health as exposed by framework-kit. */
+export type SolanaClusterStatus =
+  | Readonly<{ status: "idle" }>
+  | Readonly<{ status: "connecting" }>
+  | Readonly<{ status: "ready"; latencyMs?: number }>
+  | Readonly<{ status: "error"; error: unknown }>;
+
+/** @deprecated framework-kit emits {@link SolanaClusterStatus} objects. */
+export type LegacySolanaClusterStatus = SolanaClusterStatus["status"];
+
 /**
  * Cluster state from the store.
  */
 export interface SolanaClusterState {
   readonly endpoint: string;
   readonly commitment?: string;
-  readonly status: "idle" | "connecting" | "ready" | "error";
+  /**
+   * framework-kit's `ClusterStatus` is a discriminated union such as
+   * `{ status: 'ready', latencyMs?: number }`. The pre-1.39 string form is
+   * retained so custom stores and test doubles remain source-compatible.
+   */
+  readonly status: SolanaClusterStatus | LegacySolanaClusterStatus;
 }
 
 /**
