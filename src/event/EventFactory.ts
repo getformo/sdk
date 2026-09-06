@@ -34,7 +34,7 @@ import {
   PAGE_PROPERTIES_EXCLUDED_FIELDS,
   VERSION,
 } from "./constants";
-import { EventCreationGuard, IEventFactory } from "./type";
+import { IEventFactory } from "./type";
 import { sanitizeTrafficSources } from "./sanitize";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
@@ -51,7 +51,14 @@ class EventFactory implements IEventFactory {
   // built-ins are always present and cannot be removed by configuration.
   private excludedQueryParams: Set<string>;
 
-  constructor(options?: Options) {
+  /** Bumped by invalidate(); an event created across a bump is dropped. */
+  private generation = 0;
+
+  constructor(
+    options?: Options,
+    /** Consulted once per event, after the only await in creation. */
+    private readonly canCreate: () => boolean = () => true
+  ) {
     this.options = options;
     const tracking = options?.tracking;
     const configuredExcludes =
@@ -374,16 +381,16 @@ class EventFactory implements IEventFactory {
     }
   }
 
+  /** Drop every event still being created. Called on clear() and close(). */
+  invalidate(): void {
+    this.generation++;
+  }
+
   // Contextual fields that are automatically collected and populated by the Formo SDK
   private async generateContext(
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ): Promise<IFormoEventContext> {
     const browserName = await detectBrowser();
-    // Consent may change while browser detection is pending.
-    if (shouldContinue && !shouldContinue()) {
-      throw EVENT_CREATION_CANCELLED;
-    }
     const language = this.getLanguage();
     const timezone = this.getTimezone();
     const location = this.getLocation();
@@ -478,11 +485,18 @@ class EventFactory implements IEventFactory {
 
   private async getEnrichedEvent(
     formoEvent: Partial<IFormoEvent>,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ): Promise<IFormoEvent> {
+    // The only await in event creation. Consent may be withdrawn, or the
+    // manager cleared, while browser detection is pending; stop before
+    // attribution or identity storage is touched.
+    const generation = this.generation;
+    const enrichedContext = await this.generateContext(context);
+    if (generation !== this.generation || !this.canCreate()) {
+      throw EVENT_CREATION_CANCELLED;
+    }
     const commonEventData = {
-      context: await this.generateContext(context, shouldContinue),
+      context: enrichedContext,
       original_timestamp: getCurrentTimeFormatted(),
       user_id: formoEvent.user_id,
       type: formoEvent.type,
@@ -518,8 +532,7 @@ class EventFactory implements IEventFactory {
     category?: string,
     name?: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ): Promise<IFormoEvent> {
     // Create a copy to avoid mutating the original properties object
     let props = { ...(properties ?? {}) };
@@ -532,15 +545,14 @@ class EventFactory implements IEventFactory {
       type: "page",
     };
 
-    return this.getEnrichedEvent(pageEvent, context, shouldContinue);
+    return this.getEnrichedEvent(pageEvent, context);
   }
 
   async generateDetectWalletEvent(
     providerName: string,
     rdns: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const detectEvent: Partial<IFormoEvent> = {
       properties: {
@@ -551,7 +563,7 @@ class EventFactory implements IEventFactory {
       type: "detect",
     };
 
-    return this.getEnrichedEvent(detectEvent, context, shouldContinue);
+    return this.getEnrichedEvent(detectEvent, context);
   }
 
   async generateIdentifyEvent(
@@ -560,8 +572,7 @@ class EventFactory implements IEventFactory {
     address?: Nullable<Address>,
     userId?: Nullable<string>,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const identifyEvent: Partial<IFormoEvent> = {
       properties: {
@@ -574,15 +585,14 @@ class EventFactory implements IEventFactory {
       type: "identify",
     };
 
-    return this.getEnrichedEvent(identifyEvent, context, shouldContinue);
+    return this.getEnrichedEvent(identifyEvent, context);
   }
 
   async generateConnectEvent(
     chainId: ChainID,
     address: Address,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const connectEvent: Partial<IFormoEvent> = {
       properties: {
@@ -593,15 +603,14 @@ class EventFactory implements IEventFactory {
       type: "connect",
     };
 
-    return this.getEnrichedEvent(connectEvent, context, shouldContinue);
+    return this.getEnrichedEvent(connectEvent, context);
   }
 
   async generateDisconnectEvent(
     chainId?: ChainID,
     address?: Address,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const disconnectEvent: Partial<IFormoEvent> = {
       properties: {
@@ -612,15 +621,14 @@ class EventFactory implements IEventFactory {
       type: "disconnect",
     };
 
-    return this.getEnrichedEvent(disconnectEvent, context, shouldContinue);
+    return this.getEnrichedEvent(disconnectEvent, context);
   }
 
   async generateChainChangedEvent(
     chainId: ChainID,
     address: Address,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const chainEvent: Partial<IFormoEvent> = {
       properties: {
@@ -631,7 +639,7 @@ class EventFactory implements IEventFactory {
       type: "chain",
     };
 
-    return this.getEnrichedEvent(chainEvent, context, shouldContinue);
+    return this.getEnrichedEvent(chainEvent, context);
   }
 
   async generateSignatureEvent(
@@ -640,8 +648,7 @@ class EventFactory implements IEventFactory {
     address: Address,
     message: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const signatureEvent: Partial<IFormoEvent> = {
       properties: {
@@ -654,7 +661,7 @@ class EventFactory implements IEventFactory {
       type: "signature",
     };
 
-    return this.getEnrichedEvent(signatureEvent, context, shouldContinue);
+    return this.getEnrichedEvent(signatureEvent, context);
   }
 
   async generateTransactionEvent(
@@ -668,8 +675,7 @@ class EventFactory implements IEventFactory {
     function_name?: string,
     function_args?: Record<string, unknown>,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const transactionEvent: Partial<IFormoEvent> = {
       properties: {
@@ -687,14 +693,13 @@ class EventFactory implements IEventFactory {
       type: "transaction",
     };
 
-    return this.getEnrichedEvent(transactionEvent, context, shouldContinue);
+    return this.getEnrichedEvent(transactionEvent, context);
   }
 
   async generateTrackEvent(
     event: string,
     properties?: IFormoEventProperties,
-    context?: IFormoEventContext,
-    shouldContinue?: EventCreationGuard
+    context?: IFormoEventContext
   ) {
     const trackEvent: Partial<IFormoEvent> = {
       properties: {
@@ -717,15 +722,14 @@ class EventFactory implements IEventFactory {
       type: "track",
     };
 
-    return this.getEnrichedEvent(trackEvent, context, shouldContinue);
+    return this.getEnrichedEvent(trackEvent, context);
   }
 
   // Returns an event with type, context, properties, and common properties
   async create(
     event: APIEvent,
     address?: Address,
-    userId?: string,
-    shouldContinue?: EventCreationGuard
+    userId?: string
   ): Promise<IFormoEvent> {
     let formoEvent: Partial<IFormoEvent> = {};
 
@@ -735,8 +739,7 @@ class EventFactory implements IEventFactory {
           event.category,
           event.name,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "detect":
@@ -744,8 +747,7 @@ class EventFactory implements IEventFactory {
           event.providerName,
           event.rdns,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "identify":
@@ -755,8 +757,7 @@ class EventFactory implements IEventFactory {
           event.address,
           event.userId,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "chain":
@@ -764,8 +765,7 @@ class EventFactory implements IEventFactory {
           event.chainId,
           event.address,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "connect":
@@ -773,8 +773,7 @@ class EventFactory implements IEventFactory {
           event.chainId,
           event.address,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "disconnect":
@@ -782,8 +781,7 @@ class EventFactory implements IEventFactory {
           event.chainId,
           event.address,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "signature":
@@ -793,8 +791,7 @@ class EventFactory implements IEventFactory {
           event.address,
           event.message,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "transaction":
@@ -809,8 +806,7 @@ class EventFactory implements IEventFactory {
           event.function_name,
           event.function_args,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
       case "track":
@@ -818,8 +814,7 @@ class EventFactory implements IEventFactory {
         formoEvent = await this.generateTrackEvent(
           event.event,
           event.properties,
-          event.context,
-          shouldContinue
+          event.context
         );
         break;
     }

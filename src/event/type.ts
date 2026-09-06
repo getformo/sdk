@@ -1,6 +1,5 @@
 import { Address, APIEvent, IFormoEvent } from "../types";
 
-export type EventCreationGuard = () => boolean;
 
 export interface IEventManager {
   addEvent(event: APIEvent, address?: Address, userId?: string): Promise<void>;
@@ -9,10 +8,10 @@ export interface IEventManager {
 }
 
 export interface IEventFactory {
+  invalidate(): void;
   create(
     event: APIEvent,
     address?: Address,
-    userId?: string,
-    shouldContinue?: EventCreationGuard
+    userId?: string
   ): Promise<IFormoEvent>;
 }

@@ -25,7 +25,7 @@ class EventManager implements IEventManager {
     private readonly canAcceptEvent: () => boolean = () => true
   ) {
     this.eventQueue = eventQueue;
-    this.eventFactory = new EventFactory(options);
+    this.eventFactory = new EventFactory(options, () => this.canAcceptEvent());
   }
 
   /**
@@ -45,12 +45,7 @@ class EventManager implements IEventManager {
 
     let formoEvent;
     try {
-      formoEvent = await this.eventFactory.create(
-        _event,
-        address,
-        userId,
-        shouldContinue
-      );
+      formoEvent = await this.eventFactory.create(_event, address, userId);
     } catch (error) {
       if (error === EVENT_CREATION_CANCELLED) return;
       throw error;
@@ -78,12 +73,14 @@ class EventManager implements IEventManager {
   /** Drop any buffered events (consent withdrawal). Recoverable. */
   clear(): void {
     this.generation++;
+    this.eventFactory.invalidate();
     this.eventQueue.clear();
   }
 
   /** Terminal shutdown on teardown: nothing can be sent after this. */
   close(): void {
     this.generation++;
+    this.eventFactory.invalidate();
     this.eventQueue.close();
   }
 }
