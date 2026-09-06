@@ -562,7 +562,8 @@ describe("SolanaWalletStandardRegistry", () => {
       installWalletAfterApp(solflare);
       phantom.setAccounts([account(ADDRESS)]);
       solflare.setAccounts([account(OTHER)]);
-      // Phantom connected last, so the SDK treats it as the active wallet.
+      // Solflare registered and connected last, but the SDK's active wallet
+      // is Phantom. Registration order must not take the slot from it.
       currentAddress = ADDRESS;
 
       registry.setCluster("devnet");
