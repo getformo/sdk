@@ -2,522 +2,226 @@
 
 ## Overview
 
-The Formo Analytics SDK now supports integration with [Solana Wallet Adapter](https://github.com/anza-xyz/wallet-adapter), the standard library for Solana wallet integration. This allows tracking of Solana wallet events (connect, disconnect, signatures, and transactions) alongside existing EVM wallet tracking.
+The SDK discovers EVM wallets through EIP-6963 and compatible Solana wallets
+through the [Wallet Standard](https://github.com/wallet-standard/wallet-standard).
+This captures wallet events when a wallet registers with the page, including
+wallets used through Solana Kit, `@solana/wallet-adapter`, and framework-kit.
 
-## Design Philosophy
+Solana Kit and framework-kit are separate projects. Solana Kit is the core SDK
+and plugin stack. Apps that use framework-kit (`@solana/client`) can
+additionally pass its zustand store, which adds the transaction lifecycle and
+cluster switches.
 
-### Core Principles
+## Design Principles
 
-1. **Opt-in Configuration**: Solana integration is completely optional and only activated when explicitly configured
-2. **Additive, Not Replacement**: Solana tracking works alongside EVM tracking (not mutually exclusive like Wagmi mode)
-3. **Consistent Event Model**: Reuses the same event types (connect, disconnect, signature, transaction) for Solana
-4. **Chain-Agnostic Address Type**: Addresses are stored as strings, supporting both EVM (hex) and Solana (Base58)
-
-### Why Solana Support?
-
-- **Multi-Chain Apps**: Many dApps support both EVM and Solana chains
-- **Growing Ecosystem**: Solana has a large and growing developer ecosystem
-- **User Demand**: Users increasingly have wallets for multiple chains
-- **Unified Analytics**: Track all blockchain interactions in one place
+1. **On by default**: Solana discovery runs unless `solana: false` is passed,
+   exactly like EVM discovery runs unless `evm: false` is passed. A customer
+   who never configures Solana still gets compatible Wallet Standard connects.
+   (Before this, Solana capture was opt-in and manual, and a paying customer
+   ran for months with tens of thousands of Solana wallets and zero connect
+   events.)
+2. **No wallet library dependency**: the Wallet Standard handshake is a few
+   lines of window events, implemented inline and duck-typed. The SDK keeps
+   its two runtime dependencies.
+3. **Read-only observer**: no wallet method is wrapped, no request is issued
+   to a wallet. The SDK subscribes to `standard:events` and diffs accounts.
+4. **Consistent event model**: the same `detect`, `connect`, `disconnect` and
+   `chain` events as EVM, with Solana clusters mapped to reserved chain ids.
+5. **One connect per connection**: when both sources see a connection, one
+   of them reports it.
 
 ## Architecture
 
-### High-Level Flow
-
 ```
-Solana Wallet Adapter (Phantom, Solflare, etc.)
-                    ↓
-         SolanaAdapter
-                    ↓
-           FormoAnalytics SDK
-                    ↓
-          Analytics Events API
-```
-
-### Key Components
-
-#### 1. **SolanaAdapter** (`src/solana/SolanaAdapter.ts`)
-
-The core orchestrator that hooks into Solana Wallet Adapter's event system:
-
-- **Connection Tracking**: Listens to wallet `connect` and `disconnect` events
-- **Method Wrapping**: Wraps `sendTransaction`, `signMessage`, and `signTransaction` for tracking
-- **Transaction Confirmation**: Polls for transaction confirmation status
-- **Cluster/Network Support**: Maps Solana clusters to chain IDs for consistent tracking
-
-#### 2. **Type Definitions** (`src/solana/types.ts`)
-
-Comprehensive TypeScript interfaces for Solana integration:
-
-- `ISolanaAdapter`: Single wallet adapter interface
-- `SolanaWalletContext`: useWallet() hook context interface
-- `SolanaCluster`: Network types (mainnet-beta, testnet, devnet, localnet)
-- `SOLANA_CHAIN_IDS`: Mapping of clusters to numeric chain IDs
-- `SolanaPublicKey`: Solana public key interface
-
-#### 3. **Address Utilities** (`src/solana/address.ts`)
-
-Solana-specific address validation and utilities:
-
-- `isSolanaAddress()`: Validate Base58 format addresses
-- `getValidSolanaAddress()`: Get validated address from string or PublicKey
-- `isBlockedSolanaAddress()`: Filter system program addresses
-- `areSolanaAddressesEqual()`: Case-sensitive address comparison
-
-## Chain ID Mapping
-
-Solana doesn't use chain IDs like EVM. The SDK maps Solana clusters to high numeric IDs to avoid collision:
-
-| Cluster | Chain ID | Description |
-|---------|----------|-------------|
-| mainnet-beta | 900001 | Solana mainnet |
-| testnet | 900002 | Solana testnet |
-| devnet | 900003 | Solana devnet |
-| localnet | 900004 | Local validator |
-
-These IDs are intentionally high (900000+) to avoid collision with any EVM chain IDs.
-
-## Event Mapping
-
-### Connection Events
-
-| Wallet Adapter Event | Formo Event | Details |
-|---------------------|-------------|---------|
-| `connect` | `connect()` | Emitted when wallet connects with address and cluster-based chainId |
-| `disconnect` | `disconnect()` | Emitted when wallet disconnects |
-
-### Signature Events
-
-| Method | Formo Event | Status Mapping |
-|--------|-------------|----------------|
-| `signMessage()` | `signature()` | Before call → REQUESTED<br>Success → CONFIRMED<br>Error → REJECTED |
-| `signTransaction()` | `signature()` | Before call → REQUESTED<br>Success → CONFIRMED<br>Error → REJECTED |
-
-### Transaction Events
-
-| Method | Formo Event | Status Mapping |
-|--------|-------------|----------------|
-| `sendTransaction()` | `transaction()` | Before call → STARTED<br>Signature returned → BROADCASTED<br>Confirmed on-chain → CONFIRMED<br>Error → REJECTED/REVERTED |
-
-### Transaction Event Lifecycle
-
-A typical transaction flow:
-
-```
-User initiates sendTransaction
-        ↓
-    STARTED
-        ↓
-User approves in wallet
-        ↓
-    BROADCASTED (signature/hash received)
-        ↓
-Transaction confirmed on chain
-        ↓
-    CONFIRMED or REVERTED
+Wallet Standard wallets (Phantom, Solflare, ...)      framework-kit client.store
+        │  window events + standard:events                   │  zustand subscribe
+        ▼                                                    ▼
+SolanaWalletStandardRegistry                          SolanaStoreHandler
+  detect / connect / disconnect / chain                connect / disconnect /
+                                                       chain / transaction
+        └──────────────────┬─────────────────────────────────┘
+                           ▼
+                     SolanaManager
+                           ▼
+                    FormoAnalytics
 ```
 
-## Usage
+### `SolanaWalletStandardRegistry` (`src/solana/SolanaWalletStandardRegistry.ts`)
 
-### Basic Setup
+The Solana analogue of `EvmProviderRegistry` + EIP-6963.
 
-```typescript
-import { FormoAnalytics } from '@formo/analytics';
-// wallet/context and connection should come from your app integration
-// (for example, from @solana/wallet-adapter-react hooks inside a component)
-const wallet = solanaWalletContextOrAdapter;
-const connection = solanaConnection;
+- **Discovery**: dispatches `wallet-standard:app-ready` with a `register`
+  API and listens for `wallet-standard:register-wallet`. Both directions are
+  needed because a wallet extension and the app bundle race on every page
+  load. Wallets that list no `solana:` chain are ignored.
+- **Detect**: emitted once per discovered wallet; the SDK dedupes per session
+  on `rdns`.
+- **Connect / disconnect**: subscribes to each wallet's `standard:events`
+  `change` event and diffs its `accounts`. None to some is a connect, some to
+  none a disconnect, a different first account is a disconnect then a
+  connect. Without a configured framework-kit store, a wallet that is already
+  authorized when discovered is reported as connected at once. With a store,
+  the store reports that initial connection instead. On a multichain wallet
+  only accounts whose `chains` include a Solana chain are considered.
+- **Cluster**: the Wallet Standard lists the clusters a wallet supports, not
+  the one the app is on. The registry uses `options.solana.cluster` when
+  given, else mainnet-beta when supported, else the first Solana cluster
+  listed. `formo.solana.setCluster()` re-tags a live connection and emits
+  `chain`.
+- **Teardown**: removes its window listener, unsubscribes from every wallet,
+  and refuses late registrations through the API a wallet kept.
 
-// Initialize Formo with Solana integration
-const formo = await FormoAnalytics.init('YOUR_WRITE_KEY', {
-  solana: {
-    wallet: wallet,
-    connection: connection,
-    cluster: 'mainnet-beta',
-  },
-});
-```
+### `SolanaStoreHandler` (`src/solana/SolanaStoreHandler.ts`)
 
-### With React
+Subscribes to framework-kit's `client.store` and reports connect, disconnect,
+cluster changes (detected from the endpoint URL) and the transaction
+lifecycle (`sending` → STARTED, `waiting` → BROADCASTED, `confirmed` →
+CONFIRMED, `failed` → REJECTED or REVERTED).
 
-```tsx
-import { WalletProvider } from '@solana/wallet-adapter-react';
-import { ConnectionProvider } from '@solana/wallet-adapter-react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { FormoAnalyticsProvider } from '@formo/analytics';
+### `SolanaManager` (`src/solana/SolanaManager.ts`)
 
-function FormoProviders({ children }) {
-  return (
-    <ConnectionProvider endpoint={clusterApiUrl('mainnet-beta')}>
-      <WalletProvider wallets={wallets}>{children}</WalletProvider>
-    </ConnectionProvider>
-  );
-}
+Owns both. A store supplied at initialization owns wallet events from the
+outset. A store attached later takes ownership when it observes its first
+connection, adopting any connect the registry already reported. The registry
+continues discovering wallets and emitting `detect`; once the store owns the
+connection, connect and disconnect come from the store because it knows the
+cluster and connector more precisely.
 
-function FormoRoot({ children }) {
-  const wallet = useWallet();
-  const { connection } = useConnection();
+### Types
 
-  return (
-    <FormoAnalyticsProvider
-      writeKey="YOUR_WRITE_KEY"
-      options={{
-        solana: {
-          wallet: wallet,
-          connection: connection,
-          cluster: 'mainnet-beta',
-        },
-      }}
-    >
-      {children}
-    </FormoAnalyticsProvider>
-  );
-}
+- `src/solana/walletStandardTypes.ts`: the subset of the Wallet Standard the
+  SDK reads, duck-typed.
+- `src/solana/storeTypes.ts`: the subset of framework-kit's store state the
+  SDK reads. `client.store` must be assignable to `SolanaClientStore` without
+  a cast; a type-only check against `@solana/client` is the way to confirm
+  this after either side changes.
+- `src/solana/types.ts`: clusters, chain ids, `SolanaOptions`, and
+  `solanaWalletRdns()`.
 
-// Usage:
-// <FormoProviders>
-//   <FormoRoot>
-//     <YourApp />
-//   </FormoRoot>
-// </FormoProviders>
-```
+## Options
 
-### Dynamic Wallet Updates
+```ts
+solana?: boolean | SolanaOptions;
 
-For React apps where wallet context changes:
-
-```tsx
-import { useEffect } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
-import { useConnection } from '@solana/wallet-adapter-react';
-import { useFormo } from '@formo/analytics';
-
-function WalletTracker() {
-  const wallet = useWallet();
-  const { connection } = useConnection();
-  const formo = useFormo();
-
-  // Update Solana handler when wallet/connection changes
-  useEffect(() => {
-    formo?.solana.setWallet(wallet);
-  }, [wallet, formo]);
-
-  // Rebind listeners/wrappers when the inner adapter changes
-  useEffect(() => {
-    formo?.solana.syncWalletState();
-  }, [wallet.wallet, formo]);
-
-  useEffect(() => {
-    formo?.solana.setConnection(connection);
-  }, [connection, formo]);
-
-  return null;
-}
-```
-
-### Multi-Chain Setup (EVM + Solana)
-
-```typescript
-import { createConfig } from 'wagmi';
-import { QueryClient } from '@tanstack/react-query';
-
-const wagmiConfig = createConfig({ /* ... */ });
-const queryClient = new QueryClient();
-
-const formo = await FormoAnalytics.init('YOUR_WRITE_KEY', {
-  // EVM tracking via Wagmi
-  wagmi: {
-    config: wagmiConfig,
-    queryClient: queryClient,
-  },
-  // Solana tracking
-  solana: {
-    wallet: solanaWallet,
-    connection: solanaConnection,
-    cluster: 'mainnet-beta',
-  },
-});
-```
-
-### Autocapture Configuration
-
-Control which events are tracked (applies to both EVM and Solana):
-
-```typescript
-const formo = await FormoAnalytics.init('YOUR_WRITE_KEY', {
-  solana: {
-    wallet: wallet,
-    connection: connection,
-  },
-  autocapture: {
-    connect: true,      // Track wallet connections
-    disconnect: true,   // Track wallet disconnections
-    signature: true,    // Track message signing
-    transaction: true,  // Track transactions
-  },
-});
-```
-
-### Cleanup
-
-Always clean up when done:
-
-```typescript
-// In React component unmount or app cleanup
-useEffect(() => {
-  return () => {
-    formo.cleanup();
-  };
-}, [formo]);
-```
-
-## Configuration Options
-
-### SolanaOptions Interface
-
-```typescript
 interface SolanaOptions {
-  /**
-   * The Solana wallet adapter instance or wallet context
-   * Can be a single wallet adapter or the useWallet() context
-   */
-  wallet?: ISolanaAdapter | SolanaWalletContext;
-
-  /**
-   * The Solana connection for tracking transaction confirmations
-   */
-  connection?: SolanaConnection;
-
-  /**
-   * The Solana cluster/network
-   * Chain ID is automatically derived from cluster:
-   * - mainnet-beta: 900001
-   * - testnet: 900002
-   * - devnet: 900003
-   * - localnet: 900004
-   * @default "mainnet-beta"
-   */
+  /** framework-kit's client.store. Adds transactions and cluster switches. */
+  store?: SolanaClientStore;
+  /** The cluster the app is on. Needed without a store for non-mainnet apps. */
   cluster?: SolanaCluster;
 }
 ```
 
-### Connection: Optional but Recommended
+| Configuration | Discovery | Connect / disconnect | Transactions |
+|---|---|---|---|
+| nothing (default) | Wallet Standard | registry | manual `formo.transaction()` |
+| `solana: { cluster }` | Wallet Standard | registry, on that cluster | manual |
+| `solana: { store }` | Wallet Standard (detect only) | store | store |
+| `solana: false` | off | manual `formo.connect()` | manual |
 
-The `connection` option is optional. Confirmation tracking works when a usable Solana connection
-is available either from `options.solana.connection` or from the `connection` argument passed to
-`sendTransaction(...)`.
+Signatures (`signMessage`, `signTransaction`) are reported by neither
+source; call `formo.signature()`.
 
-| Feature | Without Connection | With Connection |
-|---------|-------------------|-----------------|
-| Connect | ✅ Tracked | ✅ Tracked |
-| Disconnect | ✅ Tracked | ✅ Tracked |
-| Signatures | ✅ Tracked | ✅ Tracked |
-| Transaction Start | ✅ Tracked | ✅ Tracked |
-| Transaction Broadcast | ✅ Tracked | ✅ Tracked |
-| Transaction Confirmed | ❌ Not tracked if no usable connection is available | ✅ Tracked |
-| Transaction Reverted | ❌ Not tracked if no usable connection is available | ✅ Tracked |
+The global `autocapture.connect`, `disconnect`, `chain`, and `transaction`
+flags still gate events from both sources.
 
-## Address Format
+## Event Coverage
 
-Solana addresses are 32-byte Base58-encoded strings:
+| Event | Wallet Standard | framework-kit store |
+|---|---|---|
+| Detect | registration | registration (still reported by the registry) |
+| Connect | account added | connection state |
+| Disconnect | accounts removed | connection state |
+| Chain change | `setCluster()` | cluster state |
+| Signature | manual | manual |
+| Transaction | manual | recorded store lifecycle |
 
-- **Example**: `FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn`
-- **Length**: 32-44 characters
-- **Character Set**: Base58 (no 0, O, I, l)
-- **Case Sensitive**: Unlike EVM addresses, Solana addresses ARE case-sensitive
+The store maps its transaction states to `started`, `broadcasted`,
+`confirmed`, `rejected`, and `reverted`. Events that neither source exposes
+remain available through `formo.signature()` and `formo.transaction()`.
 
-### System Addresses (Blocked)
+## Chain ID Mapping
 
-The SDK blocks events from known system program addresses:
+Solana has no numeric chain id. Clusters map to reserved ids above 900000:
 
-- System Program: `11111111111111111111111111111111`
-- Token Program: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
-- Token-2022 Program: `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`
-- Associated Token Program: `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL`
-- Rent Sysvar: `SysvarRent111111111111111111111111111111111`
-- Clock Sysvar: `SysvarC1ock11111111111111111111111111111111`
+| Cluster | Chain ID |
+|---------|----------|
+| mainnet-beta | 900001 |
+| testnet | 900002 |
+| devnet | 900003 |
+| localnet | 900004 |
 
-## Comparison: Solana Mode vs EVM Modes
-
-| Feature | Solana Mode | EVM (EIP-1193) | EVM (Wagmi) |
-|---------|------------|----------------|-------------|
-| **Works Alongside Other Modes** | ✅ Yes | N/A | ✅ Yes |
-| **Address Format** | Base58 (32-44 chars) | Hex (42 chars) | Hex (42 chars) |
-| **Chain ID Format** | Cluster mapped to number | Native number | Native number |
-| **Signature Tracking** | ✅ signMessage, signTransaction | ✅ personal_sign, eth_signTypedData_v4 | ✅ signMessage, signTypedData |
-| **Transaction Confirmation** | Polling with connection | Polling with provider | QueryCache |
-| **Provider Detection** | Manual (pass wallet) | EIP-6963 auto-detect | Wagmi connectors |
-| **React Integration** | Works with wallet-adapter-react | Provider-agnostic | Requires Wagmi context |
+`SOLANA_CHAIN_IDS` and `isSolanaChainId()` are exported.
 
 ## Wallet Identification
 
-The SDK generates an RDNS-like identifier for Solana wallets:
-
-```
-sol.wallet.<walletname>
-```
+The Wallet Standard has no reverse-domain identifier, so one is derived from
+the wallet name by `solanaWalletRdns()`: lowercase the name, remove whitespace,
+URL-encode the result, and prefix it with `sol.wallet.`. This preserves the
+historical framework-kit identifiers while keeping cookie delimiters safe.
+Names that differ only by case or whitespace intentionally share a session
+dedup key. Both sources derive the identifier the same way so a wallet's
+`detect` and its `connect` share one rdns whichever source reported each.
 
 Examples:
+
 - Phantom: `sol.wallet.phantom`
 - Solflare: `sol.wallet.solflare`
 - Backpack: `sol.wallet.backpack`
 
-## Implementation Details
+## Address Handling
 
-### Method Wrapping
+Solana public keys are 32-byte, Base58-encoded values. The SDK accepts 32 to
+44 characters from the Base58 alphabet (which excludes `0`, `O`, `I`, and
+`l`) and compares them case-sensitively. For example:
 
-The handler wraps wallet adapter methods to track events:
+`FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn`
 
-```typescript
-// Original method preserved
-this.originalSendTransaction = adapter.sendTransaction.bind(adapter);
+Validation checks format, not Ed25519 curve membership. `connect()` also
+checks the chain id, so a Base58 address paired with an EVM chain is rejected.
 
-// Wrapped method tracks events
-adapter.sendTransaction = async (transaction, connection, options) => {
-  // Track STARTED
-  this.formo.transaction({ status: 'started', ... });
+The SDK blocks these non-wallet addresses:
 
-  try {
-    const signature = await this.originalSendTransaction(...);
-    // Track BROADCASTED
-    this.formo.transaction({ status: 'broadcasted', transactionHash: signature, ... });
-    // Poll for CONFIRMED/REVERTED
-    this.pollTransactionConfirmation(signature, ...);
-    return signature;
-  } catch (error) {
-    // Track REJECTED
-    this.formo.transaction({ status: 'rejected', ... });
-    throw error;
-  }
-};
-```
+| Address | Value |
+|---|---|
+| System Program | `11111111111111111111111111111111` |
+| Token Program | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
+| Token-2022 Program | `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` |
+| Associated Token Program | `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL` |
+| Rent Sysvar | `SysvarRent111111111111111111111111111111111` |
+| Clock Sysvar | `SysvarC1ock11111111111111111111111111111111` |
 
-### Transaction Confirmation Polling
-
-The handler polls for transaction confirmation using the Solana connection:
-
-```typescript
-const poll = async () => {
-  const status = connection.getSignatureStatuses
-    ? (await connection.getSignatureStatuses([signature])).value[0]
-    : (await connection.getSignatureStatus(signature)).value;
-
-  if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
-    this.formo.transaction({ status: 'confirmed', ... });
-  } else if (status?.err) {
-    this.formo.transaction({ status: 'reverted', ... });
-  } else {
-    setTimeout(poll, 2000); // Retry
-  }
-};
-```
-
-### Memory Management
-
-- **Processed Signatures Set**: Limited to 1000 entries with automatic pruning
-- **Pending Transactions Map**: Cleaned up after confirmation
-- **Event Listeners**: Properly removed on cleanup
+The list and validation helpers are defined in `src/solana/address.ts`.
 
 ## Limitations
 
-1. **No Built-in Cluster Detection**: You must specify the cluster; it's not auto-detected
-2. **No Program Decoding**: Unlike EVM, function names/args aren't extracted from Solana instructions
-3. **Single Wallet at a Time**: Tracks one wallet context/adapter at a time
-4. **Polling-Based Confirmation**: Uses polling, not websockets, for transaction confirmation
-
-## Troubleshooting
-
-### Events Not Being Tracked
-
-**Check 1**: Ensure wallet is provided
-```typescript
-// ❌ Bad - no wallet
-solana: { cluster: 'mainnet-beta' }
-
-// ✅ Good
-solana: { wallet: useWallet(), cluster: 'mainnet-beta' }
-```
-
-**Check 2**: Update wallet when it changes (React)
-```typescript
-useEffect(() => {
-  formo?.solana.setWallet(wallet);
-}, [wallet]);
-
-useEffect(() => {
-  formo?.solana.syncWalletState();
-}, [wallet.wallet]);
-```
-
-**Check 3**: Check autocapture settings
-```typescript
-autocapture: {
-  connect: true,
-  signature: true,
-  transaction: true,
-}
-```
-
-### No Transaction Confirmations
-
-Ensure a usable connection is available either in options or at send-time:
-```typescript
-solana: {
-  wallet: wallet,
-  connection: connection, // Recommended persistent connection
-}
-```
-
-### Address Validation Failing
-
-Solana addresses must be:
-- 32-44 characters long
-- Valid Base58 (no 0, O, I, l characters)
-- Case-sensitive
+1. **Cluster without a store**: the standard cannot say which cluster the
+   app uses. Non-mainnet apps without a store should pass `cluster` or call
+   `setCluster()`.
+2. **No signature capture**: neither source reports `signMessage` or
+   `signTransaction`.
+3. **No transaction capture without a store**: only framework-kit's store
+   exposes the transaction lifecycle.
+4. **No program decoding**: function names and arguments are not extracted
+   from Solana instructions.
 
 ## Testing
 
-### Unit Testing
+- `test/solana/SolanaWalletStandardRegistry.spec.ts`: discovery in both
+  handshake directions, account diffing, multichain wallets, cluster
+  handling, coexistence with a store, teardown.
+- `test/solana/SolanaManager.spec.ts`: one connect per connection when both
+  sources see it, the `solana` option, an end-to-end wallet-adapter style
+  connection through `FormoAnalytics.init`.
+- `test/solana/SolanaStoreHandler.spec.ts`: the framework-kit store path.
 
-Mock the wallet adapter:
-
-```typescript
-const mockWallet = {
-  name: 'Mock Wallet',
-  publicKey: {
-    toBase58: () => 'FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn',
-  },
-  connected: true,
-  connecting: false,
-  connect: async () => {},
-  disconnect: async () => {},
-  signMessage: async (message) => new Uint8Array(64),
-  signTransaction: async (tx) => tx,
-  sendTransaction: async (tx, conn) => 'mock_signature',
-  on: jest.fn(),
-  off: jest.fn(),
-};
-```
-
-## Future Enhancements
-
-Potential improvements for future versions:
-
-1. **Program Instruction Decoding**: Extract program/method names from Solana instructions
-2. **WebSocket Confirmation**: Use Solana WebSockets for real-time confirmation
-3. **Multi-Wallet Tracking**: Track multiple wallets simultaneously
-4. **Auto Cluster Detection**: Detect cluster from connection endpoint
-5. **NFT Metadata**: Extract NFT information from transactions
+A fake wallet for tests needs `name`, `chains` with a `solana:` entry,
+`features['standard:events'].on`, and an `accounts` array; register it by
+dispatching `wallet-standard:register-wallet` with a callback `detail`.
 
 ## Resources
 
+- [Wallet Standard](https://github.com/wallet-standard/wallet-standard)
+- [Solana Kit](https://github.com/anza-xyz/kit)
+- [framework-kit](https://github.com/solana-foundation/framework-kit)
 - [Solana Wallet Adapter](https://github.com/anza-xyz/wallet-adapter)
-- [Solana Web3.js](https://solana-labs.github.io/solana-web3.js/)
-- [Solana Documentation](https://solana.com/docs)
-- [Formo Analytics Documentation](https://docs.formo.so)
-
-## Support
-
-For issues or questions:
-- Open an issue on [GitHub](https://github.com/getformo/sdk)
-- Check [Developer Docs](https://docs.formo.so)
+- [Formo docs: Solana integration](https://docs.formo.so/sdks/web#solana-integration)

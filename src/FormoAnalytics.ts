@@ -341,9 +341,15 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
-    // Initialize Solana manager if Solana options are provided
-    if (options.solana) {
-      this.solanaManager = new SolanaManager(this, options.solana);
+    // Solana wallets are discovered through the Wallet Standard
+    // unconditionally, the way EVM wallets are through EIP-6963: an app
+    // that never configures Solana still gets its connects. `solana: false`
+    // is the opt-out; an object adds framework-kit's store or a cluster.
+    if (options.solana !== false) {
+      this.solanaManager = new SolanaManager(
+        this,
+        typeof options.solana === "object" ? options.solana : undefined
+      );
     }
 
     this._currentUrl = window.location.href;
@@ -1617,7 +1623,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    */
   get solana(): SolanaManager {
     if (!this.solanaManager) {
-      this.solanaManager = new SolanaManager(this);
+      // Only reachable after `solana: false` (or after cleanup). The host
+      // opted out of discovery, so this manager serves the store path only.
+      this.solanaManager = new SolanaManager(this, undefined, false);
     }
     return this.solanaManager;
   }
