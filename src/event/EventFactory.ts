@@ -38,6 +38,7 @@ import { IEventFactory } from "./type";
 import { sanitizeTrafficSources } from "./sanitize";
 import { generateAnonymousId } from "./utils";
 import { detectBrowser } from "../browser/browsers";
+import { EVENT_CREATION_CANCELLED } from "./cancellation";
 
 const ISO_3166_ALPHA_2_REGEX = /^[A-Z]{2}$/;
 
@@ -50,7 +51,14 @@ class EventFactory implements IEventFactory {
   // built-ins are always present and cannot be removed by configuration.
   private excludedQueryParams: Set<string>;
 
-  constructor(options?: Options) {
+  /** Bumped by invalidate(); an event created across a bump is dropped. */
+  private generation = 0;
+
+  constructor(
+    options?: Options,
+    /** Consulted once per event, after the only await in creation. */
+    private readonly canCreate: () => boolean = () => true
+  ) {
     this.options = options;
     const tracking = options?.tracking;
     const configuredExcludes =
@@ -373,6 +381,11 @@ class EventFactory implements IEventFactory {
     }
   }
 
+  /** Drop every event still being created. Called on clear() and close(). */
+  invalidate(): void {
+    this.generation++;
+  }
+
   // Contextual fields that are automatically collected and populated by the Formo SDK
   private async generateContext(
     context?: IFormoEventContext
@@ -474,8 +487,16 @@ class EventFactory implements IEventFactory {
     formoEvent: Partial<IFormoEvent>,
     context?: IFormoEventContext
   ): Promise<IFormoEvent> {
+    // The only await in event creation. Consent may be withdrawn, or the
+    // manager cleared, while browser detection is pending; stop before
+    // attribution or identity storage is touched.
+    const generation = this.generation;
+    const enrichedContext = await this.generateContext(context);
+    if (generation !== this.generation || !this.canCreate()) {
+      throw EVENT_CREATION_CANCELLED;
+    }
     const commonEventData = {
-      context: await this.generateContext(context),
+      context: enrichedContext,
       original_timestamp: getCurrentTimeFormatted(),
       user_id: formoEvent.user_id,
       type: formoEvent.type,

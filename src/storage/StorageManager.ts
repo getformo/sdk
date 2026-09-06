@@ -14,6 +14,7 @@ const TYPES: StorageType[] = [
 
 export class StorageManager {
   private storages: Map<StorageType, IStorage> = new Map();
+  private resolvedTypes: Map<StorageType, StorageType> = new Map();
 
   constructor(private readonly writeKey: string) {}
 
@@ -39,8 +40,14 @@ export class StorageManager {
 
       // Add to cache
       this.storages.set(type, storage);
+      this.resolvedTypes.set(type, currentType);
     }
     return this.storages.get(type)!;
+  }
+
+  getResolvedType(type: StorageType): StorageType {
+    this.getStorage(type);
+    return this.resolvedTypes.get(type)!;
   }
 
   private createStorage(type: StorageType): IStorage {

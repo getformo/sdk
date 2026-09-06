@@ -24,3 +24,8 @@ export const cookie = () => getStorageInstance("cookieStorage");
 export const local = () => getStorageInstance("localStorage");
 export const session = () => getStorageInstance("sessionStorage");
 export const memory = () => getStorageInstance("memoryStorage");
+
+export const usesCookieStorage = (): boolean => {
+  if (!globalManager) return false;
+  return globalManager.getResolvedType("cookieStorage") === "cookieStorage";
+};

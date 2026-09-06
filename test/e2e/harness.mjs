@@ -319,6 +319,8 @@ async function runApi(opts) {
   announce6963(provider);
   const formo = await FormoAnalytics.init("wk_e2e", { tracking: true, flushAt: 1, flushInterval: 10, ...opts.sdk });
   await settle(); rec("init");
+  // Drain the constructor's delayed page hit before identity assertions.
+  await settle(400); sent.length = 0;
 
   provider.emit("connect", { chainId: "0x1" });
   provider.emit("accountsChanged", [ADDR_A]);
