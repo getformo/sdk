@@ -83,6 +83,8 @@ export interface SolanaWalletStandardRegistryDeps {
    * @see FormoAnalytics.syncWalletState
    */
   syncWalletState(params: { chainId: number; address: string }): void;
+  /** The wallet the SDK currently treats as active, across namespaces. */
+  currentAddress(): string | undefined;
   /**
    * Whether THIS registry reports connections.
    *
@@ -462,14 +464,27 @@ export class SolanaWalletStandardRegistry {
     this.cluster = cluster;
     const chainId = SOLANA_CHAIN_IDS[cluster];
 
-    for (const tracked of Array.from(this.wallets.values())) {
+    const all = Array.from(this.wallets.values());
+    // Central state follows ONE wallet. Two wallets can hold an authorized
+    // account at once, and writing each of them here would hand the wallet
+    // slot to the last REGISTERED wallet rather than to the one the SDK
+    // already treats as active, which is the last CONNECTED one.
+    const active = this.deps.currentAddress();
+    const owner =
+      all.find((t) => t.connected && t.connected.address === active) ??
+      all.find((t) => t.connected);
+
+    for (const tracked of all) {
       const connected = tracked.connected;
       if (!connected || connected.chainId === chainId) continue;
       tracked.connected = { address: connected.address, chainId };
       if (!this.deps.ownsWalletEvents()) continue;
       // Central state moves first, so a suppressed chain event still leaves
-      // the SDK on the cluster the wallet is actually on.
-      this.deps.syncWalletState({ chainId, address: connected.address });
+      // the SDK on the cluster the wallet is actually on. `chain()` writes
+      // the cluster itself, but only when the event is not suppressed.
+      if (tracked === owner) {
+        this.deps.syncWalletState({ chainId, address: connected.address });
+      }
       if (!this.deps.isAutocaptureEnabled("chain")) continue;
       this.deps
         .chain({ chainId, address: connected.address })

@@ -75,6 +75,7 @@ export class SolanaManager {
         disconnect: (params) => this.formo.disconnect(params),
         chain: (params) => this.formo.chain(params),
         syncWalletState: (params) => this.formo.syncWalletState(params),
+        currentAddress: () => this.formo.currentAddress,
         ownsWalletEvents: () => !this.storeOwnsWalletEvents,
       },
       { cluster: options?.cluster }

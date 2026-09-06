@@ -28,6 +28,7 @@ describe("SolanaWalletStandardRegistry", () => {
   let ownsWalletEvents: boolean;
   let autocapture: Record<string, boolean>;
   let willTrack: boolean;
+  let currentAddress: string | undefined;
   let originalGlobals: Map<PropertyKey, PropertyDescriptor | undefined>;
   const registries: SolanaWalletStandardRegistry[] = [];
 
@@ -138,6 +139,7 @@ describe("SolanaWalletStandardRegistry", () => {
     ownsWalletEvents = true;
     autocapture = {};
     willTrack = true;
+    currentAddress = undefined;
     deps = {
       isAutocaptureEnabled: sandbox.stub().callsFake((t: string) => autocapture[t] !== false),
       willTrackEvent: sandbox.stub().callsFake(() => willTrack),
@@ -146,6 +148,7 @@ describe("SolanaWalletStandardRegistry", () => {
       disconnect: sandbox.stub().resolves(),
       chain: sandbox.stub().resolves(),
       syncWalletState: sandbox.stub(),
+      currentAddress: sandbox.stub().callsFake(() => currentAddress),
       ownsWalletEvents: sandbox.stub().callsFake(() => ownsWalletEvents),
     } as unknown as typeof deps;
   });
@@ -548,6 +551,27 @@ describe("SolanaWalletStandardRegistry", () => {
           address: ADDRESS,
         })
       ).to.be.true;
+    });
+
+    it("keeps the active wallet when a second wallet is also connected", () => {
+      autocapture.chain = false;
+      const phantom = makeWallet("Phantom");
+      const solflare = makeWallet("Solflare");
+      const registry = makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(solflare);
+      phantom.setAccounts([account(ADDRESS)]);
+      solflare.setAccounts([account(OTHER)]);
+      // Phantom connected last, so the SDK treats it as the active wallet.
+      currentAddress = ADDRESS;
+
+      registry.setCluster("devnet");
+
+      expect(deps.syncWalletState.calledOnce).to.be.true;
+      expect(deps.syncWalletState.firstCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["devnet"],
+        address: ADDRESS,
+      });
     });
 
     it("leaves central state to the store when the store owns wallet events", () => {
