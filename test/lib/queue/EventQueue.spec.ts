@@ -805,6 +805,32 @@ describe("EventQueue", () => {
 
       expect(fetchStub.calledOnce).to.be.true;
     });
+
+    it("does not wait for a pre-clear flush", async () => {
+      useUniqueCryptoHashes();
+      let releaseFirst!: (response: Response) => void;
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          releaseFirst = resolve;
+        })
+      );
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      expect(fetchStub.calledOnce).to.be.true;
+
+      eventQueue.clear();
+      await eventQueue.enqueue(createMockEvent());
+
+      expect(fetchStub.calledTwice).to.be.true;
+      releaseFirst(makeResponse(200, "OK"));
+      await (eventQueue as any).pendingFlush;
+    });
   });
 
   describe("close", () => {
