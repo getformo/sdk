@@ -342,8 +342,9 @@ export class EventQueue implements IEventQueue {
 
     // check if an identical event was accepted within the dedup window
     if (this.isDuplicate(dedupKey)) {
+      const label = event.event ? `${event.type} "${event.event}"` : event.type;
       logger.warn(
-        `Duplicate event dropped: an identical event was accepted less than ${millisecondsToSecond(
+        `Duplicate ${label} dropped: an identical event was accepted less than ${millisecondsToSecond(
           DEDUP_WINDOW_MS
         )} seconds ago.`
       );

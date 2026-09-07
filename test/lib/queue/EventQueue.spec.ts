@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { EventQueue } from "../../../src/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
 import * as fetchModule from "../../../src/fetch";
+import { logger } from "../../../src/logger/Logger";
 
 describe("EventQueue", () => {
   let jsdom: JSDOM;
@@ -381,6 +382,21 @@ describe("EventQueue", () => {
         const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
         const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
         expect(secondId).to.not.equal(firstId);
+      });
+
+      it("names the dropped event in the duplicate warning", async () => {
+        const warn = sinon.stub(logger, "warn");
+        try {
+          const order = createMockEvent({ type: "track", event: "Order Placed", properties: { n: 1 } });
+          await eventQueue.enqueue(order);
+          await (eventQueue as any).pendingFlush;
+          await eventQueue.enqueue({ ...order });
+
+          expect(warn.calledOnce).to.be.true;
+          expect(warn.firstCall.args[0]).to.include('Duplicate track "Order Placed" dropped');
+        } finally {
+          warn.restore();
+        }
       });
 
       it("catches a page double-fire whose title moved with a live price", async () => {
