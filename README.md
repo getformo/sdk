@@ -29,7 +29,7 @@ You can install Formo on:
 
 Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on local testing, debugging, and consent management.
 
-### Custom-event idempotency
+### Idempotency for custom events
 
 The SDK automatically suppresses identical `track()` calls for 60 seconds as
 a best-effort guard against accidental double-fires. For business-critical
