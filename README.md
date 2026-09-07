@@ -31,11 +31,18 @@ Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on loc
 
 ### Idempotency for custom events
 
-The SDK automatically suppresses identical `track()` calls for 60 seconds as
-a best-effort guard against accidental double-fires. For business-critical
-events, name the logical occurrence with the reserved `idempotency_key`
-property. Reusing it for the same event name produces the same ingestion ID
-for every retry:
+The SDK deduplicates custom events in two ways.
+
+**Automatically, for 60 seconds.** When `track()` is called twice with the same
+event name and properties within 60 seconds, the SDK sends the event once.
+This handles accidental double-fires, such as a React effect that runs twice.
+It applies within one page session.
+
+**With an idempotency key, for retries.** For business-critical events, add
+the reserved `idempotency_key` property with a stable identifier for the
+occurrence, such as an order ID. Every call that reuses the key for the same
+event name gets the same message ID, so ingestion keeps one event however many
+times it is sent, including across reloads:
 
 ```ts
 await formo.track("Order Placed", {
@@ -46,12 +53,11 @@ await formo.track("Order Placed", {
 });
 ```
 
-Use a unique key for each real occurrence. The key is hashed into the event's
-identity and removed from the sent properties. Strings and finite numbers are
-accepted; any other value drops the call with a warning. Server-side duplicate
-collapse is bounded by the ingestion session and storage partition; it is not
-a global, indefinite exactly-once guarantee. When the SDK suppresses an
-identical call locally, that call's callback is not invoked.
+Use a unique key for each real occurrence. The key is hashed into the message
+ID and is not sent as a property. Strings and finite numbers are accepted; any
+other value is rejected with a warning and the event is not sent. A call the
+SDK recognises as a duplicate does not invoke its callback. Server-side
+deduplication applies within one ingestion session and one storage partition.
 
 Using [Privy](./docs/PRIVY_INTEGRATION.md)? `identify(user)`
 clusters all of a Privy user's linked wallets under a single identity.
