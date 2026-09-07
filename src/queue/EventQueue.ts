@@ -188,14 +188,11 @@ export class EventQueue implements IEventQueue {
       );
     }
 
-    // Custom events are separate occurrences by default. Important business
-    // events can opt into stable identity with idempotencyKey above.
+    // Unkeyed custom events are separate occurrences.
     if (event.type === "track") return generateNativeUUID();
 
-    // Preserve the established wire identity for every other event type.
-    // Besides avoiding an upgrade-time count discontinuity, this continues to
-    // collapse equivalent automatic events emitted by separate SDK instances
-    // during the same minute.
+    // Other event types keep the content-and-minute hash, so what ingestion
+    // collapses does not change on upgrade.
     const formattedTimestamp = toDateHourMinute(
       new Date(event.original_timestamp)
     );
@@ -205,10 +202,9 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
-   * The fingerprint duplicates are judged by: the event without its
-   * timestamp. This remains the fallback for SDK-generated event types.
-   * Custom track events provide a pre-enrichment fingerprint so volatile
-   * SDK context does not make an otherwise identical call look new.
+   * Fallback fingerprint: the event without its timestamp. Custom events
+   * pass a pre-enrichment fingerprint instead, so volatile SDK context
+   * cannot make an identical call look new.
    */
   private async generateDedupKey(event: IFormoEvent): Promise<string> {
     const { original_timestamp: _ignored, ...rest } = event;
@@ -302,8 +298,7 @@ export class EventQueue implements IEventQueue {
     }
 
     const clearSeqAtEntry = this.clearSeq;
-    // Message identity and fallback fingerprint are independent. Await them
-    // together so adding dedup work does not add another event-ordering yield.
+    // One await for both, so dedup adds no extra ordering yield.
     const [message_id, generatedDedupKey] = await Promise.all([
       this.generateMessageId(event, options?.idempotencyKey),
       this.generateDedupKey(event),

@@ -1321,13 +1321,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   /**
    * Emits a custom user event with custom properties.
    *
-   * The reserved `idempotency_key` property names one logical occurrence of
-   * the event (an order id, a checkout id). Calls that reuse the key for the
-   * same event name share one wire identity, so retries and repeated calls
-   * collapse at ingestion. The key is hashed into that identity and removed
-   * from the properties that are sent. Strings and finite numbers are
-   * accepted; any other value drops the call with a warning rather than
-   * silently sending it under a random identity.
+   * `properties.idempotency_key` (string or finite number) names one
+   * occurrence, e.g. an order id. Calls that reuse it for the same event name
+   * share one message id and collapse at ingestion. The key is hashed and
+   * not sent. Any other value drops the call with a warning.
    * @param {string} event The name of the tracked event
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
@@ -1348,7 +1345,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const { [IDEMPOTENCY_KEY_PROPERTY]: rawKey, ...rest } = properties;
       properties = rest;
       if (typeof rawKey === "string" && rawKey.trim().length > 0) {
-        // Keys are opaque: surrounding whitespace is part of the identity.
+        // Opaque key: whitespace is kept.
         idempotencyKey = rawKey;
       } else if (typeof rawKey === "number" && Number.isFinite(rawKey)) {
         idempotencyKey = String(rawKey);
