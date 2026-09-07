@@ -81,7 +81,12 @@ export function formofy(writeKey: string, options?: Options) {
 /** An instance the app created itself and exposed on window.formo. */
 function adoptWindowInstance(): LiveInstance | null {
   const f = window.formo as (IFormoAnalytics & { writeKey?: unknown }) | undefined;
-  if (!f || typeof f.writeKey !== "string" || isDisposed(f)) return null;
+  if (!f || typeof f.writeKey !== "string") return null;
+  if (isDisposed(f)) {
+    // A dead instance must not stay reachable as the page global either.
+    forgetGlobal(f);
+    return null;
+  }
   return { writeKey: f.writeKey, promise: Promise.resolve(f) };
 }
 

@@ -181,6 +181,21 @@ describe("formofy", () => {
     expect(own.cleanup.called).to.be.false;
   });
 
+  it("replaces a disposed instance found on window.formo and drops the dead global", async () => {
+    const dead = instance("wk_1");
+    dead.cleanup();
+    (window as { formo?: unknown }).formo = dead;
+    const fresh = instance("wk_1");
+    init.resolves(fresh);
+
+    formofy("wk_1");
+    await tick();
+    await tick();
+
+    expect(init.calledOnceWith("wk_1")).to.be.true;
+    expect(window.formo).to.equal(fresh);
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);
