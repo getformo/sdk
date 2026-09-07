@@ -175,6 +175,24 @@ describe("EventManager", () => {
       expect(secondOptions.dedupKey).to.equal(firstOptions.dedupKey);
     });
 
+    it("fingerprints the caller input as it was when track() was called", async () => {
+      const properties: Record<string, unknown> = { market: "ZEC", volume: 3571 };
+      const first = eventManager.addEvent({ type: "track", event: "Order Placed", properties });
+      // The app reuses and mutates the object while enrichment is pending.
+      properties.volume = 9999;
+      await first;
+      await eventManager.addEvent({
+        type: "track",
+        event: "Order Placed",
+        properties: { market: "ZEC", volume: 3571 },
+      });
+
+      // Same input, same fingerprint: the mutation did not leak into the key.
+      expect(enqueueSpy.secondCall.args[2].dedupKey).to.equal(
+        enqueueSpy.firstCall.args[2].dedupKey
+      );
+    });
+
     it("keeps caller-supplied context in the track fallback fingerprint", async () => {
       const base: APIEvent = {
         type: "track",

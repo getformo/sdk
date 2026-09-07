@@ -69,7 +69,7 @@ describe("track idempotency_key property", () => {
     expect(trackEvent.firstCall.args[4]).to.equal(callback);
   });
 
-  it("canonicalizes finite numeric keys to their string form", async () => {
+  it("canonicalizes safe integer keys to their string form", async () => {
     const { formo, trackEvent } = setup();
 
     await formo.track("Checkout Completed", { idempotency_key: 123 });
@@ -77,6 +77,28 @@ describe("track idempotency_key property", () => {
 
     expect(trackEvent.firstCall.args[1].idempotencyKey).to.equal("123");
     expect(trackEvent.secondCall.args[1].idempotencyKey).to.equal("0");
+  });
+
+  it("rejects numbers that cannot name one id exactly", async () => {
+    const { formo, trackEvent } = setup();
+
+    // 2^53 and 2^53 + 1 are the same JavaScript number.
+    await formo.track("Checkout Completed", { idempotency_key: 9007199254740993 });
+    await formo.track("Checkout Completed", { idempotency_key: 1.5 });
+
+    expect(trackEvent.called).to.be.false;
+  });
+
+  it("logs instead of rejecting when the property bag throws on access", async () => {
+    const { formo, trackEvent } = setup();
+    const properties = new Proxy(
+      { idempotency_key: "o-1", plan: "pro" },
+      { get: () => { throw new Error("lazy bag"); } }
+    );
+
+    await formo.track("Checkout Completed", properties);
+
+    expect(trackEvent.called).to.be.false;
   });
 
   it("rejects empty and whitespace-only keys instead of using random identity", async () => {

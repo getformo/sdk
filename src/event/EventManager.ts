@@ -47,6 +47,20 @@ class EventManager implements IEventManager {
       generation === this.generation && this.canAcceptEvent();
     if (!shouldContinue()) return;
 
+    // Taken before the enrichment await, from the caller's input as it is
+    // now: a properties object the app mutates while enrichment is pending
+    // must not fingerprint the event under values it did not carry.
+    const dedupKey =
+      event.type === "track"
+        ? hash(
+            JSON.stringify({
+              event: _event,
+              address: address ?? null,
+              userId: userId ?? null,
+            })
+          )
+        : undefined;
+
     let formoEvent;
     try {
       formoEvent = await this.eventFactory.create(_event, address, userId);
@@ -65,17 +79,6 @@ class EventManager implements IEventManager {
       );
       return;
     }
-
-    const dedupKey =
-      event.type === "track"
-        ? hash(
-            JSON.stringify({
-              event: _event,
-              address: address ?? null,
-              userId: userId ?? null,
-            })
-          )
-        : undefined;
 
     this.eventQueue.enqueue(
       formoEvent,

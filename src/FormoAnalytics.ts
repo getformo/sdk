@@ -1338,23 +1338,32 @@ export class FormoAnalytics implements IFormoAnalytics {
     callback?: EventCallback
   ): Promise<void> {
     let idempotencyKey: string | undefined;
-    if (
-      properties &&
-      Object.prototype.hasOwnProperty.call(properties, IDEMPOTENCY_KEY_PROPERTY)
-    ) {
-      const { [IDEMPOTENCY_KEY_PROPERTY]: rawKey, ...rest } = properties;
-      properties = rest;
-      if (typeof rawKey === "string" && rawKey.trim().length > 0) {
-        // Opaque key: whitespace is kept.
-        idempotencyKey = rawKey;
-      } else if (typeof rawKey === "number" && Number.isFinite(rawKey)) {
-        idempotencyKey = String(rawKey);
-      } else {
-        logger.warn(
-          `FormoAnalytics::track: ${IDEMPOTENCY_KEY_PROPERTY} must be a non-empty string or finite number`
-        );
-        return;
+    try {
+      if (
+        properties &&
+        Object.prototype.hasOwnProperty.call(properties, IDEMPOTENCY_KEY_PROPERTY)
+      ) {
+        const { [IDEMPOTENCY_KEY_PROPERTY]: rawKey, ...rest } = properties;
+        properties = rest;
+        if (typeof rawKey === "string" && rawKey.trim().length > 0) {
+          // Opaque key: whitespace is kept.
+          idempotencyKey = rawKey;
+        } else if (typeof rawKey === "number" && Number.isSafeInteger(rawKey)) {
+          // Above 2^53 distinct ids compare equal as numbers; pass those as
+          // strings.
+          idempotencyKey = String(rawKey);
+        } else {
+          logger.warn(
+            `FormoAnalytics::track: ${IDEMPOTENCY_KEY_PROPERTY} must be a non-empty string or safe integer`
+          );
+          return;
+        }
       }
+    } catch (error) {
+      // A throwing getter or proxy on the property bag is the host's bug,
+      // but analytics must not reject into the host over it.
+      logger.error("Error tracking event:", error);
+      return;
     }
     await this.trackEvent(
       EventType.TRACK,
