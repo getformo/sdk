@@ -54,10 +54,7 @@ await formo.track("Order Placed", {
 ```
 
 Use a unique key for each real occurrence. The key is hashed into the message
-ID and is not sent as a property. Strings and finite numbers are accepted; any
-other value is rejected with a warning and the event is not sent. A call the
-SDK recognises as a duplicate does not invoke its callback. Server-side
-deduplication applies within one ingestion session and one storage partition.
+ID and is not sent as a property.
 
 Using [Privy](./docs/PRIVY_INTEGRATION.md)? `identify(user)`
 clusters all of a Privy user's linked wallets under a single identity.
