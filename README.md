@@ -29,33 +29,6 @@ You can install Formo on:
 
 Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on local testing, debugging, and consent management.
 
-### Idempotency for custom events
-
-The SDK deduplicates custom events in two ways.
-
-**Automatically, for 60 seconds.** When `track()` is called twice with the same
-event name and properties within 60 seconds, the SDK sends the event once.
-This handles accidental double-fires, such as a React effect that runs twice.
-It applies within one page session.
-
-**With an idempotency key, for retries.** For business-critical events, add
-the reserved `idempotency_key` property with a stable identifier for the
-action, such as an order ID. Every call that reuses the key for the same
-event name gets the same message ID, so ingestion keeps one event however many
-times it is sent, including across reloads:
-
-```ts
-await formo.track("Order Placed", {
-  market: "ETH-USDC",
-  side: "buy",
-  volume: 2500,
-  idempotency_key: order.id,
-});
-```
-
-Use a unique key for each real action. The key is hashed into the message
-ID and is not sent as a property.
-
 Using [Privy](./docs/PRIVY_INTEGRATION.md)? `identify(user)`
 clusters all of a Privy user's linked wallets under a single identity.
 
