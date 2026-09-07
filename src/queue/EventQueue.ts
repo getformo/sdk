@@ -80,6 +80,18 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 // the wall clock happens to fall (see generateDedupKey).
 const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
 
+// Generated context that can differ between two calls that are the same
+// call: a live page title, a resized viewport, a window moved to another
+// screen. Left out of the fallback fingerprint only; the wire id is untouched.
+const VOLATILE_CONTEXT_FIELDS = [
+  "page_title",
+  "screen_width",
+  "screen_height",
+  "screen_density",
+  "viewport_width",
+  "viewport_height",
+];
+
 /** Monotonic time where the platform offers one, else undefined. */
 const monotonicNow = (): number | undefined =>
   typeof performance !== "undefined" && typeof performance.now === "function"
@@ -202,13 +214,17 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
-   * Fallback fingerprint: the event without its timestamp. Custom events
-   * pass a pre-enrichment fingerprint instead, so volatile SDK context
-   * cannot make an identical call look new.
+   * Fallback fingerprint: the event without its timestamp and without the
+   * volatile generated context. Custom events pass a pre-enrichment
+   * fingerprint instead.
    */
   private async generateDedupKey(event: IFormoEvent): Promise<string> {
-    const { original_timestamp: _ignored, ...rest } = event;
-    return hash(JSON.stringify(rest));
+    const { original_timestamp: _ignored, context, ...rest } = event;
+    const stableContext = context ? { ...context } : context;
+    if (stableContext) {
+      for (const field of VOLATILE_CONTEXT_FIELDS) delete stableContext[field];
+    }
+    return hash(JSON.stringify({ ...rest, context: stableContext }));
   }
 
   /**

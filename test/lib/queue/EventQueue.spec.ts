@@ -383,6 +383,73 @@ describe("EventQueue", () => {
         expect(secondId).to.not.equal(firstId);
       });
 
+      it("catches a page double-fire whose title moved with a live price", async () => {
+        const page = (page_title: string) =>
+          createMockEvent({
+            type: "page",
+            context: { page_url: "https://example.com/trade", page_title },
+            properties: { url: "https://example.com/trade", path: "/trade" },
+          });
+
+        await eventQueue.enqueue(page("0.78982 ASTER | Nado"));
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(page("0.79279 ASTER | Nado"));
+
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("ignores screen and viewport changes in the fallback fingerprint", async () => {
+        const sized = (viewport_width: number, screen_width: number) =>
+          createMockEvent({
+            type: "connect",
+            context: { page_url: "https://example.com/", viewport_width, screen_width },
+            properties: { chain_id: 1 },
+          });
+
+        await eventQueue.enqueue(sized(1280, 1920));
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(sized(800, 2560));
+
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("keeps semantic context in the fallback fingerprint", async () => {
+        const page = (page_url: string, referrer: string) =>
+          createMockEvent({
+            type: "page",
+            context: { page_url, referrer, page_title: "Same" },
+            properties: { url: page_url },
+          });
+
+        await eventQueue.enqueue(page("https://example.com/a", "https://ref.one"));
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(page("https://example.com/b", "https://ref.one"));
+        await eventQueue.enqueue(page("https://example.com/a", "https://ref.two"));
+
+        expect((eventQueue as any).queue).to.have.length(2);
+      });
+
+      it("leaves the wire identity of automatic events untouched by the exclusion", async () => {
+        const page = (page_title: string) =>
+          createMockEvent({
+            type: "page",
+            context: { page_url: "https://example.com/trade", page_title },
+          });
+        const other = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+
+        await eventQueue.enqueue(page("A"));
+        await (eventQueue as any).pendingFlush;
+        await other.enqueue(page("B"));
+        await (other as any).pendingFlush;
+
+        const ids = [fetchStub.firstCall, fetchStub.secondCall].map(
+          (call) => JSON.parse(call.args[1].body)[0].message_id
+        );
+        // Same minute, different title: still two ids on the wire.
+        expect(ids[0]).to.not.equal(ids[1]);
+        other.close();
+      });
+
       it("prunes only from the front and stops at the first live entry", async () => {
         // Ten distinct events spread over the window, then one more after
         // the oldest six expired: exactly those six are gone.
