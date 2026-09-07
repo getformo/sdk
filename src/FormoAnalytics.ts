@@ -1322,7 +1322,7 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Emits a custom user event with custom properties.
    *
    * `properties.idempotency_key` (string or finite number) names one
-   * occurrence, e.g. an order id. Calls that reuse it for the same event name
+   * action, e.g. an order id. Calls that reuse it for the same event name
    * share one message id and collapse at ingestion. The key is hashed and
    * not sent. Any other value drops the call with a warning.
    * @param {string} event The name of the tracked event

@@ -40,7 +40,7 @@ It applies within one page session.
 
 **With an idempotency key, for retries.** For business-critical events, add
 the reserved `idempotency_key` property with a stable identifier for the
-occurrence, such as an order ID. Every call that reuses the key for the same
+action, such as an order ID. Every call that reuses the key for the same
 event name gets the same message ID, so ingestion keeps one event however many
 times it is sent, including across reloads:
 
@@ -53,7 +53,7 @@ await formo.track("Order Placed", {
 });
 ```
 
-Use a unique key for each real occurrence. The key is hashed into the message
+Use a unique key for each real action. The key is hashed into the message
 ID and is not sent as a property.
 
 Using [Privy](./docs/PRIVY_INTEGRATION.md)? `identify(user)`
