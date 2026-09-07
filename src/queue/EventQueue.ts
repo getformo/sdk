@@ -201,6 +201,9 @@ export class EventQueue implements IEventQueue {
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
+    // A closed queue is terminal. In particular, a later clear() must not
+    // invalidate chunks that close() deliberately allowed to finish.
+    if (this.closed) return;
     this.clearSeq++;
     // Start a fresh queue lifecycle. A post-clear event should get the same
     // immediate-send treatment as the first event on page load, and it must
@@ -237,8 +240,19 @@ export class EventQueue implements IEventQueue {
    * real data; abandoning them would turn every unmount into silent loss.
    */
   close(): void {
+    if (this.closed) return;
     this.closed = true;
-    this.clear();
+    // Drop work that has not entered a flush, but do not advance clearSeq:
+    // sendBatches uses that sequence specifically for consent/reset
+    // invalidation, whereas chunks already spliced by an in-flight flush are
+    // accepted work and must finish during terminal teardown.
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.queue = [];
+    this.queueByteSize = 0;
+    this.flushed = false;
     // Terminal: nothing can be accepted again, so nothing needs suppressing.
     this.payloadHashes.clear();
     if (this.disposePageLeave) {
@@ -359,6 +373,9 @@ export class EventQueue implements IEventQueue {
       return Promise.resolve();
     }
 
+    // Capture before any wait. A pre-clear waiter belongs to the old queue
+    // lifecycle and must never resume into events accepted after clear().
+    const clearSeqAtFlush = this.clearSeq;
     if (this.pendingFlush) {
       // During page leave (drainAll), skip awaiting the pending flush.
       // Browser lifecycle events (pagehide/beforeunload) do not wait for
@@ -369,6 +386,10 @@ export class EventQueue implements IEventQueue {
         // The wait is a gap like any other: consent can go, and clear() or
         // close() can empty the queue. Without this re-check a resumed
         // flush would splice nothing and POST an empty batch.
+        if (this.closed || this.clearSeq !== clearSeqAtFlush) {
+          safeCall(callback);
+          return Promise.resolve();
+        }
         if (this.canSend && !this.canSend()) {
           this.clear();
           safeCall(callback);
@@ -381,9 +402,6 @@ export class EventQueue implements IEventQueue {
       }
     }
 
-    // Captured for sendBatches: a clear() while a split batch is in flight
-    // must abandon the batches behind it even if consent is back by then.
-    const clearSeqAtFlush = this.clearSeq;
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
     // Decrement the running byte total by exactly what left the queue. The

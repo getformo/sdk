@@ -501,6 +501,34 @@ describe("EventQueue", () => {
         expect(JSON.parse(fetchStub.firstCall.args[1].body)).to.have.length(1);
       });
 
+      it("does not let a pre-clear flush waiter consume the fresh lifecycle", async () => {
+        let releaseFirst!: (response: Response) => void;
+        fetchStub.onFirstCall().returns(
+          new Promise<Response>((resolve) => {
+            releaseFirst = resolve;
+          })
+        );
+        fetchStub.onSecondCall().resolves(makeResponse(200, "OK"));
+
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+        const oldWaiter = eventQueue.flush();
+
+        eventQueue.clear();
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
+        releaseFirst(makeResponse(200, "OK"));
+        await oldWaiter;
+        await (eventQueue as any).pendingFlush;
+
+        expect(fetchStub.callCount).to.equal(2);
+        const sent = fetchStub.getCalls().flatMap((call) =>
+          JSON.parse(call.args[1]?.body as string).map(
+            (event: any) => event.properties.n
+          )
+        );
+        expect(sent).to.deep.equal([1, 3]);
+      });
+
       it("drops the buffer when consent goes away while flush waits on a pending flush", async () => {
         let allowed = true;
         eventQueue = new EventQueue("test-key", {
@@ -1386,6 +1414,43 @@ describe("EventQueue", () => {
 
       expect(afterFirst).to.equal(1);
       expect(fetchStub.callCount).to.equal(afterFirst);
+    });
+
+    it("should let every chunk of an in-flight split flush finish", async () => {
+      useUniqueCryptoHashes();
+      const fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+      });
+
+      await eventQueue.enqueue(createMockEvent({ properties: { warmup: true } }));
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+      await enqueueLargeEvents(eventQueue, 8);
+
+      let releaseFirst!: (response: Response) => void;
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          releaseFirst = resolve;
+        })
+      );
+      const inFlight = eventQueue.flush();
+      await clock.tickAsync(0);
+      expect(fetchStub.calledOnce, "first chunk is in flight").to.be.true;
+
+      eventQueue.close();
+      releaseFirst(makeResponse(200, "OK"));
+      await inFlight;
+
+      const sent = fetchStub.getCalls().flatMap((call) =>
+        JSON.parse(call.args[1]?.body as string).map(
+          (event: any) => event.properties.index
+        )
+      );
+      expect(fetchStub.callCount, "payload was split").to.be.greaterThan(1);
+      expect(sent).to.deep.equal([0, 1, 2, 3, 4, 5, 6, 7]);
     });
 
     it("should remove the page-leave listeners", async () => {
