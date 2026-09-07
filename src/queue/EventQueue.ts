@@ -17,6 +17,12 @@ const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...
 type QueueItem = {
   message: IFormoEventPayload;
   callback: (...args: any) => any;
+  // Key under which this event is remembered for duplicate suppression, and
+  // the acceptance token recorded for it, so a failed send can release
+  // exactly its own entry and not a newer one for the same key. See
+  // releaseFingerprints.
+  dedupKey: string;
+  dedupToken: number;
   // Serialized size of this item, computed once at enqueue so the queue
   // byte total can be tracked incrementally (avoids an O(n) re-serialize
   // of the whole queue on every enqueue → O(n^2) overall).
@@ -68,6 +74,17 @@ const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 30 SECONDS
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
 const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 
+// How long an accepted event keeps suppressing identical events. A rolling
+// window from the moment of acceptance, so a double-fire is caught however
+// the wall clock happens to fall (see generateDedupKey).
+const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
+
+/** Monotonic time where the platform offers one, else undefined. */
+const monotonicNow = (): number | undefined =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : undefined;
+
 export class EventQueue implements IEventQueue {
   private writeKey: string;
   private apiHost: string;
@@ -81,9 +98,31 @@ export class EventQueue implements IEventQueue {
   private errorHandler: any;
   private retryCount: number;
   private pendingFlush: Promise<any> | null;
-  private payloadHashes: Set<string> = new Set();
+  // Accepted event fingerprints and when each stops counting as a duplicate.
+  //
+  // Keyed on time, not on queue membership. Hashes used to be dropped when
+  // their event left the queue, which was the same thing while every event
+  // waited for the batch timer. Since the first event of a page load is sent
+  // the moment it arrives (see enqueue), its hash left with it, and an
+  // identical track() a moment later, the double-fire this exists to
+  // catch, was accepted (#372).
+  //
+  // Insertion order is expiry order (each entry expires DEDUP_WINDOW_MS after
+  // it was added), which is what lets the prune stop at the first live entry.
+  // The token is unique per acceptance; see releaseFingerprints.
+  private payloadHashes: Map<string, { expiresAt: number; token: number }> =
+    new Map();
+  private acceptanceSeq = 0;
+  // State for elapsedNow(): the wall clock as a forward-only accumulator,
+  // and the monotonic origin.
+  private lastWall = Date.now();
+  private wallElapsed = 0;
+  private readonly monotonicStart = monotonicNow();
   private canSend?: () => boolean;
-  private generation = 0;
+  // Bumped by every clear(), so an enqueue() suspended on its hash awaits
+  // can tell that a withdrawal happened in the gap even if consent has
+  // already been granted again by the time it resumes.
+  private clearSeq = 0;
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
   private closed = false;
@@ -142,20 +181,45 @@ export class EventQueue implements IEventQueue {
   }
 
   /**
+   * The fingerprint duplicates are judged by: the event without its
+   * timestamp.
+   *
+   * Deliberately NOT the message id. That id folds in the timestamp truncated
+   * to the minute, because it is the event's identity on the wire and two
+   * events a minute apart must never share one. Judging duplicates by it
+   * meant a double-fire straddling a minute boundary (:59.999 and :00.001)
+   * got two different ids and both were sent. The window is a rolling one
+   * from acceptance, so it needs a key that does not change with the clock.
+   */
+  private async generateDedupKey(event: IFormoEvent): Promise<string> {
+    const { original_timestamp: _ignored, ...rest } = event;
+    return hash(JSON.stringify(rest));
+  }
+
+  /**
    * Drop all queued data and cancel the flush timer. Called on consent
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
-    this.generation++;
+    // A closed queue is terminal. In particular, a later clear() must not
+    // invalidate chunks that close() deliberately allowed to finish.
+    if (this.closed) return;
+    this.clearSeq++;
+    // Start a fresh queue lifecycle. A post-clear event should get the same
+    // immediate-send treatment as the first event on page load, and it must
+    // not wait on a request that belongs to the abandoned lifecycle.
+    this.flushed = false;
+    this.pendingFlush = null;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    // Consent withdrawal/reset starts a fresh analytics lifecycle. Forget
+    // every fingerprint, including delivered and in-flight ones, so no
+    // identity-derived state survives clear() and tracking can resume cleanly.
+    this.payloadHashes.clear();
     this.queue = [];
     this.queueByteSize = 0;
-    this.payloadHashes.clear();
-    this.flushed = false;
-    this.pendingFlush = null;
   }
 
   /**
@@ -176,8 +240,21 @@ export class EventQueue implements IEventQueue {
    * real data; abandoning them would turn every unmount into silent loss.
    */
   close(): void {
+    if (this.closed) return;
     this.closed = true;
-    this.clear();
+    // Drop work that has not entered a flush, but do not advance clearSeq:
+    // sendBatches uses that sequence specifically for consent/reset
+    // invalidation, whereas chunks already spliced by an in-flight flush are
+    // accepted work and must finish during terminal teardown.
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.queue = [];
+    this.queueByteSize = 0;
+    this.flushed = false;
+    // Terminal: nothing can be accepted again, so nothing needs suppressing.
+    this.payloadHashes.clear();
     if (this.disposePageLeave) {
       safeCall(this.disposePageLeave);
       this.disposePageLeave = null;
@@ -191,8 +268,6 @@ export class EventQueue implements IEventQueue {
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
-    const generation = this.generation;
-
     // A torn-down instance must never buffer, however late the caller
     // arrives. See close().
     if (this.closed) return;
@@ -203,20 +278,38 @@ export class EventQueue implements IEventQueue {
       return;
     }
 
-    const message_id = await this.generateMessageId(event);
+    const clearSeqAtEntry = this.clearSeq;
+    // Both hashes are independent. Await them together to preserve the
+    // single-yield enqueue ordering that callers relied on before the
+    // separate rolling dedup key was introduced.
+    const [message_id, dedupKey] = await Promise.all([
+      this.generateMessageId(event),
+      this.generateDedupKey(event),
+    ]);
 
-    if (this.closed || generation !== this.generation) return;
+    // Re-check after the awaits. A caller that entered before close() is
+    // suspended here, and on a queue that has not flushed yet its event
+    // would push and flush immediately - the exact shape of the bug close()
+    // exists to stop.
+    if (this.closed) return;
+    // Consent can be withdrawn in the same gap. The flush gate would still
+    // stop the send, but the contract of this path is to never buffer after
+    // withdrawal, not merely to never send.
     if (this.canSend && !this.canSend()) {
       this.clear();
       return;
     }
+    // A withdrawal that was already reversed by the time we resume still
+    // counts: this event predates it, and clear() dropped everything that
+    // was pending then. Sampling consent alone cannot see that.
+    if (this.clearSeq !== clearSeqAtEntry) return;
 
-    // check if the message already exists
-    if (this.isDuplicate(message_id)) {
+    // check if an identical event was accepted within the dedup window
+    if (this.isDuplicate(dedupKey)) {
       logger.warn(
-        `Event already enqueued, try again after ${millisecondsToSecond(
-          this.flushIntervalMs
-        )} seconds.`
+        `Duplicate event dropped: an identical event was accepted less than ${millisecondsToSecond(
+          DEDUP_WINDOW_MS
+        )} seconds ago.`
       );
       return;
     }
@@ -224,6 +317,8 @@ export class EventQueue implements IEventQueue {
     const queueItem: QueueItem = {
       message: { ...event, message_id },
       callback,
+      dedupKey,
+      dedupToken: this.acceptanceSeq,
       byteSize: 0,
     };
     // Measure once here (message only — JSON.stringify drops the
@@ -278,6 +373,9 @@ export class EventQueue implements IEventQueue {
       return Promise.resolve();
     }
 
+    // Capture before any wait. A pre-clear waiter belongs to the old queue
+    // lifecycle and must never resume into events accepted after clear().
+    const clearSeqAtFlush = this.clearSeq;
     if (this.pendingFlush) {
       // During page leave (drainAll), skip awaiting the pending flush.
       // Browser lifecycle events (pagehide/beforeunload) do not wait for
@@ -285,16 +383,30 @@ export class EventQueue implements IEventQueue {
       // before the keepalive fetch for the remaining items is dispatched.
       if (!drainAll) {
         await this.pendingFlush;
+        // The wait is a gap like any other: consent can go, and clear() or
+        // close() can empty the queue. Without this re-check a resumed
+        // flush would splice nothing and POST an empty batch.
+        if (this.closed || this.clearSeq !== clearSeqAtFlush) {
+          safeCall(callback);
+          return Promise.resolve();
+        }
+        if (this.canSend && !this.canSend()) {
+          this.clear();
+          safeCall(callback);
+          return Promise.resolve();
+        }
+        if (!this.queue.length) {
+          safeCall(callback);
+          return Promise.resolve();
+        }
       }
     }
 
     const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
-    // Only remove hashes for flushed items so duplicate detection remains
-    // active for events still in the queue. Also decrement the running
-    // byte total by exactly what left the queue.
+    // Decrement the running byte total by exactly what left the queue. The
+    // dedup hashes stay: they expire on their own clock, not on flush.
     for (const item of items) {
-      this.payloadHashes.delete(item.message.message_id);
       this.queueByteSize -= item.byteSize;
     }
     // Re-anchor to the exact invariant when the queue empties, so any
@@ -311,7 +423,7 @@ export class EventQueue implements IEventQueue {
     // Split into chunks that fit within the browser's 64KB keepalive limit.
     const batches = this.splitIntoBatches(items, data);
 
-    return (this.pendingFlush = this.sendBatches(batches, data)
+    return (this.pendingFlush = this.sendBatches(batches, data, clearSeqAtFlush)
       .then((firstError) => {
         if (firstError) {
           safeCall(callback, firstError, data);
@@ -401,15 +513,30 @@ export class EventQueue implements IEventQueue {
    * Sends batches sequentially, notifying per-item callbacks on success/failure.
    * Returns the first error encountered (if any) so the caller can report it.
    */
-  private async sendBatches(batches: Batch[], allData: IFormoEventFlushPayload[]): Promise<Error | undefined> {
+  private async sendBatches(
+    batches: Batch[],
+    allData: IFormoEventFlushPayload[],
+    clearSeqAtFlush: number
+  ): Promise<Error | undefined> {
     let firstError: Error | undefined;
 
-    for (const batch of batches) {
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
       // Consent can be withdrawn while a flush is already in flight:
       // batches were spliced before opt-out, and split batches / retry
       // backoff span seconds. Re-check before every send and abandon
-      // the remaining batches if consent was revoked mid-flush.
-      if (this.canSend && !this.canSend()) break;
+      // the remaining batches if consent was revoked mid-flush. They were
+      // never sent, so they must not count as accepted either. A clear()
+      // in the gap counts even if consent is back: these items predate it.
+      if (
+        (this.canSend && !this.canSend()) ||
+        this.clearSeq !== clearSeqAtFlush
+      ) {
+        for (let j = i; j < batches.length; j++) {
+          this.releaseFingerprints(batches[j].items);
+        }
+        break;
+      }
       try {
         const body = JSON.stringify(batch.data);
         const response = await fetch(`${this.apiHost}`, {
@@ -429,6 +556,11 @@ export class EventQueue implements IEventQueue {
         batch.items.forEach(({ message, callback: cb }) => safeCall(cb, undefined, message, allData));
       } catch (err: any) {
         firstError = firstError || err;
+        // The batch is lost: retries are exhausted or the response was not
+        // retryable. Release its fingerprints so the app can send the same
+        // event again after the error callback, instead of having that
+        // retry classified as a double-fire and dropped for a minute.
+        this.releaseFingerprints(batch.items);
         batch.items.forEach(({ message, callback: cb }) => safeCall(cb, err, message, allData));
       }
     }
@@ -453,12 +585,98 @@ export class EventQueue implements IEventQueue {
     return false;
   }
 
-  private isDuplicate(eventId: string) {
-    // check if exists a message with identical payload within 1 minute
-    if (this.payloadHashes.has(eventId)) return true;
+  /**
+   * Whether an identical event was accepted within the dedup window. Records
+   * the key when it was not. Expired keys are pruned here, on the enqueue
+   * path, so the map is bounded by one minute of accepted events and needs
+   * no timer of its own.
+   */
+  private isDuplicate(dedupKey: string): boolean {
+    const now = this.elapsedNow();
+    this.pruneExpired(now);
+    if (this.payloadHashes.has(dedupKey)) return true;
 
-    this.payloadHashes.add(eventId);
+    this.payloadHashes.set(dedupKey, {
+      expiresAt: now + DEDUP_WINDOW_MS,
+      token: ++this.acceptanceSeq,
+    });
     return false;
+  }
+
+  /**
+   * Forget that these events were accepted, so identical ones are taken
+   * again. For items that were never delivered.
+   *
+   * Only an item's OWN entry is released. A send can outlive the window
+   * through retry backoff, or be cut short by clear(); by the time it
+   * fails, the same event may have been accepted again and be in flight
+   * under the same key. The acceptance token tells the two apart. (An
+   * expiry would not: clear() and a re-accept can land in the same
+   * millisecond as the original.)
+   */
+  private releaseFingerprints(items: QueueItem[]): void {
+    for (const item of items) {
+      const entry = this.payloadHashes.get(item.dedupKey);
+      if (entry && entry.token === item.dedupToken) {
+        this.payloadHashes.delete(item.dedupKey);
+      }
+    }
+  }
+
+  /**
+   * Elapsed time since this queue was created, for the dedup window. Never
+   * decreases, keeps real pace after any clock step, and errs toward
+   * running fast.
+   *
+   * Two sources, the larger wins. The monotonic clock (performance.now) is
+   * immune to wall-clock steps but on some platforms stops while the OS is
+   * suspended, so a device that sleeps mid-window would wake still inside
+   * it. The wall clock counts suspension but can step, so it is read as a
+   * sum of forward deltas: a forward step (or suspension) is added and only
+   * expires entries early, the safe direction for a duplicate guard; a
+   * backward step adds nothing and the sum resumes at real pace from the
+   * new reading. A forward step later corrected backwards therefore leaves
+   * the clock ahead but still advancing, never pinned for the length of
+   * the step.
+   *
+   * Both sources are non-decreasing, so their max is, which is what lets
+   * pruneExpired assume insertion order is expiry order. Per instance, so
+   * test clocks that start from zero are unaffected by other instances.
+   */
+  private elapsedNow(): number {
+    const wallNow = Date.now();
+    const delta = wallNow - this.lastWall;
+    this.lastWall = wallNow;
+    if (delta > 0) this.wallElapsed += delta;
+
+    const mono = monotonicNow();
+    const monotonic =
+      mono !== undefined && this.monotonicStart !== undefined
+        ? mono - this.monotonicStart
+        : 0;
+    return Math.max(this.wallElapsed, monotonic);
+  }
+
+  /**
+   * Drop expired fingerprints from the front of the map.
+   *
+   * Entries are in insertion order and every one expires a fixed interval
+   * after insertion, so the first live entry ends the scan: each expired
+   * entry is visited once in its life, not once per enqueue. The clock never
+   * decreases (see elapsedNow), which is what makes insertion order expiry
+   * order.
+   *
+   * Manual iteration: for..of over a Map does not compile under the ES5
+   * build target, and Map.forEach cannot stop early. Deleting the current
+   * entry mid-iteration is spec-safe.
+   */
+  private pruneExpired(now: number): void {
+    const entries = this.payloadHashes.entries();
+    for (let step = entries.next(); !step.done; step = entries.next()) {
+      const key = step.value[0];
+      if (step.value[1].expiresAt > now) break;
+      this.payloadHashes.delete(key);
+    }
   }
 
   /**

@@ -200,14 +200,461 @@ describe("EventQueue", () => {
     it("should batch subsequent events instead of flushing each", async () => {
       await eventQueue.enqueue(createMockEvent());
       await (eventQueue as any).pendingFlush;
-      await eventQueue.enqueue(
-        createMockEvent({ original_timestamp: new Date(Date.now() + 1).toISOString() })
-      );
+      // A distinct event: the dedup hash truncates timestamps to the
+      // minute, so a same-minute copy would be dropped as a duplicate rather
+      // than batched, and this test would pass for the wrong reason.
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
       await (eventQueue as any).pendingFlush;
 
       // Only the first event's immediate flush hit the network; the second
       // stays queued for the flushAt/interval/pagehide paths.
       expect(fetchStub.calledOnce).to.be.true;
+      expect((eventQueue as any).queue).to.have.length(1);
+    });
+
+    // The dedup hash used to leave with its event at flush time. Once the
+    // first event of a page load was sent the instant it arrived (#326),
+    // its hash went with it, so a double-fired track() a moment later was
+    // accepted instead of suppressed (#372). The hash now lives for the
+    // full dedup window whatever the flush timing.
+    describe("duplicate suppression", () => {
+      it("drops an identical event sent right after the immediate first flush", async () => {
+        const event = createMockEvent();
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        expect(fetchStub.calledOnce).to.be.true;
+
+        await eventQueue.enqueue({ ...event });
+        await (eventQueue as any).pendingFlush;
+
+        expect(fetchStub.calledOnce, "no second send").to.be.true;
+        expect((eventQueue as any).queue, "nothing left queued").to.have.length(0);
+      });
+
+      it("keeps suppressing after a later flush while the window is open", async () => {
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        const event = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(event);
+        await eventQueue.flush();
+        expect(fetchStub.callCount).to.equal(2);
+
+        clock.tick(30_000);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("accepts an identical event again once the window has passed", async () => {
+        // Same original_timestamp on purpose: an event created after the
+        // clock moves would hash differently on its own, which would prove
+        // nothing about the window.
+        const event = createMockEvent();
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+
+        clock.tick(60_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue).to.have.length(1);
+        expect((eventQueue as any).payloadHashes.size, "expired id pruned, new one recorded").to.equal(1);
+      });
+
+      it("catches a double-fire that straddles a UTC minute boundary", async () => {
+        // message_id folds in the minute-truncated timestamp (it is the
+        // event's identity on the wire), so these two get DIFFERENT ids.
+        // The dedup key must not care: it is the same event 2ms apart.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        clock.setSystemTime(new Date("2026-08-27T12:34:59.999Z"));
+        const first = createMockEvent({ original_timestamp: new Date().toISOString() });
+        await eventQueue.enqueue(first);
+        expect((eventQueue as any).queue).to.have.length(1);
+
+        clock.setSystemTime(new Date("2026-08-27T12:35:00.001Z"));
+        const second = { ...first, original_timestamp: new Date().toISOString() };
+        expect(second.original_timestamp).to.not.equal(first.original_timestamp);
+        await eventQueue.enqueue(second);
+        expect((eventQueue as any).queue, "the copy across the boundary is dropped").to.have.length(1);
+      });
+
+      it("keeps message ids distinct across minutes while deduping by content", async () => {
+        // Same content a full window apart: both go out, with different
+        // ids, because the id must never collide for events a minute apart.
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        clock.tick(60_001);
+        await eventQueue.enqueue({ ...event, original_timestamp: new Date().toISOString() });
+        expect((eventQueue as any).queue).to.have.length(1);
+        expect((eventQueue as any).queue[0].message.message_id).to.not.equal(firstId);
+      });
+
+      it("prunes only from the front and stops at the first live entry", async () => {
+        // Ten distinct events spread over the window, then one more after
+        // the oldest six expired: exactly those six are gone.
+        for (let i = 0; i < 10; i++) {
+          await eventQueue.enqueue(createMockEvent({ properties: { i } }));
+          clock.tick(5_000);
+        }
+        await (eventQueue as any).pendingFlush;
+        expect((eventQueue as any).payloadHashes.size).to.equal(10);
+
+        // t = 50s now. Entry i expires at 5i + 60 s. At 90s that is i in
+        // 0..6: entry 6 expires at exactly 90s, and an entry is dead the
+        // instant its expiry is reached. Entries 7..9 (95s, 100s, 105s) live.
+        clock.tick(40_000);
+        await eventQueue.enqueue(createMockEvent({ properties: { i: 99 } }));
+        expect((eventQueue as any).payloadHashes.size).to.equal(10 - 7 + 1);
+
+        // A survivor is still enforced, and an expired one is accepted again.
+        await eventQueue.enqueue(createMockEvent({ properties: { i: 9 } }));
+        expect((eventQueue as any).queue.map((q: any) => q.message.properties.i)).to.not.include(9);
+        expect((eventQueue as any).payloadHashes.size).to.equal(4);
+        await eventQueue.enqueue(createMockEvent({ properties: { i: 0 } }));
+        expect((eventQueue as any).payloadHashes.size).to.equal(5);
+      });
+
+      it("releases the fingerprint of an event whose send failed, so it can be sent again", async () => {
+        // A 400 is not retryable, so the batch is lost. The app hears about
+        // it through the callback; if it sends the same event again within
+        // the window, that is a retry, not a double-fire.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        fetchStub.resolves(makeResponse(400, "Bad Request"));
+        const event = createMockEvent({ properties: { n: 2 } });
+        const cb = sinon.spy();
+        await eventQueue.enqueue(event, cb);
+        await eventQueue.flush();
+        expect(cb.calledOnce).to.be.true;
+        expect(cb.firstCall.args[0], "callback saw the error").to.be.an("error");
+
+        fetchStub.resolves(makeResponse(200, "OK"));
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "the retry is accepted").to.have.length(1);
+      });
+
+      it("does not release a newer fingerprint when an old send fails after the window", async () => {
+        // Retry backoff can keep a send in flight past the window. If the
+        // same event is accepted again meanwhile, the old failure must not
+        // release the NEW entry, or a third copy slips through.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        const event = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(event);
+        const inFlight = eventQueue.flush();
+        await clock.tickAsync(0);
+
+        // Window passes while the send hangs; the same event is accepted anew.
+        clock.tick(60_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "re-accepted after expiry").to.have.length(1);
+
+        settle(makeResponse(400, "Bad Request"));
+        await inFlight;
+
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "the newer entry still suppresses").to.have.length(1);
+      });
+
+      it("forgets fingerprints across an opt-out / opt-in round trip", async () => {
+        // clear() starts a fresh analytics lifecycle. Even when an older
+        // request eventually reaches the wire, its fingerprint must not
+        // suppress tracking after consent returns.
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        const inFlightEvent = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(inFlightEvent);
+        const inFlight = eventQueue.flush();
+        await clock.tickAsync(0);
+
+        // Buffered behind the in-flight batch, then abandoned by clear().
+        const bufferedEvent = createMockEvent({ properties: { n: 3 } });
+        await eventQueue.enqueue(bufferedEvent);
+        allowed = false;
+        eventQueue.clear();
+        allowed = true;
+
+        settle(makeResponse(200, "OK"));
+        await inFlight;
+
+        fetchStub.resolves(makeResponse(200, "OK"));
+        await eventQueue.enqueue({ ...inFlightEvent });
+        expect(fetchStub.callCount, "the event is accepted in the fresh lifecycle").to.equal(3);
+        await eventQueue.enqueue({ ...bufferedEvent });
+        expect((eventQueue as any).queue, "the abandoned event is accepted again").to.have.length(1);
+      });
+
+      it("forgets everything on close()", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        expect((eventQueue as any).payloadHashes.size).to.equal(1);
+        eventQueue.close();
+        expect((eventQueue as any).payloadHashes.size).to.equal(0);
+      });
+
+      it("releases the fingerprints of batches abandoned when consent is withdrawn mid-flush", async () => {
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        const largeProps: Record<string, string> = {};
+        for (let i = 0; i < 50; i++) largeProps[`field_${i}`] = "x".repeat(200);
+        const events = Array.from({ length: 8 }, (_, i) =>
+          createMockEvent({ properties: { ...largeProps, index: i } })
+        );
+        for (const e of events) await eventQueue.enqueue(e);
+        await (eventQueue as any).pendingFlush; // the first event's own flush
+        fetchStub.resetHistory();
+
+        // The remaining seven exceed 64KB and split. Consent goes away as the
+        // first split batch is sent; the rest are abandoned unsent.
+        fetchStub.callsFake(async () => { allowed = false; return makeResponse(200, "OK"); });
+        await eventQueue.flush();
+        expect(fetchStub.calledOnce).to.be.true;
+        const sent = new Set(
+          JSON.parse(fetchStub.firstCall.args[1].body).map((e: any) => e.properties.index)
+        );
+        const abandoned = events.find((e) => (e.properties as any).index !== 0 && !sent.has((e.properties as any).index))!;
+        const delivered = events.find((e) => sent.has((e.properties as any).index))!;
+        expect(abandoned, "some batch was abandoned").to.exist;
+
+        allowed = true;
+        await eventQueue.enqueue({ ...abandoned });
+        expect((eventQueue as any).queue, "an abandoned event can be sent again").to.have.length(1);
+        await eventQueue.enqueue({ ...delivered });
+        expect((eventQueue as any).queue, "a delivered one is still a duplicate").to.have.length(1);
+      });
+
+      it("abandons the batches behind an in-flight one after an opt-out / opt-in round trip", async () => {
+        // Consent sampled true again at the next batch boundary is not
+        // enough: these batches were spliced before the withdrawal, and
+        // clear() could not reach them. The generation counter can.
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        const largeProps: Record<string, string> = {};
+        for (let i = 0; i < 50; i++) largeProps[`field_${i}`] = "x".repeat(200);
+        const events = Array.from({ length: 8 }, (_, i) =>
+          createMockEvent({ properties: { ...largeProps, index: i } })
+        );
+        for (const e of events) await eventQueue.enqueue(e);
+        await (eventQueue as any).pendingFlush;
+        fetchStub.resetHistory();
+
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        const inFlight = eventQueue.flush();
+        await clock.tickAsync(0);
+        expect(fetchStub.calledOnce, "first split batch is in flight").to.be.true;
+
+        allowed = false;
+        eventQueue.clear();
+        allowed = true;
+        settle(makeResponse(200, "OK"));
+        await inFlight;
+
+        expect(fetchStub.calledOnce, "no further batch was sent").to.be.true;
+        const sent = new Set(
+          JSON.parse(fetchStub.firstCall.args[1].body).map((e: any) => e.properties.index)
+        );
+        const abandoned = events.find((e) => (e.properties as any).index !== 0 && !sent.has((e.properties as any).index))!;
+        await eventQueue.enqueue({ ...abandoned });
+        expect(fetchStub.calledTwice, "an abandoned event can be sent again immediately").to.be.true;
+      });
+
+      it("does not POST an empty batch when clear() empties the queue while flush waits", async () => {
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } })); // in flight
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } })); // buffered
+        const waiting = eventQueue.flush(); // waits on the in-flight one
+        eventQueue.clear();
+        settle(makeResponse(200, "OK"));
+        await waiting;
+
+        expect(fetchStub.calledOnce, "only the first event's flush hit the network").to.be.true;
+        expect(JSON.parse(fetchStub.firstCall.args[1].body)).to.have.length(1);
+      });
+
+      it("does not let a pre-clear flush waiter consume the fresh lifecycle", async () => {
+        let releaseFirst!: (response: Response) => void;
+        fetchStub.onFirstCall().returns(
+          new Promise<Response>((resolve) => {
+            releaseFirst = resolve;
+          })
+        );
+        fetchStub.onSecondCall().resolves(makeResponse(200, "OK"));
+
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+        const oldWaiter = eventQueue.flush();
+
+        eventQueue.clear();
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
+        releaseFirst(makeResponse(200, "OK"));
+        await oldWaiter;
+        await (eventQueue as any).pendingFlush;
+
+        expect(fetchStub.callCount).to.equal(2);
+        const sent = fetchStub.getCalls().flatMap((call) =>
+          JSON.parse(call.args[1]?.body as string).map(
+            (event: any) => event.properties.n
+          )
+        );
+        expect(sent).to.deep.equal([1, 3]);
+      });
+
+      it("drops the buffer when consent goes away while flush waits on a pending flush", async () => {
+        let allowed = true;
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+          canSend: () => allowed,
+        });
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } })); // in flight
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } })); // buffered
+        const cb = sinon.spy();
+        const waiting = eventQueue.flush(cb);
+        allowed = false;
+        settle(makeResponse(200, "OK"));
+        await waiting;
+
+        expect(fetchStub.calledOnce, "the buffered event was not sent").to.be.true;
+        expect((eventQueue as any).queue, "and was dropped").to.have.length(0);
+        expect(cb.calledOnce, "the flush callback still fires").to.be.true;
+      });
+
+      it("times the window from the wall clock alone where performance.now is unavailable", async () => {
+        const saved = Object.getOwnPropertyDescriptor(global, "performance");
+        Object.defineProperty(global, "performance", { value: undefined, configurable: true, writable: true });
+        try {
+          eventQueue = new EventQueue("test-key", {
+            apiHost: "https://api.example.com",
+            flushAt: 5,
+            flushInterval: 30000,
+          });
+          const event = createMockEvent({ properties: { n: 1 } });
+          await eventQueue.enqueue(event);
+          await (eventQueue as any).pendingFlush;
+
+          clock.tick(30_000);
+          await eventQueue.enqueue({ ...event });
+          expect((eventQueue as any).queue, "inside the window").to.have.length(0);
+          clock.tick(30_001);
+          await eventQueue.enqueue({ ...event });
+          expect((eventQueue as any).queue, "after the window").to.have.length(1);
+        } finally {
+          if (saved) Object.defineProperty(global, "performance", saved);
+          else delete (global as any).performance;
+        }
+      });
+
+      it("drains everything without waiting on a pending flush when the page is leaving", async () => {
+        let settle: (r: Response) => void = () => undefined;
+        fetchStub.onFirstCall().callsFake(() => new Promise<Response>((r) => { settle = r; }));
+        fetchStub.onSecondCall().resolves(makeResponse(200, "OK"));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } })); // in flight, unsettled
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
+
+        const drain = eventQueue.flush(undefined, true);
+        expect(fetchStub.calledTwice, "the drain did not wait for the in-flight send").to.be.true;
+        expect(JSON.parse(fetchStub.secondCall.args[1].body)).to.have.length(2);
+        settle(makeResponse(200, "OK"));
+        await drain;
+      });
+
+      it("keeps the fingerprint of an event whose send succeeded", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("counts a forward wall-clock step toward expiry, and ignores a backward one", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+
+        // Backward step of an hour with no elapsed time: still inside the
+        // window, still a duplicate.
+        clock.setSystemTime(Date.now() - 3_600_000);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "backward step does not reopen").to.have.length(0);
+
+        // Forward step past the window with no monotonic time elapsed
+        // (a device that slept): the window has run out.
+        clock.setSystemTime(Date.now() + 3_600_000 + 60_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "forward step expires").to.have.length(1);
+      });
+
+      it("keeps real pace after a forward wall-clock jump that is later corrected", async () => {
+        // A forward step counts (safe: expires early). The correction back
+        // must not leave the clock pinned: an event accepted after it must
+        // still expire 60s of real time later, not an hour later.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        const t0 = Date.now();
+        clock.setSystemTime(t0 + 3_600_000);
+        // Sample the dedup clock while jumped, so the forward delta is
+        // actually taken; without a read here the jump is invisible.
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 99 } }));
+        expect((eventQueue as any).elapsedNow(), "the jump was counted").to.be.at.least(3_600_000);
+        clock.setSystemTime(t0);
+        const event = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(event);
+        expect((eventQueue as any).queue).to.have.length(2);
+        await eventQueue.flush();
+
+        clock.tick(30_000);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "inside the window: duplicate").to.have.length(0);
+
+        clock.tick(30_001);
+        await eventQueue.enqueue({ ...event });
+        expect((eventQueue as any).queue, "60s of real time later: accepted").to.have.length(1);
+      });
+
+      it("still suppresses a duplicate of an event waiting in the queue", async () => {
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+
+        const queued = createMockEvent({ properties: { n: 2 } });
+        await eventQueue.enqueue(queued);
+        await eventQueue.enqueue({ ...queued });
+        expect((eventQueue as any).queue).to.have.length(1);
+      });
     });
 
     it("should accept callback parameter", async () => {
@@ -712,11 +1159,82 @@ describe("EventQueue", () => {
       await (eventQueue as any).pendingFlush;
       fetchStub.resetHistory();
 
-      await eventQueue.enqueue(createMockEvent());
+      // Distinct from the first: a same-minute copy would be dropped as a
+      // duplicate before ever reaching the buffer.
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      expect((eventQueue as any).queue, "event is buffered").to.have.length(1);
       allowed = false; // consent withdrawn while buffered
       await eventQueue.flush();
 
       expect(fetchStub.called, "no network send after opt-out").to.be.false;
+    });
+
+    it("does not buffer an event whose consent was withdrawn while it was being hashed", async () => {
+      // enqueue() suspends on its hash awaits after passing the consent
+      // gate. Withdrawal in that gap must still stop the event from being
+      // buffered or remembered as accepted, not merely from being sent.
+      useUniqueCryptoHashes();
+      let allowed = true;
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+
+      const suspended = eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      allowed = false;
+      await suspended;
+
+      expect((eventQueue as any).queue, "nothing buffered").to.have.length(0);
+      expect(
+        (eventQueue as any).payloadHashes.size,
+        "clear removes fingerprints from the prior consent lifecycle"
+      ).to.equal(0);
+      await eventQueue.flush();
+      expect(fetchStub.called).to.be.false;
+
+      // Consent returns: the withheld event was never accepted, so it goes.
+      allowed = true;
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      expect(fetchStub.calledOnce, "accepted once consent is back").to.be.true;
+    });
+
+    it("drops an event whose consent was withdrawn AND restored while it was being hashed", async () => {
+      // Sampling consent after the awaits sees it granted again. The event
+      // predates the withdrawal, and clear() dropped everything pending
+      // then, so it must not slip through on the round trip.
+      useUniqueCryptoHashes();
+      let allowed = true;
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+
+      const event = createMockEvent({ properties: { n: 2 } });
+      const suspended = eventQueue.enqueue(event);
+      allowed = false;
+      eventQueue.clear(); // what optOutTracking() does
+      allowed = true;
+      await suspended;
+
+      expect((eventQueue as any).queue, "nothing buffered").to.have.length(0);
+      await eventQueue.flush();
+      expect(fetchStub.called).to.be.false;
+
+      // Not remembered either: a fresh send of it after opt-in goes.
+      await eventQueue.enqueue({ ...event });
+      expect(fetchStub.calledOnce, "accepted afresh").to.be.true;
     });
 
     it("enqueue is a no-op once canSend() is false", async () => {
@@ -773,14 +1291,15 @@ describe("EventQueue", () => {
       await (eventQueue as any).pendingFlush;
       fetchStub.resetHistory();
 
-      await eventQueue.enqueue(createMockEvent());
-      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
+      expect((eventQueue as any).queue, "events are buffered").to.have.length(2);
       eventQueue.clear();
       await eventQueue.flush();
       expect(fetchStub.called, "cleared events are not sent").to.be.false;
 
       // Queue still works after clear (byteSize/state re-anchored).
-      await eventQueue.enqueue(createMockEvent());
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 4 } }));
       await eventQueue.flush();
       expect(fetchStub.calledOnce, "post-clear enqueue still flushes").to.be
         .true;
@@ -895,6 +1414,43 @@ describe("EventQueue", () => {
 
       expect(afterFirst).to.equal(1);
       expect(fetchStub.callCount).to.equal(afterFirst);
+    });
+
+    it("should let every chunk of an in-flight split flush finish", async () => {
+      useUniqueCryptoHashes();
+      const fetchStub = sinon.stub(fetchModule, "default");
+      fetchStub.resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+      });
+
+      await eventQueue.enqueue(createMockEvent({ properties: { warmup: true } }));
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+      await enqueueLargeEvents(eventQueue, 8);
+
+      let releaseFirst!: (response: Response) => void;
+      fetchStub.onFirstCall().returns(
+        new Promise<Response>((resolve) => {
+          releaseFirst = resolve;
+        })
+      );
+      const inFlight = eventQueue.flush();
+      await clock.tickAsync(0);
+      expect(fetchStub.calledOnce, "first chunk is in flight").to.be.true;
+
+      eventQueue.close();
+      releaseFirst(makeResponse(200, "OK"));
+      await inFlight;
+
+      const sent = fetchStub.getCalls().flatMap((call) =>
+        JSON.parse(call.args[1]?.body as string).map(
+          (event: any) => event.properties.index
+        )
+      );
+      expect(fetchStub.callCount, "payload was split").to.be.greaterThan(1);
+      expect(sent).to.deep.equal([0, 1, 2, 3, 4, 5, 6, 7]);
     });
 
     it("should remove the page-leave listeners", async () => {
