@@ -202,15 +202,19 @@ export class EventQueue implements IEventQueue {
    */
   clear(): void {
     this.clearSeq++;
+    // Start a fresh queue lifecycle. A post-clear event should get the same
+    // immediate-send treatment as the first event on page load, and it must
+    // not wait on a request that belongs to the abandoned lifecycle.
+    this.flushed = false;
+    this.pendingFlush = null;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    // Only what is being abandoned is forgotten. Fingerprints of delivered
-    // and in-flight events stay: a copy of an event that reached the wire is
-    // still a duplicate after an opt-out / opt-in round trip inside the
-    // window. They hold no identity, only a hash, and expire on their own.
-    this.releaseFingerprints(this.queue);
+    // Consent withdrawal/reset starts a fresh analytics lifecycle. Forget
+    // every fingerprint, including delivered and in-flight ones, so no
+    // identity-derived state survives clear() and tracking can resume cleanly.
+    this.payloadHashes.clear();
     this.queue = [];
     this.queueByteSize = 0;
   }

@@ -363,10 +363,10 @@ describe("EventQueue", () => {
         expect((eventQueue as any).queue, "the newer entry still suppresses").to.have.length(1);
       });
 
-      it("keeps a delivered event's fingerprint across an opt-out / opt-in round trip", async () => {
-        // clear() runs on consent withdrawal while a spliced batch is still
-        // in flight. That batch reaches the wire, so a copy sent after
-        // consent returns is a duplicate, and must still be dropped.
+      it("forgets fingerprints across an opt-out / opt-in round trip", async () => {
+        // clear() starts a fresh analytics lifecycle. Even when an older
+        // request eventually reaches the wire, its fingerprint must not
+        // suppress tracking after consent returns.
         let allowed = true;
         eventQueue = new EventQueue("test-key", {
           apiHost: "https://api.example.com",
@@ -394,8 +394,9 @@ describe("EventQueue", () => {
         settle(makeResponse(200, "OK"));
         await inFlight;
 
+        fetchStub.resolves(makeResponse(200, "OK"));
         await eventQueue.enqueue({ ...inFlightEvent });
-        expect((eventQueue as any).queue, "the delivered event still suppresses").to.have.length(0);
+        expect(fetchStub.callCount, "the event is accepted in the fresh lifecycle").to.equal(3);
         await eventQueue.enqueue({ ...bufferedEvent });
         expect((eventQueue as any).queue, "the abandoned event is accepted again").to.have.length(1);
       });
@@ -483,7 +484,7 @@ describe("EventQueue", () => {
         );
         const abandoned = events.find((e) => (e.properties as any).index !== 0 && !sent.has((e.properties as any).index))!;
         await eventQueue.enqueue({ ...abandoned });
-        expect((eventQueue as any).queue, "an abandoned event can be sent again").to.have.length(1);
+        expect(fetchStub.calledTwice, "an abandoned event can be sent again immediately").to.be.true;
       });
 
       it("does not POST an empty batch when clear() empties the queue while flush waits", async () => {
@@ -1164,15 +1165,15 @@ describe("EventQueue", () => {
       expect((eventQueue as any).queue, "nothing buffered").to.have.length(0);
       expect(
         (eventQueue as any).payloadHashes.size,
-        "only the delivered first event is remembered"
-      ).to.equal(1);
+        "clear removes fingerprints from the prior consent lifecycle"
+      ).to.equal(0);
       await eventQueue.flush();
       expect(fetchStub.called).to.be.false;
 
       // Consent returns: the withheld event was never accepted, so it goes.
       allowed = true;
       await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
-      expect((eventQueue as any).queue, "accepted once consent is back").to.have.length(1);
+      expect(fetchStub.calledOnce, "accepted once consent is back").to.be.true;
     });
 
     it("drops an event whose consent was withdrawn AND restored while it was being hashed", async () => {
@@ -1205,7 +1206,7 @@ describe("EventQueue", () => {
 
       // Not remembered either: a fresh send of it after opt-in goes.
       await eventQueue.enqueue({ ...event });
-      expect((eventQueue as any).queue, "accepted afresh").to.have.length(1);
+      expect(fetchStub.calledOnce, "accepted afresh").to.be.true;
     });
 
     it("enqueue is a no-op once canSend() is false", async () => {
