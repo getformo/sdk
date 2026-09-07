@@ -38,10 +38,11 @@ property. Reusing it for the same event name produces the same ingestion ID
 for every retry:
 
 ```ts
-await formo.track("Checkout Completed", {
-  plan: "pro",
-  amount: 99,
-  idempotency_key: checkout.id,
+await formo.track("Order Placed", {
+  market: "ETH-USDC",
+  side: "buy",
+  volume: 2500,
+  idempotency_key: order.id,
 });
 ```
 
