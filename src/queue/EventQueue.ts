@@ -265,8 +265,13 @@ export class EventQueue implements IEventQueue {
     }
 
     const clearSeqAtEntry = this.clearSeq;
-    const message_id = await this.generateMessageId(event);
-    const dedupKey = await this.generateDedupKey(event);
+    // Both hashes are independent. Await them together to preserve the
+    // single-yield enqueue ordering that callers relied on before the
+    // separate rolling dedup key was introduced.
+    const [message_id, dedupKey] = await Promise.all([
+      this.generateMessageId(event),
+      this.generateDedupKey(event),
+    ]);
 
     // Re-check after the awaits. A caller that entered before close() is
     // suspended here, and on a queue that has not flushed yet its event
