@@ -446,6 +446,11 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** Set by cleanup(); a torn-down instance refuses new registrations. */
   private isCleanedUp = false;
 
+  /** True once cleanup() has run. formofy() uses it to avoid reusing a dead instance. */
+  public get disposed(): boolean {
+    return this.isCleanedUp;
+  }
+
   public cleanup(): void {
     this.isCleanedUp = true;
     logger.debug("FormoAnalytics: Cleaning up resources");

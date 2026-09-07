@@ -10,8 +10,12 @@ import { formofy, _resetFormofy } from "../src/initialization";
 // every autocaptured event.
 describe("formofy", () => {
   let init: sinon.SinonStub;
-  const instance = (writeKey: string) =>
-    ({ writeKey, cleanup: sinon.spy() }) as unknown as FormoAnalytics & { cleanup: sinon.SinonSpy };
+  type Fake = FormoAnalytics & { cleanup: sinon.SinonSpy; disposed: boolean };
+  const instance = (writeKey: string): Fake => {
+    const f = { writeKey, disposed: false } as unknown as Fake;
+    f.cleanup = sinon.spy(() => { f.disposed = true; });
+    return f;
+  };
   const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
   let dom: JSDOM;
@@ -124,6 +128,57 @@ describe("formofy", () => {
     expect(own.cleanup.calledOnce).to.be.true;
     expect(init.calledOnceWith("wk_2")).to.be.true;
     expect(window.formo).to.equal(b);
+  });
+
+  it("starts over when the app tore the cached instance down itself", async () => {
+    const a = instance("wk_1");
+    const b = instance("wk_1");
+    init.onFirstCall().resolves(a).onSecondCall().resolves(b);
+
+    formofy("wk_1");
+    await tick();
+    a.cleanup(); // the app's own teardown, outside formofy
+    formofy("wk_1");
+    await tick();
+    await tick();
+
+    expect(init.calledTwice).to.be.true;
+    expect(window.formo).to.equal(b);
+  });
+
+  it("does not hand a disposed instance back after a failed key switch", async () => {
+    const a = instance("wk_1");
+    const a2 = instance("wk_1");
+    init.onFirstCall().resolves(a).onSecondCall().rejects(new Error("boom")).onThirdCall().resolves(a2);
+    const error = sinon.stub(console, "error");
+    try {
+      formofy("wk_1");
+      await tick();
+      formofy("wk_2"); // tears a down, then fails
+      await tick(); await tick(); await tick();
+      expect(window.formo, "disposed instance is not left as the global").to.equal(undefined);
+      formofy("wk_1");
+      await tick(); await tick();
+    } finally {
+      error.restore();
+    }
+
+    expect(init.callCount).to.equal(3);
+    expect(window.formo).to.equal(a2);
+  });
+
+  it("keeps an adopted instance even after the app removes the global", async () => {
+    const own = instance("wk_1");
+    (window as { formo?: unknown }).formo = own;
+
+    formofy("wk_1");
+    await tick();
+    delete (window as { formo?: unknown }).formo;
+    formofy("wk_1");
+    await tick();
+
+    expect(init.called, "the adoption is remembered").to.be.false;
+    expect(own.cleanup.called).to.be.false;
   });
 
   it("does not let a throwing ready callback break the second caller", async () => {

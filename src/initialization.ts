@@ -38,16 +38,28 @@ export function formofy(writeKey: string, options?: Options) {
     return;
   }
 
-  const existing = live ?? adoptWindowInstance();
+  const existing = live ?? (live = adoptWindowInstance());
   if (existing && existing.writeKey === writeKey) {
-    existing.promise.then((f) => runReady(options, f)).catch(() => undefined);
+    existing.promise
+      .then((f) => {
+        if (!isDisposed(f)) {
+          runReady(options, f);
+          return;
+        }
+        // The app tore it down itself. Forget it and start over.
+        if (live === existing) live = null;
+        forgetGlobal(f);
+        formofy(writeKey, options);
+      })
+      .catch(() => undefined);
     return;
   }
 
   const previous: Promise<IFormoAnalytics | null> = existing?.promise ?? Promise.resolve(null);
   const promise = previous
     .then((f) => {
-      if (f) f.cleanup();
+      if (f && !isDisposed(f)) f.cleanup();
+      if (f) forgetGlobal(f);
     })
     .catch(() => undefined)
     .then(() => FormoAnalytics.init(writeKey, options));
@@ -69,8 +81,17 @@ export function formofy(writeKey: string, options?: Options) {
 /** An instance the app created itself and exposed on window.formo. */
 function adoptWindowInstance(): LiveInstance | null {
   const f = window.formo as (IFormoAnalytics & { writeKey?: unknown }) | undefined;
-  if (!f || typeof f.writeKey !== "string") return null;
+  if (!f || typeof f.writeKey !== "string" || isDisposed(f)) return null;
   return { writeKey: f.writeKey, promise: Promise.resolve(f) };
+}
+
+function isDisposed(f: IFormoAnalytics): boolean {
+  return (f as { disposed?: boolean }).disposed === true;
+}
+
+/** A torn-down instance must not stay reachable as the page global. */
+function forgetGlobal(f: IFormoAnalytics): void {
+  if (window.formo === f) delete window.formo;
 }
 
 /** @internal Forget the live instance. For tests only. */
