@@ -2,7 +2,9 @@ import { LogLevel } from "../logger";
 import {
   IFormoEventContext,
   IFormoEventProperties,
+  EventCallback,
   SignatureStatus,
+  TrackOptions,
   TransactionStatus,
 } from "./events";
 import { EIP1193Provider } from "./provider";
@@ -133,7 +135,7 @@ export interface IFormoAnalytics {
     event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callbackOrOptions?: EventCallback | TrackOptions
   ): Promise<void>;
   
   // Consent management methods
@@ -362,4 +364,3 @@ export interface Options {
   errorHandler?: (err: Error) => void;
   ready?: (formo: IFormoAnalytics) => void;
 }
-

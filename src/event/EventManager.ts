@@ -5,6 +5,7 @@ import { EventFactory } from "./EventFactory";
 import { EVENT_CREATION_CANCELLED } from "./cancellation";
 import { IEventFactory, IEventManager } from "./type";
 import { isBlockedAddress } from "../utils/address";
+import { hash } from "../utils";
 
 /**
  * A service to generate valid event payloads and queue them for processing
@@ -37,7 +38,10 @@ class EventManager implements IEventManager {
     address?: Address,
     userId?: string
   ): Promise<void> {
-    const { callback, ..._event } = event;
+    const { callback, ...eventWithoutCallback } = event;
+    const { idempotencyKey, ..._event } = eventWithoutCallback as APIEvent & {
+      idempotencyKey?: string;
+    };
     const generation = this.generation;
     const shouldContinue = () =>
       generation === this.generation && this.canAcceptEvent();
@@ -62,12 +66,27 @@ class EventManager implements IEventManager {
       return;
     }
 
-    this.eventQueue.enqueue(formoEvent, (err, _, data) => {
-      if (err) {
-        logger.error("Error sending events:", err);
-      } else logger.info(`Events sent successfully: ${data.length} events`);
-      callback?.(err, _, data);
-    });
+    const dedupKey =
+      event.type === "track"
+        ? hash(
+            JSON.stringify({
+              event: _event,
+              address: address ?? null,
+              userId: userId ?? null,
+            })
+          )
+        : undefined;
+
+    this.eventQueue.enqueue(
+      formoEvent,
+      (err, _, data) => {
+        if (err) {
+          logger.error("Error sending events:", err);
+        } else logger.info(`Events sent successfully: ${data.length} events`);
+        callback?.(err, _, data);
+      },
+      { dedupKey, idempotencyKey }
+    );
   }
 
   /** Drop any buffered events (consent withdrawal). Recoverable. */

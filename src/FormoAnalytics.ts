@@ -37,9 +37,11 @@ import {
   IFormoAnalytics,
   IFormoEventContext,
   IFormoEventProperties,
+  EventCallback,
   Options,
   SignatureStatus,
   TransactionStatus,
+  TrackOptions,
   WrappedRequestFunction,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
@@ -1321,21 +1323,49 @@ export class FormoAnalytics implements IFormoAnalytics {
    * @param {string} event The name of the tracked event
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
-   * @param {(...args: unknown[]) => void} callback
+   * @param {EventCallback | TrackOptions} callbackOrOptions Legacy callback,
+   * or options containing an idempotency key and optional callback.
    * @returns {Promise<void>}
    */
   async track(
     event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callbackOrOptions?: EventCallback | TrackOptions
   ): Promise<void> {
+    const options =
+      typeof callbackOrOptions === "function"
+        ? { callback: callbackOrOptions }
+        : callbackOrOptions || {};
+
+    const rawIdempotencyKey = options.idempotencyKey;
+    let idempotencyKey: string | undefined;
+    if (rawIdempotencyKey !== undefined) {
+      if (
+        typeof rawIdempotencyKey === "string" &&
+        rawIdempotencyKey.trim().length > 0
+      ) {
+        // Treat caller keys as opaque: whitespace is allowed around a
+        // non-empty value and remains part of its identity.
+        idempotencyKey = rawIdempotencyKey;
+      } else if (
+        typeof rawIdempotencyKey === "number" &&
+        Number.isFinite(rawIdempotencyKey)
+      ) {
+        idempotencyKey = String(rawIdempotencyKey);
+      } else {
+        logger.warn(
+          "FormoAnalytics::track: idempotencyKey must be a non-empty string or finite number"
+        );
+        return;
+      }
+    }
     await this.trackEvent(
       EventType.TRACK,
-      { event },
+      { event, idempotencyKey },
       properties,
       context,
-      callback
+      options.callback
     );
   }
 

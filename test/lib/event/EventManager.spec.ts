@@ -153,6 +153,57 @@ describe("EventManager", () => {
       expect(formoEvent.type).to.equal("track");
     });
 
+    it("deduplicates track calls before volatile SDK context is added", async () => {
+      const apiEvent: APIEvent = {
+        type: "track",
+        event: "Checkout Completed",
+        properties: { plan: "pro", amount: 99 },
+        context: { source: "confirmation" },
+      };
+
+      await eventManager.addEvent(apiEvent);
+      document.title = "Pricing updated";
+      await eventManager.addEvent({ ...apiEvent });
+
+      const firstEvent = enqueueSpy.firstCall.args[0];
+      const secondEvent = enqueueSpy.secondCall.args[0];
+      const firstOptions = enqueueSpy.firstCall.args[2];
+      const secondOptions = enqueueSpy.secondCall.args[2];
+      expect(firstEvent.context.page_title).to.not.equal(
+        secondEvent.context.page_title
+      );
+      expect(secondOptions.dedupKey).to.equal(firstOptions.dedupKey);
+    });
+
+    it("keeps caller-supplied context in the track fallback fingerprint", async () => {
+      const base: APIEvent = {
+        type: "track",
+        event: "Checkout Completed",
+        properties: { plan: "pro", amount: 99 },
+      };
+
+      await eventManager.addEvent({ ...base, context: { source: "button" } });
+      await eventManager.addEvent({ ...base, context: { source: "api" } });
+
+      expect(enqueueSpy.firstCall.args[2].dedupKey).to.not.equal(
+        enqueueSpy.secondCall.args[2].dedupKey
+      );
+    });
+
+    it("forwards idempotency without adding it to the event payload", async () => {
+      const apiEvent: APIEvent = {
+        type: "track",
+        event: "Checkout Completed",
+        properties: { plan: "pro" },
+        idempotencyKey: "checkout-123",
+      };
+
+      await eventManager.addEvent(apiEvent);
+
+      expect(enqueueSpy.firstCall.args[0]).not.to.have.property("idempotencyKey");
+      expect(enqueueSpy.firstCall.args[2].idempotencyKey).to.equal("checkout-123");
+    });
+
     it("should include address when provided", async () => {
       const address = "0x1234567890123456789012345678901234567890";
       const apiEvent: APIEvent = {

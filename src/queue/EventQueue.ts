@@ -2,6 +2,7 @@ import { isNetworkError } from "../validators";
 import { IFormoEvent, IFormoEventPayload } from "../types";
 import {
   clampNumber,
+  generateNativeUUID,
   getActionDescriptor,
   hash,
   millisecondsToSecond,
@@ -10,7 +11,7 @@ import {
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch, { FetchRetryError } from "../fetch";
-import { IEventQueue } from "./type";
+import { EnqueueOptions, IEventQueue } from "./type";
 const noop = () => {};
 const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...args); } catch { /* swallow */ } };
 
@@ -173,23 +174,41 @@ export class EventQueue implements IEventQueue {
     });
   }
 
-  private async generateMessageId(event: IFormoEvent): Promise<string> {
-    const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
-    const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
-    const eventString = JSON.stringify(eventForHashing);
-    return hash(eventString);
+  private async generateMessageId(
+    event: IFormoEvent,
+    idempotencyKey?: string
+  ): Promise<string> {
+    if (idempotencyKey !== undefined) {
+      return hash(
+        JSON.stringify({
+          type: event.type,
+          event: event.event ?? null,
+          idempotencyKey,
+        })
+      );
+    }
+
+    // Custom events are separate occurrences by default. Important business
+    // events can opt into stable identity with idempotencyKey above.
+    if (event.type === "track") return generateNativeUUID();
+
+    // Preserve the established wire identity for every other event type.
+    // Besides avoiding an upgrade-time count discontinuity, this continues to
+    // collapse equivalent automatic events emitted by separate SDK instances
+    // during the same minute.
+    const formattedTimestamp = toDateHourMinute(
+      new Date(event.original_timestamp)
+    );
+    return hash(
+      JSON.stringify({ ...event, original_timestamp: formattedTimestamp })
+    );
   }
 
   /**
    * The fingerprint duplicates are judged by: the event without its
-   * timestamp.
-   *
-   * Deliberately NOT the message id. That id folds in the timestamp truncated
-   * to the minute, because it is the event's identity on the wire and two
-   * events a minute apart must never share one. Judging duplicates by it
-   * meant a double-fire straddling a minute boundary (:59.999 and :00.001)
-   * got two different ids and both were sent. The window is a rolling one
-   * from acceptance, so it needs a key that does not change with the clock.
+   * timestamp. This remains the fallback for SDK-generated event types.
+   * Custom track events provide a pre-enrichment fingerprint so volatile
+   * SDK context does not make an otherwise identical call look new.
    */
   private async generateDedupKey(event: IFormoEvent): Promise<string> {
     const { original_timestamp: _ignored, ...rest } = event;
@@ -266,7 +285,11 @@ export class EventQueue implements IEventQueue {
     return this.closed;
   }
 
-  async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
+  async enqueue(
+    event: IFormoEvent,
+    callback?: (...args: any) => void,
+    options?: EnqueueOptions
+  ) {
     callback = callback || noop;
     // A torn-down instance must never buffer, however late the caller
     // arrives. See close().
@@ -279,13 +302,15 @@ export class EventQueue implements IEventQueue {
     }
 
     const clearSeqAtEntry = this.clearSeq;
-    // Both hashes are independent. Await them together to preserve the
-    // single-yield enqueue ordering that callers relied on before the
-    // separate rolling dedup key was introduced.
-    const [message_id, dedupKey] = await Promise.all([
-      this.generateMessageId(event),
+    // Message identity and fallback fingerprint are independent. Await them
+    // together so adding dedup work does not add another event-ordering yield.
+    const [message_id, generatedDedupKey] = await Promise.all([
+      this.generateMessageId(event, options?.idempotencyKey),
       this.generateDedupKey(event),
     ]);
+    const dedupKey = options?.idempotencyKey
+      ? message_id
+      : options?.dedupKey || generatedDedupKey;
 
     // Re-check after the awaits. A caller that entered before close() is
     // suspended here, and on a queue that has not flushed yet its event

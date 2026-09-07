@@ -72,6 +72,18 @@ describe("EventQueue", () => {
     });
   }
 
+  function useUniqueNativeUUIDs() {
+    let counter = 0;
+    Object.defineProperty(global, "crypto", {
+      value: {
+        randomUUID: () =>
+          `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`,
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+
   /** Enqueue multiple large (~10KB each) events to exceed the 64KB keepalive limit. */
   async function enqueueLargeEvents(queue: EventQueue, count = 8, cb?: sinon.SinonSpy) {
     const largeProps: Record<string, string> = {};
@@ -260,9 +272,8 @@ describe("EventQueue", () => {
       });
 
       it("catches a double-fire that straddles a UTC minute boundary", async () => {
-        // message_id folds in the minute-truncated timestamp (it is the
-        // event's identity on the wire), so these two get DIFFERENT ids.
-        // The dedup key must not care: it is the same event 2ms apart.
+        // The minute-based wire IDs differ, but the rolling content key must
+        // not care: this is the same event 2ms apart.
         await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
         await (eventQueue as any).pendingFlush;
 
@@ -279,8 +290,8 @@ describe("EventQueue", () => {
       });
 
       it("keeps message ids distinct across minutes while deduping by content", async () => {
-        // Same content a full window apart: both go out, with different
-        // ids, because the id must never collide for events a minute apart.
+        // Same content a full window apart: both go out, and the legacy
+        // minute-based identity keeps automatic events distinct over time.
         const event = createMockEvent({ properties: { n: 1 } });
         await eventQueue.enqueue(event);
         await (eventQueue as any).pendingFlush;
@@ -290,6 +301,86 @@ describe("EventQueue", () => {
         await eventQueue.enqueue({ ...event, original_timestamp: new Date().toISOString() });
         expect((eventQueue as any).queue).to.have.length(1);
         expect((eventQueue as any).queue[0].message.message_id).to.not.equal(firstId);
+      });
+
+      it("preserves deterministic wire identity for non-track events", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        const secondQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+        });
+        await secondQueue.enqueue({ ...event });
+        await (secondQueue as any).pendingFlush;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+
+        expect(secondId).to.equal(firstId);
+        secondQueue.close();
+      });
+
+      it("uses distinct wire identity for separate unkeyed track occurrences", async () => {
+        useUniqueNativeUUIDs();
+        const event = createMockEvent({
+          type: "track",
+          event: "Checkout Completed",
+        });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        const secondQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+        });
+        await secondQueue.enqueue({ ...event });
+        await (secondQueue as any).pendingFlush;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+
+        expect(secondId).to.not.equal(firstId);
+        secondQueue.close();
+      });
+
+      it("uses an idempotency key as stable wire identity across queue instances", async () => {
+        const firstQueue = eventQueue;
+        const event = createMockEvent({
+          type: "track",
+          event: "Checkout Completed",
+          properties: { plan: "pro", amount: 99 },
+        });
+        await firstQueue.enqueue(event, undefined, {
+          idempotencyKey: "checkout-123",
+        });
+        await (firstQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        const secondQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+        });
+        await secondQueue.enqueue(
+          { ...event, original_timestamp: new Date(Date.now() + 5_000).toISOString() },
+          undefined,
+          { idempotencyKey: "checkout-123" }
+        );
+        await (secondQueue as any).pendingFlush;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+
+        expect(secondId).to.equal(firstId);
+        secondQueue.close();
+      });
+
+      it("scopes idempotency keys by event type and name", async () => {
+        const checkout = createMockEvent({ type: "track", event: "Checkout Completed" });
+        const refund = createMockEvent({ type: "track", event: "Checkout Refunded" });
+
+        await eventQueue.enqueue(checkout, undefined, { idempotencyKey: "123" });
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(refund, undefined, { idempotencyKey: "123" });
+        await eventQueue.flush();
+
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+        expect(secondId).to.not.equal(firstId);
       });
 
       it("prunes only from the front and stops at the first live entry", async () => {
