@@ -20,16 +20,6 @@ export type IFormoEventProperties = Record<string, unknown>;
 export type IFormoEventContext = Record<string, unknown>;
 export type EventCallback = (...args: unknown[]) => void;
 
-/** Options for custom track events. */
-export interface TrackOptions {
-  /**
-   * Stable identifier for one logical event occurrence. Reusing the key for
-   * the same event name produces the same message ID. Numeric identifiers are
-   * canonicalized to their string representation.
-   */
-  idempotencyKey?: string | number;
-  callback?: EventCallback;
-}
 export type UTMParameters = {
   utm_source: string;
   utm_medium: string;

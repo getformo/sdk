@@ -4,7 +4,6 @@ import {
   IFormoEventProperties,
   EventCallback,
   SignatureStatus,
-  TrackOptions,
   TransactionStatus,
 } from "./events";
 import { EIP1193Provider } from "./provider";
@@ -135,7 +134,7 @@ export interface IFormoAnalytics {
     event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callbackOrOptions?: EventCallback | TrackOptions
+    callback?: EventCallback
   ): Promise<void>;
   
   // Consent management methods

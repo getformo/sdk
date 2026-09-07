@@ -33,23 +33,24 @@ Visit Formo's [Developer Docs](https://docs.formo.so) for detailed guides on loc
 
 The SDK automatically suppresses identical `track()` calls for 60 seconds as
 a best-effort guard against accidental double-fires. For business-critical
-events, pass a stable identifier for the logical occurrence. Reusing it for
-the same event name produces the same ingestion ID for every retry:
+events, name the logical occurrence with the reserved `idempotency_key`
+property. Reusing it for the same event name produces the same ingestion ID
+for every retry:
 
 ```ts
-await formo.track(
-  "Checkout Completed",
-  { plan: "pro", amount: 99 },
-  undefined,
-  { idempotencyKey: checkout.id, callback: onTracked }
-);
+await formo.track("Checkout Completed", {
+  plan: "pro",
+  amount: 99,
+  idempotency_key: checkout.id,
+});
 ```
 
-Use a unique key for each real occurrence. The key itself is hashed and is not
-included in the event payload. Server-side duplicate collapse is bounded by
-the ingestion session and storage partition; it is not a global, indefinite
-exactly-once guarantee. When the SDK suppresses an identical call locally,
-that call's callback is not invoked.
+Use a unique key for each real occurrence. The key is hashed into the event's
+identity and removed from the sent properties. Strings and finite numbers are
+accepted; any other value drops the call with a warning. Server-side duplicate
+collapse is bounded by the ingestion session and storage partition; it is not
+a global, indefinite exactly-once guarantee. When the SDK suppresses an
+identical call locally, that call's callback is not invoked.
 
 Using [Privy](./docs/PRIVY_INTEGRATION.md)? `identify(user)`
 clusters all of a Privy user's linked wallets under a single identity.

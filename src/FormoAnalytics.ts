@@ -9,6 +9,7 @@ import {
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
+import { IDEMPOTENCY_KEY_PROPERTY } from "./event/constants";
 import { cookie, session, initStorageManager } from "./storage";
 import {
   getIdentityCookieDomain,
@@ -41,7 +42,6 @@ import {
   Options,
   SignatureStatus,
   TransactionStatus,
-  TrackOptions,
   WrappedRequestFunction,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
@@ -1320,42 +1320,38 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits a custom user event with custom properties.
+   *
+   * The reserved `idempotency_key` property names one logical occurrence of
+   * the event (an order id, a checkout id). Calls that reuse the key for the
+   * same event name share one wire identity, so retries and repeated calls
+   * collapse at ingestion. The key is hashed into that identity and removed
+   * from the properties that are sent. Strings and finite numbers are
+   * accepted; any other value drops the call with a warning rather than
+   * silently sending it under a random identity.
    * @param {string} event The name of the tracked event
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
-   * @param {EventCallback | TrackOptions} callbackOrOptions Legacy callback,
-   * or options containing an idempotency key and optional callback.
+   * @param {EventCallback} callback
    * @returns {Promise<void>}
    */
   async track(
     event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callbackOrOptions?: EventCallback | TrackOptions
+    callback?: EventCallback
   ): Promise<void> {
-    const options =
-      typeof callbackOrOptions === "function"
-        ? { callback: callbackOrOptions }
-        : callbackOrOptions || {};
-
-    const rawIdempotencyKey = options.idempotencyKey;
     let idempotencyKey: string | undefined;
-    if (rawIdempotencyKey !== undefined) {
-      if (
-        typeof rawIdempotencyKey === "string" &&
-        rawIdempotencyKey.trim().length > 0
-      ) {
-        // Treat caller keys as opaque: whitespace is allowed around a
-        // non-empty value and remains part of its identity.
-        idempotencyKey = rawIdempotencyKey;
-      } else if (
-        typeof rawIdempotencyKey === "number" &&
-        Number.isFinite(rawIdempotencyKey)
-      ) {
-        idempotencyKey = String(rawIdempotencyKey);
+    if (properties && IDEMPOTENCY_KEY_PROPERTY in properties) {
+      const { [IDEMPOTENCY_KEY_PROPERTY]: rawKey, ...rest } = properties;
+      properties = rest;
+      if (typeof rawKey === "string" && rawKey.trim().length > 0) {
+        // Keys are opaque: surrounding whitespace is part of the identity.
+        idempotencyKey = rawKey;
+      } else if (typeof rawKey === "number" && Number.isFinite(rawKey)) {
+        idempotencyKey = String(rawKey);
       } else {
         logger.warn(
-          "FormoAnalytics::track: idempotencyKey must be a non-empty string or finite number"
+          `FormoAnalytics::track: ${IDEMPOTENCY_KEY_PROPERTY} must be a non-empty string or finite number`
         );
         return;
       }
@@ -1365,7 +1361,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       { event, idempotencyKey },
       properties,
       context,
-      options.callback
+      callback
     );
   }
 

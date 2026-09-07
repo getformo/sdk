@@ -74,10 +74,18 @@ const PAGE_PROPERTIES_EXCLUDED_FIELDS = new Set<string>([
   'query',
 ]);
 
+/**
+ * Reserved track() property naming one logical occurrence of a custom event.
+ * Read and removed by track() before the event is built: it becomes the wire
+ * identity of the event and is not sent as a property. See FormoAnalytics.track.
+ */
+const IDEMPOTENCY_KEY_PROPERTY = "idempotency_key";
+
 export {
   CHANNEL,
   VERSION,
   CLICK_ID_PARAMS,
+  IDEMPOTENCY_KEY_PROPERTY,
   DEFAULT_EXCLUDED_QUERY_PARAMS,
   DEFAULT_REFERRAL_PARAMS,
   PAGE_PROPERTIES_EXCLUDED_FIELDS,
