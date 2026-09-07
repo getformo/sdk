@@ -21,7 +21,12 @@ import {
   SolanaTransactionRecord,
   SolanaWalletStatus,
 } from "./storeTypes";
-import { SOLANA_CHAIN_IDS, SolanaCluster, UnsubscribeFn } from "./types";
+import {
+  SOLANA_CHAIN_IDS,
+  SolanaCluster,
+  UnsubscribeFn,
+  solanaWalletRdns,
+} from "./types";
 import { isBlockedSolanaAddress } from "./address";
 
 /**
@@ -78,15 +83,28 @@ export class SolanaStoreHandler {
    * When true, auto-detection from the store endpoint is disabled.
    */
   private explicitCluster: boolean;
+  private beforeWalletConnect?: (connection: {
+    address: string;
+    chainId: number;
+    rdns: string;
+  }) => boolean;
 
   constructor(
     formoAnalytics: FormoAnalytics,
     store: SolanaClientStore,
-    options?: { cluster?: SolanaCluster }
+    options?: {
+      cluster?: SolanaCluster;
+      beforeWalletConnect?: (connection: {
+        address: string;
+        chainId: number;
+        rdns: string;
+      }) => boolean;
+    }
   ) {
     this.formo = formoAnalytics;
     this.store = store;
     this.explicitCluster = !!options?.cluster;
+    this.beforeWalletConnect = options?.beforeWalletConnect;
     this.cluster = options?.cluster || this.detectClusterFromStore(store) || "mainnet-beta";
     this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
@@ -185,13 +203,20 @@ export class SolanaStoreHandler {
           chainId: this.chainId,
         });
 
-        if (this.formo.isAutocaptureEnabled("connect")) {
-          const connectorName = wallet.session.connector?.name || wallet.connectorId;
+        const connectorName = wallet.session.connector?.name || wallet.connectorId;
+        const rdns = solanaWalletRdns(connectorName);
+        const shouldEmit =
+          this.beforeWalletConnect?.({
+            address,
+            chainId: this.chainId,
+            rdns,
+          }) ?? true;
+        if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
           this.formo.connect(
             { chainId: this.chainId, address },
             {
               providerName: connectorName,
-              rdns: `sol.wallet.${connectorName.toLowerCase().replace(/\s+/g, "")}`,
+              rdns,
             }
           ).catch((error) => {
             logger.error("SolanaStoreHandler: Error emitting initial connect", error);
@@ -257,13 +282,16 @@ export class SolanaStoreHandler {
       connector: wallet.connectorId,
     });
 
-    if (this.formo.isAutocaptureEnabled("connect")) {
-      const connectorName = wallet.session.connector?.name || wallet.connectorId;
+    const connectorName = wallet.session.connector?.name || wallet.connectorId;
+    const rdns = solanaWalletRdns(connectorName);
+    const shouldEmit =
+      this.beforeWalletConnect?.({ address, chainId, rdns }) ?? true;
+    if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
       this.formo.connect(
         { chainId, address },
         {
           providerName: connectorName,
-          rdns: `sol.wallet.${connectorName.toLowerCase().replace(/\s+/g, "")}`,
+          rdns,
         }
       ).catch((error) => {
         logger.error("SolanaStoreHandler: Error emitting connect", error);

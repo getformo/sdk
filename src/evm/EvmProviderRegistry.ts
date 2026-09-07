@@ -66,6 +66,28 @@ export class EvmProviderRegistry {
   /** The window-injected provider, once detected, so it is not re-wrapped. */
   private injectedDetail?: EIP6963ProviderDetail;
 
+  /**
+   * Attribution supplied by the integration layer for a provider that was
+   * never announced: the wagmi fallback wrap names a connector's provider
+   * after the CONNECTOR, so request-derived events carry the same wallet
+   * name as the hook-driven events from the same connection. Without it
+   * the name came from flag sniffing, and a custom or embedded connector
+   * whose provider exposes no recognised flag split one wallet's activity
+   * between "Injected Provider" and the connector's name.
+   *
+   * A RESOLVER, read at each `infoFor`, not a value: the name is live for
+   * the connector the integration layer bound it to (a WalletConnect
+   * session that resolves or changes its peer renames without a re-wrap),
+   * and the integration layer names events on its hook path with the same
+   * function, so the two paths cannot disagree. Which connector a
+   * provider is bound to is the integration layer's decision; it is not
+   * necessarily the connector that is current when the request runs.
+   */
+  private attributions = new WeakMap<
+    EIP1193Provider,
+    () => { name: string; rdns?: string } | undefined
+  >();
+
   constructor(private readonly deps: EvmProviderRegistryDeps) {}
 
   // ── the provider set ─────────────────────────────────────────────────────
@@ -128,18 +150,57 @@ export class EvmProviderRegistry {
   }
 
   /**
+   * Record (or, with `undefined`, forget) the integration layer's own
+   * attribution resolver for a provider. See `attributions`.
+   */
+  rememberAttribution(
+    provider: EIP1193Provider | undefined,
+    resolve: (() => { name: string; rdns?: string } | undefined) | undefined
+  ): void {
+    if (!provider) return;
+    if (!resolve) {
+      this.attributions.delete(provider);
+      return;
+    }
+    this.attributions.set(provider, resolve);
+  }
+
+  /** The supplied attribution for a provider, if any resolves right now. */
+  private suppliedAttributionFor(
+    provider: EIP1193Provider
+  ): { name: string; rdns?: string } | undefined {
+    const resolve = this.attributions.get(provider);
+    if (!resolve) return undefined;
+    try {
+      const info = resolve();
+      return info?.name ? info : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * A provider's display name and rdns.
    *
-   * EIP-6963 metadata is authoritative when we have it; otherwise fall back to
-   * sniffing the injected provider, which is all a pre-6963 wallet offers.
+   * EIP-6963 metadata is authoritative when we have it. A supplied
+   * attribution (the connector a wagmi app connected through) comes next:
+   * it describes the SESSION, which is what the hook-driven events report.
+   * Otherwise fall back to sniffing the injected provider, which is all a
+   * pre-6963 wallet offers; a supplied name without an rdns keeps the
+   * sniffed rdns.
    */
   infoFor(provider: EIP1193Provider): { name: string; rdns: string } {
     const announced = this.details.find((p) => p.provider === provider);
+    const supplied = announced
+      ? undefined
+      : this.suppliedAttributionFor(provider);
     const info = announced
       ? { name: announced.info.name, rdns: announced.info.rdns }
       : (() => {
           const injected = detectInjectedProviderInfo(provider);
-          return { name: injected.name, rdns: injected.rdns };
+          return supplied
+            ? { name: supplied.name, rdns: supplied.rdns ?? injected.rdns }
+            : { name: injected.name, rdns: injected.rdns };
         })();
 
     // WalletConnect names the TRANSPORT; the session's peer names the
@@ -150,7 +211,10 @@ export class EvmProviderRegistry {
     // is included because a flagless WalletConnect-compatible provider
     // registered BEFORE its session exists detects as nothing at all;
     // the peer appearing later is itself the proof of what it was, so
-    // the rdns upgrades with it.
+    // the rdns upgrades with it. A supplied name gets the same treatment
+    // and no more: the integration layer resolves its own peer names
+    // where it wants them, and a branded connector must keep its name on
+    // both paths.
     if (info.name === "WalletConnect" || info.name === "Injected Provider") {
       const peer = readWalletConnectPeer(provider);
       if (peer?.name) {

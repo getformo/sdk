@@ -35,6 +35,12 @@ switch, a transaction with a real receipt, an EIP-5792 batch, a wallet switch
 between two providers, and disconnect. It also asserts the SDK issued no RPC
 on a wallet's transport beyond `eth_accounts` and the receipt/status polls.
 
+The same Chrome process also loads the SDK inside a real cross-site iframe
+(`localhost` parent, `127.0.0.1` child) with third-party cookies phased out.
+It destroys and recreates the iframe and asserts that two events per load share
+one anonymous ID, no cookie was accepted, and the same ID survives the reload
+through the frame's partitioned localStorage.
+
 ## What it does not do
 
 It does not drive a real wallet extension. The wallets here speak the same

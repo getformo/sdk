@@ -64,6 +64,75 @@ describe("EvmProviderRegistry", () => {
     jsdom?.window.close();
   });
 
+  describe("supplied attribution", () => {
+    // The wagmi fallback wrap records the CONNECTOR for a provider that was
+    // never announced, so request-derived events name the same wallet as
+    // the hook-driven ones from that connection.
+    it("names an unannounced provider after the supplied attribution", () => {
+      const r = registry();
+      const p = makeProvider();
+      r.rememberAttribution(p, () => ({ name: "Rabby", rdns: "io.rabby" }));
+      expect(r.infoFor(p)).to.deep.equal({ name: "Rabby", rdns: "io.rabby" });
+    });
+
+    it("keeps the sniffed rdns when the attribution has none", () => {
+      const r = registry();
+      const p = makeProvider();
+      r.rememberAttribution(p, () => ({ name: "Rabby" }));
+      expect(r.infoFor(p)).to.deep.equal({ name: "Rabby", rdns: "io.injected.provider" });
+    });
+
+    it("reads the resolver live on every lookup", () => {
+      // A request issued right after a connector switch, before the
+      // asynchronous re-wrap settles, must already carry the new name.
+      const r = registry();
+      const p = makeProvider();
+      let name = "MetaMask";
+      r.rememberAttribution(p, () => ({ name }));
+      expect(r.infoFor(p).name).to.equal("MetaMask");
+      name = "Rabby";
+      expect(r.infoFor(p).name).to.equal("Rabby");
+    });
+
+    it("replaces only a GENERIC supplied name with the live WalletConnect peer", () => {
+      // The generic transport name gets the same peer treatment as a
+      // registered provider's; a branded connector keeps its name, as it
+      // does on the hook path.
+      const r = registry();
+      const p = makeProvider() as any;
+      p.session = { peer: { metadata: { name: "Ledger Live", url: "https://ledger.com" } } };
+      r.rememberAttribution(p, () => ({ name: "WalletConnect" }));
+      expect(r.infoFor(p)).to.deep.equal({ name: "Ledger Live", rdns: "com.walletconnect" });
+      r.rememberAttribution(p, () => ({ name: "AppKit" }));
+      expect(r.infoFor(p).name).to.equal("AppKit");
+    });
+
+    it("falls back to sniffing when the resolver yields nothing or throws", () => {
+      const r = registry();
+      const p = makeProvider();
+      r.rememberAttribution(p, () => undefined);
+      expect(r.infoFor(p).name).to.equal("Injected Provider");
+      r.rememberAttribution(p, () => { throw new Error("gone"); });
+      expect(r.infoFor(p).name).to.equal("Injected Provider");
+    });
+
+    it("forgets the attribution when told to", () => {
+      const r = registry();
+      const p = makeProvider();
+      r.rememberAttribution(p, () => ({ name: "Rabby" }));
+      r.rememberAttribution(p, undefined);
+      expect(r.infoFor(p).name).to.equal("Injected Provider");
+    });
+
+    it("never overrides EIP-6963 announcement metadata", () => {
+      const r = registry();
+      const p = makeProvider();
+      r.add(detail(p, "Rainbow", "me.rainbow"));
+      r.rememberAttribution(p, () => ({ name: "Something Else" }));
+      expect(r.infoFor(p)).to.deep.equal({ name: "Rainbow", rdns: "me.rainbow" });
+    });
+  });
+
   describe("the provider set", () => {
     it("adds a provider once", () => {
       const r = registry();

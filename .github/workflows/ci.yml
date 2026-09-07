@@ -203,4 +203,5 @@ jobs:
           node-version: "22.14.0"
 
       - name: Audit production dependencies
-        run: pnpm audit --prod --audit-level=high
+        # Fail on advisories, not registry outages.
+        run: pnpm audit --prod --audit-level=high --ignore-registry-errors

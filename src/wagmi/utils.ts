@@ -266,7 +266,15 @@ export function buildSafeFunctionArgs(
   const result: Record<string, unknown> = {};
 
   for (const [key, val] of Object.entries(functionArgs)) {
-    const safeKey = reservedFields.has(key) ? `arg_${key}` : key;
+    // A prefixed key must not land on another argument's own name: an ABI
+    // with both `to` and `arg_to` would otherwise keep only one of them,
+    // whichever came later. Keep prefixing until the name is free.
+    let safeKey = key;
+    if (reservedFields.has(key)) {
+      do {
+        safeKey = `arg_${safeKey}`;
+      } while (safeKey in functionArgs);
+    }
     result[safeKey] = val;
 
     // If the value is a nested object (struct), flatten it

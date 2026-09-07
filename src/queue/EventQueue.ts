@@ -250,7 +250,6 @@ export class EventQueue implements IEventQueue {
 
   async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
     callback = callback || noop;
-
     // A torn-down instance must never buffer, however late the caller
     // arrives. See close().
     if (this.closed) return;

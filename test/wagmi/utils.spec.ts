@@ -620,6 +620,26 @@ describe("wagmi/utils", () => {
       });
     });
 
+    it("keeps both arguments when an ABI has a reserved name AND its prefixed form", () => {
+      // Whichever order the ABI lists them in, neither value may be lost.
+      expect(
+        buildSafeFunctionArgs({ to: "0xA", arg_to: "0xB" }, RESERVED_FIELDS)
+      ).to.deep.equal({ arg_arg_to: "0xA", arg_to: "0xB" });
+      expect(
+        buildSafeFunctionArgs({ arg_to: "0xB", to: "0xA" }, RESERVED_FIELDS)
+      ).to.deep.equal({ arg_to: "0xB", arg_arg_to: "0xA" });
+      expect(
+        buildSafeFunctionArgs(
+          { providerName: "x", arg_providerName: "y", arg_arg_providerName: "z" },
+          new Set([...Array.from(RESERVED_FIELDS), "providerName", "rdns"])
+        )
+      ).to.deep.equal({
+        arg_arg_arg_providerName: "x",
+        arg_providerName: "y",
+        arg_arg_providerName: "z",
+      });
+    });
+
     it("should flatten nested structs", () => {
       const result = buildSafeFunctionArgs(
         {

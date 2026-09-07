@@ -7,7 +7,6 @@ export {
   isValidProvider,
   readWalletConnectPeer,
   isUserRejectionError,
-  readSafeAppAccount,
   DEFAULT_PROVIDER_ICON,
 } from './detection';
 

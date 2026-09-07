@@ -777,6 +777,101 @@ describe("WagmiEventHandler", () => {
       expect(txProperties!.arg_to).to.not.equal(txCall.to);
     });
 
+    it("does not let a function arg named 'providerName' overwrite wallet attribution", async () => {
+      // Attribution is spread BEFORE the function args, so an ABI input that
+      // happens to be called `providerName` (or `rdns`) would relabel the
+      // wallet on the broadcast event AND, via the stored safeFunctionArgs,
+      // on the receipt. Both names are reserved: the arg keeps its value
+      // under the `arg_` prefix and the connector keeps the attribution.
+      const connectedState = createConnectedState();
+      (mockWagmiConfig as any).setState(connectedState);
+
+      new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+      if (statusListener) {
+        await statusListener("connected", "disconnected");
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const txHash = "0xtxhash_attribution_collision";
+      const mutationEvent: MutationCacheEvent = {
+        type: "updated",
+        mutation: {
+          mutationId: 101,
+          options: { mutationKey: ["writeContract"] },
+          state: {
+            status: "success",
+            data: txHash,
+            variables: {
+              address: "0xContractAddress",
+              abi: [
+                {
+                  type: "function",
+                  name: "register",
+                  inputs: [
+                    { name: "providerName", type: "string" },
+                    { name: "rdns", type: "string" },
+                    { name: "amount", type: "uint256" },
+                  ],
+                  outputs: [],
+                  stateMutability: "nonpayable",
+                },
+              ],
+              functionName: "register",
+              args: ["Spoofed Wallet", "io.spoofed", BigInt(7)],
+            },
+          },
+        },
+      };
+
+      if (mutationListener) {
+        mutationListener(mutationEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      const txCall = mockFormo.transaction.firstCall.args[0];
+      expect(txCall.function_args).to.deep.equal({
+        providerName: "Spoofed Wallet",
+        rdns: "io.spoofed",
+        amount: "7",
+      });
+      const broadcastProperties = mockFormo.transaction.firstCall.args[1];
+      expect(broadcastProperties).to.deep.equal({
+        providerName: "MetaMask",
+        arg_providerName: "Spoofed Wallet",
+        arg_rdns: "io.spoofed",
+        amount: "7",
+      });
+
+      mockFormo.transaction.resetHistory();
+
+      const queryEvent: QueryCacheEvent = {
+        type: "updated",
+        query: {
+          queryKey: ["waitForTransactionReceipt", { hash: txHash, chainId: 1 }],
+          queryHash: `waitForTransactionReceipt-${txHash}`,
+          state: {
+            status: "success",
+            data: { status: "success", blockNumber: BigInt(1), gasUsed: BigInt(21000) },
+            fetchStatus: "idle",
+          },
+        },
+      };
+      if (queryListener) {
+        queryListener(queryEvent);
+      }
+
+      expect(mockFormo.transaction.calledOnce).to.be.true;
+      expect(mockFormo.transaction.firstCall.args[0].status).to.equal("confirmed");
+      const receiptProperties = mockFormo.transaction.firstCall.args[1];
+      expect(receiptProperties).to.deep.equal({
+        providerName: "MetaMask",
+        arg_providerName: "Spoofed Wallet",
+        arg_rdns: "io.spoofed",
+        amount: "7",
+      });
+    });
+
     it("should handle writeContract with nested struct containing BigInt", async () => {
       // Tests Solidity structs like: struct Order { address maker; uint256 price; }
       const connectedState = createConnectedState();

@@ -186,6 +186,279 @@ describe("wagmi hybrid capture", () => {
     state.connections.set(id, { ...state.connections.get(id), ...patch });
   }
 
+  it("names imperative captures after the connector, not after provider flag sniffing", async () => {
+    // The fixture connector is "MetaMask" but its provider carries no
+    // isMetaMask flag, exactly like a custom or embedded connector. Hook
+    // events say "MetaMask"; the request wrapper used to say "Injected
+    // Provider", splitting one wallet's activity across two identities.
+    const { formo, sent, provider } = await setup();
+
+    await provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await provider.request({
+      method: "eth_sendTransaction",
+      params: [{ from: ADDR, to: TO, value: "0x0" }],
+    });
+    await settle();
+
+    const named = sent.filter((e) => e.type === "signature" || e.type === "transaction");
+    expect(named.length).to.be.greaterThan(0);
+    for (const e of named) {
+      expect(e.properties?.providerName, `${e.type}:${e.status}`).to.equal("MetaMask");
+    }
+    formo.cleanup?.();
+  });
+
+  it("carries the connector's rdns when wagmi knows it, else the sniffed one", async () => {
+    const withRdns = makeProvider();
+    const state = makeState(withRdns, 1);
+    state.connections.get("c1").connector.rdns = "io.metamask";
+    const a = await setup(true, { provider: withRdns, state });
+    await withRdns.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(a.sent.find((e) => e.type === "signature")?.properties?.rdns).to.equal("io.metamask");
+    a.formo.cleanup?.();
+
+    const b = await setup();
+    await b.provider.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    const sig = b.sent.find((e) => e.type === "signature");
+    expect(sig?.properties?.providerName).to.equal("MetaMask");
+    expect(sig?.properties?.rdns).to.equal("io.injected.provider");
+    b.formo.cleanup?.();
+
+    // A ONE-element list is one value.
+    const single = makeProvider();
+    const singleState = makeState(single, 1);
+    singleState.connections.get("c1").connector.rdns = ["io.metamask"];
+    const d = await setup(true, { provider: single, state: singleState });
+    await single.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(d.sent.find((e) => e.type === "signature")?.properties?.rdns).to.equal("io.metamask");
+    d.formo.cleanup?.();
+
+    // A connector matching SEVERAL rdns values does not say which one this
+    // provider is; guessing the first would mislabel the others.
+    const multi = makeProvider();
+    const multiState = makeState(multi, 1);
+    multiState.connections.get("c1").connector.rdns = ["io.metamask", "io.metamask.mobile"];
+    const c = await setup(true, { provider: multi, state: multiState });
+    await multi.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(c.sent.find((e) => e.type === "signature")?.properties?.rdns).to.equal("io.injected.provider");
+    c.formo.cleanup?.();
+  });
+
+  it("holds one wallet name for a request whose connector changes while the prompt is open", async () => {
+    // Two connectors share one provider. A switch while a signature prompt
+    // is open must not split REQUESTED and CONFIRMED between two names.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    let release: (v: unknown) => void = () => undefined;
+    const gate = new Promise((r) => { release = r; });
+    const inner = shared.request;
+    shared.request = async (args: { method: string }) => {
+      if (args.method === "personal_sign") { await gate; return "0xsigned"; }
+      return inner(args);
+    };
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    const pending = shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    release(undefined);
+    await pending;
+    await settle();
+
+    const names = sent.filter((e) => e.type === "signature").map((e) => `${e.status}:${e.properties?.providerName}`);
+    expect(names).to.deep.equal(["requested:MetaMask", "confirmed:MetaMask"]);
+
+    // The NEXT request belongs to the new connector.
+    sent.length = 0;
+    await shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("Rabby");
+    formo.cleanup?.();
+  });
+
+  it("re-attributes the SAME provider when a different connector takes it over", async () => {
+    // Two wagmi connectors can hand out one provider (both target
+    // window.ethereum). The wrapper is already installed, so the wrap
+    // path rebinds rather than reinstalls; the attribution must still
+    // follow the connector the user actually chose.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    sent.length = 0;
+
+    await shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("Rabby");
+    formo.cleanup?.();
+  });
+
+  it("holds one wallet name across started, broadcasted and confirmed when the connector changes mid-transaction", async () => {
+    // The transaction path snapshots separately from the signature path,
+    // and the receipt poll runs long after the request returned. A switch
+    // while the wallet prompt is open, and another while the receipt is
+    // still pending, must not relabel any status.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    let releaseTx: (v: unknown) => void = () => undefined;
+    let releaseReceipt: (v: unknown) => void = () => undefined;
+    const txGate = new Promise((r) => { releaseTx = r; });
+    const receiptGate = new Promise((r) => { releaseReceipt = r; });
+    const inner = shared.request;
+    shared.request = async (args: { method: string }) => {
+      if (args.method === "eth_sendTransaction") { await txGate; return "0x" + "ab".repeat(32); }
+      if (args.method === "eth_getTransactionReceipt") { await receiptGate; return { status: "0x1", blockNumber: "0x1" }; }
+      return inner(args);
+    };
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    const pending = shared.request({
+      method: "eth_sendTransaction",
+      params: [{ from: ADDR, to: TO, value: "0x0" }],
+    });
+    await settle();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    releaseTx(undefined);
+    await pending;
+    await settle();
+    releaseReceipt(undefined);
+    await settle();
+
+    const names = sent
+      .filter((e) => e.type === "transaction")
+      .map((e) => `${e.status}:${e.properties?.providerName}`);
+    expect(names).to.deep.equal([
+      "started:MetaMask",
+      "broadcasted:MetaMask",
+      "confirmed:MetaMask",
+    ]);
+    formo.cleanup?.();
+  });
+
+  it("keeps the previous label for a request in the same tick as a switch, then rebinds the shared provider", async () => {
+    // Attribution is bound to the connector whose getProvider resolved to
+    // the wrapped provider. A shared provider is re-bound when the NEW
+    // connector's resolution lands (one microtask); a request inside that
+    // gap keeps the previous label. The alternative, reading the current
+    // connector live, mislabels a request over a previous connector's
+    // provider, which real apps do issue through retained wallet clients.
+    const subscriptions: Subscription[] = [];
+    const shared = makeProvider();
+    const state = makeState(shared, 1);
+    const { formo, sent } = await setup(true, { provider: shared, state, subscriptions });
+
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => shared,
+        },
+      });
+      state.current = "c2";
+    });
+    const pending = shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await pending;
+    await settle();
+
+    const names = sent.filter((e) => e.type === "signature").map((e) => e.properties?.providerName);
+    expect(names, "same tick: previous label, consistently").to.deep.equal(["MetaMask", "MetaMask"]);
+
+    sent.length = 0;
+    await shared.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName, "rebound").to.equal("Rabby");
+    formo.cleanup?.();
+  });
+
+  it("keeps a branded WalletConnect-backed connector's name, as the hook path does", async () => {
+    // The hook path resolves a session peer only for connectors named
+    // WalletConnect. A branded connector over the same transport keeps its
+    // own name there; the request path must not split it.
+    const branded = makeProvider();
+    branded.session = { peer: { metadata: { name: "Ledger Live", url: "https://ledger.com" } } };
+    const state = makeState(branded, 1);
+    state.connections.get("c1").connector.name = "AppKit";
+    const { formo, sent } = await setup(true, { provider: branded, state });
+
+    await branded.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("AppKit");
+    formo.cleanup?.();
+  });
+
+  it("re-attributes captures to the new connector after a connector switch", async () => {
+    const subscriptions: Subscription[] = [];
+    const first = makeProvider();
+    const state = makeState(first, 1);
+    const { formo, sent } = await setup(true, { provider: first, state, subscriptions });
+
+    const second = makeProvider();
+    fireStoreUpdate(subscriptions, state, () => {
+      state.connections.set("c2", {
+        accounts: [ADDR],
+        chainId: 1,
+        connector: {
+          id: "rabby", name: "Rabby", type: "injected", uid: "2",
+          getProvider: async () => second,
+        },
+      });
+      state.current = "c2";
+    });
+    await settle();
+    sent.length = 0;
+
+    await second.request({ method: "personal_sign", params: ["0x68", ADDR] });
+    await settle();
+
+    expect(sent.find((e) => e.type === "signature")?.properties?.providerName).to.equal("Rabby");
+    formo.cleanup?.();
+  });
+
   it("does NOT instrument the provider unless explicitly opted in", async () => {
     // Wagmi mode's baseline contract: observe state and caches, never
     // touch the signing transport. Instrumentation is opt-in.
@@ -392,6 +665,10 @@ describe("wagmi hybrid capture", () => {
     // Two from provider B on ITS chain, then two from provider A still on
     // the chain it was wrapped with - B's report must not bleed onto A.
     expect(chains).to.deep.equal([10, 10, 137, 137]);
+    // Same for the wallet name: a request over provider A belongs to the
+    // connector that handed A out, not to the connector now current.
+    const names = sent.filter((e) => e.type === "signature").map((e) => e.properties?.providerName);
+    expect(names).to.deep.equal(["Rabby", "Rabby", "MetaMask", "MetaMask"]);
     formo.cleanup?.();
   });
 

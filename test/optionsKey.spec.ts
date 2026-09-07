@@ -38,6 +38,21 @@ describe("computeOptionsKey", () => {
     );
   });
 
+  it("stays stable for the same Solana store", () => {
+    const store = {} as never;
+    expect(computeOptionsKey({ solana: { store } })).to.equal(
+      computeOptionsKey({ solana: { store } })
+    );
+  });
+
+  it("changes when the Solana store instance is replaced", () => {
+    expect(
+      computeOptionsKey({ solana: { store: {} as never } })
+    ).to.not.equal(
+      computeOptionsKey({ solana: { store: {} as never } })
+    );
+  });
+
   it("handles absent options", () => {
     expect(computeOptionsKey(undefined)).to.equal("undefined");
   });
