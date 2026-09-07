@@ -1,27 +1,79 @@
 import { FormoAnalytics } from "./FormoAnalytics";
-import { Options } from "./types";
+import { IFormoAnalytics, Options } from "./types";
 
-export function formofy(writeKey: string, options?: Options) {
-  if (writeKey && typeof window !== "undefined") {
-    FormoAnalytics.init(writeKey, options)
-      .then((f) => {
-        window.formo = f;
-        // Call ready callback if provided with proper error handling
-        if (options?.ready) {
-          // Wrap the callback execution in a try-catch to handle synchronous errors
-          try {
-            options.ready(f);
-          } catch (callbackError) {
-            console.error("Error in FormoAnalytics ready callback:", callbackError);
-          }
-          
-          // Note: If the callback returns a Promise (even though typed as void),
-          // it's the responsibility of the callback implementation to handle its own errors.
-          // This prevents the callback from throwing unhandled rejections.
-        }
-      })
-      .catch((e) => console.error("Error initializing FormoAnalytics:", e));
-  } else {
-    console.warn("FormoAnalytics not found");
+/**
+ * The instance formofy() last created or adopted for this page, and the
+ * write key it was created for. Kept while init is still pending, so two
+ * calls in the same tick share one instance too.
+ */
+type LiveInstance = { writeKey: string; promise: Promise<IFormoAnalytics> };
+let live: LiveInstance | null = null;
+
+function runReady(options: Options | undefined, instance: IFormoAnalytics): void {
+  if (!options?.ready) return;
+  // Wrap the callback so a synchronous throw cannot escape. A callback that
+  // returns a promise owns its own rejections.
+  try {
+    options.ready(instance);
+  } catch (callbackError) {
+    console.error("Error in FormoAnalytics ready callback:", callbackError);
   }
+}
+
+/**
+ * Script-tag entry point. One live instance per page:
+ *
+ * - A repeat call with the same write key reuses the existing instance (or
+ *   the one still initialising) and only runs the new `ready` callback.
+ *   Tag managers, React strict mode, and hot reloads all call this twice,
+ *   and a second instance would double every autocaptured event.
+ * - A call with a different write key tears the previous instance down
+ *   first, so only one instance ever sends.
+ * - An instance the app put on `window.formo` itself is adopted the same
+ *   way, matched on its write key.
+ */
+export function formofy(writeKey: string, options?: Options) {
+  if (!writeKey || typeof window === "undefined") {
+    console.warn("FormoAnalytics not found");
+    return;
+  }
+
+  const existing = live ?? adoptWindowInstance();
+  if (existing && existing.writeKey === writeKey) {
+    existing.promise.then((f) => runReady(options, f)).catch(() => undefined);
+    return;
+  }
+
+  const previous: Promise<IFormoAnalytics | null> = existing?.promise ?? Promise.resolve(null);
+  const promise = previous
+    .then((f) => {
+      if (f) f.cleanup();
+    })
+    .catch(() => undefined)
+    .then(() => FormoAnalytics.init(writeKey, options));
+  const entry: LiveInstance = { writeKey, promise };
+  live = entry;
+
+  promise
+    .then((f) => {
+      window.formo = f;
+      runReady(options, f);
+    })
+    .catch((e) => {
+      // Let a later call try again rather than pin a failed init forever.
+      if (live === entry) live = null;
+      console.error("Error initializing FormoAnalytics:", e);
+    });
+}
+
+/** An instance the app created itself and exposed on window.formo. */
+function adoptWindowInstance(): LiveInstance | null {
+  const f = window.formo as (IFormoAnalytics & { writeKey?: unknown }) | undefined;
+  if (!f || typeof f.writeKey !== "string") return null;
+  return { writeKey: f.writeKey, promise: Promise.resolve(f) };
+}
+
+/** @internal Forget the live instance. For tests only. */
+export function _resetFormofy(): void {
+  live = null;
 }
