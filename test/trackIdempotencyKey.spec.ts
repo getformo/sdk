@@ -43,6 +43,18 @@ describe("track idempotency_key property", () => {
     expect(trackEvent.firstCall.args[2]).to.deep.equal({ plan: "pro" });
   });
 
+  it("ignores an inherited idempotency_key: only an own property is a key", async () => {
+    const { formo, trackEvent } = setup();
+    const properties = Object.create({ idempotency_key: "inherited" });
+    properties.plan = "pro";
+
+    await formo.track("Checkout Completed", properties);
+
+    expect(trackEvent.calledOnce).to.be.true;
+    expect(trackEvent.firstCall.args[1].idempotencyKey).to.equal(undefined);
+    expect(trackEvent.firstCall.args[2]).to.equal(properties);
+  });
+
   it("sends unkeyed calls with no identity and untouched properties", async () => {
     const { formo, trackEvent } = setup();
     const callback = sinon.spy();
