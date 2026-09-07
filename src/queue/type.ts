@@ -1,7 +1,18 @@
 import { IFormoEvent } from "../types";
 
+export type EnqueueOptions = {
+  /** Fingerprint computed before SDK enrichment for best-effort dedup. */
+  dedupKey?: string;
+  /** Stable business identifier supplied by the caller. */
+  idempotencyKey?: string;
+};
+
 export interface IEventQueue {
-  enqueue(event: IFormoEvent, callback?: (...args: any) => void): Promise<void>;
+  enqueue(
+    event: IFormoEvent,
+    callback?: (...args: any) => void,
+    options?: EnqueueOptions
+  ): Promise<void>;
   flush(callback?: (...args: any) => void): Promise<any>;
   // Drop all buffered events on consent withdrawal. Part of the queue
   // contract — a custom queue must not silently skip it. Recoverable: the

@@ -9,6 +9,7 @@ import {
   CONSENT_OPT_OUT_KEY,
   TEventType,
 } from "./constants";
+import { IDEMPOTENCY_KEY_PROPERTY } from "./event/constants";
 import { cookie, session, initStorageManager } from "./storage";
 import {
   getIdentityCookieDomain,
@@ -37,6 +38,7 @@ import {
   IFormoAnalytics,
   IFormoEventContext,
   IFormoEventProperties,
+  EventCallback,
   Options,
   SignatureStatus,
   TransactionStatus,
@@ -1318,21 +1320,54 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Emits a custom user event with custom properties.
+   *
+   * `properties.idempotency_key` (string or safe integer) names one
+   * action, e.g. an order id. Calls that reuse it for the same event name
+   * share one message id and collapse at ingestion. The key is hashed and
+   * not sent. Any other value drops the call with a warning.
    * @param {string} event The name of the tracked event
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
-   * @param {(...args: unknown[]) => void} callback
+   * @param {EventCallback} callback
    * @returns {Promise<void>}
    */
   async track(
     event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
+    let idempotencyKey: string | undefined;
+    try {
+      if (
+        properties &&
+        Object.prototype.hasOwnProperty.call(properties, IDEMPOTENCY_KEY_PROPERTY)
+      ) {
+        const { [IDEMPOTENCY_KEY_PROPERTY]: rawKey, ...rest } = properties;
+        properties = rest;
+        if (typeof rawKey === "string" && rawKey.trim().length > 0) {
+          // Opaque key: whitespace is kept.
+          idempotencyKey = rawKey;
+        } else if (typeof rawKey === "number" && Number.isSafeInteger(rawKey)) {
+          // Above 2^53 distinct ids compare equal as numbers; pass those as
+          // strings.
+          idempotencyKey = String(rawKey);
+        } else {
+          logger.warn(
+            `FormoAnalytics::track: ${IDEMPOTENCY_KEY_PROPERTY} must be a non-empty string or safe integer`
+          );
+          return;
+        }
+      }
+    } catch (error) {
+      // A throwing getter or proxy on the property bag is the host's bug,
+      // but analytics must not reject into the host over it.
+      logger.error("Error tracking event:", error);
+      return;
+    }
     await this.trackEvent(
       EventType.TRACK,
-      { event },
+      { event, idempotencyKey },
       properties,
       context,
       callback

@@ -18,6 +18,8 @@ export interface ICommonProperties {
 
 export type IFormoEventProperties = Record<string, unknown>;
 export type IFormoEventContext = Record<string, unknown>;
+export type EventCallback = (...args: unknown[]) => void;
+
 export type UTMParameters = {
   utm_source: string;
   utm_medium: string;
@@ -98,6 +100,7 @@ export interface DisconnectAPIEvent {
 export interface TrackAPIEvent {
   type: "track";
   event: string;
+  idempotencyKey?: string;
   volume?: number;
   revenue?: number;
   currency?: string;
@@ -107,7 +110,7 @@ export interface TrackAPIEvent {
 export type APIEvent = {
   properties?: IFormoEventProperties;
   context?: IFormoEventContext;
-  callback?: (...args: unknown[]) => void;
+  callback?: EventCallback;
 } & (
   | PageAPIEvent
   | DetectAPIEvent

@@ -43,4 +43,3 @@ Join the [Formo community Slack channel](https://formo.so/slack) for help and qu
 ## Contributing
 
 [Contributions](https://github.com/getformo/sdk/blob/main/CONTRIBUTING.md) are welcome! Feel free to open fixes and feature suggestions.
-

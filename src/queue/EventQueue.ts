@@ -2,6 +2,7 @@ import { isNetworkError } from "../validators";
 import { IFormoEvent, IFormoEventPayload } from "../types";
 import {
   clampNumber,
+  generateNativeUUID,
   getActionDescriptor,
   hash,
   millisecondsToSecond,
@@ -10,7 +11,7 @@ import {
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch, { FetchRetryError } from "../fetch";
-import { IEventQueue } from "./type";
+import { EnqueueOptions, IEventQueue } from "./type";
 const noop = () => {};
 const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...args); } catch { /* swallow */ } };
 
@@ -78,6 +79,18 @@ const MIN_FLUSH_INTERVAL = 1_000 * 10; // 10 SECONDS
 // window from the moment of acceptance, so a double-fire is caught however
 // the wall clock happens to fall (see generateDedupKey).
 const DEDUP_WINDOW_MS = 1_000 * 60; // 1 MINUTE
+
+// Generated context that can differ between two calls that are the same
+// call: a live page title, a resized viewport, a window moved to another
+// screen. Left out of the fallback fingerprint only; the wire id is untouched.
+const VOLATILE_CONTEXT_FIELDS = [
+  "page_title",
+  "screen_width",
+  "screen_height",
+  "screen_density",
+  "viewport_width",
+  "viewport_height",
+];
 
 /** Monotonic time where the platform offers one, else undefined. */
 const monotonicNow = (): number | undefined =>
@@ -173,27 +186,45 @@ export class EventQueue implements IEventQueue {
     });
   }
 
-  private async generateMessageId(event: IFormoEvent): Promise<string> {
-    const formattedTimestamp = toDateHourMinute(new Date(event.original_timestamp));
-    const eventForHashing = { ...event, original_timestamp: formattedTimestamp };
-    const eventString = JSON.stringify(eventForHashing);
-    return hash(eventString);
+  private async generateMessageId(
+    event: IFormoEvent,
+    idempotencyKey?: string
+  ): Promise<string> {
+    if (idempotencyKey !== undefined) {
+      return hash(
+        JSON.stringify({
+          type: event.type,
+          event: event.event ?? null,
+          idempotencyKey,
+        })
+      );
+    }
+
+    // Unkeyed custom events are separate occurrences.
+    if (event.type === "track") return generateNativeUUID();
+
+    // Other event types keep the content-and-minute hash, so what ingestion
+    // collapses does not change on upgrade.
+    const formattedTimestamp = toDateHourMinute(
+      new Date(event.original_timestamp)
+    );
+    return hash(
+      JSON.stringify({ ...event, original_timestamp: formattedTimestamp })
+    );
   }
 
   /**
-   * The fingerprint duplicates are judged by: the event without its
-   * timestamp.
-   *
-   * Deliberately NOT the message id. That id folds in the timestamp truncated
-   * to the minute, because it is the event's identity on the wire and two
-   * events a minute apart must never share one. Judging duplicates by it
-   * meant a double-fire straddling a minute boundary (:59.999 and :00.001)
-   * got two different ids and both were sent. The window is a rolling one
-   * from acceptance, so it needs a key that does not change with the clock.
+   * Fallback fingerprint: the event without its timestamp and without the
+   * volatile generated context. Custom events pass a pre-enrichment
+   * fingerprint instead.
    */
   private async generateDedupKey(event: IFormoEvent): Promise<string> {
-    const { original_timestamp: _ignored, ...rest } = event;
-    return hash(JSON.stringify(rest));
+    const { original_timestamp: _ignored, context, ...rest } = event;
+    const stableContext = context ? { ...context } : context;
+    if (stableContext) {
+      for (const field of VOLATILE_CONTEXT_FIELDS) delete stableContext[field];
+    }
+    return hash(JSON.stringify({ ...rest, context: stableContext }));
   }
 
   /**
@@ -266,7 +297,11 @@ export class EventQueue implements IEventQueue {
     return this.closed;
   }
 
-  async enqueue(event: IFormoEvent, callback?: (...args: any) => void) {
+  async enqueue(
+    event: IFormoEvent,
+    callback?: (...args: any) => void,
+    options?: EnqueueOptions
+  ) {
     callback = callback || noop;
     // A torn-down instance must never buffer, however late the caller
     // arrives. See close().
@@ -279,13 +314,14 @@ export class EventQueue implements IEventQueue {
     }
 
     const clearSeqAtEntry = this.clearSeq;
-    // Both hashes are independent. Await them together to preserve the
-    // single-yield enqueue ordering that callers relied on before the
-    // separate rolling dedup key was introduced.
-    const [message_id, dedupKey] = await Promise.all([
-      this.generateMessageId(event),
+    // One await for both, so dedup adds no extra ordering yield.
+    const [message_id, generatedDedupKey] = await Promise.all([
+      this.generateMessageId(event, options?.idempotencyKey),
       this.generateDedupKey(event),
     ]);
+    const dedupKey = options?.idempotencyKey
+      ? message_id
+      : options?.dedupKey || generatedDedupKey;
 
     // Re-check after the awaits. A caller that entered before close() is
     // suspended here, and on a queue that has not flushed yet its event
@@ -306,8 +342,9 @@ export class EventQueue implements IEventQueue {
 
     // check if an identical event was accepted within the dedup window
     if (this.isDuplicate(dedupKey)) {
+      const label = event.event ? `${event.type} "${event.event}"` : event.type;
       logger.warn(
-        `Duplicate event dropped: an identical event was accepted less than ${millisecondsToSecond(
+        `Duplicate ${label} dropped: an identical event was accepted less than ${millisecondsToSecond(
           DEDUP_WINDOW_MS
         )} seconds ago.`
       );

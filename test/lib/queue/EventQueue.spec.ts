@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { EventQueue } from "../../../src/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
 import * as fetchModule from "../../../src/fetch";
+import { logger } from "../../../src/logger/Logger";
 
 describe("EventQueue", () => {
   let jsdom: JSDOM;
@@ -66,6 +67,18 @@ describe("EventQueue", () => {
           },
         },
         randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+
+  function useUniqueNativeUUIDs() {
+    let counter = 0;
+    Object.defineProperty(global, "crypto", {
+      value: {
+        randomUUID: () =>
+          `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`,
       },
       writable: true,
       configurable: true,
@@ -260,9 +273,8 @@ describe("EventQueue", () => {
       });
 
       it("catches a double-fire that straddles a UTC minute boundary", async () => {
-        // message_id folds in the minute-truncated timestamp (it is the
-        // event's identity on the wire), so these two get DIFFERENT ids.
-        // The dedup key must not care: it is the same event 2ms apart.
+        // The minute-based wire IDs differ, but the rolling content key must
+        // not care: this is the same event 2ms apart.
         await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
         await (eventQueue as any).pendingFlush;
 
@@ -279,8 +291,8 @@ describe("EventQueue", () => {
       });
 
       it("keeps message ids distinct across minutes while deduping by content", async () => {
-        // Same content a full window apart: both go out, with different
-        // ids, because the id must never collide for events a minute apart.
+        // Same content a full window apart: both go out, and the legacy
+        // minute-based identity keeps automatic events distinct over time.
         const event = createMockEvent({ properties: { n: 1 } });
         await eventQueue.enqueue(event);
         await (eventQueue as any).pendingFlush;
@@ -290,6 +302,168 @@ describe("EventQueue", () => {
         await eventQueue.enqueue({ ...event, original_timestamp: new Date().toISOString() });
         expect((eventQueue as any).queue).to.have.length(1);
         expect((eventQueue as any).queue[0].message.message_id).to.not.equal(firstId);
+      });
+
+      it("preserves deterministic wire identity for non-track events", async () => {
+        const event = createMockEvent({ properties: { n: 1 } });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        const secondQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+        });
+        await secondQueue.enqueue({ ...event });
+        await (secondQueue as any).pendingFlush;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+
+        expect(secondId).to.equal(firstId);
+        secondQueue.close();
+      });
+
+      it("uses distinct wire identity for separate unkeyed track occurrences", async () => {
+        useUniqueNativeUUIDs();
+        const event = createMockEvent({
+          type: "track",
+          event: "Checkout Completed",
+        });
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        const secondQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+        });
+        await secondQueue.enqueue({ ...event });
+        await (secondQueue as any).pendingFlush;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+
+        expect(secondId).to.not.equal(firstId);
+        secondQueue.close();
+      });
+
+      it("uses an idempotency key as stable wire identity across queue instances", async () => {
+        const firstQueue = eventQueue;
+        const event = createMockEvent({
+          type: "track",
+          event: "Checkout Completed",
+          properties: { plan: "pro", amount: 99 },
+        });
+        await firstQueue.enqueue(event, undefined, {
+          idempotencyKey: "checkout-123",
+        });
+        await (firstQueue as any).pendingFlush;
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+
+        const secondQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+        });
+        await secondQueue.enqueue(
+          { ...event, original_timestamp: new Date(Date.now() + 5_000).toISOString() },
+          undefined,
+          { idempotencyKey: "checkout-123" }
+        );
+        await (secondQueue as any).pendingFlush;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+
+        expect(secondId).to.equal(firstId);
+        secondQueue.close();
+      });
+
+      it("scopes idempotency keys by event type and name", async () => {
+        const checkout = createMockEvent({ type: "track", event: "Checkout Completed" });
+        const refund = createMockEvent({ type: "track", event: "Checkout Refunded" });
+
+        await eventQueue.enqueue(checkout, undefined, { idempotencyKey: "123" });
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(refund, undefined, { idempotencyKey: "123" });
+        await eventQueue.flush();
+
+        const firstId = JSON.parse(fetchStub.firstCall.args[1].body)[0].message_id;
+        const secondId = JSON.parse(fetchStub.secondCall.args[1].body)[0].message_id;
+        expect(secondId).to.not.equal(firstId);
+      });
+
+      it("names the dropped event in the duplicate warning", async () => {
+        const warn = sinon.stub(logger, "warn");
+        try {
+          const order = createMockEvent({ type: "track", event: "Order Placed", properties: { n: 1 } });
+          await eventQueue.enqueue(order);
+          await (eventQueue as any).pendingFlush;
+          await eventQueue.enqueue({ ...order });
+
+          expect(warn.calledOnce).to.be.true;
+          expect(warn.firstCall.args[0]).to.include('Duplicate track "Order Placed" dropped');
+        } finally {
+          warn.restore();
+        }
+      });
+
+      it("catches a page double-fire whose title moved with a live price", async () => {
+        const page = (page_title: string) =>
+          createMockEvent({
+            type: "page",
+            context: { page_url: "https://example.com/trade", page_title },
+            properties: { url: "https://example.com/trade", path: "/trade" },
+          });
+
+        await eventQueue.enqueue(page("0.78982 ASTER | Nado"));
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(page("0.79279 ASTER | Nado"));
+
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("ignores screen and viewport changes in the fallback fingerprint", async () => {
+        const sized = (viewport_width: number, screen_width: number) =>
+          createMockEvent({
+            type: "connect",
+            context: { page_url: "https://example.com/", viewport_width, screen_width },
+            properties: { chain_id: 1 },
+          });
+
+        await eventQueue.enqueue(sized(1280, 1920));
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(sized(800, 2560));
+
+        expect((eventQueue as any).queue).to.have.length(0);
+      });
+
+      it("keeps semantic context in the fallback fingerprint", async () => {
+        const page = (page_url: string, referrer: string) =>
+          createMockEvent({
+            type: "page",
+            context: { page_url, referrer, page_title: "Same" },
+            properties: { url: page_url },
+          });
+
+        await eventQueue.enqueue(page("https://example.com/a", "https://ref.one"));
+        await (eventQueue as any).pendingFlush;
+        await eventQueue.enqueue(page("https://example.com/b", "https://ref.one"));
+        await eventQueue.enqueue(page("https://example.com/a", "https://ref.two"));
+
+        expect((eventQueue as any).queue).to.have.length(2);
+      });
+
+      it("leaves the wire identity of automatic events untouched by the exclusion", async () => {
+        const page = (page_title: string) =>
+          createMockEvent({
+            type: "page",
+            context: { page_url: "https://example.com/trade", page_title },
+          });
+        const other = new EventQueue("test-key", { apiHost: "https://api.example.com" });
+
+        await eventQueue.enqueue(page("A"));
+        await (eventQueue as any).pendingFlush;
+        await other.enqueue(page("B"));
+        await (other as any).pendingFlush;
+
+        const ids = [fetchStub.firstCall, fetchStub.secondCall].map(
+          (call) => JSON.parse(call.args[1].body)[0].message_id
+        );
+        // Same minute, different title: still two ids on the wire.
+        expect(ids[0]).to.not.equal(ids[1]);
+        other.close();
       });
 
       it("prunes only from the front and stops at the first live entry", async () => {

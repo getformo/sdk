@@ -74,10 +74,17 @@ const PAGE_PROPERTIES_EXCLUDED_FIELDS = new Set<string>([
   'query',
 ]);
 
+/**
+ * Reserved track() property naming one action tracked as a custom event. Lifted
+ * out by track(): it becomes the message id and is never sent.
+ */
+const IDEMPOTENCY_KEY_PROPERTY = "idempotency_key";
+
 export {
   CHANNEL,
   VERSION,
   CLICK_ID_PARAMS,
+  IDEMPOTENCY_KEY_PROPERTY,
   DEFAULT_EXCLUDED_QUERY_PARAMS,
   DEFAULT_REFERRAL_PARAMS,
   PAGE_PROPERTIES_EXCLUDED_FIELDS,

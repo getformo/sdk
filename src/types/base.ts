@@ -2,6 +2,7 @@ import { LogLevel } from "../logger";
 import {
   IFormoEventContext,
   IFormoEventProperties,
+  EventCallback,
   SignatureStatus,
   TransactionStatus,
 } from "./events";
@@ -133,7 +134,7 @@ export interface IFormoAnalytics {
     event: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void>;
   
   // Consent management methods
@@ -362,4 +363,3 @@ export interface Options {
   errorHandler?: (err: Error) => void;
   ready?: (formo: IFormoAnalytics) => void;
 }
-
