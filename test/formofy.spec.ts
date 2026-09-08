@@ -196,6 +196,43 @@ describe("formofy", () => {
     expect(window.formo).to.equal(fresh);
   });
 
+  it("shares one pending instance between two copies of the bundle", async () => {
+    // A tag manager that injects the script twice evaluates the module twice.
+    const a = instance("wk_1");
+    let resolve!: (f: FormoAnalytics) => void;
+    init.returns(new Promise<FormoAnalytics>((r) => { resolve = r; }));
+    const modulePath = require.resolve("../src/initialization");
+    delete require.cache[modulePath];
+    const copy2 = require(modulePath) as { formofy: typeof formofy };
+    const ready2 = sinon.spy();
+
+    formofy("wk_1");        // first copy, init still pending
+    copy2.formofy("wk_1", { ready: ready2 }); // second copy, same page
+    resolve(a);
+    await tick();
+
+    expect(init.calledOnce, "one instance across both copies").to.be.true;
+    expect(ready2.calledOnceWith(a)).to.be.true;
+    expect(window.formo).to.equal(a);
+  });
+
+  it("lets a newer call win over a stale same-key restart", async () => {
+    const a = instance("wk_1");
+    const b = instance("wk_2");
+    init.onFirstCall().resolves(a).onSecondCall().resolves(b);
+
+    formofy("wk_1");
+    await tick();
+    a.cleanup();          // the app's own teardown
+    formofy("wk_1");      // would restart wk_1 once the promise settles
+    formofy("wk_2");      // but this call lands first
+    await tick(); await tick(); await tick();
+
+    expect(init.calledTwice, "no third init for the stale wk_1 restart").to.be.true;
+    expect(init.secondCall.args[0]).to.equal("wk_2");
+    expect(window.formo).to.equal(b);
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);
