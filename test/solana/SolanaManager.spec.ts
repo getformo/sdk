@@ -219,6 +219,19 @@ describe("SolanaManager", () => {
       expect(mockFormo.chain.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS["testnet"]);
     });
 
+    it("keeps the app's cluster across setStore()", () => {
+      const manager = makeManager({ store: makeStore() });
+      manager.setCluster("testnet"); // named while a store is attached
+      const next = makeStore(); // its endpoint says devnet
+      manager.setStore(next);
+
+      next.setState({ wallet: connectedWallet("backpack", "Backpack") });
+
+      expect(mockFormo.connect.lastCall.args[0].chainId, "the named cluster outlives the store").to.equal(
+        SOLANA_CHAIN_IDS["testnet"]
+      );
+    });
+
     it("lists discovered wallets", () => {
       const manager = makeManager();
       registerStandardWallet(makeStandardWallet("Phantom"));

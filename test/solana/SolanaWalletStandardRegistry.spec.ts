@@ -187,6 +187,21 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
+    it("moves the central chain before detect for a wallet already authorized", () => {
+      installWalletBeforeApp(makeWallet("Phantom", { accounts: [account(ADDRESS)] }));
+      makeRegistry();
+
+      // The detect gate reads the central chain; a stale snapshot on an
+      // excluded cluster must not silence a wallet on an allowed one.
+      expect(deps.syncWalletState.calledBefore(deps.detect)).to.be.true;
+      expect(deps.syncWalletState.firstCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+        address: ADDRESS,
+      });
+      expect(deps.detect.calledOnce).to.be.true;
+      expect(deps.connect.calledOnce).to.be.true;
+    });
+
     it("detects a wallet that is injected after the SDK (register-wallet)", () => {
       const registry = makeRegistry();
       expect(deps.detect.called).to.be.false;

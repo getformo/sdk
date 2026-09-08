@@ -312,6 +312,13 @@ export class SolanaWalletStandardRegistry {
       chains: tracked.wallet.chains,
     });
 
+    // A wallet already authorized moves the central chain first, so the
+    // detect gate reads the live cluster and not a snapshot on an excluded one.
+    const live = firstSolanaAccount(tracked.wallet.accounts);
+    if (live && this.deps.ownsWalletEvents()) {
+      this.deps.syncWalletState({ chainId: this.chainIdFor(tracked), address: live.address });
+    }
+
     this.deps
       .detect({ providerName: tracked.name, rdns: tracked.rdns })
       .catch((error) => {
