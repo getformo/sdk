@@ -71,8 +71,10 @@ export function formofy(writeKey: string, options?: Options): void {
 function currentInstance(): Live | null {
   const live = getLive();
   const own = adoptWindowInstance();
-  if (live && own && live.instance && own.instance !== live.instance) {
-    retire(live.instance);
+  if (live && own && own.instance !== live.instance) {
+    // The app's instance wins. A resolved cached instance is retired now;
+    // a pending one retires itself on completion (see start).
+    if (live.instance) retire(live.instance);
     setLive(own);
     return own;
   }
@@ -96,6 +98,12 @@ function start(writeKey: string, options: Options | undefined, previous: Live | 
   promise
     .then((f) => {
       entry.instance = f;
+      // Superseded while initialising (the app installed its own instance,
+      // or another key took over): this result must not send.
+      if (getLive() !== entry) {
+        retire(f);
+        return;
+      }
       window.formo = f;
       runReady(options, f);
     })

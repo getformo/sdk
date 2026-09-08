@@ -262,6 +262,27 @@ describe("formofy", () => {
     expect(ready.calledOnceWith(own)).to.be.true;
   });
 
+  it("adopts an instance the app installs while the cached init is still pending", async () => {
+    const a = instance("wk_1");
+    let resolve!: (f: FormoAnalytics) => void;
+    init.returns(new Promise<FormoAnalytics>((r) => { resolve = r; }));
+    formofy("wk_1"); // pending
+    const own = instance("wk_2");
+    (window as { formo?: unknown }).formo = own;
+    init.resetHistory();
+    const ready = sinon.spy();
+
+    formofy("wk_2", { ready });
+    await tick();
+    resolve(a); // the superseded init completes late
+    await tick();
+
+    expect(init.called, "no extra instance for the app's own key").to.be.false;
+    expect(ready.calledOnceWith(own)).to.be.true;
+    expect(a.cleanup.calledOnce, "the late result retires itself").to.be.true;
+    expect(window.formo).to.equal(own);
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);
