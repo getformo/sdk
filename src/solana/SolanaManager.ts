@@ -13,10 +13,11 @@
  *     Opt-in through `solana: { store }` or `formo.solana.setStore()`.
  *
  * Both observe the same Wallet Standard connection when a framework-kit app
- * connects. A store supplied at initialization owns wallet events; a store
- * attached later takes ownership when it observes its first connection and
- * adopts any connect the registry already reported. One connect per
- * connection, whichever path an app is on.
+ * connects. A store, whether supplied at initialization or attached later,
+ * takes ownership of wallet events when it observes its first connection
+ * and adopts any connect the registry already reported. Until then the
+ * registry reports, so a connection the store never sees is not lost. One
+ * connect per connection, whichever path an app is on.
  *
  * For signMessage/signTransaction tracking (not captured by either path),
  * use formo.signature() directly with the address and chainId.
@@ -60,11 +61,15 @@ export class SolanaManager {
       this.pendingCluster = options.cluster;
     }
 
-    // A store supplied at initialization owns wallet events from the outset:
-    // unlike a store attached later, it has not missed any prior registry
-    // state and it knows the cluster more precisely.
-    this.storeOwnsWalletEvents = !!options?.store;
-
+    // Attach before discovery starts: the registry reports a wallet
+    // authorized before the SDK the moment it is constructed, and that
+    // report must carry the store's detected cluster, not the default.
+    let cluster = options?.cluster;
+    if (options?.store) {
+      logger.info("SolanaManager: Initializing store-based Solana tracking");
+      this.attachStore(options.store, cluster);
+      if (!cluster) cluster = SOLANA_CLUSTERS_BY_ID[this.storeHandler!.getChainId()];
+    }
     this.registry = new SolanaWalletStandardRegistry(
       {
         isAutocaptureEnabled: (t) => this.formo.isAutocaptureEnabled(t),
@@ -72,19 +77,31 @@ export class SolanaManager {
         detect: (params) => this.formo.detect(params),
         connect: (params, properties) =>
           this.formo.connect(params, properties),
-        disconnect: (params) => this.formo.disconnect(params),
+        // A registry disconnect clears the Solana namespace once its event
+        // is built. If the store's wallet held the slot, put it back.
+        disconnect: (params) => {
+          const restore = this.formo.deferWalletRestore(params.chainId);
+          return this.formo.disconnect(params).then(() => {
+            const live = this.storeHandler?.restorableConnection();
+            if (live && !this.formo.solanaAddress) restore(live);
+          });
+        },
         chain: (params) => this.formo.chain(params),
-        syncWalletState: (params) => this.formo.syncWalletState(params),
+        // Same hand-back as the disconnect wrapper, for the capture-off path.
+        syncWalletState: (params) => {
+          this.formo.syncWalletState(params);
+          if (params.address) return;
+          const live = this.storeHandler?.restorableConnection();
+          if (live && !this.formo.solanaAddress) this.formo.restoreWalletState(live);
+        },
+        restoreWalletState: (params) => this.formo.restoreWalletState(params),
+        deferWalletRestore: (chainId) => this.formo.deferWalletRestore(chainId),
         currentAddress: () => this.formo.currentAddress,
+        solanaAddress: () => this.formo.solanaAddress,
         ownsWalletEvents: () => !this.storeOwnsWalletEvents,
       },
-      { cluster: options?.cluster }
+      { cluster }
     );
-
-    if (options?.store) {
-      logger.info("SolanaManager: Initializing store-based Solana tracking");
-      this.attachStore(options.store, options.cluster);
-    }
   }
 
   private attachStore(
@@ -93,6 +110,24 @@ export class SolanaManager {
   ): void {
     this.storeHandler = new SolanaStoreHandler(this.formo, store, {
       cluster,
+      // The registry reports until the store observes a connection, so it
+      // must follow the store's endpoint in the meantime.
+      onClusterChange: (detected) => this.registry?.setCluster(detected),
+      // The store's wallet leaving clears the Solana namespace. A connection
+      // the registry reported before the store took ownership is still
+      // live; put it back if nothing else holds the slot.
+      afterWalletDisconnect: (departed, restore) => {
+        const held = this.formo.solanaAddress;
+        // Another Solana wallet took the slot meanwhile: leave it.
+        if (held && held !== departed.address) return;
+        // Capture was off, so disconnect() never ran: clear the stale slot.
+        if (held) this.formo.syncWalletState({ chainId: departed.chainId });
+        const live = this.registry?.newestConnection(departed.address);
+        if (!live) return;
+        // Nothing was awaited on the capture-off path, so a plain write.
+        if (held) this.formo.restoreWalletState(live);
+        else restore(live);
+      },
       beforeWalletConnect: (connection) => {
         // The store's cluster is authoritative even when chain autocapture is
         // disabled. Keep central attribution correct without manufacturing a
@@ -196,6 +231,12 @@ export class SolanaManager {
       this.pendingCluster = cluster;
     }
     this.registry?.setCluster(cluster);
+  }
+
+  /** @see SolanaWalletStandardRegistry.restorableFrom */
+  onReset(): void {
+    this.registry?.onReset();
+    this.storeHandler?.onReset();
   }
 
   /** Names of the Wallet Standard wallets discovered so far. */

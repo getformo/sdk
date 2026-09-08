@@ -261,6 +261,60 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
+  it("tells the Solana manager about reset()", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+    const onReset = sandbox.stub((formo as any).solanaManager, "onReset");
+
+    formo.reset();
+
+    expect(onReset.calledOnce).to.be.true;
+  });
+
+  it("does not redetect a wallet on a page hit after reset()", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+
+    announce(makeInjected());
+    await settle();
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+
+    // reset() keeps the anonymous id, so the wallet is already known for
+    // this browser: the page hit's detection retry must find it marked.
+    formo.reset();
+    await formo.page();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+    formo.cleanup();
+  });
+
+  it("detects a wallet again after opt-out then opt-in", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo, sent } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+
+    announce(makeInjected());
+    await settle();
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(1);
+
+    // Opt-out starts a new anonymous id, so the wallet is new to it.
+    formo.optOutTracking();
+    formo.optInTracking();
+    await settle();
+
+    expect(sent.filter((e) => e.type === "detect").length).to.equal(2);
+    formo.cleanup();
+  });
+
   it("retries detection when wagmi leaves an excluded chain", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({

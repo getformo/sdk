@@ -50,7 +50,7 @@ import {
   ITrackingPolicy,
   TrackingPolicy,
 } from "./tracking/TrackingPolicy";
-import { WalletStateStore } from "./wallet/WalletStateStore";
+import { WalletStateStore, WalletRestore } from "./wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./evm/EvmProviderRegistry";
 import {
   detectInjectedProviderInfo,
@@ -418,7 +418,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Reset user and wallet state while preserving the browser's anonymous id.
-   * Use `optOutTracking()` to clear the anonymous id and the attribution.
+   * The detect marker is scoped to that id, so it survives; the identify
+   * marker is cleared so a login after a logout identifies again. Use
+   * `optOutTracking()` to clear the id, the markers and the attribution.
    * @returns {void}
    */
   public reset(): void {
@@ -430,9 +432,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // page lifetime, because they fall back to currentAddress. Keep the
     // EVM provider reference so tracking can resume on the next connect.
     this.wallet.reset();
+    this.solanaManager?.onReset();
 
     cookie().remove(SESSION_USER_ID_KEY);
-    cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(ACTIVE_WALLET_KEY);
     // Attribution belongs to the visit, so reset preserves it.
@@ -692,6 +694,26 @@ export class FormoAnalytics implements IFormoAnalytics {
   }): void {
     this.wallet.syncWalletState(params);
     this.retryWalletDetection();
+  }
+
+  /** @see WalletStateStore.restore */
+  public restoreWalletState(params: { chainId: ChainID; address: Address }): void {
+    this.wallet.restore(params.chainId, params.address);
+    this.retryWalletDetection();
+  }
+
+  /** @see WalletStateStore.deferRestore */
+  public deferWalletRestore(chainId: ChainID): WalletRestore {
+    const restore = this.wallet.deferRestore(chainId);
+    return (wallet) => {
+      restore(wallet);
+      this.retryWalletDetection();
+    };
+  }
+
+  /** The Solana wallet held centrally, whichever namespace is active. */
+  get solanaAddress(): Address | undefined {
+    return this.wallet.solanaAddress;
   }
 
   private retryWalletDetection(): void {
@@ -1419,6 +1441,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.reset();
     // Consent withdrawal also clears the browser id and the attribution.
     clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+    // A fresh anonymous id has never seen these wallets.
+    cookie().remove(SESSION_WALLET_DETECTED_KEY);
+    cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     session().remove(SESSION_TRAFFIC_SOURCE_KEY);
 
     logger.info("Successfully opted out of tracking");

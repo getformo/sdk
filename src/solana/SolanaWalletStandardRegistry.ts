@@ -32,6 +32,7 @@
  */
 
 import { logger } from "../logger";
+import type { WalletRestore } from "../wallet/WalletStateStore";
 import type { AutocaptureEventType } from "../tracking/TrackingPolicy";
 import { isBlockedSolanaAddress, isSolanaAddress } from "./address";
 import {
@@ -76,15 +77,30 @@ export interface SolanaWalletStandardRegistryDeps {
   /**
    * Record wallet and chain state centrally WITHOUT emitting an event.
    *
-   * Observing a chain is not the same as reporting one: the exclusion gate
-   * keys off the central chain, so a cluster switch has to land there even
-   * when `autocapture.chain` is off. The EVM tracker separates the two the
-   * same way.
+   * Observing a wallet is not the same as reporting one: the exclusion gate
+   * keys off the central chain, so a connection or a cluster switch has to
+   * land there even when the matching autocapture event is off or the chain
+   * is excluded. Without an address, the chain's state is cleared. The EVM
+   * tracker separates the two the same way.
    * @see FormoAnalytics.syncWalletState
    */
-  syncWalletState(params: { chainId: number; address: string }): void;
+  syncWalletState(params: { chainId: number; address?: string }): void;
+  /**
+   * Put a still-connected wallet back after a disconnect cleared the Solana
+   * namespace, without taking the active slot from another namespace.
+   * @see FormoAnalytics.restoreWalletState
+   */
+  restoreWalletState(params: { chainId: number; address: string }): void;
+  /**
+   * A restore decided before `disconnect()` is awaited and written after.
+   * Refused if the namespace changed hands or was reset meanwhile.
+   * @see FormoAnalytics.deferWalletRestore
+   */
+  deferWalletRestore(chainId: number): WalletRestore;
   /** The wallet the SDK currently treats as active, across namespaces. */
   currentAddress(): string | undefined;
+  /** The wallet held in the Solana namespace, active or not. */
+  solanaAddress(): string | undefined;
   /**
    * Whether THIS registry reports connections.
    *
@@ -103,6 +119,8 @@ export interface SolanaWalletStandardRegistryOptions {
   cluster?: SolanaCluster;
 }
 
+type SolanaConnection = { address: string; chainId: number };
+
 interface TrackedWallet {
   wallet: WalletStandardWallet;
   name: string;
@@ -111,6 +129,8 @@ interface TrackedWallet {
   unsubscribe?: UnsubscribeFn;
   /** The account this registry currently considers connected, if any. */
   connected?: { address: string; chainId: number };
+  /** Order of connection, so the newest remaining wallet can take the slot. */
+  connectedSeq?: number;
   /** Whether this registry, rather than a store, emitted its connect. */
   connectWasReported: boolean;
 }
@@ -166,6 +186,14 @@ function firstSolanaAccount(
 
 export class SolanaWalletStandardRegistry {
   private wallets = new Map<WalletStandardWallet, TrackedWallet>();
+  private connectSeq = 0;
+  /**
+   * Connections observed before this sequence number predate a `reset()`.
+   * They stay tracked and their disconnect is still reported, but they are
+   * not put back into central state until observed again: reset() promised
+   * a clean slate.
+   */
+  private restorableFrom = 0;
   private cluster?: SolanaCluster;
   private removeWindowListener?: () => void;
   /** Set by cleanup(); a torn-down registry refuses late registrations. */
@@ -367,12 +395,19 @@ export class SolanaWalletStandardRegistry {
     if (previous && next && previous.address === next.address) return;
 
     if (!this.deps.ownsWalletEvents()) {
-      // The store handler reports this connection. Still record it, so a
-      // later change is judged against what the wallet actually did rather
-      // than against a stale snapshot.
+      // A connection this registry reported before a store took ownership
+      // is one the store cannot see end; close it here so its connect is
+      // not left open forever.
+      if (previous && tracked.connectWasReported) {
+        this.reportDisconnect(tracked, previous);
+      }
+      // The store handler reports the rest. Still record it, so a later
+      // change is judged against what the wallet actually did rather than
+      // against a stale snapshot.
       tracked.connected = next
         ? { address: next.address, chainId: this.chainIdFor(tracked) }
         : undefined;
+      if (next) tracked.connectedSeq = ++this.connectSeq;
       tracked.connectWasReported = false;
       return;
     }
@@ -384,6 +419,7 @@ export class SolanaWalletStandardRegistry {
   private reportConnect(tracked: TrackedWallet, address: string): void {
     const chainId = this.chainIdFor(tracked);
     tracked.connected = { address, chainId };
+    tracked.connectedSeq = ++this.connectSeq;
     tracked.connectWasReported = false;
 
     logger.info("SolanaWalletStandardRegistry: Wallet connected", {
@@ -391,6 +427,9 @@ export class SolanaWalletStandardRegistry {
       address,
       chainId,
     });
+
+    // Exclusion is not suppression: the connection lands centrally either way.
+    this.deps.syncWalletState({ chainId, address });
 
     if (!this.deps.isAutocaptureEnabled("connect")) return;
     // FormoAnalytics.connect() deliberately resolves without enqueueing when
@@ -425,13 +464,40 @@ export class SolanaWalletStandardRegistry {
       chainId: previous.chainId,
     });
 
-    if (!this.deps.isAutocaptureEnabled("disconnect")) return;
-    this.deps.disconnect(previous).catch((error) => {
-      logger.error(
-        "SolanaWalletStandardRegistry: Error emitting disconnect",
-        error
-      );
-    });
+    if (!this.deps.isAutocaptureEnabled("disconnect")) {
+      // Keep central state honest, as `disconnect()` would have. Another
+      // wallet holding the slot is not ours to touch. Otherwise clear the
+      // departed wallet (a restore is a no-op while suppressed), then hand
+      // the slot to the newest remaining connection.
+      const held = this.deps.solanaAddress();
+      if (held && held !== previous.address) return;
+      this.deps.syncWalletState({ chainId: previous.chainId });
+      const remaining = this.newestConnection();
+      if (remaining) this.deps.restoreWalletState(remaining);
+      return;
+    }
+    // `disconnect()` clears the Solana namespace once the event is built.
+    // Put the slot back afterwards if another wallet tracked here held it.
+    // A store's wallet is the store's to restore (see SolanaManager).
+    const held = this.deps.solanaAddress();
+    // Another wallet tracked here holds the slot, possibly on the same address.
+    const keep = held && this.trackedOn(held) ? held : undefined;
+    // Taken before the await: a reset() or a new session landing meanwhile
+    // makes the restore stale, and only the SDK can tell.
+    const restore = this.deps.deferWalletRestore(previous.chainId);
+    this.deps
+      .disconnect(previous)
+      .then(() => {
+        if (!keep || this.deps.solanaAddress()) return;
+        const owner = this.connectionOf(keep);
+        if (owner) restore(owner);
+      })
+      .catch((error) => {
+        logger.error(
+          "SolanaWalletStandardRegistry: Error emitting disconnect",
+          error
+        );
+      });
   }
 
   // ── cluster ─────────────────────────────────────────────────────────────
@@ -469,10 +535,10 @@ export class SolanaWalletStandardRegistry {
     // account at once, and writing each of them here would hand the wallet
     // slot to the last REGISTERED wallet rather than to the one the SDK
     // already treats as active, which is the last CONNECTED one.
-    const active = this.deps.currentAddress();
-    const owner =
-      all.find((t) => t.connected && t.connected.address === active) ??
-      all.find((t) => t.connected);
+    //
+    // Only a wallet observed since the last reset() may take the slot.
+    const slot = this.deps.solanaAddress() ?? this.deps.currentAddress();
+    const owner = this.trackedOn(slot) ?? this.newestTracked();
 
     for (const tracked of all) {
       const connected = tracked.connected;
@@ -483,7 +549,7 @@ export class SolanaWalletStandardRegistry {
       // the SDK on the cluster the wallet is actually on. `chain()` writes
       // the cluster itself, but only when the event is not suppressed.
       if (tracked === owner) {
-        this.deps.syncWalletState({ chainId, address: connected.address });
+        this.deps.restoreWalletState({ chainId, address: connected.address });
       }
       if (!this.deps.isAutocaptureEnabled("chain")) continue;
       this.deps
@@ -502,6 +568,43 @@ export class SolanaWalletStandardRegistry {
   /** Names of every wallet discovered so far, for the debug helpers. */
   get walletNames(): string[] {
     return Array.from(this.wallets.values()).map((t) => t.name);
+  }
+
+  /** The newest restorable connection, if any, other than `except`. */
+  newestConnection(except?: string): SolanaConnection | undefined {
+    return this.newestTracked(except)?.connected;
+  }
+
+  /** The restorable connection on `address`, if any. */
+  private connectionOf(address: string): SolanaConnection | undefined {
+    return this.trackedOn(address)?.connected;
+  }
+
+  private newestTracked(except?: string): TrackedWallet | undefined {
+    let newest: TrackedWallet | undefined;
+    this.wallets.forEach((candidate) => {
+      if (!this.isRestorable(candidate) || candidate.connected?.address === except) return;
+      if ((candidate.connectedSeq ?? 0) > (newest?.connectedSeq ?? -1)) newest = candidate;
+    });
+    return newest;
+  }
+
+  private trackedOn(address: string | undefined): TrackedWallet | undefined {
+    if (!address) return undefined;
+    for (const candidate of Array.from(this.wallets.values())) {
+      if (this.isRestorable(candidate) && candidate.connected?.address === address) return candidate;
+    }
+    return undefined;
+  }
+
+  /** Live, and observed since the last reset(). */
+  private isRestorable(candidate: TrackedWallet): boolean {
+    return !!candidate.connected && (candidate.connectedSeq ?? 0) >= this.restorableFrom;
+  }
+
+  /** @see restorableFrom */
+  onReset(): void {
+    this.restorableFrom = this.connectSeq + 1;
   }
 
   /**

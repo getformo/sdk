@@ -25,6 +25,7 @@ describe("SolanaManager", () => {
   const managers: SolanaManager[] = [];
 
   const ADDRESS = "FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn";
+  const OTHER_ADDRESS = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
   function makeStandardWallet(name: string) {
     const listeners: Array<(p: { accounts: unknown[] }) => void> = [];
@@ -89,12 +90,12 @@ describe("SolanaManager", () => {
     return store;
   }
 
-  const connectedWallet = (connectorId: string, name: string) =>
+  const connectedWallet = (connectorId: string, name: string, address: string = ADDRESS) =>
     ({
       status: "connected" as const,
       connectorId,
       session: {
-        account: { address: ADDRESS },
+        account: { address },
         connector: { id: connectorId, name },
         disconnect: async () => undefined,
       },
@@ -163,6 +164,10 @@ describe("SolanaManager", () => {
       isAutocaptureEnabled: sandbox.stub().returns(true),
       willTrackEvent: sandbox.stub().returns(true),
       syncWalletState: sandbox.stub(),
+      restoreWalletState: sandbox.stub(),
+      deferWalletRestore: sandbox.stub().callsFake(() => mockFormo.restoreWalletState),
+      currentAddress: undefined,
+      solanaAddress: undefined,
     } as any;
   });
 
@@ -255,6 +260,303 @@ describe("SolanaManager", () => {
       store.setState({ wallet: { status: "disconnected" } });
 
       expect(mockFormo.disconnect.calledOnce).to.be.true;
+    });
+
+    it("reports a connection a store given at init never observes", () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+
+      // The app connected outside framework-kit; the store stays silent.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // When the store does catch up it adopts that connect, once.
+      store.setState({ wallet: connectedWallet("phantom", "Phantom") });
+      expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
+    it("reports a wallet authorized before the SDK on the store's detected cluster", () => {
+      // No explicit cluster: the store's devnet endpoint is the only source.
+      // A wallet injected before the SDK registers the moment it hears
+      // app-ready, which the registry announces from its constructor.
+      const phantom = makeStandardWallet("Phantom");
+      phantom.accounts = [{ address: ADDRESS, chains: ["solana:devnet"] }];
+      const onReady = (e: Event) =>
+        (e as CustomEvent<WalletStandardRegisterApi>).detail.register(phantom as never);
+      window.addEventListener("wallet-standard:app-ready", onReady);
+      try {
+        makeManager({ store: makeStore() });
+      } finally {
+        window.removeEventListener("wallet-standard:app-ready", onReady);
+      }
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.devnet);
+    });
+
+    it("follows the store's endpoint while the registry still reports", () => {
+      const store = makeStore(); // devnet
+      makeManager({ store });
+      store.setState({
+        cluster: { endpoint: "https://api.testnet.solana.com", status: { status: "ready" } },
+      });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+
+      // The store never observes this connection; the registry reports it.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:testnet"] }]);
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.testnet);
+    });
+
+    it("follows a cluster change that arrives in the same store update as a wallet change", () => {
+      const store = makeStore(); // devnet
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      // The registry reports Phantom while the store is still disconnected.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet", "solana:testnet"] }]);
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.devnet);
+
+      // One batched update: the store's wallet and its endpoint change together.
+      store.setState({
+        wallet: connectedWallet("backpack", "Backpack"),
+        cluster: { endpoint: "https://api.testnet.solana.com", status: { status: "ready" } },
+      });
+
+      // Phantom's connection is closed by the registry; it must carry the
+      // cluster the registry learned from that batched update.
+      phantom.setAccounts([]);
+      const phantomDisconnect = mockFormo.disconnect.getCalls().find((c) => c.args[0]?.address === ADDRESS);
+      expect(phantomDisconnect, "the registry closed its own connection").to.not.equal(undefined);
+      expect(phantomDisconnect?.args[0]?.chainId).to.equal(SOLANA_CHAIN_IDS.testnet);
+    });
+
+    it("puts a registry connection back after the store's own wallet disconnects", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      // The registry reports Phantom while the store is disconnected.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      // The store then connects and later disconnects its own wallet, which
+      // clears the Solana namespace.
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      (mockFormo as any).solanaAddress = undefined; // disconnect() will have cleared the slot
+      mockFormo.restoreWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.restoreWalletState.lastCall?.args[0]).to.deep.equal({
+        address: ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("puts back a store wallet that was already connected when the store attached", async () => {
+      const manager = makeManager();
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]); // reported by the registry
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      manager.setStore(store); // attached while already connected
+      (mockFormo as any).solanaAddress = OTHER_ADDRESS;
+      mockFormo.disconnect.callsFake(async () => {
+        (mockFormo as any).solanaAddress = undefined;
+      });
+      mockFormo.restoreWalletState.resetHistory();
+
+      phantom.setAccounts([]); // the registry closes the connection it reported
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.restoreWalletState.lastCall?.args[0], "the initial connection is live").to.deep.equal({
+        address: OTHER_ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("puts the store's wallet back after a capture-off registry clear", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "disconnect");
+      const manager = makeManager();
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]); // reported by the registry
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack", ADDRESS) }); // same address, own connector
+      manager.setStore(store);
+      (mockFormo as any).solanaAddress = ADDRESS;
+      mockFormo.syncWalletState.callsFake((p: any) => {
+        if (!p.address) (mockFormo as any).solanaAddress = undefined; // the clear
+      });
+      mockFormo.restoreWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.restoreWalletState.lastCall?.args[0], "the store's connector is still live").to.deep.equal({
+        address: ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("clears the slot the store's wallet left when disconnect capture is off", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "disconnect");
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      makeManager({ store });
+      (mockFormo as any).solanaAddress = OTHER_ADDRESS; // the store's wallet holds the slot
+      mockFormo.syncWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.disconnect.called, "no event with capture off").to.be.false;
+      expect(mockFormo.syncWalletState.lastCall?.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("hands the slot to a live registry wallet when the store's wallet leaves with capture off", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "disconnect");
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]); // reported by the registry
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      (mockFormo as any).solanaAddress = OTHER_ADDRESS;
+      mockFormo.restoreWalletState.resetHistory();
+      mockFormo.syncWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      // The departed wallet is cleared first: a restore is refused while
+      // tracking is suppressed and must not leave it in the slot.
+      expect(mockFormo.syncWalletState.calledOnce).to.be.true;
+      expect(mockFormo.syncWalletState.firstCall.args[0]).to.deep.equal({ chainId: SOLANA_CHAIN_IDS.devnet });
+      expect(mockFormo.syncWalletState.calledBefore(mockFormo.restoreWalletState)).to.be.true;
+      expect(mockFormo.restoreWalletState.lastCall?.args[0]).to.deep.equal({
+        address: ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("does not put the departing wallet back when the registry also tracks it", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      // The same wallet reaches both: the store reports it, the registry records it silently.
+      store.setState({ wallet: connectedWallet("phantom", "Phantom") });
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      (mockFormo as any).solanaAddress = undefined; // disconnect() will have cleared the slot
+      mockFormo.restoreWalletState.resetHistory();
+
+      // The store sees the disconnect before the Wallet Standard change.
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      const restored = mockFormo.restoreWalletState.getCalls().map((c) => c.args[0]?.address);
+      expect(restored, "the departing address is not restored").to.not.include(ADDRESS);
+    });
+
+    it("puts the store's wallet back after a registry disconnect clears the namespace", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]); // reported by the registry
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      (mockFormo as any).solanaAddress = OTHER_ADDRESS;
+      mockFormo.disconnect.callsFake(async () => {
+        (mockFormo as any).solanaAddress = undefined; // disconnect() cleared the Solana namespace
+        mockFormo.currentAddress = "0x000000000000000000000000000000000000dEaD"; // an EVM wallet falls back in
+      });
+      mockFormo.restoreWalletState.resetHistory();
+      mockFormo.syncWalletState.resetHistory(); // count only what the disconnect writes
+
+      phantom.setAccounts([]); // the registry closes its own connection
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Through the namespace-preserving writer only: a syncWalletState()
+      // here would promote the Solana wallet over the EVM one.
+      expect(mockFormo.syncWalletState.called).to.be.false;
+      expect(mockFormo.restoreWalletState.lastCall?.args[0]).to.deep.equal({
+        address: OTHER_ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+      expect(
+        mockFormo.deferWalletRestore.calledBefore(mockFormo.disconnect),
+        "the restore marker predates the disconnect"
+      ).to.be.true;
+    });
+
+    it("does not put the store's pre-reset wallet back after a registry disconnect", async () => {
+      const store = makeStore();
+      const manager = makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      manager.onReset(); // logout
+      (mockFormo as any).solanaAddress = undefined;
+      mockFormo.restoreWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.restoreWalletState.called, "Backpack predates the reset").to.be.false;
+    });
+
+    it("does not put a pre-reset registry wallet back after the store's wallet leaves", async () => {
+      const store = makeStore();
+      const manager = makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      manager.onReset(); // logout, then the store's wallet leaves
+      (mockFormo as any).solanaAddress = undefined;
+      mockFormo.restoreWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.restoreWalletState.called, "Phantom predates the reset").to.be.false;
+    });
+
+    it("takes the restore marker before the store's disconnect is awaited", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      mockFormo.deferWalletRestore.resetHistory();
+      mockFormo.disconnect.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+
+      expect(mockFormo.deferWalletRestore.calledOnce).to.be.true;
+      expect(mockFormo.deferWalletRestore.calledBefore(mockFormo.disconnect)).to.be.true;
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    it("clears a departed store wallet behind an active EVM wallet when capture is off", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "disconnect");
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      makeManager({ store });
+      mockFormo.currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM connected last
+      (mockFormo as any).solanaAddress = OTHER_ADDRESS; // the departed wallet still sits in its namespace
+      mockFormo.syncWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.syncWalletState.lastCall?.args[0], "Solana slot cleared, EVM untouched").to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
     });
 
     it("still detects wallets, which the store never reported", () => {
@@ -404,6 +706,28 @@ describe("SolanaManager", () => {
 
       formo.cleanup();
       expect(connect.called).to.be.false;
+    });
+
+    it("gates later events on a Wallet Standard connection to an excluded chain", async () => {
+      const formo = await FormoAnalytics.init("test-write-key", {
+        tracking: { excludeChains: [SOLANA_CHAIN_IDS["mainnet-beta"]] },
+        evm: false,
+      });
+      const sent: any[] = [];
+      sandbox
+        .stub((formo as any).eventManager, "addEvent")
+        .callsFake(async (e: any) => {
+          sent.push(e);
+        });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:mainnet"] }]);
+
+      await formo.track("Swap Confirmed");
+      formo.cleanup();
+
+      expect(formo.currentChainId).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+      expect(sent.filter((e) => e.type === "track")).to.deep.equal([]);
     });
 
     it("reports a wallet-adapter style connection end to end", async () => {
