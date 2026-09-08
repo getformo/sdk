@@ -29,6 +29,8 @@ describe("SolanaWalletStandardRegistry", () => {
   let autocapture: Record<string, boolean>;
   let willTrack: boolean;
   let currentAddress: string | undefined;
+  /** The Solana slot, when it differs from what currentAddress implies. */
+  let solanaSlot: string | undefined;
   let originalGlobals: Map<PropertyKey, PropertyDescriptor | undefined>;
   const registries: SolanaWalletStandardRegistry[] = [];
 
@@ -141,6 +143,7 @@ describe("SolanaWalletStandardRegistry", () => {
     autocapture = {};
     willTrack = true;
     currentAddress = undefined;
+    solanaSlot = undefined;
     deps = {
       isAutocaptureEnabled: sandbox.stub().callsFake((t: string) => autocapture[t] !== false),
       willTrackEvent: sandbox.stub().callsFake(() => willTrack),
@@ -149,7 +152,12 @@ describe("SolanaWalletStandardRegistry", () => {
       disconnect: sandbox.stub().resolves(),
       chain: sandbox.stub().resolves(),
       syncWalletState: sandbox.stub(),
+      restoreWalletState: sandbox.stub(),
       currentAddress: sandbox.stub().callsFake(() => currentAddress),
+      // The Solana slot: an explicit override, else currentAddress when it is a Solana address.
+      solanaAddress: sandbox
+        .stub()
+        .callsFake(() => solanaSlot ?? (currentAddress && !currentAddress.startsWith("0x") ? currentAddress : undefined)),
       ownsWalletEvents: sandbox.stub().callsFake(() => ownsWalletEvents),
     } as unknown as typeof deps;
   });
@@ -514,7 +522,7 @@ describe("SolanaWalletStandardRegistry", () => {
       backpack.setAccounts([]);
 
       expect(deps.disconnect.called).to.be.false;
-      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+      expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
         address: ADDRESS,
         chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
       });
@@ -536,7 +544,7 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
-    it("clears the Solana slot without promoting another Solana wallet while an EVM wallet is active", () => {
+    it("hands the Solana slot to a remaining wallet without displacing an active EVM wallet", () => {
       autocapture = { disconnect: false };
       const phantom = makeWallet("Phantom");
       const backpack = makeWallet("Backpack");
@@ -546,11 +554,15 @@ describe("SolanaWalletStandardRegistry", () => {
       phantom.setAccounts([account(ADDRESS)]);
       backpack.setAccounts([account(OTHER_ADDRESS)]);
       currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM connected last
+      solanaSlot = OTHER_ADDRESS; // Backpack holds the Solana slot behind it
       deps.syncWalletState.resetHistory();
 
       backpack.setAccounts([]);
 
-      expect(deps.syncWalletState.lastCall.args[0], "no promotion over the active EVM wallet").to.deep.equal({
+      // A namespace-preserving restore, never a promoting sync.
+      expect(deps.syncWalletState.called).to.be.false;
+      expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
+        address: ADDRESS,
         chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
       });
     });
@@ -572,7 +584,7 @@ describe("SolanaWalletStandardRegistry", () => {
 
       c.setAccounts([]);
 
-      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+      expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
         address: OTHER_ADDRESS,
         chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
       });
@@ -611,6 +623,7 @@ describe("SolanaWalletStandardRegistry", () => {
 
       expect(deps.disconnect.calledOnce, "the reported connection is closed").to.be.true;
       expect(deps.syncWalletState.called, "the store restores its own wallet, not the registry").to.be.false;
+      expect(deps.restoreWalletState.called).to.be.false;
     });
 
     it("does not restore a tracked wallet that disconnected while the first disconnect was in flight", async () => {
@@ -622,17 +635,18 @@ describe("SolanaWalletStandardRegistry", () => {
       phantom.setAccounts([account(ADDRESS)]);
       backpack.setAccounts([account(OTHER_ADDRESS)]);
       currentAddress = OTHER_ADDRESS;
-      let settle!: () => void;
-      deps.disconnect.callsFake(() => new Promise<void>((r) => { settle = () => { currentAddress = undefined; r(); }; }));
-      deps.syncWalletState.resetHistory();
+      const resolvers: Array<() => void> = [];
+      deps.disconnect.callsFake(() => new Promise<void>((r) => { resolvers.push(r); }));
+      deps.restoreWalletState.resetHistory();
 
-      phantom.setAccounts([]);   // keeps Backpack in mind
+      phantom.setAccounts([]);   // keeps Backpack in mind (first resolver)
       backpack.setAccounts([]);  // but Backpack leaves too before Phantom's disconnect settles
-      settle();
+      currentAddress = undefined; // both disconnects cleared the namespace
+      for (const r of resolvers) r();
       await new Promise((r) => setTimeout(r, 0));
 
-      const restored = deps.syncWalletState.getCalls().map((c) => c.args[0]?.address).filter(Boolean);
-      expect(restored, "a departed wallet is not put back").to.not.include(OTHER_ADDRESS);
+      expect(resolvers.length, "both disconnects were emitted").to.equal(2);
+      expect(deps.restoreWalletState.called, "a departed wallet is not put back").to.be.false;
     });
 
     it("does not overwrite a wallet that connected while the disconnect was in flight", async () => {
@@ -654,22 +668,29 @@ describe("SolanaWalletStandardRegistry", () => {
       expect(deps.syncWalletState.called, "the newer wallet keeps the slot").to.be.false;
     });
 
-    it("does not restore over an EVM wallet that became active during the disconnect", async () => {
+    it("restores a tracked wallet into the empty Solana slot even when an EVM wallet is active", async () => {
       const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
       makeRegistry();
       installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
       phantom.setAccounts([account(ADDRESS)]);
-      ownsWalletEvents = false;
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
       currentAddress = OTHER_ADDRESS;
       deps.disconnect.callsFake(async () => {
-        currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM connected meanwhile
+        currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM fallback after the clear
+        solanaSlot = undefined;
       });
       deps.syncWalletState.resetHistory();
 
       phantom.setAccounts([]);
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(deps.syncWalletState.called, "the EVM wallet keeps the slot").to.be.false;
+      expect(deps.syncWalletState.called, "never a promoting sync").to.be.false;
+      expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
+        address: OTHER_ADDRESS,
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
     });
 
     it("restores a retained wallet with the chain it is on once the disconnect settles", async () => {
@@ -685,12 +706,12 @@ describe("SolanaWalletStandardRegistry", () => {
         registry.setCluster("devnet"); // the cluster moves while the event is in flight
         currentAddress = undefined;
       });
-      deps.syncWalletState.resetHistory();
+      deps.restoreWalletState.resetHistory();
 
       phantom.setAccounts([]);
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+      expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
         chainId: SOLANA_CHAIN_IDS.devnet,
         address: OTHER_ADDRESS,
       });
@@ -708,12 +729,12 @@ describe("SolanaWalletStandardRegistry", () => {
       deps.disconnect.callsFake(async () => {
         currentAddress = undefined;
       });
-      deps.syncWalletState.resetHistory();
+      deps.restoreWalletState.resetHistory();
 
       phantom.setAccounts([]);
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+      expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
         chainId: SOLANA_CHAIN_IDS.devnet,
         address: OTHER_ADDRESS,
       });
@@ -848,8 +869,9 @@ describe("SolanaWalletStandardRegistry", () => {
       registry.setCluster("devnet");
 
       expect(deps.chain.called).to.be.false;
+      // The owner keeps its slot on the new cluster; no other namespace moves.
       expect(
-        deps.syncWalletState.calledWith({
+        deps.restoreWalletState.calledWith({
           chainId: SOLANA_CHAIN_IDS["devnet"],
           address: ADDRESS,
         })
@@ -870,11 +892,13 @@ describe("SolanaWalletStandardRegistry", () => {
       currentAddress = ADDRESS;
       // Count only what the cluster switch writes, not the two connects.
       deps.syncWalletState.resetHistory();
+      deps.restoreWalletState.resetHistory();
 
       registry.setCluster("devnet");
 
-      expect(deps.syncWalletState.calledOnce).to.be.true;
-      expect(deps.syncWalletState.firstCall.args[0]).to.deep.equal({
+      expect(deps.syncWalletState.called).to.be.false;
+      expect(deps.restoreWalletState.calledOnce).to.be.true;
+      expect(deps.restoreWalletState.firstCall.args[0]).to.deep.equal({
         chainId: SOLANA_CHAIN_IDS["devnet"],
         address: ADDRESS,
       });

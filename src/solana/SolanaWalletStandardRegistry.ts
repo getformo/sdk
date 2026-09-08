@@ -84,8 +84,16 @@ export interface SolanaWalletStandardRegistryDeps {
    * @see FormoAnalytics.syncWalletState
    */
   syncWalletState(params: { chainId: number; address?: string }): void;
+  /**
+   * Put a still-connected wallet back after a disconnect cleared the Solana
+   * namespace, without taking the active slot from another namespace.
+   * @see FormoAnalytics.restoreWalletState
+   */
+  restoreWalletState(params: { chainId: number; address: string }): void;
   /** The wallet the SDK currently treats as active, across namespaces. */
   currentAddress(): string | undefined;
+  /** The wallet held in the Solana namespace, active or not. */
+  solanaAddress(): string | undefined;
   /**
    * Whether THIS registry reports connections.
    *
@@ -448,12 +456,12 @@ export class SolanaWalletStandardRegistry {
       // slot follows the active wallet: if another wallet owns it, leave it;
       // if this one did, hand it to a wallet still connected, else clear it,
       // so the gone wallet does not attach to later events.
-      // `currentAddress` spans namespaces: another Solana wallet holding it
-      // (tracked here or owned by a store) means the slot is not ours to
-      // touch. The newest remaining connection takes over, matching
-      // last-connected-wins.
-      const active = this.deps.currentAddress();
-      if (active && active !== previous.address && isSolanaAddress(active)) return;
+      // Another Solana wallet holding the slot (tracked here or a store's)
+      // means it is not ours to touch. Otherwise the newest remaining
+      // connection takes the Solana slot, matching last-connected-wins,
+      // without displacing an active EVM wallet; with none left, clear it.
+      const held = this.deps.solanaAddress();
+      if (held && held !== previous.address) return;
       let remaining: TrackedWallet | undefined;
       this.wallets.forEach((candidate) => {
         if (candidate === tracked || !candidate.connected) return;
@@ -461,37 +469,28 @@ export class SolanaWalletStandardRegistry {
           remaining = candidate;
         }
       });
-      // Promote a remaining Solana wallet only if this one held the slot.
-      // With an EVM wallet active, clear the Solana namespace and leave the
-      // active namespace where it is.
-      const thisWasActive = !active || active === previous.address;
-      this.deps.syncWalletState(
-        thisWasActive && remaining?.connected
-          ? { chainId: remaining.connected.chainId, address: remaining.connected.address }
-          : { chainId: previous.chainId }
-      );
+      if (remaining?.connected) this.deps.restoreWalletState(remaining.connected);
+      else this.deps.syncWalletState({ chainId: previous.chainId });
       return;
     }
     // `disconnect()` clears the Solana namespace once the event is built.
     // If another wallet tracked here held the slot, put it back afterwards:
-    // its session did not end. Only into a slot that is still empty, and
-    // only if that wallet is still connected by then; a store's wallet is
-    // the store's to restore (see SolanaManager).
-    const active = this.deps.currentAddress();
-    const keep =
-      active && active !== previous.address && isSolanaAddress(active)
-        ? active
-        : undefined;
+    // its session did not end. Only into a Solana slot that is still empty,
+    // only if that wallet is still connected by then, and without taking
+    // the active slot from an EVM wallet. A store's wallet is the store's
+    // to restore (see SolanaManager).
+    const held = this.deps.solanaAddress();
+    const keep = held && held !== previous.address ? held : undefined;
     this.deps
       .disconnect(previous)
       .then(() => {
-        if (!keep || this.deps.currentAddress()) return;
+        if (!keep || this.deps.solanaAddress()) return;
         let owner: { address: string; chainId: number } | undefined;
         this.wallets.forEach((candidate) => {
           const connected = candidate.connected;
           if (connected && connected.address === keep) owner = connected;
         });
-        if (owner) this.deps.syncWalletState(owner);
+        if (owner) this.deps.restoreWalletState(owner);
       })
       .catch((error) => {
         logger.error(
@@ -550,7 +549,7 @@ export class SolanaWalletStandardRegistry {
       // the SDK on the cluster the wallet is actually on. `chain()` writes
       // the cluster itself, but only when the event is not suppressed.
       if (tracked === owner) {
-        this.deps.syncWalletState({ chainId, address: connected.address });
+        this.deps.restoreWalletState({ chainId, address: connected.address });
       }
       if (!this.deps.isAutocaptureEnabled("chain")) continue;
       this.deps

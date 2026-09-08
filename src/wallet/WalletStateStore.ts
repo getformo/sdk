@@ -138,6 +138,27 @@ export class WalletStateStore {
     return this.state.evm.address;
   }
 
+  get solanaAddress(): Address | undefined {
+    return this.state.solana.address;
+  }
+
+  /**
+   * Write a namespace's wallet WITHOUT changing which namespace is active.
+   *
+   * For putting a still-connected wallet back after a disconnect on its
+   * namespace cleared it. That wallet did not just connect, so it must not
+   * take the slot from a wallet on the other namespace that did; it only
+   * becomes active when nothing else is.
+   */
+  restore(chainId: ChainID, address: Address): void {
+    const namespace = this.namespaceOf(chainId);
+    const ns = this.state[namespace];
+    ns.address = address;
+    ns.chainId = chainId;
+    if (!this._activeNamespace) this._activeNamespace = namespace;
+    this.syncDerived();
+  }
+
   get evmChainId(): ChainID | undefined {
     return this.state.evm.chainId;
   }

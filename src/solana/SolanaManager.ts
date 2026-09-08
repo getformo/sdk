@@ -36,7 +36,6 @@ import {
   SolanaOptions,
 } from "./types";
 import { SolanaClientStore } from "./storeTypes";
-import { isSolanaAddress } from "./address";
 
 export class SolanaManager {
   private storeHandler?: SolanaStoreHandler;
@@ -89,11 +88,13 @@ export class SolanaManager {
         disconnect: (params) =>
           this.formo.disconnect(params).then(() => {
             const live = this.storeHandler?.currentConnection();
-            if (live && !this.formo.currentAddress) this.formo.syncWalletState(live);
+            if (live && !this.formo.solanaAddress) this.formo.restoreWalletState(live);
           }),
         chain: (params) => this.formo.chain(params),
         syncWalletState: (params) => this.formo.syncWalletState(params),
+        restoreWalletState: (params) => this.formo.restoreWalletState(params),
         currentAddress: () => this.formo.currentAddress,
+        solanaAddress: () => this.formo.solanaAddress,
         ownsWalletEvents: () => !this.storeOwnsWalletEvents,
       },
       { cluster }
@@ -113,18 +114,14 @@ export class SolanaManager {
       // the registry reported before the store took ownership is still
       // live; put it back if nothing else holds the slot.
       afterWalletDisconnect: (departed) => {
-        const current = this.formo.currentAddress;
-        if (current && current !== departed.address) {
-          // A Solana wallet took the slot meanwhile: leave it. An active EVM
-          // wallet keeps its namespace, but the departed Solana account must
-          // not linger behind it (capture off means disconnect() never ran).
-          if (!isSolanaAddress(current)) this.formo.syncWalletState({ chainId: departed.chainId });
-          return;
-        }
+        const held = this.formo.solanaAddress;
+        // Another Solana wallet took the slot meanwhile: leave it.
+        if (held && held !== departed.address) return;
         const live = this.registry?.newestConnection(departed.address);
         if (live) {
-          this.formo.syncWalletState(live);
-        } else if (current === departed.address) {
+          // Back into the Solana slot without displacing an active EVM wallet.
+          this.formo.restoreWalletState(live);
+        } else if (held === departed.address) {
           // Capture was off, so disconnect() never ran: clear the stale slot.
           this.formo.syncWalletState({ chainId: departed.chainId });
         }

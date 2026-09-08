@@ -698,6 +698,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.retryWalletDetection();
   }
 
+  /** @see WalletStateStore.restore */
+  public restoreWalletState(params: { chainId: ChainID; address: Address }): void {
+    this.wallet.restore(params.chainId, params.address);
+  }
+
+  /** The Solana wallet held centrally, whichever namespace is active. */
+  get solanaAddress(): Address | undefined {
+    return this.wallet.solanaAddress;
+  }
+
   private retryWalletDetection(): void {
     if (this.isCleanedUp) return;
     void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());

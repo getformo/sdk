@@ -272,6 +272,31 @@ describe("WalletStateStore", () => {
     });
   });
 
+  describe("restore", () => {
+    const SOL_B = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" as Address;
+
+    it("writes a namespace without changing which namespace is active", () => {
+      const s = store();
+      s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+      s.syncWalletState({ chainId: 1, address: EVM_A }); // EVM connected last and stays active
+
+      s.restore(SOL_CHAIN, SOL_B);
+
+      expect(s.solanaAddress).to.equal(SOL_B);
+      expect(s.address, "the active EVM wallet is untouched").to.equal(EVM_A);
+      expect(s.chainId).to.equal(1);
+    });
+
+    it("becomes the active namespace only when nothing else is", () => {
+      const s = store();
+
+      s.restore(SOL_CHAIN, SOL_A);
+
+      expect(s.address).to.equal(SOL_A);
+      expect(s.chainId).to.equal(SOL_CHAIN);
+    });
+  });
+
   describe("persistence", () => {
     it("round-trips the wallet through the cookie", () => {
       const a = store();
