@@ -1,27 +1,241 @@
 import { FormoAnalytics } from "./FormoAnalytics";
-import { Options } from "./types";
+import { IFormoAnalytics, Options } from "./types";
 
-export function formofy(writeKey: string, options?: Options) {
-  if (writeKey && typeof window !== "undefined") {
-    FormoAnalytics.init(writeKey, options)
+/**
+ * The instance formofy() last created or adopted for this page, and the
+ * write key it was created for. Held while init is still pending, so calls
+ * in the same tick share one instance.
+ *
+ * Stored on the page, not in this module: a tag manager can inject the
+ * bundle twice, and each copy would otherwise start its own instance
+ * before the first had put anything on window.formo.
+ */
+type Live = {
+  writeKey: string;
+  promise: Promise<IFormoAnalytics>;
+  /** Set once the promise resolves, so the entry can be compared with window.formo. */
+  instance?: IFormoAnalytics;
+};
+type Registry = { live: Live | null; managed: WeakSet<IFormoAnalytics> };
+const SLOT = Symbol.for("formo.live");
+const SUPERSEDED = Symbol("formofy.superseded");
+const registry = (): Registry => {
+  const w = window as unknown as Record<symbol, Registry | Live | undefined>;
+  const found = w[SLOT];
+  if (found && "managed" in found) return found;
+  // Nothing yet, or a slot written by an older copy that stored the live
+  // entry bare (hot reload across versions): keep what it had.
+  const migrated: Registry = { live: found ?? null, managed: new WeakSet() };
+  if (migrated.live?.instance) migrated.managed.add(migrated.live.instance);
+  if (migrated.live && !migrated.live.instance) {
+    // Still pending under the old owner, whose failure handler no longer
+    // recognises the slot. Clear the entry ourselves if it rejects.
+    const pending = migrated.live;
+    pending.promise
       .then((f) => {
-        window.formo = f;
-        // Call ready callback if provided with proper error handling
-        if (options?.ready) {
-          // Wrap the callback execution in a try-catch to handle synchronous errors
-          try {
-            options.ready(f);
-          } catch (callbackError) {
-            console.error("Error in FormoAnalytics ready callback:", callbackError);
-          }
-          
-          // Note: If the callback returns a Promise (even though typed as void),
-          // it's the responsibility of the callback implementation to handle its own errors.
-          // This prevents the callback from throwing unhandled rejections.
-        }
+        pending.instance = f;
+        migrated.managed.add(f);
       })
-      .catch((e) => console.error("Error initializing FormoAnalytics:", e));
-  } else {
-    console.warn("FormoAnalytics not found");
+      .catch(() => {
+        if (migrated.live === pending) migrated.live = null;
+      });
   }
+  w[SLOT] = migrated;
+  return migrated;
+};
+const getLive = (): Live | null => registry().live;
+const setLive = (live: Live | null): void => {
+  registry().live = live;
+};
+/** Instances formofy created or adopted, so its own predecessor on window.formo is not mistaken for an app replacement. */
+const remember = (f: IFormoAnalytics): void => {
+  registry().managed.add(f);
+};
+
+/**
+ * Script-tag entry point. One live instance per page:
+ *
+ * - A repeat call with the same write key reuses the existing instance (or
+ *   the one still initialising) and only runs the new `ready` callback.
+ *   Tag managers, React strict mode, and hot reloads all call this twice,
+ *   and a second instance would double every autocaptured event.
+ * - A call with a different write key retires the previous instance first,
+ *   so only one instance ever sends.
+ * - An instance the app put on `window.formo` itself is adopted the same
+ *   way, matched on its write key.
+ */
+export function formofy(writeKey: string, options?: Options): void {
+  if (!writeKey || typeof window === "undefined") {
+    console.warn("FormoAnalytics not found");
+    return;
+  }
+
+  const current = currentInstance();
+  if (!current || current.writeKey !== writeKey) {
+    start(writeKey, options, current);
+    return;
+  }
+
+  setLive(current);
+  if (current.instance && !isDisposed(current.instance)) {
+    // Healthy and resolved: serve it now, so a key switch later in the
+    // same tick cannot take the callback away.
+    if (!window.formo) window.formo = current.instance;
+    runReady(options, current.instance);
+    return;
+  }
+  current.promise
+    .then((f) => {
+      if (!isDisposed(f)) {
+        if (!window.formo) window.formo = f;
+        runReady(options, f);
+        return;
+      }
+      // The app tore it down itself. Start over, unless a newer call
+      // already replaced it: a same-key restart is shared, another key wins.
+      const now = getLive();
+      if (now !== current) {
+        if (now && now.writeKey === writeKey) {
+          now.promise
+            .then((g) => {
+              if (getLive() === now && !isDisposed(g)) runReady(options, g);
+            })
+            .catch(() => undefined);
+        }
+        return;
+      }
+      forgetGlobal(f);
+      start(writeKey, options, null);
+    })
+    .catch(() => undefined);
+}
+
+/**
+ * What formofy() should build on: the live entry, unless the app has since
+ * put an instance of its own on window.formo, which then wins and the
+ * cached one is retired so both do not send.
+ */
+function currentInstance(): Live | null {
+  const live = getLive();
+  const own = adoptWindowInstance();
+  if (!live) {
+    if (own) remember(own.instance!);
+    return own;
+  }
+  if (own && own.instance !== live.instance && !registry().managed.has(own.instance!)) {
+    // The app's own instance wins. A resolved cached instance is retired
+    // now; a pending one retires itself on completion (see start).
+    if (live.instance) retire(live.instance);
+    remember(own.instance!);
+    setLive(own);
+    return own;
+  }
+  return live;
+}
+
+/** Retire `previous`, if any, then initialise a new instance and make it live. */
+function start(writeKey: string, options: Options | undefined, previous: Live | null): void {
+  // With nothing to retire, init runs synchronously: its constructor
+  // installs the history hooks, and a navigation right after formofy()
+  // must be seen.
+  const entry = { writeKey } as Live;
+  if (previous && !previous.instance) {
+    // Still initialising: retire it once it exists, then start, unless a
+    // later call took the slot while we waited.
+    entry.promise = previous.promise
+      .then((f) => retire(f))
+      .catch(() => undefined)
+      .then(() => {
+        if (getLive() !== entry) return Promise.reject(SUPERSEDED);
+        // The app installed its own instance while we waited: it wins.
+        const own = adoptWindowInstance();
+        if (own && !registry().managed.has(own.instance!)) {
+          remember(own.instance!);
+          setLive(own);
+          if (own.writeKey === writeKey) runReady(options, own.instance!);
+          return Promise.reject(SUPERSEDED);
+        }
+        return FormoAnalytics.init(writeKey, options);
+      });
+  } else {
+    if (previous?.instance) retire(previous.instance);
+    entry.promise = FormoAnalytics.init(writeKey, options);
+  }
+  const promise = entry.promise;
+  setLive(entry);
+
+  promise
+    .then((f) => {
+      entry.instance = f;
+      remember(f);
+      // Superseded while initialising (another key took over): this result
+      // must not send.
+      if (getLive() !== entry) {
+        retire(f);
+        return;
+      }
+      // The app installed its own instance meanwhile: it wins, this result
+      // stands down, and the callback only runs if that instance is for the
+      // key that was asked for.
+      const own = adoptWindowInstance();
+      if (own && own.instance !== f && !registry().managed.has(own.instance!)) {
+        retire(f);
+        remember(own.instance!);
+        setLive(own);
+        if (own.writeKey === writeKey) runReady(options, own.instance!);
+        return;
+      }
+      window.formo = f;
+      runReady(options, f);
+    })
+    .catch((e) => {
+      if (e === SUPERSEDED) return;
+      // Let a later call try again rather than pin a failed init forever.
+      if (getLive() === entry) setLive(null);
+      console.error("Error initializing FormoAnalytics:", e);
+    });
+}
+
+/** An instance the app created itself and exposed on window.formo. */
+function adoptWindowInstance(): Live | null {
+  const f = window.formo as (IFormoAnalytics & { writeKey?: unknown }) | undefined;
+  if (!f || typeof f.writeKey !== "string") return null;
+  if (isDisposed(f)) {
+    forgetGlobal(f);
+    return null;
+  }
+  return { writeKey: f.writeKey, promise: Promise.resolve(f), instance: f };
+}
+
+/** Tear an instance down and stop it being reachable as the page global. */
+function retire(f: IFormoAnalytics): void {
+  if (!isDisposed(f)) f.cleanup();
+  forgetGlobal(f);
+}
+
+function isDisposed(f: IFormoAnalytics): boolean {
+  return (f as { disposed?: boolean }).disposed === true;
+}
+
+function forgetGlobal(f: IFormoAnalytics): void {
+  if (window.formo === f) delete window.formo;
+}
+
+function runReady(options: Options | undefined, f: IFormoAnalytics): void {
+  if (!options?.ready) return;
+  // A synchronous throw must not escape. A callback that returns a promise
+  // owns its own rejections.
+  try {
+    options.ready(f);
+  } catch (callbackError) {
+    console.error("Error in FormoAnalytics ready callback:", callbackError);
+  }
+}
+
+/** @internal Forget the live instance. For tests only. */
+export function _resetFormofy(): void {
+  if (typeof window === "undefined") return;
+  const r = registry();
+  r.live = null;
+  r.managed = new WeakSet();
 }
