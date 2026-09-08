@@ -1318,12 +1318,14 @@ describe("EventQueue", () => {
 
     it("reports the batches it abandons when consent goes mid-flush", async () => {
       let allowed = true;
+      const errorHandler = sinon.spy();
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
         flushAt: 20,
         flushInterval: 30000,
         retryCount: 1,
         canSend: () => allowed,
+        errorHandler,
       });
       await eventQueue.enqueue(createMockEvent());
       await (eventQueue as any).pendingFlush;
@@ -1347,6 +1349,8 @@ describe("EventQueue", () => {
       expect(delivered, "batch one delivered").to.be.greaterThan(0);
       expect(delivered + dropped).to.equal(8);
       expect(flushCb.firstCall.args[0]?.code, "the flush reports the drop").to.equal("consent_withdrawn");
+      expect(errorHandler.calledOnce, "the errorHandler hears it too").to.be.true;
+      expect(errorHandler.firstCall.args[0]?.code).to.equal("consent_withdrawn");
     });
 
     it("does not send when consent is revoked before flush", async () => {
