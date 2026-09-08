@@ -18,9 +18,17 @@ type Live = {
 };
 type Registry = { live: Live | null; managed: WeakSet<IFormoAnalytics> };
 const SLOT = Symbol.for("formo.live");
+const SUPERSEDED = Symbol("formofy.superseded");
 const registry = (): Registry => {
-  const w = window as unknown as Record<symbol, Registry | undefined>;
-  return (w[SLOT] ??= { live: null, managed: new WeakSet() });
+  const w = window as unknown as Record<symbol, Registry | Live | undefined>;
+  const found = w[SLOT];
+  if (found && "managed" in found) return found;
+  // Nothing yet, or a slot written by an older copy that stored the live
+  // entry bare (hot reload across versions): keep what it had.
+  const migrated: Registry = { live: found ?? null, managed: new WeakSet() };
+  if (migrated.live?.instance) migrated.managed.add(migrated.live.instance);
+  w[SLOT] = migrated;
+  return migrated;
 };
 const getLive = (): Live | null => registry().live;
 const setLive = (live: Live | null): void => {
@@ -56,6 +64,13 @@ export function formofy(writeKey: string, options?: Options): void {
   }
 
   setLive(current);
+  if (current.instance && !isDisposed(current.instance)) {
+    // Healthy and resolved: serve it now, so a key switch later in the
+    // same tick cannot take the callback away.
+    if (!window.formo) window.formo = current.instance;
+    runReady(options, current.instance);
+    return;
+  }
   current.promise
     .then((f) => {
       if (!isDisposed(f)) {
@@ -106,18 +121,23 @@ function start(writeKey: string, options: Options | undefined, previous: Live | 
   // With nothing to retire, init runs synchronously: its constructor
   // installs the history hooks, and a navigation right after formofy()
   // must be seen.
-  let promise: Promise<IFormoAnalytics>;
+  const entry = { writeKey } as Live;
   if (previous && !previous.instance) {
-    // Still initialising: retire it once it exists, then start.
-    promise = previous.promise
+    // Still initialising: retire it once it exists, then start, unless a
+    // later call took the slot while we waited.
+    entry.promise = previous.promise
       .then((f) => retire(f))
       .catch(() => undefined)
-      .then(() => FormoAnalytics.init(writeKey, options));
+      .then(() =>
+        getLive() === entry
+          ? FormoAnalytics.init(writeKey, options)
+          : Promise.reject(SUPERSEDED)
+      );
   } else {
     if (previous?.instance) retire(previous.instance);
-    promise = FormoAnalytics.init(writeKey, options);
+    entry.promise = FormoAnalytics.init(writeKey, options);
   }
-  const entry: Live = { writeKey, promise };
+  const promise = entry.promise;
   setLive(entry);
 
   promise
@@ -134,6 +154,7 @@ function start(writeKey: string, options: Options | undefined, previous: Live | 
       runReady(options, f);
     })
     .catch((e) => {
+      if (e === SUPERSEDED) return;
       // Let a later call try again rather than pin a failed init forever.
       if (getLive() === entry) setLive(null);
       console.error("Error initializing FormoAnalytics:", e);

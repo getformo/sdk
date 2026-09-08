@@ -347,6 +347,53 @@ describe("formofy", () => {
     expect(ready.calledOnceWith(a)).to.be.true;
   });
 
+  it("keeps a live entry written by an older copy of the bundle", async () => {
+    // A previous version stored the entry bare in the page slot.
+    const old = instance("wk_1");
+    (window as unknown as Record<symbol, unknown>)[Symbol.for("formo.live")] = {
+      writeKey: "wk_1", promise: Promise.resolve(old), instance: old,
+    };
+    const ready = sinon.spy();
+
+    formofy("wk_1", { ready });
+    await tick();
+
+    expect(init.called, "no second instance").to.be.false;
+    expect(ready.calledOnceWith(old)).to.be.true;
+  });
+
+  it("skips a queued key that was superseded while it waited", async () => {
+    const a = instance("wk_1");
+    const c = instance("wk_3");
+    let resolveA!: (f: FormoAnalytics) => void;
+    init.onFirstCall().returns(new Promise<FormoAnalytics>((r) => { resolveA = r; }));
+    init.onSecondCall().resolves(c);
+    formofy("wk_1"); // pending
+    formofy("wk_2"); // queued behind A
+    formofy("wk_3"); // takes the slot from B
+    resolveA(a);
+    await tick(); await tick(); await tick();
+
+    expect(init.calledTwice, "B never initialised").to.be.true;
+    expect(init.secondCall.args[0]).to.equal("wk_3");
+    expect(a.cleanup.calledOnce).to.be.true;
+    expect(window.formo).to.equal(c);
+  });
+
+  it("runs ready for a healthy instance even when a key switch follows in the same tick", async () => {
+    const a = instance("wk_1");
+    init.onFirstCall().resolves(a).onSecondCall().resolves(instance("wk_2"));
+    formofy("wk_1");
+    await tick();
+    const ready = sinon.spy();
+
+    formofy("wk_1", { ready });
+    formofy("wk_2");
+    await tick();
+
+    expect(ready.calledOnceWith(a)).to.be.true;
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);
