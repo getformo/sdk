@@ -272,6 +272,25 @@ describe("SolanaManager", () => {
       expect(mockFormo.connect.calledOnce).to.be.true;
     });
 
+    it("reports a wallet authorized before the SDK on the store's detected cluster", () => {
+      // No explicit cluster: the store's devnet endpoint is the only source.
+      // A wallet injected before the SDK registers the moment it hears
+      // app-ready, which the registry announces from its constructor.
+      const phantom = makeStandardWallet("Phantom");
+      phantom.accounts = [{ address: ADDRESS, chains: ["solana:devnet"] }];
+      const onReady = (e: Event) =>
+        (e as CustomEvent<WalletStandardRegisterApi>).detail.register(phantom as never);
+      window.addEventListener("wallet-standard:app-ready", onReady);
+      try {
+        makeManager({ store: makeStore() });
+      } finally {
+        window.removeEventListener("wallet-standard:app-ready", onReady);
+      }
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.devnet);
+    });
+
     it("still detects wallets, which the store never reported", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));
