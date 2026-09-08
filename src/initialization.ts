@@ -10,7 +10,12 @@ import { IFormoAnalytics, Options } from "./types";
  * bundle twice, and each copy would otherwise start its own instance
  * before the first had put anything on window.formo.
  */
-type Live = { writeKey: string; promise: Promise<IFormoAnalytics> };
+type Live = {
+  writeKey: string;
+  promise: Promise<IFormoAnalytics>;
+  /** Set once the promise resolves, so the entry can be compared with window.formo. */
+  instance?: IFormoAnalytics;
+};
 const SLOT = Symbol.for("formo.live");
 const slot = () => window as unknown as Record<symbol, Live | undefined>;
 const getLive = (): Live | null => slot()[SLOT] ?? null;
@@ -36,7 +41,7 @@ export function formofy(writeKey: string, options?: Options): void {
     return;
   }
 
-  const current = getLive() ?? adoptWindowInstance();
+  const current = currentInstance();
   if (!current || current.writeKey !== writeKey) {
     start(writeKey, options, current);
     return;
@@ -58,17 +63,39 @@ export function formofy(writeKey: string, options?: Options): void {
     .catch(() => undefined);
 }
 
+/**
+ * What formofy() should build on: the live entry, unless the app has since
+ * put an instance of its own on window.formo, which then wins and the
+ * cached one is retired so both do not send.
+ */
+function currentInstance(): Live | null {
+  const live = getLive();
+  const own = adoptWindowInstance();
+  if (live && own && live.instance && own.instance !== live.instance) {
+    retire(live.instance);
+    setLive(own);
+    return own;
+  }
+  return live ?? own;
+}
+
 /** Retire `previous`, if any, then initialise a new instance and make it live. */
 function start(writeKey: string, options: Options | undefined, previous: Live | null): void {
-  const promise = (previous?.promise ?? Promise.resolve(null))
-    .then((f) => f && retire(f))
-    .catch(() => undefined)
-    .then(() => FormoAnalytics.init(writeKey, options));
+  // With nothing to retire, init runs synchronously: its constructor
+  // installs the history hooks, and a navigation right after formofy()
+  // must be seen.
+  const promise = previous
+    ? previous.promise
+        .then((f) => retire(f))
+        .catch(() => undefined)
+        .then(() => FormoAnalytics.init(writeKey, options))
+    : FormoAnalytics.init(writeKey, options);
   const entry: Live = { writeKey, promise };
   setLive(entry);
 
   promise
     .then((f) => {
+      entry.instance = f;
       window.formo = f;
       runReady(options, f);
     })
@@ -87,7 +114,7 @@ function adoptWindowInstance(): Live | null {
     forgetGlobal(f);
     return null;
   }
-  return { writeKey: f.writeKey, promise: Promise.resolve(f) };
+  return { writeKey: f.writeKey, promise: Promise.resolve(f), instance: f };
 }
 
 /** Tear an instance down and stop it being reachable as the page global. */

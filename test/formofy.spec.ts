@@ -233,6 +233,35 @@ describe("formofy", () => {
     expect(window.formo).to.equal(b);
   });
 
+  it("initialises synchronously when nothing is live yet", () => {
+    init.resolves(instance("wk_1"));
+
+    formofy("wk_1");
+
+    // The constructor installs the history hooks; a navigation right after
+    // formofy() must already be seen.
+    expect(init.calledOnce).to.be.true;
+  });
+
+  it("adopts an instance the app swapped onto window.formo after formofy cached one", async () => {
+    const a = instance("wk_1");
+    init.resolves(a);
+    formofy("wk_1");
+    await tick();
+    const own = instance("wk_2");
+    (window as { formo?: unknown }).formo = own;
+    init.resetHistory();
+    const ready = sinon.spy();
+
+    formofy("wk_2", { ready });
+    await tick();
+
+    expect(init.called, "no extra instance for the app's own key").to.be.false;
+    expect(a.cleanup.calledOnce, "the cached instance is retired").to.be.true;
+    expect(window.formo).to.equal(own);
+    expect(ready.calledOnceWith(own)).to.be.true;
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);
