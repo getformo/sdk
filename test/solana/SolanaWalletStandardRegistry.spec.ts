@@ -592,7 +592,7 @@ describe("SolanaWalletStandardRegistry", () => {
       expect(deps.disconnect.firstCall.args[0].address).to.equal(ADDRESS);
     });
 
-    it("puts a store-owned Solana wallet back after closing a registry-reported connection", async () => {
+    it("leaves a wallet it does not track to its owner after closing a reported connection", async () => {
       const phantom = makeWallet("Phantom");
       makeRegistry();
       installWalletAfterApp(phantom);
@@ -610,10 +610,29 @@ describe("SolanaWalletStandardRegistry", () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(deps.disconnect.calledOnce, "the reported connection is closed").to.be.true;
-      expect(deps.syncWalletState.lastCall.args[0], "the store's wallet is restored").to.deep.equal({
-        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
-        address: OTHER_ADDRESS,
-      });
+      expect(deps.syncWalletState.called, "the store restores its own wallet, not the registry").to.be.false;
+    });
+
+    it("does not restore a tracked wallet that disconnected while the first disconnect was in flight", async () => {
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+      currentAddress = OTHER_ADDRESS;
+      let settle!: () => void;
+      deps.disconnect.callsFake(() => new Promise<void>((r) => { settle = () => { currentAddress = undefined; r(); }; }));
+      deps.syncWalletState.resetHistory();
+
+      phantom.setAccounts([]);   // keeps Backpack in mind
+      backpack.setAccounts([]);  // but Backpack leaves too before Phantom's disconnect settles
+      settle();
+      await new Promise((r) => setTimeout(r, 0));
+
+      const restored = deps.syncWalletState.getCalls().map((c) => c.args[0]?.address).filter(Boolean);
+      expect(restored, "a departed wallet is not put back").to.not.include(OTHER_ADDRESS);
     });
 
     it("does not overwrite a wallet that connected while the disconnect was in flight", async () => {

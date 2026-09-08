@@ -310,6 +310,12 @@ export class SolanaStoreHandler {
     }
   }
 
+  /** The store's wallet as last observed, if it is connected. */
+  currentConnection(): { address: string; chainId: number } | undefined {
+    if (!this.lastAddress) return undefined;
+    return { address: this.lastAddress, chainId: this.lastChainId ?? this.chainId };
+  }
+
   private handleDisconnect(): void {
     if (!this.lastAddress) {
       return;

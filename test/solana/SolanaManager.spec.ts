@@ -409,6 +409,42 @@ describe("SolanaManager", () => {
       expect(restored, "the departing address is not restored").to.not.include(ADDRESS);
     });
 
+    it("puts the store's wallet back after a registry disconnect clears the namespace", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]); // reported by the registry
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      mockFormo.disconnect.callsFake(async () => {
+        mockFormo.currentAddress = undefined; // disconnect() cleared the Solana namespace
+      });
+      mockFormo.syncWalletState.resetHistory();
+
+      phantom.setAccounts([]); // the registry closes its own connection
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.syncWalletState.lastCall?.args[0]).to.deep.equal({
+        address: OTHER_ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("clears a departed store wallet behind an active EVM wallet when capture is off", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "disconnect");
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      makeManager({ store });
+      mockFormo.currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM connected last
+      mockFormo.syncWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.syncWalletState.lastCall?.args[0], "Solana slot cleared, EVM untouched").to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
     it("still detects wallets, which the store never reported", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));

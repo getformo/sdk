@@ -36,6 +36,7 @@ import {
   SolanaOptions,
 } from "./types";
 import { SolanaClientStore } from "./storeTypes";
+import { isSolanaAddress } from "./address";
 
 export class SolanaManager {
   private storeHandler?: SolanaStoreHandler;
@@ -83,7 +84,13 @@ export class SolanaManager {
         detect: (params) => this.formo.detect(params),
         connect: (params, properties) =>
           this.formo.connect(params, properties),
-        disconnect: (params) => this.formo.disconnect(params),
+        // A registry disconnect clears the Solana namespace once its event
+        // is built. If the store's wallet held the slot, put it back.
+        disconnect: (params) =>
+          this.formo.disconnect(params).then(() => {
+            const live = this.storeHandler?.currentConnection();
+            if (live && !this.formo.currentAddress) this.formo.syncWalletState(live);
+          }),
         chain: (params) => this.formo.chain(params),
         syncWalletState: (params) => this.formo.syncWalletState(params),
         currentAddress: () => this.formo.currentAddress,
@@ -107,8 +114,13 @@ export class SolanaManager {
       // live; put it back if nothing else holds the slot.
       afterWalletDisconnect: (departed) => {
         const current = this.formo.currentAddress;
-        // Another wallet took the slot meanwhile: leave it.
-        if (current && current !== departed.address) return;
+        if (current && current !== departed.address) {
+          // A Solana wallet took the slot meanwhile: leave it. An active EVM
+          // wallet keeps its namespace, but the departed Solana account must
+          // not linger behind it (capture off means disconnect() never ran).
+          if (!isSolanaAddress(current)) this.formo.syncWalletState({ chainId: departed.chainId });
+          return;
+        }
         const live = this.registry?.newestConnection(departed.address);
         if (live) {
           this.formo.syncWalletState(live);
