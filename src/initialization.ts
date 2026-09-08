@@ -16,11 +16,19 @@ type Live = {
   /** Set once the promise resolves, so the entry can be compared with window.formo. */
   instance?: IFormoAnalytics;
 };
+type Registry = { live: Live | null; managed: WeakSet<IFormoAnalytics> };
 const SLOT = Symbol.for("formo.live");
-const slot = () => window as unknown as Record<symbol, Live | undefined>;
-const getLive = (): Live | null => slot()[SLOT] ?? null;
+const registry = (): Registry => {
+  const w = window as unknown as Record<symbol, Registry | undefined>;
+  return (w[SLOT] ??= { live: null, managed: new WeakSet() });
+};
+const getLive = (): Live | null => registry().live;
 const setLive = (live: Live | null): void => {
-  slot()[SLOT] = live ?? undefined;
+  registry().live = live;
+};
+/** Instances formofy created or adopted, so its own predecessor on window.formo is not mistaken for an app replacement. */
+const remember = (f: IFormoAnalytics): void => {
+  registry().managed.add(f);
 };
 
 /**
@@ -51,12 +59,19 @@ export function formofy(writeKey: string, options?: Options): void {
   current.promise
     .then((f) => {
       if (!isDisposed(f)) {
+        if (!window.formo) window.formo = f;
         runReady(options, f);
         return;
       }
       // The app tore it down itself. Start over, unless a newer call
-      // already replaced it, in which case that call wins.
-      if (getLive() !== current) return;
+      // already replaced it: a same-key restart is shared, another key wins.
+      const now = getLive();
+      if (now !== current) {
+        if (now && now.writeKey === writeKey) {
+          now.promise.then((g) => runReady(options, g)).catch(() => undefined);
+        }
+        return;
+      }
       forgetGlobal(f);
       start(writeKey, options, null);
     })
@@ -71,14 +86,19 @@ export function formofy(writeKey: string, options?: Options): void {
 function currentInstance(): Live | null {
   const live = getLive();
   const own = adoptWindowInstance();
-  if (live && own && own.instance !== live.instance) {
-    // The app's instance wins. A resolved cached instance is retired now;
-    // a pending one retires itself on completion (see start).
+  if (!live) {
+    if (own) remember(own.instance!);
+    return own;
+  }
+  if (own && own.instance !== live.instance && !registry().managed.has(own.instance!)) {
+    // The app's own instance wins. A resolved cached instance is retired
+    // now; a pending one retires itself on completion (see start).
     if (live.instance) retire(live.instance);
+    remember(own.instance!);
     setLive(own);
     return own;
   }
-  return live ?? own;
+  return live;
 }
 
 /** Retire `previous`, if any, then initialise a new instance and make it live. */
@@ -86,18 +106,24 @@ function start(writeKey: string, options: Options | undefined, previous: Live | 
   // With nothing to retire, init runs synchronously: its constructor
   // installs the history hooks, and a navigation right after formofy()
   // must be seen.
-  const promise = previous
-    ? previous.promise
-        .then((f) => retire(f))
-        .catch(() => undefined)
-        .then(() => FormoAnalytics.init(writeKey, options))
-    : FormoAnalytics.init(writeKey, options);
+  let promise: Promise<IFormoAnalytics>;
+  if (previous && !previous.instance) {
+    // Still initialising: retire it once it exists, then start.
+    promise = previous.promise
+      .then((f) => retire(f))
+      .catch(() => undefined)
+      .then(() => FormoAnalytics.init(writeKey, options));
+  } else {
+    if (previous?.instance) retire(previous.instance);
+    promise = FormoAnalytics.init(writeKey, options);
+  }
   const entry: Live = { writeKey, promise };
   setLive(entry);
 
   promise
     .then((f) => {
       entry.instance = f;
+      remember(f);
       // Superseded while initialising (the app installed its own instance,
       // or another key took over): this result must not send.
       if (getLive() !== entry) {
@@ -152,5 +178,8 @@ function runReady(options: Options | undefined, f: IFormoAnalytics): void {
 
 /** @internal Forget the live instance. For tests only. */
 export function _resetFormofy(): void {
-  if (typeof window !== "undefined") setLive(null);
+  if (typeof window === "undefined") return;
+  const r = registry();
+  r.live = null;
+  r.managed = new WeakSet();
 }

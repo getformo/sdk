@@ -283,6 +283,70 @@ describe("formofy", () => {
     expect(window.formo).to.equal(own);
   });
 
+  it("switches key once when two calls for the new key land back-to-back", async () => {
+    const a = instance("wk_1");
+    const b = instance("wk_2");
+    init.onFirstCall().resolves(a).onSecondCall().resolves(b);
+    formofy("wk_1");
+    await tick();
+
+    formofy("wk_2");
+    formofy("wk_2");
+    await tick(); await tick();
+
+    expect(init.calledTwice, "one init for wk_2").to.be.true;
+    expect(a.cleanup.calledOnce).to.be.true;
+    expect(window.formo).to.equal(b);
+  });
+
+  it("retires a resolved predecessor and starts the new key synchronously", async () => {
+    const a = instance("wk_1");
+    init.onFirstCall().resolves(a).onSecondCall().resolves(instance("wk_2"));
+    formofy("wk_1");
+    await tick();
+
+    formofy("wk_2");
+
+    // Before any microtask: A is gone and B's constructor has run, so a
+    // navigation right after the call belongs to B.
+    expect(a.cleanup.calledOnce).to.be.true;
+    expect(init.calledTwice).to.be.true;
+  });
+
+  it("runs every ready callback across a shared same-key restart", async () => {
+    const a = instance("wk_1");
+    const fresh = instance("wk_1");
+    init.onFirstCall().resolves(a).onSecondCall().resolves(fresh);
+    formofy("wk_1");
+    await tick();
+    a.cleanup();
+    const ready1 = sinon.spy();
+    const ready2 = sinon.spy();
+
+    formofy("wk_1", { ready: ready1 });
+    formofy("wk_1", { ready: ready2 });
+    await tick(); await tick(); await tick();
+
+    expect(init.calledTwice, "one restart shared by both calls").to.be.true;
+    expect(ready1.calledOnceWith(fresh)).to.be.true;
+    expect(ready2.calledOnceWith(fresh)).to.be.true;
+  });
+
+  it("puts the retained instance back on window.formo if the app removed it", async () => {
+    const a = instance("wk_1");
+    init.resolves(a);
+    formofy("wk_1");
+    await tick();
+    delete (window as { formo?: unknown }).formo;
+    const ready = sinon.spy();
+
+    formofy("wk_1", { ready });
+    await tick();
+
+    expect(window.formo).to.equal(a);
+    expect(ready.calledOnceWith(a)).to.be.true;
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);
