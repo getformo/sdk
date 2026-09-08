@@ -1352,8 +1352,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         const { [IDEMPOTENCY_KEY_PROPERTY]: rawKey, ...rest } = properties;
         properties = rest;
         if (rawKey === undefined || rawKey === null) {
-          // `{ idempotency_key: order?.id }` with no order: an unkeyed call,
-          // not a rejected one.
+          // `{ idempotency_key: order?.id }` with no order: unkeyed, not rejected.
         } else if (typeof rawKey === "string" && rawKey.trim().length > 0) {
           // Opaque key: whitespace is kept.
           idempotencyKey = rawKey;

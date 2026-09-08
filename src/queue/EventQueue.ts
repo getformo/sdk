@@ -575,9 +575,8 @@ export class EventQueue implements IEventQueue {
         (this.canSend && !this.canSend()) ||
         this.clearSeq !== clearSeqAtFlush
       ) {
-        // Tell every abandoned item, and the flush, that these were not
-        // delivered. Silence here read as success: the flush callback got
-        // no error and the item callbacks never fired.
+        // Report the drop to every abandoned item and to the flush. Silence
+        // here read as success.
         const error = notDeliveredError();
         firstError = firstError || error;
         for (let j = i; j < batches.length; j++) {
