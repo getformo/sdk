@@ -569,6 +569,51 @@ describe("SolanaWalletStandardRegistry", () => {
       expect(registry.newestConnection()).to.be.undefined;
     });
 
+    it("follows the newest Solana connection on a cluster switch while an EVM wallet is active", () => {
+      autocapture.chain = false;
+      const phantom = makeWallet("Phantom");
+      const solflare = makeWallet("Solflare");
+      const registry = makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(solflare);
+      phantom.setAccounts([account(ADDRESS)]);
+      solflare.setAccounts([account(OTHER_ADDRESS)]); // connected last
+      currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM active, Solana slot dormant
+      solanaSlot = undefined;
+      deps.restoreWalletState.resetHistory();
+
+      registry.setCluster("devnet");
+
+      expect(deps.restoreWalletState.calledOnce).to.be.true;
+      expect(deps.restoreWalletState.firstCall.args[0], "connection order, not registration order").to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["devnet"],
+        address: OTHER_ADDRESS,
+      });
+    });
+
+    it("puts back a second wallet connected on the same address", async () => {
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(ADDRESS)]); // same account, distinct wallet
+      currentAddress = ADDRESS;
+      deps.disconnect.callsFake(async () => {
+        currentAddress = undefined;
+      });
+      deps.restoreWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(deps.restoreWalletState.lastCall?.args[0], "Backpack still holds the account").to.deep.equal({
+        address: ADDRESS,
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+    });
+
     it("does not hand the slot to a pre-reset wallet on a cluster switch", () => {
       const phantom = makeWallet("Phantom");
       const registry = makeRegistry();

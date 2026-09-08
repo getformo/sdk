@@ -104,9 +104,11 @@ export class WalletStateStore {
   private observationSeq = 0;
   /**
    * Advanced by every write that can make a namespace active: a ticket, or
-   * a plain `set` (a backfill from a signature, a chain write).
+   * a plain `set` (a backfill from a signature, a chain write). Kept per
+   * namespace and in total.
    */
   private claimSeq = 0;
+  private namespaceClaims: Record<ChainNamespace, number> = { evm: 0, solana: 0 };
   private newestObservation: Record<ChainNamespace, number> = {
     evm: 0,
     solana: 0,
@@ -170,6 +172,7 @@ export class WalletStateStore {
    */
   observe(namespace: ChainNamespace): Observation {
     this.claimSeq++;
+    this.namespaceClaims[namespace]++;
     const id = ++this.observationSeq;
     this.newestObservation[namespace] = id;
     return { id, namespace };
@@ -263,12 +266,12 @@ export class WalletStateStore {
    * A `restore` decided now but written after an await. Take it before the
    * first await, for the same reason as `observe`.
    *
-   * The write is refused if a newer signal claimed the namespace meanwhile
-   * or if reset() ran.
+   * The write is refused if anything wrote to the namespace meanwhile (a
+   * connect, a chain write) or if reset() ran.
    */
   deferRestore(chainId: ChainID): WalletRestore {
     const namespace = this.namespaceOf(chainId);
-    const observation = this.newestObservation[namespace];
+    const written = this.namespaceClaims[namespace];
     const resets = this.resetCount;
     // The awaited disconnect clears this namespace and derived state falls
     // through to the other one. Only a namespace that was active takes the
@@ -276,10 +279,7 @@ export class WalletStateStore {
     const wasActive = this._activeNamespace === namespace;
     const claims = this.claimSeq;
     return (wallet) => {
-      if (
-        !this.isUnchangedSince(namespace, observation) ||
-        resets !== this.resetCount
-      ) {
+      if (this.namespaceClaims[namespace] !== written || resets !== this.resetCount) {
         logger.debug("restore: skipped, the namespace changed hands or was reset meanwhile");
         return;
       }
@@ -315,6 +315,7 @@ export class WalletStateStore {
         : this.namespaceOf(namespaceOrChainId);
     const ns = this.state[namespace];
     this.claimSeq++;
+    this.namespaceClaims[namespace]++;
 
     // A plain write. Whether this transition is still the newest is decided
     // by the observation ticket its caller holds, not by comparing addresses

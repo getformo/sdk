@@ -480,7 +480,8 @@ export class SolanaWalletStandardRegistry {
     // Put the slot back afterwards if another wallet tracked here held it.
     // A store's wallet is the store's to restore (see SolanaManager).
     const held = this.deps.solanaAddress();
-    const keep = held && held !== previous.address ? held : undefined;
+    // Another wallet tracked here holds the slot, possibly on the same address.
+    const keep = held && this.trackedOn(held) ? held : undefined;
     // Taken before the await: a reset() or a new session landing meanwhile
     // makes the restore stale, and only the SDK can tell.
     const restore = this.deps.deferWalletRestore(previous.chainId);
@@ -536,10 +537,8 @@ export class SolanaWalletStandardRegistry {
     // already treats as active, which is the last CONNECTED one.
     //
     // Only a wallet observed since the last reset() may take the slot.
-    const active = this.deps.currentAddress();
-    const owner =
-      all.find((t) => this.isRestorable(t) && t.connected?.address === active) ??
-      all.find((t) => this.isRestorable(t));
+    const slot = this.deps.solanaAddress() ?? this.deps.currentAddress();
+    const owner = this.trackedOn(slot) ?? this.newestTracked();
 
     for (const tracked of all) {
       const connected = tracked.connected;
@@ -573,20 +572,27 @@ export class SolanaWalletStandardRegistry {
 
   /** The newest restorable connection, if any, other than `except`. */
   newestConnection(except?: string): SolanaConnection | undefined {
+    return this.newestTracked(except)?.connected;
+  }
+
+  /** The restorable connection on `address`, if any. */
+  private connectionOf(address: string): SolanaConnection | undefined {
+    return this.trackedOn(address)?.connected;
+  }
+
+  private newestTracked(except?: string): TrackedWallet | undefined {
     let newest: TrackedWallet | undefined;
     this.wallets.forEach((candidate) => {
       if (!this.isRestorable(candidate) || candidate.connected?.address === except) return;
       if ((candidate.connectedSeq ?? 0) > (newest?.connectedSeq ?? -1)) newest = candidate;
     });
-    return newest?.connected;
+    return newest;
   }
 
-  /** The restorable connection on `address`, if any. */
-  private connectionOf(address: string): SolanaConnection | undefined {
+  private trackedOn(address: string | undefined): TrackedWallet | undefined {
+    if (!address) return undefined;
     for (const candidate of Array.from(this.wallets.values())) {
-      if (this.isRestorable(candidate) && candidate.connected?.address === address) {
-        return candidate.connected;
-      }
+      if (this.isRestorable(candidate) && candidate.connected?.address === address) return candidate;
     }
     return undefined;
   }

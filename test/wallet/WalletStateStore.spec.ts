@@ -338,6 +338,19 @@ describe("WalletStateStore", () => {
         expect(s.address).to.be.undefined;
       });
 
+      it("is voided by a chain write on the namespace", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.clear(SOL_CHAIN);
+        s.set(900003, {}); // what chain() writes: a newer cluster
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.solanaAddress, "the stale wallet is not written over the newer chain").to.be.undefined;
+        expect(s.chainId).to.equal(900003);
+      });
+
       it("is voided by a newer session on the namespace", () => {
         const s = store();
         s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
