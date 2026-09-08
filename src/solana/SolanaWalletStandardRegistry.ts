@@ -76,13 +76,14 @@ export interface SolanaWalletStandardRegistryDeps {
   /**
    * Record wallet and chain state centrally WITHOUT emitting an event.
    *
-   * Observing a chain is not the same as reporting one: the exclusion gate
-   * keys off the central chain, so a cluster switch has to land there even
-   * when `autocapture.chain` is off. The EVM tracker separates the two the
-   * same way.
+   * Observing a wallet is not the same as reporting one: the exclusion gate
+   * keys off the central chain, so a connection or a cluster switch has to
+   * land there even when the matching autocapture event is off or the chain
+   * is excluded. Without an address, the chain's state is cleared. The EVM
+   * tracker separates the two the same way.
    * @see FormoAnalytics.syncWalletState
    */
-  syncWalletState(params: { chainId: number; address: string }): void;
+  syncWalletState(params: { chainId: number; address?: string }): void;
   /** The wallet the SDK currently treats as active, across namespaces. */
   currentAddress(): string | undefined;
   /**
@@ -392,6 +393,12 @@ export class SolanaWalletStandardRegistry {
       chainId,
     });
 
+    // Central state moves first, whatever the gates below decide. Exclusion
+    // is not suppression: the chain gate reads the central chain, so a
+    // connection this registry keeps quiet about must still land there, or
+    // later events bypass `excludeChains` and carry no Solana address.
+    this.deps.syncWalletState({ chainId, address });
+
     if (!this.deps.isAutocaptureEnabled("connect")) return;
     // FormoAnalytics.connect() deliberately resolves without enqueueing when
     // tracking is suppressed or this chain is excluded. Only a connect that
@@ -425,7 +432,12 @@ export class SolanaWalletStandardRegistry {
       chainId: previous.chainId,
     });
 
-    if (!this.deps.isAutocaptureEnabled("disconnect")) return;
+    if (!this.deps.isAutocaptureEnabled("disconnect")) {
+      // Still clear central state, as `disconnect()` would have, so the
+      // gone wallet does not attach to later events.
+      this.deps.syncWalletState({ chainId: previous.chainId });
+      return;
+    }
     this.deps.disconnect(previous).catch((error) => {
       logger.error(
         "SolanaWalletStandardRegistry: Error emitting disconnect",

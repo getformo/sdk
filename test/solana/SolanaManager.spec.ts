@@ -257,6 +257,21 @@ describe("SolanaManager", () => {
       expect(mockFormo.disconnect.calledOnce).to.be.true;
     });
 
+    it("reports a connection a store given at init never observes", () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+
+      // The app connected outside framework-kit; the store stays silent.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      expect(mockFormo.connect.calledOnce).to.be.true;
+
+      // When the store does catch up it adopts that connect, once.
+      store.setState({ wallet: connectedWallet("phantom", "Phantom") });
+      expect(mockFormo.connect.calledOnce).to.be.true;
+    });
+
     it("still detects wallets, which the store never reported", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));
@@ -404,6 +419,28 @@ describe("SolanaManager", () => {
 
       formo.cleanup();
       expect(connect.called).to.be.false;
+    });
+
+    it("gates later events on a Wallet Standard connection to an excluded chain", async () => {
+      const formo = await FormoAnalytics.init("test-write-key", {
+        tracking: { excludeChains: [SOLANA_CHAIN_IDS["mainnet-beta"]] },
+        evm: false,
+      });
+      const sent: any[] = [];
+      sandbox
+        .stub((formo as any).eventManager, "addEvent")
+        .callsFake(async (e: any) => {
+          sent.push(e);
+        });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:mainnet"] }]);
+
+      await formo.track("Swap Confirmed");
+      formo.cleanup();
+
+      expect(formo.currentChainId).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+      expect(sent.filter((e) => e.type === "track")).to.deep.equal([]);
     });
 
     it("reports a wallet-adapter style connection end to end", async () => {

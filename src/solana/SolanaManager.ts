@@ -13,10 +13,11 @@
  *     Opt-in through `solana: { store }` or `formo.solana.setStore()`.
  *
  * Both observe the same Wallet Standard connection when a framework-kit app
- * connects. A store supplied at initialization owns wallet events; a store
- * attached later takes ownership when it observes its first connection and
- * adopts any connect the registry already reported. One connect per
- * connection, whichever path an app is on.
+ * connects. A store, whether supplied at initialization or attached later,
+ * takes ownership of wallet events when it observes its first connection
+ * and adopts any connect the registry already reported. Until then the
+ * registry reports, so a connection the store never sees is not lost. One
+ * connect per connection, whichever path an app is on.
  *
  * For signMessage/signTransaction tracking (not captured by either path),
  * use formo.signature() directly with the address and chainId.
@@ -60,11 +61,11 @@ export class SolanaManager {
       this.pendingCluster = options.cluster;
     }
 
-    // A store supplied at initialization owns wallet events from the outset:
-    // unlike a store attached later, it has not missed any prior registry
-    // state and it knows the cluster more precisely.
-    this.storeOwnsWalletEvents = !!options?.store;
-
+    // A store given here does not own wallet events yet. It takes them on
+    // the first connection it observes (see `beforeWalletConnect`), the
+    // same as a store attached later. Owning them from the outset silenced
+    // the registry for a connection the store never observes, which was
+    // then reported nowhere.
     this.registry = new SolanaWalletStandardRegistry(
       {
         isAutocaptureEnabled: (t) => this.formo.isAutocaptureEnabled(t),

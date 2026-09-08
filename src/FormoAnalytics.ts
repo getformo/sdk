@@ -418,7 +418,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Reset user and wallet state while preserving the browser's anonymous id.
-   * Use `optOutTracking()` to clear the anonymous id and the attribution.
+   * The session's detect marker stays with that id: the wallets it names
+   * are already known for this browser, so a reset must not make the next
+   * page hit or wallet sync report them again. The identify marker is
+   * cleared, so a login after a logout identifies again. Use
+   * `optOutTracking()` to clear the anonymous id, the markers and the
+   * attribution.
    * @returns {void}
    */
   public reset(): void {
@@ -432,7 +437,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.wallet.reset();
 
     cookie().remove(SESSION_USER_ID_KEY);
-    cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     cookie().remove(ACTIVE_WALLET_KEY);
     // Attribution belongs to the visit, so reset preserves it.
@@ -1416,6 +1420,10 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.reset();
     // Consent withdrawal also clears the browser id and the attribution.
     clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
+    // The detect marker is scoped to that id: a fresh id has never seen
+    // these wallets, so opting back in reports them anew.
+    cookie().remove(SESSION_WALLET_DETECTED_KEY);
+    cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     session().remove(SESSION_TRAFFIC_SOURCE_KEY);
 
     logger.info("Successfully opted out of tracking");

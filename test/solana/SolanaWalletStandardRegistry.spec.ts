@@ -430,6 +430,57 @@ describe("SolanaWalletStandardRegistry", () => {
       expect(deps.disconnect.called).to.be.false;
     });
 
+    it("records central state when connect capture is off", () => {
+      autocapture = { connect: false };
+      const wallet = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(wallet);
+
+      wallet.setAccounts([account(ADDRESS)]);
+
+      expect(deps.connect.called).to.be.false;
+      expect(
+        deps.syncWalletState.calledWith({
+          chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+          address: ADDRESS,
+        })
+      ).to.be.true;
+    });
+
+    it("records central state for a connection on an excluded chain", () => {
+      willTrack = false;
+      const wallet = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(wallet);
+
+      wallet.setAccounts([account(ADDRESS)]);
+
+      // Exclusion is not suppression: the chain gate keys off central
+      // state, so the excluded chain must land there.
+      expect(deps.connect.called).to.be.false;
+      expect(
+        deps.syncWalletState.calledWith({
+          chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+          address: ADDRESS,
+        })
+      ).to.be.true;
+    });
+
+    it("clears central state when disconnect capture is off", () => {
+      autocapture = { disconnect: false };
+      const wallet = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(wallet);
+      wallet.setAccounts([account(ADDRESS)]);
+
+      wallet.setAccounts([]);
+
+      expect(deps.disconnect.called).to.be.false;
+      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+    });
+
     it("does not mark a suppressed connect as reported for store handoff", () => {
       const wallet = makeWallet("Phantom");
       const registry = makeRegistry();
@@ -565,6 +616,8 @@ describe("SolanaWalletStandardRegistry", () => {
       // Solflare registered and connected last, but the SDK's active wallet
       // is Phantom. Registration order must not take the slot from it.
       currentAddress = ADDRESS;
+      // Count only what the cluster switch writes, not the two connects.
+      deps.syncWalletState.resetHistory();
 
       registry.setCluster("devnet");
 
