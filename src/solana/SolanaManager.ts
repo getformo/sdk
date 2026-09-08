@@ -61,20 +61,14 @@ export class SolanaManager {
       this.pendingCluster = options.cluster;
     }
 
-    // A store given here does not own wallet events yet. It takes them on
-    // the first connection it observes (see `beforeWalletConnect`), the
-    // same as a store attached later. Owning them from the outset silenced
-    // the registry for a connection the store never observes, which was
-    // then reported nowhere.
-    //
-    // The store attaches before discovery starts: the registry reports a
-    // wallet authorized before the SDK the moment it is constructed, and
-    // that report must carry the store's detected cluster, not the default.
+    // Attach before discovery starts: the registry reports a wallet
+    // authorized before the SDK the moment it is constructed, and that
+    // report must carry the store's detected cluster, not the default.
     let cluster = options?.cluster;
     if (options?.store) {
       logger.info("SolanaManager: Initializing store-based Solana tracking");
-      this.attachStore(options.store, options.cluster);
-      cluster = cluster ?? SOLANA_CLUSTERS_BY_ID[this.storeHandler!.getChainId()];
+      this.attachStore(options.store, cluster);
+      if (!cluster) cluster = SOLANA_CLUSTERS_BY_ID[this.storeHandler!.getChainId()];
     }
     this.registry = new SolanaWalletStandardRegistry(
       {
@@ -93,10 +87,7 @@ export class SolanaManager {
           });
         },
         chain: (params) => this.formo.chain(params),
-        // A clear from the registry's capture-off path. The store's wallet
-        // may still be live, through its own connector, even on the same
-        // address; put it back if the slot is empty, as the disconnect
-        // wrapper above does.
+        // Same hand-back as the disconnect wrapper, for the capture-off path.
         syncWalletState: (params) => {
           this.formo.syncWalletState(params);
           if (params.address) return;
@@ -129,17 +120,11 @@ export class SolanaManager {
         const held = this.formo.solanaAddress;
         // Another Solana wallet took the slot meanwhile: leave it.
         if (held && held !== departed.address) return;
-        if (held) {
-          // Capture was off, so disconnect() never ran: clear the stale slot
-          // first. A restore is refused while tracking is suppressed and must
-          // not leave the departed wallet in place.
-          this.formo.syncWalletState({ chainId: departed.chainId });
-        }
+        // Capture was off, so disconnect() never ran: clear the stale slot.
+        if (held) this.formo.syncWalletState({ chainId: departed.chainId });
         const live = this.registry?.newestConnection(departed.address);
         if (!live) return;
-        // Back into the Solana slot without displacing an active EVM wallet.
-        // Nothing was awaited on the capture-off path, so a plain write; the
-        // deferred one refuses if a reset() landed while the event was built.
+        // Nothing was awaited on the capture-off path, so a plain write.
         if (held) this.formo.restoreWalletState(live);
         else restore(live);
       },
@@ -248,10 +233,7 @@ export class SolanaManager {
     this.registry?.setCluster(cluster);
   }
 
-  /**
-   * reset() cleared wallet identity. Connections observed before it must not
-   * be put back after a later disconnect; only a fresh observation counts.
-   */
+  /** @see SolanaWalletStandardRegistry.restorableFrom */
   onReset(): void {
     this.registry?.onReset();
     this.storeHandler?.onReset();

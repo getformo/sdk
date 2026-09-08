@@ -16,13 +16,13 @@ import {
   EvmChainState,
 } from "../types";
 
+/** A restore taken with `deferRestore`, written once its await is over. */
+export type WalletRestore = (wallet: { chainId: ChainID; address: Address }) => void;
+
 /**
  * A ticket identifying one wallet observation, taken before any async work.
  * See `WalletStateStore.observe`.
  */
-/** A restore taken with `deferRestore`, written once its await is over. */
-export type WalletRestore = (wallet: { chainId: ChainID; address: Address }) => void;
-
 export interface Observation {
   readonly id: number;
   readonly namespace: ChainNamespace;
@@ -104,8 +104,7 @@ export class WalletStateStore {
   private observationSeq = 0;
   /**
    * Advanced by every write that can make a namespace active: a ticket, or
-   * a plain `set` (a backfill from a signature, a chain write). A deferred
-   * restore reads it to tell a transient fallthrough from real activity.
+   * a plain `set` (a backfill from a signature, a chain write).
    */
   private claimSeq = 0;
   private newestObservation: Record<ChainNamespace, number> = {
@@ -130,11 +129,7 @@ export class WalletStateStore {
     solana: 0,
   };
 
-  /**
-   * How many times reset() has wiped identity. A hand-back decided before a
-   * reset must not put the wallet back after it: reset() promises a clean
-   * slate until the next connect.
-   */
+  /** How many times reset() has wiped identity; a deferred restore must not undo one. */
   private resetCount = 0;
 
   /** Derived from the active namespace. Read by integrations and by events. */
@@ -156,73 +151,6 @@ export class WalletStateStore {
 
   get solanaAddress(): Address | undefined {
     return this.state.solana.address;
-  }
-
-  /**
-   * Write a namespace's wallet WITHOUT changing which namespace is active.
-   *
-   * For putting a still-connected wallet back after a disconnect on its
-   * namespace cleared it. That wallet did not just connect, so it must not
-   * take the slot from a wallet on the other namespace that did; it only
-   * becomes active when nothing else is.
-   */
-  restore(chainId: ChainID, address: Address): void {
-    // The same rule as every other write: never LEARN a wallet while
-    // suppressed. The slot was already cleared by the disconnect.
-    if (this.deps.isTrackingSuppressed()) return;
-    const valid = validateAddress(address, chainId);
-    if (!valid) {
-      logger.warn(`restore: invalid address ("${address}") for chain ${chainId}`);
-      return;
-    }
-    const namespace = this.namespaceOf(chainId);
-    const ns = this.state[namespace];
-    ns.address = valid;
-    ns.chainId = chainId;
-    if (!this._activeNamespace) this._activeNamespace = namespace;
-    // A restore claims the namespace like any other write. Without this, a
-    // disconnect still in flight for another wallet would find its snapshot
-    // unchanged and clear the wallet just put back.
-    this.observe(namespace);
-    this.syncDerived();
-  }
-
-  /**
-   * A `restore` decided now but written after an await.
-   *
-   * The write is refused if a newer signal claimed the namespace meanwhile
-   * (a connect: that session owns the slot now) or if reset() ran (identity
-   * must stay clear until the next connect). Take it before the first await,
-   * for the same reason as `observe`.
-   */
-  deferRestore(chainId: ChainID): WalletRestore {
-    const namespace = this.namespaceOf(chainId);
-    const observation = this.newestObservation[namespace];
-    const resets = this.resetCount;
-    // The disconnect about to be awaited clears this namespace, and the
-    // derived state then falls through to the other one. If this namespace
-    // was the active one, the restored wallet takes the slot back; a wallet
-    // that merely sat behind it does not.
-    const wasActive = this._activeNamespace === namespace;
-    const claims = this.claimSeq;
-    return (wallet) => {
-      if (
-        !this.isUnchangedSince(namespace, observation) ||
-        resets !== this.resetCount
-      ) {
-        logger.debug("restore: skipped, the namespace changed hands or was reset meanwhile");
-        return;
-      }
-      // Nothing at all happened meanwhile, on either namespace: the other
-      // namespace being active now is the fallthrough, not a new connect,
-      // backfill, or chain write.
-      const quiet = this.claimSeq === claims;
-      this.restore(wallet.chainId, wallet.address);
-      if (wasActive && quiet && this.state[namespace].address) {
-        this._activeNamespace = namespace;
-        this.syncDerived();
-      }
-    };
   }
 
   get evmChainId(): ChainID | undefined {
@@ -304,6 +232,67 @@ export class WalletStateStore {
   }
 
   // ── writes ───────────────────────────────────────────────────────────────
+
+  /**
+   * Write a namespace's wallet WITHOUT changing which namespace is active.
+   *
+   * For putting a still-connected wallet back after a disconnect on its
+   * namespace cleared it. That wallet did not just connect, so it only
+   * becomes active when nothing else is.
+   */
+  restore(chainId: ChainID, address: Address): void {
+    // Never LEARN a wallet while suppressed; the disconnect already cleared the slot.
+    if (this.deps.isTrackingSuppressed()) return;
+    const valid = validateAddress(address, chainId);
+    if (!valid) {
+      logger.warn(`restore: invalid address ("${address}") for chain ${chainId}`);
+      return;
+    }
+    const namespace = this.namespaceOf(chainId);
+    const ns = this.state[namespace];
+    ns.address = valid;
+    ns.chainId = chainId;
+    if (!this._activeNamespace) this._activeNamespace = namespace;
+    // Claim the namespace, or a disconnect still in flight for another
+    // wallet would find its snapshot unchanged and clear this one.
+    this.observe(namespace);
+    this.syncDerived();
+  }
+
+  /**
+   * A `restore` decided now but written after an await. Take it before the
+   * first await, for the same reason as `observe`.
+   *
+   * The write is refused if a newer signal claimed the namespace meanwhile
+   * or if reset() ran.
+   */
+  deferRestore(chainId: ChainID): WalletRestore {
+    const namespace = this.namespaceOf(chainId);
+    const observation = this.newestObservation[namespace];
+    const resets = this.resetCount;
+    // The awaited disconnect clears this namespace and derived state falls
+    // through to the other one. Only a namespace that was active takes the
+    // slot back.
+    const wasActive = this._activeNamespace === namespace;
+    const claims = this.claimSeq;
+    return (wallet) => {
+      if (
+        !this.isUnchangedSince(namespace, observation) ||
+        resets !== this.resetCount
+      ) {
+        logger.debug("restore: skipped, the namespace changed hands or was reset meanwhile");
+        return;
+      }
+      // Quiet: the other namespace is active by fallthrough, not by a new write.
+      const quiet = this.claimSeq === claims;
+      this.restore(wallet.chainId, wallet.address);
+      if (wasActive && quiet && this.state[namespace].address) {
+        this._activeNamespace = namespace;
+        this.syncDerived();
+      }
+    };
+  }
+
 
   set provider(next: EIP1193Provider | undefined) {
     this.displaceProvider(this.state.evm.provider, next);

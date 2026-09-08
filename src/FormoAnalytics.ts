@@ -418,12 +418,9 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /**
    * Reset user and wallet state while preserving the browser's anonymous id.
-   * The session's detect marker stays with that id: the wallets it names
-   * are already known for this browser, so a reset must not make the next
-   * page hit or wallet sync report them again. The identify marker is
-   * cleared, so a login after a logout identifies again. Use
-   * `optOutTracking()` to clear the anonymous id, the markers and the
-   * attribution.
+   * The detect marker is scoped to that id, so it survives; the identify
+   * marker is cleared so a login after a logout identifies again. Use
+   * `optOutTracking()` to clear the id, the markers and the attribution.
    * @returns {void}
    */
   public reset(): void {
@@ -435,8 +432,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     // page lifetime, because they fall back to currentAddress. Keep the
     // EVM provider reference so tracking can resume on the next connect.
     this.wallet.reset();
-    // Solana connections observed before this point stay live but are not
-    // put back into central state after a later disconnect.
     this.solanaManager?.onReset();
 
     cookie().remove(SESSION_USER_ID_KEY);
@@ -1443,8 +1438,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.reset();
     // Consent withdrawal also clears the browser id and the attribution.
     clearAnonymousId(LOCAL_ANONYMOUS_ID_KEY);
-    // The detect marker is scoped to that id: a fresh id has never seen
-    // these wallets, so opting back in reports them anew.
+    // A fresh anonymous id has never seen these wallets.
     cookie().remove(SESSION_WALLET_DETECTED_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
     session().remove(SESSION_TRAFFIC_SOURCE_KEY);

@@ -32,6 +32,7 @@
  */
 
 import { logger } from "../logger";
+import type { WalletRestore } from "../wallet/WalletStateStore";
 import type { AutocaptureEventType } from "../tracking/TrackingPolicy";
 import { isBlockedSolanaAddress, isSolanaAddress } from "./address";
 import {
@@ -95,7 +96,7 @@ export interface SolanaWalletStandardRegistryDeps {
    * Refused if the namespace changed hands or was reset meanwhile.
    * @see FormoAnalytics.deferWalletRestore
    */
-  deferWalletRestore(chainId: number): (wallet: { chainId: number; address: string }) => void;
+  deferWalletRestore(chainId: number): WalletRestore;
   /** The wallet the SDK currently treats as active, across namespaces. */
   currentAddress(): string | undefined;
   /** The wallet held in the Solana namespace, active or not. */
@@ -117,6 +118,8 @@ export interface SolanaWalletStandardRegistryOptions {
   /** The cluster the app uses. Overrides what is derived from the wallet. */
   cluster?: SolanaCluster;
 }
+
+type SolanaConnection = { address: string; chainId: number };
 
 interface TrackedWallet {
   wallet: WalletStandardWallet;
@@ -186,9 +189,9 @@ export class SolanaWalletStandardRegistry {
   private connectSeq = 0;
   /**
    * Connections observed before this sequence number predate a `reset()`.
-   * They are still live and still get their disconnect reported, but they
-   * are not put back into central state: reset() promised a clean slate
-   * until a wallet is observed again.
+   * They stay tracked and their disconnect is still reported, but they are
+   * not put back into central state until observed again: reset() promised
+   * a clean slate.
    */
   private restorableFrom = 0;
   private cluster?: SolanaCluster;
@@ -425,10 +428,7 @@ export class SolanaWalletStandardRegistry {
       chainId,
     });
 
-    // Central state moves first, whatever the gates below decide. Exclusion
-    // is not suppression: the chain gate reads the central chain, so a
-    // connection this registry keeps quiet about must still land there, or
-    // later events bypass `excludeChains` and carry no Solana address.
+    // Exclusion is not suppression: the connection lands centrally either way.
     this.deps.syncWalletState({ chainId, address });
 
     if (!this.deps.isAutocaptureEnabled("connect")) return;
@@ -465,52 +465,31 @@ export class SolanaWalletStandardRegistry {
     });
 
     if (!this.deps.isAutocaptureEnabled("disconnect")) {
-      // Still keep central state honest, as `disconnect()` would have. The
-      // slot follows the active wallet: if another wallet owns it, leave it;
-      // if this one did, hand it to a wallet still connected, else clear it,
-      // so the gone wallet does not attach to later events.
-      // Another Solana wallet holding the slot (tracked here or a store's)
-      // means it is not ours to touch. Otherwise the newest remaining
-      // connection takes the Solana slot, matching last-connected-wins,
-      // without displacing an active EVM wallet; with none left, clear it.
+      // Keep central state honest, as `disconnect()` would have. Another
+      // wallet holding the slot is not ours to touch. Otherwise clear the
+      // departed wallet (a restore is a no-op while suppressed), then hand
+      // the slot to the newest remaining connection.
       const held = this.deps.solanaAddress();
       if (held && held !== previous.address) return;
-      // Clear the departed wallet first: a restore is refused while tracking
-      // is suppressed, and must not leave the gone wallet in the slot.
       this.deps.syncWalletState({ chainId: previous.chainId });
-      let remaining: TrackedWallet | undefined;
-      this.wallets.forEach((candidate) => {
-        if (candidate === tracked || !this.isRestorable(candidate)) return;
-        if ((candidate.connectedSeq ?? 0) > (remaining?.connectedSeq ?? -1)) {
-          remaining = candidate;
-        }
-      });
-      if (remaining?.connected) this.deps.restoreWalletState(remaining.connected);
+      const remaining = this.newestConnection();
+      if (remaining) this.deps.restoreWalletState(remaining);
       return;
     }
     // `disconnect()` clears the Solana namespace once the event is built.
-    // If another wallet tracked here held the slot, put it back afterwards:
-    // its session did not end. Only into a Solana slot that is still empty,
-    // only if that wallet is still connected by then, and without taking
-    // the active slot from an EVM wallet. A store's wallet is the store's
-    // to restore (see SolanaManager).
+    // Put the slot back afterwards if another wallet tracked here held it.
+    // A store's wallet is the store's to restore (see SolanaManager).
     const held = this.deps.solanaAddress();
     const keep = held && held !== previous.address ? held : undefined;
     // Taken before the await: a reset() or a new session landing meanwhile
     // makes the restore stale, and only the SDK can tell.
-    const restoreLater = this.deps.deferWalletRestore(previous.chainId);
+    const restore = this.deps.deferWalletRestore(previous.chainId);
     this.deps
       .disconnect(previous)
       .then(() => {
         if (!keep || this.deps.solanaAddress()) return;
-        let owner: { address: string; chainId: number } | undefined;
-        this.wallets.forEach((candidate) => {
-          const connected = candidate.connected;
-          if (connected && connected.address === keep && this.isRestorable(candidate)) {
-            owner = connected;
-          }
-        });
-        if (owner) restoreLater(owner);
+        const owner = this.connectionOf(keep);
+        if (owner) restore(owner);
       })
       .catch((error) => {
         logger.error(
@@ -555,6 +534,7 @@ export class SolanaWalletStandardRegistry {
     // account at once, and writing each of them here would hand the wallet
     // slot to the last REGISTERED wallet rather than to the one the SDK
     // already treats as active, which is the last CONNECTED one.
+    //
     // Only a wallet observed since the last reset() may take the slot.
     const active = this.deps.currentAddress();
     const owner =
@@ -591,12 +571,8 @@ export class SolanaWalletStandardRegistry {
     return Array.from(this.wallets.values()).map((t) => t.name);
   }
 
-  /**
-   * The rdns this registry reported a still-live connect for `address`
-   * under, if any. Lets a failed store adoption name both identities.
-   */
-  /** The newest connection this registry still considers live, if any, other than `except`. */
-  newestConnection(except?: string): { address: string; chainId: number } | undefined {
+  /** The newest restorable connection, if any, other than `except`. */
+  newestConnection(except?: string): SolanaConnection | undefined {
     let newest: TrackedWallet | undefined;
     this.wallets.forEach((candidate) => {
       if (!this.isRestorable(candidate) || candidate.connected?.address === except) return;
@@ -605,20 +581,30 @@ export class SolanaWalletStandardRegistry {
     return newest?.connected;
   }
 
+  /** The restorable connection on `address`, if any. */
+  private connectionOf(address: string): SolanaConnection | undefined {
+    for (const candidate of Array.from(this.wallets.values())) {
+      if (this.isRestorable(candidate) && candidate.connected?.address === address) {
+        return candidate.connected;
+      }
+    }
+    return undefined;
+  }
+
   /** Live, and observed since the last reset(). */
   private isRestorable(candidate: TrackedWallet): boolean {
     return !!candidate.connected && (candidate.connectedSeq ?? 0) >= this.restorableFrom;
   }
 
-  /**
-   * The SDK's identity was reset. Connections observed so far stay tracked
-   * (their disconnect is still reported) but are no longer put back into
-   * central state until observed again.
-   */
+  /** @see restorableFrom */
   onReset(): void {
     this.restorableFrom = this.connectSeq + 1;
   }
 
+  /**
+   * The rdns this registry reported a still-live connect for `address`
+   * under, if any. Lets a failed store adoption name both identities.
+   */
   reportedConnectionRdns(address: string): string | undefined {
     for (const tracked of Array.from(this.wallets.values())) {
       if (

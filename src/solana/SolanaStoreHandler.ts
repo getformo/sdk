@@ -58,7 +58,7 @@ export class SolanaStoreHandler {
    */
   private lastWalletStatus: SolanaWalletStatus["status"] = "disconnected";
   private lastAddress?: string;
-  /** False once reset() ran after the connection was observed. */
+  /** Whether the observed connection may be put back after a disconnect. */
   private restorable = false;
   private lastChainId?: number;
 
@@ -109,7 +109,6 @@ export class SolanaStoreHandler {
       }) => boolean;
       /** Called when the cluster is re-detected from a changed endpoint. */
       onClusterChange?: (cluster: SolanaCluster) => void;
-      /** Called once the store's wallet disconnect has been handled, with the wallet that left. */
       /**
        * Runs once the store's wallet has left central state. `restore` puts
        * a still-live wallet back; it refuses if the namespace changed hands
@@ -335,7 +334,7 @@ export class SolanaStoreHandler {
     return { address: this.lastAddress, chainId: this.lastChainId ?? this.chainId };
   }
 
-  /** @see SolanaWalletStandardRegistry.onReset */
+  /** reset() ran: the observed connection is not put back until observed again. */
   onReset(): void {
     this.restorable = false;
   }
