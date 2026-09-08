@@ -536,6 +536,25 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
+    it("clears the Solana slot without promoting another Solana wallet while an EVM wallet is active", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+      currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM connected last
+      deps.syncWalletState.resetHistory();
+
+      backpack.setAccounts([]);
+
+      expect(deps.syncWalletState.lastCall.args[0], "no promotion over the active EVM wallet").to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+    });
+
     it("hands the slot to the most recently connected remaining wallet", () => {
       autocapture = { disconnect: false };
       const a = makeWallet("A");
@@ -571,6 +590,44 @@ describe("SolanaWalletStandardRegistry", () => {
 
       expect(deps.disconnect.calledOnce).to.be.true;
       expect(deps.disconnect.firstCall.args[0].address).to.equal(ADDRESS);
+    });
+
+    it("puts a store-owned Solana wallet back after closing a registry-reported connection", async () => {
+      const phantom = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      phantom.setAccounts([account(ADDRESS)]);
+      expect(deps.connect.calledOnce).to.be.true;
+      // A store connected another wallet; it holds the Solana slot now.
+      ownsWalletEvents = false;
+      currentAddress = OTHER_ADDRESS;
+      deps.disconnect.callsFake(async () => {
+        currentAddress = undefined; // disconnect() cleared the namespace
+      });
+      deps.syncWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(deps.disconnect.calledOnce, "the reported connection is closed").to.be.true;
+      expect(deps.syncWalletState.lastCall.args[0], "the store's wallet is restored").to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+        address: OTHER_ADDRESS,
+      });
+    });
+
+    it("leaves a store-owned Solana wallet alone on a suppressed disconnect", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      phantom.setAccounts([account(ADDRESS)]);
+      currentAddress = OTHER_ADDRESS; // a store's wallet, unknown to the registry
+      deps.syncWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+
+      expect(deps.syncWalletState.called).to.be.false;
     });
 
     it("does not mark a suppressed connect as reported for store handoff", () => {

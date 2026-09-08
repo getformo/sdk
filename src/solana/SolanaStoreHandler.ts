@@ -164,9 +164,12 @@ export class SolanaStoreHandler {
     // Don't auto-detect if the cluster was explicitly set
     if (!this.explicitCluster) {
       const detected = this.detectClusterFromStore(this.store);
-      if (detected) {
+      if (detected && detected !== this.cluster) {
+        // A wallet and endpoint change can arrive in one store update, and
+        // the wallet listener runs first; tell the registry from here too.
         this.cluster = detected;
         this.chainId = SOLANA_CHAIN_IDS[detected];
+        this.onClusterChange?.(detected);
       }
     }
     return this.chainId;

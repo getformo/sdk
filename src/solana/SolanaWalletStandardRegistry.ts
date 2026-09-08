@@ -448,33 +448,54 @@ export class SolanaWalletStandardRegistry {
       // slot follows the active wallet: if another wallet owns it, leave it;
       // if this one did, hand it to a wallet still connected, else clear it,
       // so the gone wallet does not attach to later events.
-      // `currentAddress` spans namespaces: only another connected Solana
-      // wallet holding it means the slot is not ours to touch. The newest
-      // remaining connection takes over, matching last-connected-wins.
+      // `currentAddress` spans namespaces: another Solana wallet holding it
+      // (tracked here or owned by a store) means the slot is not ours to
+      // touch. The newest remaining connection takes over, matching
+      // last-connected-wins.
       const active = this.deps.currentAddress();
-      let ownedElsewhere = false;
+      if (active && active !== previous.address && isSolanaAddress(active)) return;
       let remaining: TrackedWallet | undefined;
       this.wallets.forEach((candidate) => {
         if (candidate === tracked || !candidate.connected) return;
-        if (candidate.connected.address === active) ownedElsewhere = true;
         if ((candidate.connectedSeq ?? 0) > (remaining?.connectedSeq ?? -1)) {
           remaining = candidate;
         }
       });
-      if (ownedElsewhere) return;
+      // Promote a remaining Solana wallet only if this one held the slot.
+      // With an EVM wallet active, clear the Solana namespace and leave the
+      // active namespace where it is.
+      const thisWasActive = !active || active === previous.address;
       this.deps.syncWalletState(
-        remaining?.connected
+        thisWasActive && remaining?.connected
           ? { chainId: remaining.connected.chainId, address: remaining.connected.address }
           : { chainId: previous.chainId }
       );
       return;
     }
-    this.deps.disconnect(previous).catch((error) => {
-      logger.error(
-        "SolanaWalletStandardRegistry: Error emitting disconnect",
-        error
-      );
-    });
+    // `disconnect()` clears the Solana namespace once the event is built.
+    // If another Solana wallet holds the slot (a store's, or one tracked
+    // here), put it back afterwards: its session did not end.
+    const active = this.deps.currentAddress();
+    const keep =
+      active && active !== previous.address && isSolanaAddress(active)
+        ? active
+        : undefined;
+    this.deps
+      .disconnect(previous)
+      .then(() => {
+        if (keep && this.deps.currentAddress() !== keep) {
+          this.deps.syncWalletState({
+            chainId: SOLANA_CHAIN_IDS[this.cluster ?? "mainnet-beta"],
+            address: keep,
+          });
+        }
+      })
+      .catch((error) => {
+        logger.error(
+          "SolanaWalletStandardRegistry: Error emitting disconnect",
+          error
+        );
+      });
   }
 
   // ── cluster ─────────────────────────────────────────────────────────────

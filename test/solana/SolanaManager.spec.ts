@@ -307,6 +307,29 @@ describe("SolanaManager", () => {
       expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.testnet);
     });
 
+    it("follows a cluster change that arrives in the same store update as a wallet change", () => {
+      const store = makeStore(); // devnet
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      // One batched update: the store's wallet and its endpoint change together.
+      store.setState({
+        wallet: connectedWallet("backpack", "Backpack"),
+        cluster: { endpoint: "https://api.testnet.solana.com", status: { status: "ready" } },
+      });
+      mockFormo.connect.resetHistory();
+
+      // A registry-only connection afterwards must carry the new cluster.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:testnet"] }]);
+      // The store owns events now, so the registry records silently; the
+      // recorded chain is what a later disconnect would report.
+      expect(mockFormo.connect.called).to.be.false;
+      store.setState({ wallet: { status: "disconnected" } });
+      phantom.setAccounts([]);
+      const chains = mockFormo.disconnect.getCalls().map((c) => c.args[0]?.chainId);
+      expect(chains).to.not.include(SOLANA_CHAIN_IDS.devnet);
+    });
+
     it("still detects wallets, which the store never reported", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));
