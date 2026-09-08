@@ -33,6 +33,7 @@ describe("SolanaWalletStandardRegistry", () => {
   const registries: SolanaWalletStandardRegistry[] = [];
 
   const ADDRESS = "FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn";
+  const OTHER_ADDRESS = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
   const OTHER = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
   const EVM = "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf";
   const SYSTEM_PROGRAM = "11111111111111111111111111111111";
@@ -477,6 +478,25 @@ describe("SolanaWalletStandardRegistry", () => {
 
       expect(deps.disconnect.called).to.be.false;
       expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+    });
+
+    it("hands central state to a wallet that stays connected when disconnect capture is off", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+
+      phantom.setAccounts([]);
+
+      expect(deps.disconnect.called).to.be.false;
+      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+        address: OTHER_ADDRESS,
         chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
       });
     });

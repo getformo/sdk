@@ -433,9 +433,16 @@ export class SolanaWalletStandardRegistry {
     });
 
     if (!this.deps.isAutocaptureEnabled("disconnect")) {
-      // Still clear central state, as `disconnect()` would have, so the
-      // gone wallet does not attach to later events.
-      this.deps.syncWalletState({ chainId: previous.chainId });
+      // Still keep central state honest, as `disconnect()` would have: hand
+      // it to a wallet that is still connected, else clear it, so the gone
+      // wallet does not attach to later events.
+      let remaining: { address: string; chainId: number } | undefined;
+      this.wallets.forEach((candidate) => {
+        if (!remaining && candidate !== tracked && candidate.connected) {
+          remaining = candidate.connected;
+        }
+      });
+      this.deps.syncWalletState(remaining ?? { chainId: previous.chainId });
       return;
     }
     this.deps.disconnect(previous).catch((error) => {
