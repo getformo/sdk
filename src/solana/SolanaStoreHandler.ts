@@ -58,6 +58,8 @@ export class SolanaStoreHandler {
    */
   private lastWalletStatus: SolanaWalletStatus["status"] = "disconnected";
   private lastAddress?: string;
+  /** False once reset() ran after the connection was observed. */
+  private restorable = false;
   private lastChainId?: number;
 
   /**
@@ -298,6 +300,7 @@ export class SolanaStoreHandler {
 
     this.lastAddress = address;
     this.lastChainId = chainId;
+    this.restorable = true;
 
     logger.info("SolanaStoreHandler: Wallet connected", {
       address,
@@ -322,10 +325,18 @@ export class SolanaStoreHandler {
     }
   }
 
-  /** The store's wallet as last observed, if it is connected. */
-  currentConnection(): { address: string; chainId: number } | undefined {
-    if (!this.lastAddress) return undefined;
+  /**
+   * The store's wallet as last observed, if it is connected and may be put
+   * back into central state: a connection from before a reset() may not.
+   */
+  restorableConnection(): { address: string; chainId: number } | undefined {
+    if (!this.lastAddress || !this.restorable) return undefined;
     return { address: this.lastAddress, chainId: this.lastChainId ?? this.chainId };
+  }
+
+  /** @see SolanaWalletStandardRegistry.onReset */
+  onReset(): void {
+    this.restorable = false;
   }
 
   private handleDisconnect(): void {

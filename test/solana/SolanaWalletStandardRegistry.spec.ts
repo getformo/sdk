@@ -546,6 +546,52 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
+    it("does not put back a wallet connected before reset()", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      const registry = makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+      registry.onReset(); // logout: both connections predate the clean slate
+      currentAddress = OTHER_ADDRESS; // Backpack still sits in the slot
+      deps.restoreWalletState.resetHistory();
+      deps.syncWalletState.resetHistory();
+
+      backpack.setAccounts([]);
+
+      expect(deps.restoreWalletState.called, "Phantom predates the reset").to.be.false;
+      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+      expect(registry.newestConnection()).to.be.undefined;
+    });
+
+    it("puts back a wallet observed again after reset()", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      const registry = makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      registry.onReset();
+      backpack.setAccounts([account(OTHER_ADDRESS)]); // a fresh observation
+      phantom.setAccounts([]);
+      phantom.setAccounts([account(ADDRESS)]); // Phantom reconnects: eligible again
+      currentAddress = ADDRESS;
+      deps.restoreWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+
+      expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
+        address: OTHER_ADDRESS,
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+    });
+
     it("hands the Solana slot to a remaining wallet without displacing an active EVM wallet", () => {
       autocapture = { disconnect: false };
       const phantom = makeWallet("Phantom");

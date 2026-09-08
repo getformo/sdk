@@ -444,6 +444,40 @@ describe("SolanaManager", () => {
       ).to.be.true;
     });
 
+    it("does not put the store's pre-reset wallet back after a registry disconnect", async () => {
+      const store = makeStore();
+      const manager = makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      manager.onReset(); // logout
+      (mockFormo as any).solanaAddress = undefined;
+      mockFormo.restoreWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.restoreWalletState.called, "Backpack predates the reset").to.be.false;
+    });
+
+    it("does not put a pre-reset registry wallet back after the store's wallet leaves", async () => {
+      const store = makeStore();
+      const manager = makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      manager.onReset(); // logout, then the store's wallet leaves
+      (mockFormo as any).solanaAddress = undefined;
+      mockFormo.restoreWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.restoreWalletState.called, "Phantom predates the reset").to.be.false;
+    });
+
     it("takes the restore marker before the store's disconnect is awaited", async () => {
       const store = makeStore();
       makeManager({ store });

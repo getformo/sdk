@@ -435,6 +435,9 @@ export class FormoAnalytics implements IFormoAnalytics {
     // page lifetime, because they fall back to currentAddress. Keep the
     // EVM provider reference so tracking can resume on the next connect.
     this.wallet.reset();
+    // Solana connections observed before this point stay live but are not
+    // put back into central state after a later disconnect.
+    this.solanaManager?.onReset();
 
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);

@@ -184,6 +184,13 @@ function firstSolanaAccount(
 export class SolanaWalletStandardRegistry {
   private wallets = new Map<WalletStandardWallet, TrackedWallet>();
   private connectSeq = 0;
+  /**
+   * Connections observed before this sequence number predate a `reset()`.
+   * They are still live and still get their disconnect reported, but they
+   * are not put back into central state: reset() promised a clean slate
+   * until a wallet is observed again.
+   */
+  private restorableFrom = 0;
   private cluster?: SolanaCluster;
   private removeWindowListener?: () => void;
   /** Set by cleanup(); a torn-down registry refuses late registrations. */
@@ -470,7 +477,7 @@ export class SolanaWalletStandardRegistry {
       if (held && held !== previous.address) return;
       let remaining: TrackedWallet | undefined;
       this.wallets.forEach((candidate) => {
-        if (candidate === tracked || !candidate.connected) return;
+        if (candidate === tracked || !this.isRestorable(candidate)) return;
         if ((candidate.connectedSeq ?? 0) > (remaining?.connectedSeq ?? -1)) {
           remaining = candidate;
         }
@@ -497,7 +504,9 @@ export class SolanaWalletStandardRegistry {
         let owner: { address: string; chainId: number } | undefined;
         this.wallets.forEach((candidate) => {
           const connected = candidate.connected;
-          if (connected && connected.address === keep) owner = connected;
+          if (connected && connected.address === keep && this.isRestorable(candidate)) {
+            owner = connected;
+          }
         });
         if (owner) restoreLater(owner);
       })
@@ -587,10 +596,24 @@ export class SolanaWalletStandardRegistry {
   newestConnection(except?: string): { address: string; chainId: number } | undefined {
     let newest: TrackedWallet | undefined;
     this.wallets.forEach((candidate) => {
-      if (!candidate.connected || candidate.connected.address === except) return;
+      if (!this.isRestorable(candidate) || candidate.connected?.address === except) return;
       if ((candidate.connectedSeq ?? 0) > (newest?.connectedSeq ?? -1)) newest = candidate;
     });
     return newest?.connected;
+  }
+
+  /** Live, and observed since the last reset(). */
+  private isRestorable(candidate: TrackedWallet): boolean {
+    return !!candidate.connected && (candidate.connectedSeq ?? 0) >= this.restorableFrom;
+  }
+
+  /**
+   * The SDK's identity was reset. Connections observed so far stay tracked
+   * (their disconnect is still reported) but are no longer put back into
+   * central state until observed again.
+   */
+  onReset(): void {
+    this.restorableFrom = this.connectSeq + 1;
   }
 
   reportedConnectionRdns(address: string): string | undefined {

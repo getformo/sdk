@@ -174,6 +174,10 @@ export class WalletStateStore {
     ns.address = valid;
     ns.chainId = chainId;
     if (!this._activeNamespace) this._activeNamespace = namespace;
+    // A restore claims the namespace like any other write. Without this, a
+    // disconnect still in flight for another wallet would find its snapshot
+    // unchanged and clear the wallet just put back.
+    this.observe(namespace);
     this.syncDerived();
   }
 
@@ -189,6 +193,12 @@ export class WalletStateStore {
     const namespace = this.namespaceOf(chainId);
     const observation = this.newestObservation[namespace];
     const resets = this.resetCount;
+    // The disconnect about to be awaited clears this namespace, and the
+    // derived state then falls through to the other one. If this namespace
+    // was the active one, the restored wallet takes the slot back; a wallet
+    // that merely sat behind it does not.
+    const wasActive = this._activeNamespace === namespace;
+    const seq = this.observationSeq;
     return (wallet) => {
       if (
         !this.isUnchangedSince(namespace, observation) ||
@@ -197,7 +207,14 @@ export class WalletStateStore {
         logger.debug("restore: skipped, the namespace changed hands or was reset meanwhile");
         return;
       }
+      // Nothing at all happened meanwhile, on either namespace: the other
+      // namespace being active now is the fallthrough, not a new connect.
+      const quiet = this.observationSeq === seq;
       this.restore(wallet.chainId, wallet.address);
+      if (wasActive && quiet && this.state[namespace].address) {
+        this._activeNamespace = namespace;
+        this.syncDerived();
+      }
     };
   }
 

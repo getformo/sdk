@@ -261,6 +261,19 @@ describe("detect in wagmi mode", () => {
     formo.cleanup();
   });
 
+  it("tells the Solana manager about reset()", async () => {
+    const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
+    const { formo } = await setup({
+      tracking: true,
+      wagmi: { config: mockWagmiConfig as any, queryClient: mockQueryClient as any },
+    });
+    const onReset = sandbox.stub((formo as any).solanaManager, "onReset");
+
+    formo.reset();
+
+    expect(onReset.calledOnce).to.be.true;
+  });
+
   it("does not redetect a wallet on a page hit after reset()", async () => {
     const { mockWagmiConfig, mockQueryClient } = mkWagmi(sandbox);
     const { formo, sent } = await setup({

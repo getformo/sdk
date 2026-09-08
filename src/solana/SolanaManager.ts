@@ -88,7 +88,7 @@ export class SolanaManager {
         disconnect: (params) => {
           const restore = this.formo.deferWalletRestore(params.chainId);
           return this.formo.disconnect(params).then(() => {
-            const live = this.storeHandler?.currentConnection();
+            const live = this.storeHandler?.restorableConnection();
             if (live && !this.formo.solanaAddress) restore(live);
           });
         },
@@ -233,6 +233,15 @@ export class SolanaManager {
       this.pendingCluster = cluster;
     }
     this.registry?.setCluster(cluster);
+  }
+
+  /**
+   * reset() cleared wallet identity. Connections observed before it must not
+   * be put back after a later disconnect; only a fresh observation counts.
+   */
+  onReset(): void {
+    this.registry?.onReset();
+    this.storeHandler?.onReset();
   }
 
   /** Names of the Wallet Standard wallets discovered so far. */

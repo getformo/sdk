@@ -349,6 +349,58 @@ describe("WalletStateStore", () => {
         expect(s.solanaAddress, "the newer session keeps the slot").to.equal(SOL_B);
       });
 
+      it("claims the namespace, so an older disconnect in flight leaves it alone", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+        const before = s.snapshot("solana"); // what disconnect() captures
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.clear(SOL_CHAIN);
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.isUnchangedSince("solana", before), "the disconnect's cleanup is stale now").to.be.false;
+      });
+
+      it("takes the slot back when its namespace was the active one", () => {
+        const s = store();
+        s.syncWalletState({ chainId: 1, address: EVM_A }); // an older EVM wallet
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_B }); // Solana active
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.clear(SOL_CHAIN); // disconnect(A) clears the namespace: EVM falls through
+        expect(s.address).to.equal(EVM_A);
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.address, "the transient fallthrough is undone").to.equal(SOL_B);
+        expect(s.chainId).to.equal(SOL_CHAIN);
+      });
+
+      it("leaves a wallet that connected meanwhile active", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_B }); // Solana active
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.clear(SOL_CHAIN);
+        s.syncWalletState({ chainId: 1, address: EVM_A }); // a real EVM connect
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.solanaAddress).to.equal(SOL_B);
+        expect(s.address, "the newer EVM session keeps the slot").to.equal(EVM_A);
+      });
+
+      it("does not take the slot back when it sat behind the other namespace", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_B });
+        s.syncWalletState({ chainId: 1, address: EVM_A }); // EVM active
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.clear(SOL_CHAIN);
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.solanaAddress).to.equal(SOL_B);
+        expect(s.address).to.equal(EVM_A);
+      });
+
       it("ignores a reset on the other namespace's timeline only through reset itself", () => {
         const s = store();
         s.syncWalletState({ chainId: 1, address: EVM_A });
