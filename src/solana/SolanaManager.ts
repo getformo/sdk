@@ -66,6 +66,16 @@ export class SolanaManager {
     // same as a store attached later. Owning them from the outset silenced
     // the registry for a connection the store never observes, which was
     // then reported nowhere.
+    //
+    // The store attaches before discovery starts: the registry reports a
+    // wallet authorized before the SDK the moment it is constructed, and
+    // that report must carry the store's detected cluster, not the default.
+    let cluster = options?.cluster;
+    if (options?.store) {
+      logger.info("SolanaManager: Initializing store-based Solana tracking");
+      this.attachStore(options.store, options.cluster);
+      cluster = cluster ?? SOLANA_CLUSTERS_BY_ID[this.storeHandler!.getChainId()];
+    }
     this.registry = new SolanaWalletStandardRegistry(
       {
         isAutocaptureEnabled: (t) => this.formo.isAutocaptureEnabled(t),
@@ -79,13 +89,8 @@ export class SolanaManager {
         currentAddress: () => this.formo.currentAddress,
         ownsWalletEvents: () => !this.storeOwnsWalletEvents,
       },
-      { cluster: options?.cluster }
+      { cluster }
     );
-
-    if (options?.store) {
-      logger.info("SolanaManager: Initializing store-based Solana tracking");
-      this.attachStore(options.store, options.cluster);
-    }
   }
 
   private attachStore(

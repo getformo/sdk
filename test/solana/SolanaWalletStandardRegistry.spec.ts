@@ -482,7 +482,7 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
-    it("hands central state to a wallet that stays connected when disconnect capture is off", () => {
+    it("leaves central state alone when a non-active wallet disconnects with capture off", () => {
       autocapture = { disconnect: false };
       const phantom = makeWallet("Phantom");
       const backpack = makeWallet("Backpack");
@@ -491,12 +491,31 @@ describe("SolanaWalletStandardRegistry", () => {
       installWalletAfterApp(backpack);
       phantom.setAccounts([account(ADDRESS)]);
       backpack.setAccounts([account(OTHER_ADDRESS)]);
+      currentAddress = OTHER_ADDRESS; // the SDK treats the last connected wallet as active
+      deps.syncWalletState.resetHistory();
 
       phantom.setAccounts([]);
 
       expect(deps.disconnect.called).to.be.false;
+      expect(deps.syncWalletState.called, "the active wallet keeps the slot").to.be.false;
+    });
+
+    it("hands central state to a wallet still connected when the active one disconnects with capture off", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+      currentAddress = OTHER_ADDRESS;
+
+      backpack.setAccounts([]);
+
+      expect(deps.disconnect.called).to.be.false;
       expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
-        address: OTHER_ADDRESS,
+        address: ADDRESS,
         chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
       });
     });

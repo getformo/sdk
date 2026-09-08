@@ -433,9 +433,12 @@ export class SolanaWalletStandardRegistry {
     });
 
     if (!this.deps.isAutocaptureEnabled("disconnect")) {
-      // Still keep central state honest, as `disconnect()` would have: hand
-      // it to a wallet that is still connected, else clear it, so the gone
-      // wallet does not attach to later events.
+      // Still keep central state honest, as `disconnect()` would have. The
+      // slot follows the active wallet: if another wallet owns it, leave it;
+      // if this one did, hand it to a wallet still connected, else clear it,
+      // so the gone wallet does not attach to later events.
+      const active = this.deps.currentAddress();
+      if (active && active !== previous.address) return;
       let remaining: { address: string; chainId: number } | undefined;
       this.wallets.forEach((candidate) => {
         if (!remaining && candidate !== tracked && candidate.connected) {
