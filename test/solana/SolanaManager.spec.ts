@@ -312,22 +312,22 @@ describe("SolanaManager", () => {
       makeManager({ store });
       const phantom = makeStandardWallet("Phantom");
       registerStandardWallet(phantom);
+      // The registry reports Phantom while the store is still disconnected.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet", "solana:testnet"] }]);
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.devnet);
+
       // One batched update: the store's wallet and its endpoint change together.
       store.setState({
         wallet: connectedWallet("backpack", "Backpack"),
         cluster: { endpoint: "https://api.testnet.solana.com", status: { status: "ready" } },
       });
-      mockFormo.connect.resetHistory();
 
-      // A registry-only connection afterwards must carry the new cluster.
-      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:testnet"] }]);
-      // The store owns events now, so the registry records silently; the
-      // recorded chain is what a later disconnect would report.
-      expect(mockFormo.connect.called).to.be.false;
-      store.setState({ wallet: { status: "disconnected" } });
+      // Phantom's connection is closed by the registry; it must carry the
+      // cluster the registry learned from that batched update.
       phantom.setAccounts([]);
-      const chains = mockFormo.disconnect.getCalls().map((c) => c.args[0]?.chainId);
-      expect(chains).to.not.include(SOLANA_CHAIN_IDS.devnet);
+      const phantomDisconnect = mockFormo.disconnect.getCalls().find((c) => c.args[0]?.address === ADDRESS);
+      expect(phantomDisconnect, "the registry closed its own connection").to.not.equal(undefined);
+      expect(phantomDisconnect?.args[0]?.chainId).to.equal(SOLANA_CHAIN_IDS.testnet);
     });
 
     it("still detects wallets, which the store never reported", () => {

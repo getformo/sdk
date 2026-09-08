@@ -616,6 +616,48 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
+    it("does not overwrite a wallet that connected while the disconnect was in flight", async () => {
+      const phantom = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      phantom.setAccounts([account(ADDRESS)]);
+      ownsWalletEvents = false;
+      currentAddress = OTHER_ADDRESS; // a store's wallet holds the slot
+      const NEWER = "So11111111111111111111111111111111111111112";
+      deps.disconnect.callsFake(async () => {
+        currentAddress = NEWER; // another wallet took the slot meanwhile
+      });
+      deps.syncWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(deps.syncWalletState.called, "the newer wallet keeps the slot").to.be.false;
+    });
+
+    it("restores a tracked wallet with the chain it connected on", async () => {
+      const phantom = makeWallet("Phantom");
+      const devnetOnly = makeWallet("DevnetOnly", { chains: ["solana:devnet"] });
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(devnetOnly);
+      phantom.setAccounts([account(ADDRESS)]);
+      devnetOnly.setAccounts([account(OTHER_ADDRESS, ["solana:devnet"])]);
+      currentAddress = OTHER_ADDRESS;
+      deps.disconnect.callsFake(async () => {
+        currentAddress = undefined;
+      });
+      deps.syncWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS.devnet,
+        address: OTHER_ADDRESS,
+      });
+    });
+
     it("leaves a store-owned Solana wallet alone on a suppressed disconnect", () => {
       autocapture = { disconnect: false };
       const phantom = makeWallet("Phantom");

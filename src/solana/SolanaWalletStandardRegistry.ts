@@ -474,20 +474,24 @@ export class SolanaWalletStandardRegistry {
     }
     // `disconnect()` clears the Solana namespace once the event is built.
     // If another Solana wallet holds the slot (a store's, or one tracked
-    // here), put it back afterwards: its session did not end.
+    // here), put it back afterwards: its session did not end. Only when the
+    // slot is actually empty, so a wallet that connected meanwhile keeps it.
     const active = this.deps.currentAddress();
     const keep =
       active && active !== previous.address && isSolanaAddress(active)
         ? active
         : undefined;
+    let keepChainId = SOLANA_CHAIN_IDS[this.cluster ?? "mainnet-beta"];
+    this.wallets.forEach((candidate) => {
+      const connected = candidate.connected;
+      if (connected && connected.address === keep) keepChainId = connected.chainId;
+    });
     this.deps
       .disconnect(previous)
       .then(() => {
-        if (keep && this.deps.currentAddress() !== keep) {
-          this.deps.syncWalletState({
-            chainId: SOLANA_CHAIN_IDS[this.cluster ?? "mainnet-beta"],
-            address: keep,
-          });
+        const now = this.deps.currentAddress();
+        if (keep && (!now || !isSolanaAddress(now))) {
+          this.deps.syncWalletState({ chainId: keepChainId, address: keep });
         }
       })
       .catch((error) => {
