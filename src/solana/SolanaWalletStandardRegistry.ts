@@ -112,6 +112,8 @@ interface TrackedWallet {
   unsubscribe?: UnsubscribeFn;
   /** The account this registry currently considers connected, if any. */
   connected?: { address: string; chainId: number };
+  /** Order of connection, so the newest remaining wallet can take the slot. */
+  connectedSeq?: number;
   /** Whether this registry, rather than a store, emitted its connect. */
   connectWasReported: boolean;
 }
@@ -167,6 +169,7 @@ function firstSolanaAccount(
 
 export class SolanaWalletStandardRegistry {
   private wallets = new Map<WalletStandardWallet, TrackedWallet>();
+  private connectSeq = 0;
   private cluster?: SolanaCluster;
   private removeWindowListener?: () => void;
   /** Set by cleanup(); a torn-down registry refuses late registrations. */
@@ -368,12 +371,19 @@ export class SolanaWalletStandardRegistry {
     if (previous && next && previous.address === next.address) return;
 
     if (!this.deps.ownsWalletEvents()) {
-      // The store handler reports this connection. Still record it, so a
-      // later change is judged against what the wallet actually did rather
-      // than against a stale snapshot.
+      // A connection this registry reported before a store took ownership
+      // is one the store cannot see end; close it here so its connect is
+      // not left open forever.
+      if (previous && tracked.connectWasReported) {
+        this.reportDisconnect(tracked, previous);
+      }
+      // The store handler reports the rest. Still record it, so a later
+      // change is judged against what the wallet actually did rather than
+      // against a stale snapshot.
       tracked.connected = next
         ? { address: next.address, chainId: this.chainIdFor(tracked) }
         : undefined;
+      if (next) tracked.connectedSeq = ++this.connectSeq;
       tracked.connectWasReported = false;
       return;
     }
@@ -385,6 +395,7 @@ export class SolanaWalletStandardRegistry {
   private reportConnect(tracked: TrackedWallet, address: string): void {
     const chainId = this.chainIdFor(tracked);
     tracked.connected = { address, chainId };
+    tracked.connectedSeq = ++this.connectSeq;
     tracked.connectWasReported = false;
 
     logger.info("SolanaWalletStandardRegistry: Wallet connected", {
@@ -437,15 +448,25 @@ export class SolanaWalletStandardRegistry {
       // slot follows the active wallet: if another wallet owns it, leave it;
       // if this one did, hand it to a wallet still connected, else clear it,
       // so the gone wallet does not attach to later events.
+      // `currentAddress` spans namespaces: only another connected Solana
+      // wallet holding it means the slot is not ours to touch. The newest
+      // remaining connection takes over, matching last-connected-wins.
       const active = this.deps.currentAddress();
-      if (active && active !== previous.address) return;
-      let remaining: { address: string; chainId: number } | undefined;
+      let ownedElsewhere = false;
+      let remaining: TrackedWallet | undefined;
       this.wallets.forEach((candidate) => {
-        if (!remaining && candidate !== tracked && candidate.connected) {
-          remaining = candidate.connected;
+        if (candidate === tracked || !candidate.connected) return;
+        if (candidate.connected.address === active) ownedElsewhere = true;
+        if ((candidate.connectedSeq ?? 0) > (remaining?.connectedSeq ?? -1)) {
+          remaining = candidate;
         }
       });
-      this.deps.syncWalletState(remaining ?? { chainId: previous.chainId });
+      if (ownedElsewhere) return;
+      this.deps.syncWalletState(
+        remaining?.connected
+          ? { chainId: remaining.connected.chainId, address: remaining.connected.address }
+          : { chainId: previous.chainId }
+      );
       return;
     }
     this.deps.disconnect(previous).catch((error) => {

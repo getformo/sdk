@@ -83,6 +83,7 @@ export class SolanaStoreHandler {
    * When true, auto-detection from the store endpoint is disabled.
    */
   private explicitCluster: boolean;
+  private onClusterChange?: (cluster: SolanaCluster) => void;
   private beforeWalletConnect?: (connection: {
     address: string;
     chainId: number;
@@ -99,12 +100,15 @@ export class SolanaStoreHandler {
         chainId: number;
         rdns: string;
       }) => boolean;
+      /** Called when the cluster is re-detected from a changed endpoint. */
+      onClusterChange?: (cluster: SolanaCluster) => void;
     }
   ) {
     this.formo = formoAnalytics;
     this.store = store;
     this.explicitCluster = !!options?.cluster;
     this.beforeWalletConnect = options?.beforeWalletConnect;
+    this.onClusterChange = options?.onClusterChange;
     this.cluster = options?.cluster || this.detectClusterFromStore(store) || "mainnet-beta";
     this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
@@ -364,6 +368,7 @@ export class SolanaStoreHandler {
       to: detected,
       chainId: this.chainId,
     });
+    this.onClusterChange?.(detected);
 
     if (this.lastAddress) {
       this.lastChainId = this.chainId;

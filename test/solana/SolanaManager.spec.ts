@@ -291,6 +291,22 @@ describe("SolanaManager", () => {
       expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.devnet);
     });
 
+    it("follows the store's endpoint while the registry still reports", () => {
+      const store = makeStore(); // devnet
+      makeManager({ store });
+      store.setState({
+        cluster: { endpoint: "https://api.testnet.solana.com", status: { status: "ready" } },
+      });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+
+      // The store never observes this connection; the registry reports it.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:testnet"] }]);
+
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      expect(mockFormo.connect.firstCall.args[0].chainId).to.equal(SOLANA_CHAIN_IDS.testnet);
+    });
+
     it("still detects wallets, which the store never reported", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));

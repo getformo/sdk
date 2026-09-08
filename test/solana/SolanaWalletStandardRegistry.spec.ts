@@ -520,6 +520,59 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
+    it("clears the Solana slot on a suppressed disconnect even while an EVM wallet is active", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      phantom.setAccounts([account(ADDRESS)]);
+      currentAddress = "0x000000000000000000000000000000000000dEaD"; // EVM wallet took the active slot
+      deps.syncWalletState.resetHistory();
+
+      phantom.setAccounts([]);
+
+      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+    });
+
+    it("hands the slot to the most recently connected remaining wallet", () => {
+      autocapture = { disconnect: false };
+      const a = makeWallet("A");
+      const b = makeWallet("B");
+      const c = makeWallet("C");
+      makeRegistry();
+      installWalletAfterApp(a);
+      installWalletAfterApp(b);
+      installWalletAfterApp(c);
+      a.setAccounts([account(ADDRESS)]);
+      b.setAccounts([account(OTHER_ADDRESS)]);
+      const THIRD = "So11111111111111111111111111111111111111112";
+      c.setAccounts([account(THIRD)]);
+      currentAddress = THIRD;
+
+      c.setAccounts([]);
+
+      expect(deps.syncWalletState.lastCall.args[0]).to.deep.equal({
+        address: OTHER_ADDRESS,
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+    });
+
+    it("emits the disconnect for a connection it reported before a store took ownership", () => {
+      const phantom = makeWallet("Phantom");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      phantom.setAccounts([account(ADDRESS)]);
+      expect(deps.connect.calledOnce).to.be.true;
+
+      ownsWalletEvents = false; // a store connected another wallet meanwhile
+      phantom.setAccounts([]);
+
+      expect(deps.disconnect.calledOnce).to.be.true;
+      expect(deps.disconnect.firstCall.args[0].address).to.equal(ADDRESS);
+    });
+
     it("does not mark a suppressed connect as reported for store handoff", () => {
       const wallet = makeWallet("Phantom");
       const registry = makeRegistry();

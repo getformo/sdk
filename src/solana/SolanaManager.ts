@@ -99,6 +99,9 @@ export class SolanaManager {
   ): void {
     this.storeHandler = new SolanaStoreHandler(this.formo, store, {
       cluster,
+      // The registry reports until the store observes a connection, so it
+      // must follow the store's endpoint in the meantime.
+      onClusterChange: (detected) => this.registry?.setCluster(detected),
       beforeWalletConnect: (connection) => {
         // The store's cluster is authoritative even when chain autocapture is
         // disabled. Keep central attribution correct without manufacturing a
