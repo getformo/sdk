@@ -27,6 +27,19 @@ const registry = (): Registry => {
   // entry bare (hot reload across versions): keep what it had.
   const migrated: Registry = { live: found ?? null, managed: new WeakSet() };
   if (migrated.live?.instance) migrated.managed.add(migrated.live.instance);
+  if (migrated.live && !migrated.live.instance) {
+    // Still pending under the old owner, whose failure handler no longer
+    // recognises the slot. Clear the entry ourselves if it rejects.
+    const pending = migrated.live;
+    pending.promise
+      .then((f) => {
+        pending.instance = f;
+        migrated.managed.add(f);
+      })
+      .catch(() => {
+        if (migrated.live === pending) migrated.live = null;
+      });
+  }
   w[SLOT] = migrated;
   return migrated;
 };
@@ -132,11 +145,18 @@ function start(writeKey: string, options: Options | undefined, previous: Live | 
     entry.promise = previous.promise
       .then((f) => retire(f))
       .catch(() => undefined)
-      .then(() =>
-        getLive() === entry
-          ? FormoAnalytics.init(writeKey, options)
-          : Promise.reject(SUPERSEDED)
-      );
+      .then(() => {
+        if (getLive() !== entry) return Promise.reject(SUPERSEDED);
+        // The app installed its own instance while we waited: it wins.
+        const own = adoptWindowInstance();
+        if (own && !registry().managed.has(own.instance!)) {
+          remember(own.instance!);
+          setLive(own);
+          if (own.writeKey === writeKey) runReady(options, own.instance!);
+          return Promise.reject(SUPERSEDED);
+        }
+        return FormoAnalytics.init(writeKey, options);
+      });
   } else {
     if (previous?.instance) retire(previous.instance);
     entry.promise = FormoAnalytics.init(writeKey, options);

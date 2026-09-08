@@ -435,6 +435,42 @@ describe("formofy", () => {
     expect(window.formo).to.equal(c);
   });
 
+  it("does not start a queued key when the app installed its own instance meanwhile", async () => {
+    const a = instance("wk_1");
+    let resolveA!: (f: FormoAnalytics) => void;
+    init.onFirstCall().returns(new Promise<FormoAnalytics>((r) => { resolveA = r; }));
+    formofy("wk_1"); // pending
+    const ready = sinon.spy();
+    formofy("wk_2", { ready }); // queued behind A
+    const own = instance("wk_2");
+    (window as { formo?: unknown }).formo = own;
+    resolveA(a);
+    await tick(); await tick(); await tick();
+
+    expect(init.calledOnce, "wk_2 never initialised: the app's instance is adopted").to.be.true;
+    expect(a.cleanup.calledOnce).to.be.true;
+    expect(window.formo).to.equal(own);
+    expect(ready.calledOnceWith(own)).to.be.true;
+  });
+
+  it("recovers when a pending entry migrated from an older copy rejects", async () => {
+    let reject!: (e: Error) => void;
+    (window as unknown as Record<symbol, unknown>)[Symbol.for("formo.live")] = {
+      writeKey: "wk_1", promise: new Promise<FormoAnalytics>((_, r) => { reject = r; }),
+    };
+    const fresh = instance("wk_1");
+    init.resolves(fresh);
+
+    formofy("wk_1"); // migrates the slot and waits on the old pending init
+    reject(new Error("old init failed"));
+    await tick(); await tick();
+    formofy("wk_1"); // must start over, not reuse the rejected entry
+    await tick();
+
+    expect(init.calledOnce).to.be.true;
+    expect(window.formo).to.equal(fresh);
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);
