@@ -394,6 +394,47 @@ describe("formofy", () => {
     expect(ready.calledOnceWith(a)).to.be.true;
   });
 
+  it("stands down a pending result when the app installed its own instance meanwhile", async () => {
+    const a = instance("wk_1");
+    let resolve!: (f: FormoAnalytics) => void;
+    init.returns(new Promise<FormoAnalytics>((r) => { resolve = r; }));
+    const ready = sinon.spy();
+    formofy("wk_1", { ready }); // pending, nothing else calls formofy
+    const own = instance("wk_1");
+    (window as { formo?: unknown }).formo = own;
+
+    resolve(a);
+    await tick();
+
+    expect(a.cleanup.calledOnce, "the late result retires itself").to.be.true;
+    expect(window.formo).to.equal(own);
+    expect(ready.calledOnceWith(own), "same key: ready runs on the app's instance").to.be.true;
+  });
+
+  it("does not hand a retired restart to a queued ready callback", async () => {
+    const a = instance("wk_1");
+    const fresh = instance("wk_1");
+    const c = instance("wk_2");
+    let resolveFresh!: (f: FormoAnalytics) => void;
+    init.onFirstCall().resolves(a);
+    init.onSecondCall().returns(new Promise<FormoAnalytics>((r) => { resolveFresh = r; }));
+    init.onThirdCall().resolves(c);
+    formofy("wk_1");
+    await tick();
+    a.cleanup();
+    const ready2 = sinon.spy();
+    formofy("wk_1");                 // starts the shared restart
+    formofy("wk_1", { ready: ready2 }); // queues on it
+    await tick();
+    formofy("wk_2");                 // supersedes the restart
+    resolveFresh(fresh);
+    await tick(); await tick(); await tick();
+
+    expect(fresh.cleanup.calledOnce, "the restart result retired").to.be.true;
+    expect(ready2.called, "no callback with a retired instance").to.be.false;
+    expect(window.formo).to.equal(c);
+  });
+
   it("does not let a throwing ready callback break the second caller", async () => {
     const a = instance("wk_1");
     init.resolves(a);

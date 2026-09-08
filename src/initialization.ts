@@ -83,7 +83,11 @@ export function formofy(writeKey: string, options?: Options): void {
       const now = getLive();
       if (now !== current) {
         if (now && now.writeKey === writeKey) {
-          now.promise.then((g) => runReady(options, g)).catch(() => undefined);
+          now.promise
+            .then((g) => {
+              if (getLive() === now && !isDisposed(g)) runReady(options, g);
+            })
+            .catch(() => undefined);
         }
         return;
       }
@@ -144,10 +148,21 @@ function start(writeKey: string, options: Options | undefined, previous: Live | 
     .then((f) => {
       entry.instance = f;
       remember(f);
-      // Superseded while initialising (the app installed its own instance,
-      // or another key took over): this result must not send.
+      // Superseded while initialising (another key took over): this result
+      // must not send.
       if (getLive() !== entry) {
         retire(f);
+        return;
+      }
+      // The app installed its own instance meanwhile: it wins, this result
+      // stands down, and the callback only runs if that instance is for the
+      // key that was asked for.
+      const own = adoptWindowInstance();
+      if (own && own.instance !== f && !registry().managed.has(own.instance!)) {
+        retire(f);
+        remember(own.instance!);
+        setLive(own);
+        if (own.writeKey === writeKey) runReady(options, own.instance!);
         return;
       }
       window.formo = f;
