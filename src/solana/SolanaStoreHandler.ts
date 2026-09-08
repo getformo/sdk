@@ -84,6 +84,7 @@ export class SolanaStoreHandler {
    */
   private explicitCluster: boolean;
   private onClusterChange?: (cluster: SolanaCluster) => void;
+  private afterWalletDisconnect?: () => void;
   private beforeWalletConnect?: (connection: {
     address: string;
     chainId: number;
@@ -102,6 +103,8 @@ export class SolanaStoreHandler {
       }) => boolean;
       /** Called when the cluster is re-detected from a changed endpoint. */
       onClusterChange?: (cluster: SolanaCluster) => void;
+      /** Called once the store's wallet disconnect has been handled. */
+      afterWalletDisconnect?: () => void;
     }
   ) {
     this.formo = formoAnalytics;
@@ -109,6 +112,7 @@ export class SolanaStoreHandler {
     this.explicitCluster = !!options?.cluster;
     this.beforeWalletConnect = options?.beforeWalletConnect;
     this.onClusterChange = options?.onClusterChange;
+    this.afterWalletDisconnect = options?.afterWalletDisconnect;
     this.cluster = options?.cluster || this.detectClusterFromStore(store) || "mainnet-beta";
     this.chainId = SOLANA_CHAIN_IDS[this.cluster];
 
@@ -320,9 +324,15 @@ export class SolanaStoreHandler {
       this.formo.disconnect({
         chainId: this.lastChainId,
         address: this.lastAddress,
-      }).catch((error) => {
-        logger.error("SolanaStoreHandler: Error emitting disconnect", error);
-      });
+      })
+        .catch((error) => {
+          logger.error("SolanaStoreHandler: Error emitting disconnect", error);
+        })
+        // disconnect() clears the namespace once the event is built; anyone
+        // repopulating it must run after that.
+        .then(() => this.afterWalletDisconnect?.());
+    } else {
+      this.afterWalletDisconnect?.();
     }
 
     this.lastAddress = undefined;

@@ -330,6 +330,29 @@ describe("SolanaManager", () => {
       expect(phantomDisconnect?.args[0]?.chainId).to.equal(SOLANA_CHAIN_IDS.testnet);
     });
 
+    it("puts a registry connection back after the store's own wallet disconnects", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      // The registry reports Phantom while the store is disconnected.
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      expect(mockFormo.connect.calledOnce).to.be.true;
+      // The store then connects and later disconnects its own wallet, which
+      // clears the Solana namespace.
+      store.setState({ wallet: connectedWallet("backpack", "Backpack") });
+      mockFormo.currentAddress = undefined;
+      mockFormo.syncWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.syncWalletState.lastCall?.args[0]).to.deep.equal({
+        address: ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
     it("still detects wallets, which the store never reported", () => {
       makeManager({ store: makeStore() });
       registerStandardWallet(makeStandardWallet("Phantom"));

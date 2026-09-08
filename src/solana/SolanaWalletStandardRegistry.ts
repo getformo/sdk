@@ -481,18 +481,19 @@ export class SolanaWalletStandardRegistry {
       active && active !== previous.address && isSolanaAddress(active)
         ? active
         : undefined;
-    let keepChainId = SOLANA_CHAIN_IDS[this.cluster ?? "mainnet-beta"];
-    this.wallets.forEach((candidate) => {
-      const connected = candidate.connected;
-      if (connected && connected.address === keep) keepChainId = connected.chainId;
-    });
     this.deps
       .disconnect(previous)
       .then(() => {
-        const now = this.deps.currentAddress();
-        if (keep && (!now || !isSolanaAddress(now))) {
-          this.deps.syncWalletState({ chainId: keepChainId, address: keep });
-        }
+        // Only into an empty slot: a wallet that became active meanwhile,
+        // Solana or EVM, keeps it. The chain is read now, not before the
+        // await, in case the cluster moved in between.
+        if (!keep || this.deps.currentAddress()) return;
+        let chainId = SOLANA_CHAIN_IDS[this.cluster ?? "mainnet-beta"];
+        this.wallets.forEach((candidate) => {
+          const connected = candidate.connected;
+          if (connected && connected.address === keep) chainId = connected.chainId;
+        });
+        this.deps.syncWalletState({ chainId, address: keep });
       })
       .catch((error) => {
         logger.error(
@@ -576,6 +577,16 @@ export class SolanaWalletStandardRegistry {
    * The rdns this registry reported a still-live connect for `address`
    * under, if any. Lets a failed store adoption name both identities.
    */
+  /** The newest connection this registry still considers live, if any. */
+  newestConnection(): { address: string; chainId: number } | undefined {
+    let newest: TrackedWallet | undefined;
+    this.wallets.forEach((candidate) => {
+      if (!candidate.connected) return;
+      if ((candidate.connectedSeq ?? 0) > (newest?.connectedSeq ?? -1)) newest = candidate;
+    });
+    return newest?.connected;
+  }
+
   reportedConnectionRdns(address: string): string | undefined {
     for (const tracked of Array.from(this.wallets.values())) {
       if (

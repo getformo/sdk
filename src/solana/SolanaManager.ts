@@ -102,6 +102,13 @@ export class SolanaManager {
       // The registry reports until the store observes a connection, so it
       // must follow the store's endpoint in the meantime.
       onClusterChange: (detected) => this.registry?.setCluster(detected),
+      // The store's wallet leaving clears the Solana namespace. A connection
+      // the registry reported before the store took ownership is still
+      // live; put it back if nothing else holds the slot.
+      afterWalletDisconnect: () => {
+        const live = this.registry?.newestConnection();
+        if (live && !this.formo.currentAddress) this.formo.syncWalletState(live);
+      },
       beforeWalletConnect: (connection) => {
         // The store's cluster is authoritative even when chain autocapture is
         // disabled. Keep central attribution correct without manufacturing a
