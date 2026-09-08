@@ -347,6 +347,14 @@ export class FormoAnalytics implements IFormoAnalytics {
       }
     }
 
+    // Seed currentAddress/currentChainId from the persisted snapshot before
+    // the first page hit queues so reload-time track()/page() carry the
+    // wallet even before wagmi/EIP-1193 reconnection completes. Before
+    // Solana discovery too: a wallet authorized before the SDK is reported
+    // the moment the registry is constructed, and that live connection must
+    // land on top of the snapshot, not under it.
+    this.wallet.load();
+
     // Solana wallets are discovered through the Wallet Standard
     // unconditionally, the way EVM wallets are through EIP-6963: an app
     // that never configures Solana still gets its connects. `solana: false`
@@ -359,11 +367,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     this._currentUrl = window.location.href;
-
-    // Seed currentAddress/currentChainId from the persisted snapshot before
-    // the first page hit queues so reload-time track()/page() carry the
-    // wallet even before wagmi/EIP-1193 reconnection completes.
-    this.wallet.load();
 
     this.trackPageHit();
     this.trackPageHits();

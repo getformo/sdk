@@ -40,7 +40,8 @@ import { SolanaClientStore } from "./storeTypes";
 export class SolanaManager {
   private storeHandler?: SolanaStoreHandler;
   private registry?: SolanaWalletStandardRegistry;
-  private pendingCluster?: SolanaCluster;
+  /** The cluster the app named, through options or setCluster(). Outlives any store. */
+  private cluster?: SolanaCluster;
   private storeOwnsWalletEvents = false;
 
   /**
@@ -56,10 +57,7 @@ export class SolanaManager {
   ) {
     if (!enabled) return;
 
-    if (options?.cluster) {
-      // Store pending cluster for when setStore is called later
-      this.pendingCluster = options.cluster;
-    }
+    this.cluster = options?.cluster;
 
     // Attach before discovery starts: the registry reports a wallet
     // authorized before the SDK the moment it is constructed, and that
@@ -211,8 +209,8 @@ export class SolanaManager {
     this.storeHandler?.cleanup();
     this.storeHandler = undefined;
     this.storeOwnsWalletEvents = false;
-    this.attachStore(store, options?.cluster || this.pendingCluster);
-    this.pendingCluster = undefined;
+    if (options?.cluster) this.cluster = options.cluster;
+    this.attachStore(store, this.cluster);
   }
 
   /**
@@ -225,11 +223,8 @@ export class SolanaManager {
    */
   setCluster(cluster: SolanaCluster): void {
     if (!this.enabled) return;
-    if (this.storeHandler) {
-      this.storeHandler.setCluster(cluster);
-    } else {
-      this.pendingCluster = cluster;
-    }
+    this.cluster = cluster;
+    this.storeHandler?.setCluster(cluster);
     this.registry?.setCluster(cluster);
   }
 
