@@ -1316,6 +1316,39 @@ describe("EventQueue", () => {
       fetchStub.resolves(makeResponse(200, "OK"));
     });
 
+    it("reports the batches it abandons when consent goes mid-flush", async () => {
+      let allowed = true;
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+        canSend: () => allowed,
+      });
+      await eventQueue.enqueue(createMockEvent());
+      await (eventQueue as any).pendingFlush;
+      fetchStub.resetHistory();
+      // Consent is withdrawn while the first of several split batches is
+      // on the wire.
+      fetchStub.onFirstCall().callsFake(async () => {
+        allowed = false;
+        return makeResponse(200, "OK");
+      });
+
+      const itemCb = sinon.spy();
+      await enqueueLargeEvents(eventQueue, 8, itemCb);
+      const flushCb = sinon.spy();
+      await eventQueue.flush(flushCb);
+
+      expect(fetchStub.calledOnce, "only the first batch was sent").to.be.true;
+      expect(itemCb.callCount, "every item hears back").to.equal(8);
+      const delivered = itemCb.getCalls().filter((c) => c.args[0] === undefined).length;
+      const dropped = itemCb.getCalls().filter((c) => c.args[0]?.code === "consent_withdrawn").length;
+      expect(delivered, "batch one delivered").to.be.greaterThan(0);
+      expect(delivered + dropped).to.equal(8);
+      expect(flushCb.firstCall.args[0]?.code, "the flush reports the drop").to.equal("consent_withdrawn");
+    });
+
     it("does not send when consent is revoked before flush", async () => {
       useUniqueCryptoHashes();
       let allowed = true;
