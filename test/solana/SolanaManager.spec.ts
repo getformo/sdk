@@ -25,6 +25,7 @@ describe("SolanaManager", () => {
   const managers: SolanaManager[] = [];
 
   const ADDRESS = "FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn";
+  const OTHER_ADDRESS = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
   function makeStandardWallet(name: string) {
     const listeners: Array<(p: { accounts: unknown[] }) => void> = [];
@@ -89,12 +90,12 @@ describe("SolanaManager", () => {
     return store;
   }
 
-  const connectedWallet = (connectorId: string, name: string) =>
+  const connectedWallet = (connectorId: string, name: string, address: string = ADDRESS) =>
     ({
       status: "connected" as const,
       connectorId,
       session: {
-        account: { address: ADDRESS },
+        account: { address },
         connector: { id: connectorId, name },
         disconnect: async () => undefined,
       },
@@ -340,7 +341,7 @@ describe("SolanaManager", () => {
       expect(mockFormo.connect.calledOnce).to.be.true;
       // The store then connects and later disconnects its own wallet, which
       // clears the Solana namespace.
-      store.setState({ wallet: connectedWallet("backpack", "Backpack") });
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
       mockFormo.currentAddress = undefined;
       mockFormo.syncWalletState.resetHistory();
 
@@ -351,6 +352,61 @@ describe("SolanaManager", () => {
         address: ADDRESS,
         chainId: SOLANA_CHAIN_IDS.devnet,
       });
+    });
+
+    it("clears the slot the store's wallet left when disconnect capture is off", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "disconnect");
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      makeManager({ store });
+      mockFormo.currentAddress = OTHER_ADDRESS; // the store's wallet holds the slot
+      mockFormo.syncWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.disconnect.called, "no event with capture off").to.be.false;
+      expect(mockFormo.syncWalletState.lastCall?.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("hands the slot to a live registry wallet when the store's wallet leaves with capture off", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "disconnect");
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]); // reported by the registry
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      mockFormo.currentAddress = OTHER_ADDRESS;
+      mockFormo.syncWalletState.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockFormo.syncWalletState.lastCall?.args[0]).to.deep.equal({
+        address: ADDRESS,
+        chainId: SOLANA_CHAIN_IDS.devnet,
+      });
+    });
+
+    it("does not put the departing wallet back when the registry also tracks it", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      const phantom = makeStandardWallet("Phantom");
+      registerStandardWallet(phantom);
+      // The same wallet reaches both: the store reports it, the registry records it silently.
+      store.setState({ wallet: connectedWallet("phantom", "Phantom") });
+      phantom.setAccounts([{ address: ADDRESS, chains: ["solana:devnet"] }]);
+      mockFormo.currentAddress = undefined; // disconnect() will have cleared the slot
+      mockFormo.syncWalletState.resetHistory();
+
+      // The store sees the disconnect before the Wallet Standard change.
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      const restored = mockFormo.syncWalletState.getCalls().map((c) => c.args[0]?.address);
+      expect(restored, "the departing address is not restored").to.not.include(ADDRESS);
     });
 
     it("still detects wallets, which the store never reported", () => {

@@ -105,9 +105,17 @@ export class SolanaManager {
       // The store's wallet leaving clears the Solana namespace. A connection
       // the registry reported before the store took ownership is still
       // live; put it back if nothing else holds the slot.
-      afterWalletDisconnect: () => {
-        const live = this.registry?.newestConnection();
-        if (live && !this.formo.currentAddress) this.formo.syncWalletState(live);
+      afterWalletDisconnect: (departed) => {
+        const current = this.formo.currentAddress;
+        // Another wallet took the slot meanwhile: leave it.
+        if (current && current !== departed.address) return;
+        const live = this.registry?.newestConnection(departed.address);
+        if (live) {
+          this.formo.syncWalletState(live);
+        } else if (current === departed.address) {
+          // Capture was off, so disconnect() never ran: clear the stale slot.
+          this.formo.syncWalletState({ chainId: departed.chainId });
+        }
       },
       beforeWalletConnect: (connection) => {
         // The store's cluster is authoritative even when chain autocapture is

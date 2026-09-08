@@ -577,11 +577,11 @@ export class SolanaWalletStandardRegistry {
    * The rdns this registry reported a still-live connect for `address`
    * under, if any. Lets a failed store adoption name both identities.
    */
-  /** The newest connection this registry still considers live, if any. */
-  newestConnection(): { address: string; chainId: number } | undefined {
+  /** The newest connection this registry still considers live, if any, other than `except`. */
+  newestConnection(except?: string): { address: string; chainId: number } | undefined {
     let newest: TrackedWallet | undefined;
     this.wallets.forEach((candidate) => {
-      if (!candidate.connected) return;
+      if (!candidate.connected || candidate.connected.address === except) return;
       if ((candidate.connectedSeq ?? 0) > (newest?.connectedSeq ?? -1)) newest = candidate;
     });
     return newest?.connected;
