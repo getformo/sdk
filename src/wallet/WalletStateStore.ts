@@ -20,6 +20,9 @@ import {
  * A ticket identifying one wallet observation, taken before any async work.
  * See `WalletStateStore.observe`.
  */
+/** A restore taken with `deferRestore`, written once its await is over. */
+export type WalletRestore = (wallet: { chainId: ChainID; address: Address }) => void;
+
 export interface Observation {
   readonly id: number;
   readonly namespace: ChainNamespace;
@@ -121,6 +124,13 @@ export class WalletStateStore {
     solana: 0,
   };
 
+  /**
+   * How many times reset() has wiped identity. A hand-back decided before a
+   * reset must not put the wallet back after it: reset() promises a clean
+   * slate until the next connect.
+   */
+  private resetCount = 0;
+
   /** Derived from the active namespace. Read by integrations and by events. */
   address?: Address;
   chainId?: ChainID;
@@ -151,12 +161,44 @@ export class WalletStateStore {
    * becomes active when nothing else is.
    */
   restore(chainId: ChainID, address: Address): void {
+    // The same rule as every other write: never LEARN a wallet while
+    // suppressed. The slot was already cleared by the disconnect.
+    if (this.deps.isTrackingSuppressed()) return;
+    const valid = validateAddress(address, chainId);
+    if (!valid) {
+      logger.warn(`restore: invalid address ("${address}") for chain ${chainId}`);
+      return;
+    }
     const namespace = this.namespaceOf(chainId);
     const ns = this.state[namespace];
-    ns.address = address;
+    ns.address = valid;
     ns.chainId = chainId;
     if (!this._activeNamespace) this._activeNamespace = namespace;
     this.syncDerived();
+  }
+
+  /**
+   * A `restore` decided now but written after an await.
+   *
+   * The write is refused if a newer signal claimed the namespace meanwhile
+   * (a connect: that session owns the slot now) or if reset() ran (identity
+   * must stay clear until the next connect). Take it before the first await,
+   * for the same reason as `observe`.
+   */
+  deferRestore(chainId: ChainID): WalletRestore {
+    const namespace = this.namespaceOf(chainId);
+    const observation = this.newestObservation[namespace];
+    const resets = this.resetCount;
+    return (wallet) => {
+      if (
+        !this.isUnchangedSince(namespace, observation) ||
+        resets !== this.resetCount
+      ) {
+        logger.debug("restore: skipped, the namespace changed hands or was reset meanwhile");
+        return;
+      }
+      this.restore(wallet.chainId, wallet.address);
+    };
   }
 
   get evmChainId(): ChainID | undefined {
@@ -301,6 +343,7 @@ export class WalletStateStore {
 
   /** Both namespaces, keeping the EVM provider so tracking can resume. */
   reset(): void {
+    this.resetCount++;
     const evmProvider = this.state.evm.provider;
     this.state = { evm: { provider: evmProvider }, solana: {} };
     this._activeNamespace = undefined;

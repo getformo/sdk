@@ -16,6 +16,7 @@
 import { FormoAnalytics } from "../FormoAnalytics";
 import { TransactionStatus } from "../types/events";
 import { logger } from "../logger";
+import type { WalletRestore } from "../wallet/WalletStateStore";
 import {
   SolanaClientStore,
   SolanaTransactionRecord,
@@ -84,7 +85,10 @@ export class SolanaStoreHandler {
    */
   private explicitCluster: boolean;
   private onClusterChange?: (cluster: SolanaCluster) => void;
-  private afterWalletDisconnect?: (wallet: { address: string; chainId: number }) => void;
+  private afterWalletDisconnect?: (
+    wallet: { address: string; chainId: number },
+    restore: WalletRestore
+  ) => void;
   private beforeWalletConnect?: (connection: {
     address: string;
     chainId: number;
@@ -104,7 +108,15 @@ export class SolanaStoreHandler {
       /** Called when the cluster is re-detected from a changed endpoint. */
       onClusterChange?: (cluster: SolanaCluster) => void;
       /** Called once the store's wallet disconnect has been handled, with the wallet that left. */
-      afterWalletDisconnect?: (wallet: { address: string; chainId: number }) => void;
+      /**
+       * Runs once the store's wallet has left central state. `restore` puts
+       * a still-live wallet back; it refuses if the namespace changed hands
+       * or was reset while the disconnect was in flight.
+       */
+      afterWalletDisconnect?: (
+        wallet: { address: string; chainId: number },
+        restore: WalletRestore
+      ) => void;
     }
   ) {
     this.formo = formoAnalytics;
@@ -327,6 +339,9 @@ export class SolanaStoreHandler {
     });
 
     const departed = { address: this.lastAddress, chainId: this.lastChainId ?? this.chainId };
+    // Taken before the await, so a reset() or a new session landing while
+    // the event is built voids the hand-back.
+    const restore = this.formo.deferWalletRestore(departed.chainId);
     if (this.formo.isAutocaptureEnabled("disconnect")) {
       this.formo.disconnect(departed)
         .catch((error) => {
@@ -334,9 +349,9 @@ export class SolanaStoreHandler {
         })
         // disconnect() clears the namespace once the event is built; anyone
         // repopulating it must run after that.
-        .then(() => this.afterWalletDisconnect?.(departed));
+        .then(() => this.afterWalletDisconnect?.(departed, restore));
     } else {
-      this.afterWalletDisconnect?.(departed);
+      this.afterWalletDisconnect?.(departed, restore);
     }
 
     this.lastAddress = undefined;

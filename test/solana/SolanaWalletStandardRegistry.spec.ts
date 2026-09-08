@@ -153,6 +153,8 @@ describe("SolanaWalletStandardRegistry", () => {
       chain: sandbox.stub().resolves(),
       syncWalletState: sandbox.stub(),
       restoreWalletState: sandbox.stub(),
+      // The deferred writer is the same stub, so restores assert in one place.
+      deferWalletRestore: sandbox.stub().callsFake(() => deps.restoreWalletState),
       currentAddress: sandbox.stub().callsFake(() => currentAddress),
       // The Solana slot: an explicit override, else currentAddress when it is a Solana address.
       solanaAddress: sandbox
@@ -666,6 +668,28 @@ describe("SolanaWalletStandardRegistry", () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(deps.syncWalletState.called, "the newer wallet keeps the slot").to.be.false;
+    });
+
+    it("takes the restore marker before the disconnect is awaited", async () => {
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+      currentAddress = OTHER_ADDRESS;
+      deps.deferWalletRestore.resetHistory();
+      deps.disconnect.resetHistory();
+
+      phantom.setAccounts([]);
+
+      // Synchronously, before disconnect() resolves: a reset() landing in
+      // between is what the marker exists to catch.
+      expect(deps.deferWalletRestore.calledOnce).to.be.true;
+      expect(deps.deferWalletRestore.calledBefore(deps.disconnect)).to.be.true;
+      expect(deps.deferWalletRestore.firstCall.args[0]).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+      await new Promise((r) => setTimeout(r, 0));
     });
 
     it("restores a tracked wallet into the empty Solana slot even when an EVM wallet is active", async () => {

@@ -295,6 +295,72 @@ describe("WalletStateStore", () => {
       expect(s.address).to.equal(SOL_A);
       expect(s.chainId).to.equal(SOL_CHAIN);
     });
+
+    it("never learns a wallet while tracking is suppressed", () => {
+      const s = store();
+      suppressed = true;
+
+      s.restore(SOL_CHAIN, SOL_A);
+
+      expect(s.solanaAddress).to.be.undefined;
+      expect(s.address).to.be.undefined;
+    });
+
+    it("refuses an invalid address", () => {
+      const s = store();
+
+      s.restore(SOL_CHAIN, "not-a-solana-address" as Address);
+
+      expect(s.solanaAddress).to.be.undefined;
+    });
+
+    describe("deferRestore", () => {
+      it("writes when nothing claimed the namespace meanwhile", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.clear(SOL_CHAIN); // what disconnect() does once its event is built
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.solanaAddress).to.equal(SOL_B);
+      });
+
+      it("is voided by a reset() that landed in between", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.reset();
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.solanaAddress, "reset() promised a clean slate").to.be.undefined;
+        expect(s.address).to.be.undefined;
+      });
+
+      it("is voided by a newer session on the namespace", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_B }); // a new connect
+
+        restore({ chainId: SOL_CHAIN, address: SOL_A });
+
+        expect(s.solanaAddress, "the newer session keeps the slot").to.equal(SOL_B);
+      });
+
+      it("ignores a reset on the other namespace's timeline only through reset itself", () => {
+        const s = store();
+        s.syncWalletState({ chainId: 1, address: EVM_A });
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.syncWalletState({ chainId: 1, address: EVM_B }); // EVM activity is not a Solana signal
+
+        restore({ chainId: SOL_CHAIN, address: SOL_A });
+
+        expect(s.solanaAddress).to.equal(SOL_A);
+        expect(s.address, "the EVM wallet stays active").to.equal(EVM_B);
+      });
+    });
   });
 
   describe("persistence", () => {

@@ -90,6 +90,12 @@ export interface SolanaWalletStandardRegistryDeps {
    * @see FormoAnalytics.restoreWalletState
    */
   restoreWalletState(params: { chainId: number; address: string }): void;
+  /**
+   * A restore decided before `disconnect()` is awaited and written after.
+   * Refused if the namespace changed hands or was reset meanwhile.
+   * @see FormoAnalytics.deferWalletRestore
+   */
+  deferWalletRestore(chainId: number): (wallet: { chainId: number; address: string }) => void;
   /** The wallet the SDK currently treats as active, across namespaces. */
   currentAddress(): string | undefined;
   /** The wallet held in the Solana namespace, active or not. */
@@ -481,6 +487,9 @@ export class SolanaWalletStandardRegistry {
     // to restore (see SolanaManager).
     const held = this.deps.solanaAddress();
     const keep = held && held !== previous.address ? held : undefined;
+    // Taken before the await: a reset() or a new session landing meanwhile
+    // makes the restore stale, and only the SDK can tell.
+    const restoreLater = this.deps.deferWalletRestore(previous.chainId);
     this.deps
       .disconnect(previous)
       .then(() => {
@@ -490,7 +499,7 @@ export class SolanaWalletStandardRegistry {
           const connected = candidate.connected;
           if (connected && connected.address === keep) owner = connected;
         });
-        if (owner) this.deps.restoreWalletState(owner);
+        if (owner) restoreLater(owner);
       })
       .catch((error) => {
         logger.error(

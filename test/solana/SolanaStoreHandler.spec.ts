@@ -99,6 +99,7 @@ describe("SolanaStoreHandler", () => {
     mockFormo = {
       connect: sandbox.stub().resolves(),
       disconnect: sandbox.stub().resolves(),
+      deferWalletRestore: sandbox.stub().returns(sandbox.stub()),
       chain: sandbox.stub().resolves(),
       transaction: sandbox.stub().resolves(),
       signature: sandbox.stub().resolves(),

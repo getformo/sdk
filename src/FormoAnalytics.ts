@@ -50,7 +50,7 @@ import {
   ITrackingPolicy,
   TrackingPolicy,
 } from "./tracking/TrackingPolicy";
-import { WalletStateStore } from "./wallet/WalletStateStore";
+import { WalletStateStore, WalletRestore } from "./wallet/WalletStateStore";
 import { EvmProviderRegistry } from "./evm/EvmProviderRegistry";
 import {
   detectInjectedProviderInfo,
@@ -701,6 +701,16 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** @see WalletStateStore.restore */
   public restoreWalletState(params: { chainId: ChainID; address: Address }): void {
     this.wallet.restore(params.chainId, params.address);
+    this.retryWalletDetection();
+  }
+
+  /** @see WalletStateStore.deferRestore */
+  public deferWalletRestore(chainId: ChainID): WalletRestore {
+    const restore = this.wallet.deferRestore(chainId);
+    return (wallet) => {
+      restore(wallet);
+      this.retryWalletDetection();
+    };
   }
 
   /** The Solana wallet held centrally, whichever namespace is active. */

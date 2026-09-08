@@ -165,6 +165,7 @@ describe("SolanaManager", () => {
       willTrackEvent: sandbox.stub().returns(true),
       syncWalletState: sandbox.stub(),
       restoreWalletState: sandbox.stub(),
+      deferWalletRestore: sandbox.stub().callsFake(() => mockFormo.restoreWalletState),
       currentAddress: undefined,
       solanaAddress: undefined,
     } as any;
@@ -425,14 +426,36 @@ describe("SolanaManager", () => {
         mockFormo.currentAddress = "0x000000000000000000000000000000000000dEaD"; // an EVM wallet falls back in
       });
       mockFormo.restoreWalletState.resetHistory();
+      mockFormo.syncWalletState.resetHistory(); // count only what the disconnect writes
 
       phantom.setAccounts([]); // the registry closes its own connection
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(mockFormo.restoreWalletState.lastCall?.args[0], "restored without displacing the EVM wallet").to.deep.equal({
+      // Through the namespace-preserving writer only: a syncWalletState()
+      // here would promote the Solana wallet over the EVM one.
+      expect(mockFormo.syncWalletState.called).to.be.false;
+      expect(mockFormo.restoreWalletState.lastCall?.args[0]).to.deep.equal({
         address: OTHER_ADDRESS,
         chainId: SOLANA_CHAIN_IDS.devnet,
       });
+      expect(
+        mockFormo.deferWalletRestore.calledBefore(mockFormo.disconnect),
+        "the restore marker predates the disconnect"
+      ).to.be.true;
+    });
+
+    it("takes the restore marker before the store's disconnect is awaited", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      store.setState({ wallet: connectedWallet("backpack", "Backpack", OTHER_ADDRESS) });
+      mockFormo.deferWalletRestore.resetHistory();
+      mockFormo.disconnect.resetHistory();
+
+      store.setState({ wallet: { status: "disconnected" } });
+
+      expect(mockFormo.deferWalletRestore.calledOnce).to.be.true;
+      expect(mockFormo.deferWalletRestore.calledBefore(mockFormo.disconnect)).to.be.true;
+      await new Promise((r) => setTimeout(r, 0));
     });
 
     it("clears a departed store wallet behind an active EVM wallet when capture is off", async () => {
