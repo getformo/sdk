@@ -110,9 +110,22 @@ describe("track idempotency_key property", () => {
     expect(trackEvent.called).to.be.false;
   });
 
+  it("treats a null or undefined key as no key and strips the property", async () => {
+    const { formo, trackEvent } = setup();
+
+    await formo.track("Checkout Completed", { plan: "pro", idempotency_key: undefined });
+    await formo.track("Checkout Completed", { plan: "pro", idempotency_key: null });
+
+    expect(trackEvent.calledTwice).to.be.true;
+    for (const call of trackEvent.getCalls()) {
+      expect(call.args[1].idempotencyKey).to.equal(undefined);
+      expect(call.args[2]).to.deep.equal({ plan: "pro" });
+    }
+  });
+
   it("rejects other runtime values without throwing into the host", async () => {
     const { formo, trackEvent } = setup();
-    const invalidKeys = [null, undefined, true, {}, [], NaN, Infinity, -Infinity];
+    const invalidKeys = [true, {}, [], NaN, Infinity, -Infinity];
 
     for (const idempotency_key of invalidKeys) {
       await formo.track("Checkout Completed", { idempotency_key });

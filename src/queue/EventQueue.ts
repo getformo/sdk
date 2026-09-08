@@ -13,6 +13,12 @@ import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch, { FetchRetryError } from "../fetch";
 import { EnqueueOptions, IEventQueue } from "./type";
 const noop = () => {};
+/** The error handed to callbacks of events dropped by opt-out or reset mid-flush. */
+const notDeliveredError = (): Error & { code: string } =>
+  Object.assign(
+    new Error("Events not sent: consent was withdrawn or the queue was cleared before delivery"),
+    { code: "consent_withdrawn" }
+  );
 const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...args); } catch { /* swallow */ } };
 
 type QueueItem = {
@@ -569,8 +575,15 @@ export class EventQueue implements IEventQueue {
         (this.canSend && !this.canSend()) ||
         this.clearSeq !== clearSeqAtFlush
       ) {
+        // Report the drop to every abandoned item and to the flush. Silence
+        // here read as success.
+        const error = notDeliveredError();
+        firstError = firstError || error;
         for (let j = i; j < batches.length; j++) {
           this.releaseFingerprints(batches[j].items);
+          batches[j].items.forEach(({ message, callback: cb }) =>
+            safeCall(cb, error, message, allData)
+          );
         }
         break;
       }

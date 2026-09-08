@@ -1329,7 +1329,8 @@ export class FormoAnalytics implements IFormoAnalytics {
    * `properties.idempotency_key` (string or safe integer) names one
    * action, e.g. an order id. Calls that reuse it for the same event name
    * share one message id and collapse at ingestion. The key is hashed and
-   * not sent. Any other value drops the call with a warning.
+   * not sent. null or undefined means no key; any other value drops the
+   * call with a warning.
    * @param {string} event The name of the tracked event
    * @param {IFormoEventProperties} properties
    * @param {IFormoEventContext} context
@@ -1350,7 +1351,9 @@ export class FormoAnalytics implements IFormoAnalytics {
       ) {
         const { [IDEMPOTENCY_KEY_PROPERTY]: rawKey, ...rest } = properties;
         properties = rest;
-        if (typeof rawKey === "string" && rawKey.trim().length > 0) {
+        if (rawKey === undefined || rawKey === null) {
+          // `{ idempotency_key: order?.id }` with no order: unkeyed, not rejected.
+        } else if (typeof rawKey === "string" && rawKey.trim().length > 0) {
           // Opaque key: whitespace is kept.
           idempotencyKey = rawKey;
         } else if (typeof rawKey === "number" && Number.isSafeInteger(rawKey)) {
