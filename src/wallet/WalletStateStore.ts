@@ -102,6 +102,12 @@ export class WalletStateStore {
    * namespace since.
    */
   private observationSeq = 0;
+  /**
+   * Advanced by every write that can make a namespace active: a ticket, or
+   * a plain `set` (a backfill from a signature, a chain write). A deferred
+   * restore reads it to tell a transient fallthrough from real activity.
+   */
+  private claimSeq = 0;
   private newestObservation: Record<ChainNamespace, number> = {
     evm: 0,
     solana: 0,
@@ -198,7 +204,7 @@ export class WalletStateStore {
     // was the active one, the restored wallet takes the slot back; a wallet
     // that merely sat behind it does not.
     const wasActive = this._activeNamespace === namespace;
-    const seq = this.observationSeq;
+    const claims = this.claimSeq;
     return (wallet) => {
       if (
         !this.isUnchangedSince(namespace, observation) ||
@@ -208,8 +214,9 @@ export class WalletStateStore {
         return;
       }
       // Nothing at all happened meanwhile, on either namespace: the other
-      // namespace being active now is the fallthrough, not a new connect.
-      const quiet = this.observationSeq === seq;
+      // namespace being active now is the fallthrough, not a new connect,
+      // backfill, or chain write.
+      const quiet = this.claimSeq === claims;
       this.restore(wallet.chainId, wallet.address);
       if (wasActive && quiet && this.state[namespace].address) {
         this._activeNamespace = namespace;
@@ -234,6 +241,7 @@ export class WalletStateStore {
    * to finish in.
    */
   observe(namespace: ChainNamespace): Observation {
+    this.claimSeq++;
     const id = ++this.observationSeq;
     this.newestObservation[namespace] = id;
     return { id, namespace };
@@ -317,6 +325,7 @@ export class WalletStateStore {
         ? namespaceOrChainId
         : this.namespaceOf(namespaceOrChainId);
     const ns = this.state[namespace];
+    this.claimSeq++;
 
     // A plain write. Whether this transition is still the newest is decided
     // by the observation ticket its caller holds, not by comparing addresses

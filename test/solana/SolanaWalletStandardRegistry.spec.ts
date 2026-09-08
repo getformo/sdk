@@ -569,6 +569,20 @@ describe("SolanaWalletStandardRegistry", () => {
       expect(registry.newestConnection()).to.be.undefined;
     });
 
+    it("does not hand the slot to a pre-reset wallet on a cluster switch", () => {
+      const phantom = makeWallet("Phantom");
+      const registry = makeRegistry();
+      installWalletAfterApp(phantom);
+      phantom.setAccounts([account(ADDRESS)]);
+      registry.onReset();
+      currentAddress = undefined; // reset() emptied the slot
+      deps.restoreWalletState.resetHistory();
+
+      registry.setCluster("devnet");
+
+      expect(deps.restoreWalletState.called, "Phantom predates the reset").to.be.false;
+    });
+
     it("puts back a wallet observed again after reset()", () => {
       autocapture = { disconnect: false };
       const phantom = makeWallet("Phantom");
@@ -607,8 +621,14 @@ describe("SolanaWalletStandardRegistry", () => {
 
       backpack.setAccounts([]);
 
-      // A namespace-preserving restore, never a promoting sync.
-      expect(deps.syncWalletState.called).to.be.false;
+      // The departed wallet is cleared first (a restore is a no-op while
+      // suppressed), then a namespace-preserving restore, never a
+      // promoting sync with an address.
+      expect(deps.syncWalletState.calledOnce).to.be.true;
+      expect(deps.syncWalletState.firstCall.args[0]).to.deep.equal({
+        chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
+      });
+      expect(deps.syncWalletState.calledBefore(deps.restoreWalletState)).to.be.true;
       expect(deps.restoreWalletState.lastCall.args[0]).to.deep.equal({
         address: ADDRESS,
         chainId: SOLANA_CHAIN_IDS["mainnet-beta"],

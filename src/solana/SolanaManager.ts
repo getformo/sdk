@@ -93,7 +93,16 @@ export class SolanaManager {
           });
         },
         chain: (params) => this.formo.chain(params),
-        syncWalletState: (params) => this.formo.syncWalletState(params),
+        // A clear from the registry's capture-off path. The store's wallet
+        // may still be live, through its own connector, even on the same
+        // address; put it back if the slot is empty, as the disconnect
+        // wrapper above does.
+        syncWalletState: (params) => {
+          this.formo.syncWalletState(params);
+          if (params.address) return;
+          const live = this.storeHandler?.restorableConnection();
+          if (live && !this.formo.solanaAddress) this.formo.restoreWalletState(live);
+        },
         restoreWalletState: (params) => this.formo.restoreWalletState(params),
         deferWalletRestore: (chainId) => this.formo.deferWalletRestore(chainId),
         currentAddress: () => this.formo.currentAddress,
@@ -120,15 +129,19 @@ export class SolanaManager {
         const held = this.formo.solanaAddress;
         // Another Solana wallet took the slot meanwhile: leave it.
         if (held && held !== departed.address) return;
-        const live = this.registry?.newestConnection(departed.address);
-        if (live) {
-          // Back into the Solana slot without displacing an active EVM
-          // wallet, and not at all if a reset() landed meanwhile.
-          restore(live);
-        } else if (held === departed.address) {
-          // Capture was off, so disconnect() never ran: clear the stale slot.
+        if (held) {
+          // Capture was off, so disconnect() never ran: clear the stale slot
+          // first. A restore is refused while tracking is suppressed and must
+          // not leave the departed wallet in place.
           this.formo.syncWalletState({ chainId: departed.chainId });
         }
+        const live = this.registry?.newestConnection(departed.address);
+        if (!live) return;
+        // Back into the Solana slot without displacing an active EVM wallet.
+        // Nothing was awaited on the capture-off path, so a plain write; the
+        // deferred one refuses if a reset() landed while the event was built.
+        if (held) this.formo.restoreWalletState(live);
+        else restore(live);
       },
       beforeWalletConnect: (connection) => {
         // The store's cluster is authoritative even when chain autocapture is

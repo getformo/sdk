@@ -388,6 +388,19 @@ describe("WalletStateStore", () => {
         expect(s.address, "the newer EVM session keeps the slot").to.equal(EVM_A);
       });
 
+      it("leaves an EVM backfill that landed meanwhile active", () => {
+        const s = store();
+        s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_B }); // Solana active
+        const restore = s.deferRestore(SOL_CHAIN);
+        s.clear(SOL_CHAIN);
+        s.backfill(EVM_A, 1); // a signature on an EVM wallet, no ticket taken
+
+        restore({ chainId: SOL_CHAIN, address: SOL_B });
+
+        expect(s.solanaAddress).to.equal(SOL_B);
+        expect(s.address, "the backfilled EVM wallet keeps the slot").to.equal(EVM_A);
+      });
+
       it("does not take the slot back when it sat behind the other namespace", () => {
         const s = store();
         s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_B });

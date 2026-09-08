@@ -222,6 +222,7 @@ export class SolanaStoreHandler {
         this.lastWalletStatus = "connected";
         this.lastAddress = address;
         this.lastChainId = this.chainId;
+        this.restorable = true;
 
         logger.info("SolanaStoreHandler: Already connected on initialization", {
           address,

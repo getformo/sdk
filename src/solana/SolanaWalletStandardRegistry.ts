@@ -475,6 +475,9 @@ export class SolanaWalletStandardRegistry {
       // without displacing an active EVM wallet; with none left, clear it.
       const held = this.deps.solanaAddress();
       if (held && held !== previous.address) return;
+      // Clear the departed wallet first: a restore is refused while tracking
+      // is suppressed, and must not leave the gone wallet in the slot.
+      this.deps.syncWalletState({ chainId: previous.chainId });
       let remaining: TrackedWallet | undefined;
       this.wallets.forEach((candidate) => {
         if (candidate === tracked || !this.isRestorable(candidate)) return;
@@ -483,7 +486,6 @@ export class SolanaWalletStandardRegistry {
         }
       });
       if (remaining?.connected) this.deps.restoreWalletState(remaining.connected);
-      else this.deps.syncWalletState({ chainId: previous.chainId });
       return;
     }
     // `disconnect()` clears the Solana namespace once the event is built.
@@ -553,10 +555,11 @@ export class SolanaWalletStandardRegistry {
     // account at once, and writing each of them here would hand the wallet
     // slot to the last REGISTERED wallet rather than to the one the SDK
     // already treats as active, which is the last CONNECTED one.
+    // Only a wallet observed since the last reset() may take the slot.
     const active = this.deps.currentAddress();
     const owner =
-      all.find((t) => t.connected && t.connected.address === active) ??
-      all.find((t) => t.connected);
+      all.find((t) => this.isRestorable(t) && t.connected?.address === active) ??
+      all.find((t) => this.isRestorable(t));
 
     for (const tracked of all) {
       const connected = tracked.connected;
