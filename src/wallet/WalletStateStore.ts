@@ -244,8 +244,6 @@ export class WalletStateStore {
    * becomes active when nothing else is.
    */
   restore(chainId: ChainID, address: Address): void {
-    // Never LEARN a wallet while suppressed; the disconnect already cleared the slot.
-    if (this.deps.isTrackingSuppressed()) return;
     const valid = validateAddress(address, chainId);
     if (!valid) {
       logger.warn(`restore: invalid address ("${address}") for chain ${chainId}`);
@@ -253,6 +251,17 @@ export class WalletStateStore {
     }
     const namespace = this.namespaceOf(chainId);
     const ns = this.state[namespace];
+    // Never LEARN a wallet while suppressed; the disconnect already cleared
+    // the slot. A wallet already known may still move chain: that is an
+    // update of what is known, not new identity, and a cluster change on an
+    // excluded route must not leave later events on the old chain.
+    if (this.deps.isTrackingSuppressed()) {
+      if (ns.address === valid && ns.chainId !== chainId) {
+        ns.chainId = chainId;
+        this.syncDerived();
+      }
+      return;
+    }
     ns.address = valid;
     ns.chainId = chainId;
     if (!this._activeNamespace) this._activeNamespace = namespace;

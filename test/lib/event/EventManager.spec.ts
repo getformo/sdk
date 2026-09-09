@@ -291,6 +291,15 @@ describe("EventManager", () => {
       expect(stableStringify({ a: growing })).to.equal('{"a":[1,2]}');
     });
 
+    it("answers the callback when the address is blocked", async () => {
+      const callback = sinon.stub();
+      await eventManager.addEvent({ type: "connect", callback } as any, "0x0000000000000000000000000000000000000000" as any);
+
+      expect(enqueueSpy.called).to.be.false;
+      expect(callback.calledOnce).to.be.true;
+      expect(callback.firstCall.args[0].code).to.equal("blocked");
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);

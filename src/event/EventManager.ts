@@ -94,6 +94,13 @@ class EventManager implements IEventManager {
       logger.warn(
         `Event blocked: Address ${formoEvent.address} is in the blocked list and cannot emit events`
       );
+      if (callback) {
+        try {
+          callback(Object.assign(new Error("Event not sent: the address is blocked"), { code: "blocked" }), _event, []);
+        } catch {
+          /* a throwing callback is the host's bug */
+        }
+      }
       return;
     }
 
