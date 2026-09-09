@@ -592,6 +592,19 @@ describe("SolanaManager", () => {
       expect(wallet.solanaAddress).to.equal(ADDRESS);
     });
 
+    it("keeps an active EVM wallet when a background Solana wallet's cluster changes", async () => {
+      mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "chain");
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack") }); // devnet
+      makeManager({ store });
+      wallet.syncWalletState({ chainId: 1, address: EVM }); // EVM connected later: active
+
+      store.setState({ cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: { status: "ready" } } });
+
+      expect(wallet.address, "the EVM wallet stays active").to.equal(EVM);
+      expect(wallet.chainId).to.equal(1);
+      expect(wallet.solanaAddress).to.equal(ADDRESS);
+    });
+
     it("does not hand the slot to a wallet the registry only recorded", async () => {
       const store = makeStore({ wallet: connectedWallet("backpack", "Backpack") });
       makeManager({ store }); // the store owns wallet events from its first connection

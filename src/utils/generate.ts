@@ -15,7 +15,7 @@ export function stableStringify(value: unknown): string {
           .reduce<Record<string, unknown>>((acc, k) => {
             acc[k] = (v as Record<string, unknown>)[k];
             return acc;
-          }, {})
+          }, Object.create(null))
       : v
   );
 }

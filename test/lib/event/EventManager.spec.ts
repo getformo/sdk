@@ -186,6 +186,16 @@ describe("EventManager", () => {
       expect(keys[3], "array order does").to.not.equal(keys[2]);
     });
 
+    it("keeps an own __proto__ key in the fingerprint", async () => {
+      const withProto = JSON.parse('{"__proto__": {"a": 1}, "x": 1}');
+      const without = { x: 1 };
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: withProto });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: without });
+
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0]).to.not.equal(keys[1]);
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);

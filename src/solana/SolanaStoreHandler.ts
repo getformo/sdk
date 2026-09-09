@@ -157,8 +157,10 @@ export class SolanaStoreHandler {
     if (previousCluster !== cluster && this.lastAddress) {
       this.lastChainId = this.chainId;
       // Central state moves first: a suppressed or excluded chain event
-      // must still leave later events on the cluster the wallet is on.
-      this.formo.syncWalletState({ address: this.lastAddress, chainId: this.chainId });
+      // must still leave later events on the cluster the wallet is on. A
+      // namespace write only; a cluster change does not make a background
+      // Solana wallet the active one over an EVM wallet that connected later.
+      this.formo.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
 
       if (this.formo.isAutocaptureEnabled("chain")) {
         this.formo.chain({
@@ -421,8 +423,8 @@ export class SolanaStoreHandler {
 
     if (this.lastAddress) {
       this.lastChainId = this.chainId;
-      // Central state moves first, as in setCluster().
-      this.formo.syncWalletState({ address: this.lastAddress, chainId: this.chainId });
+      // Central state moves first, as in setCluster(); a namespace write only.
+      this.formo.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
       if (this.formo.isAutocaptureEnabled("chain")) {
         this.formo.chain({
           chainId: this.chainId,
