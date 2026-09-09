@@ -133,6 +133,12 @@ interface TrackedWallet {
   connectedSeq?: number;
   /** Whether this registry, rather than a store, emitted its connect. */
   connectWasReported: boolean;
+  /**
+   * Whether the connection reached central state through this registry. A
+   * connection recorded while a store owned events, or observed while
+   * suppressed, has no connect event and must not be put back.
+   */
+  attributed: boolean;
 }
 
 /** Whether a chain identifier belongs to the Solana namespace. */
@@ -295,6 +301,7 @@ export class SolanaWalletStandardRegistry {
         name: wallet.name,
         rdns: solanaWalletRdns(wallet.name),
         connectWasReported: false,
+        attributed: false,
       };
       this.wallets.set(wallet, tracked);
       added.push(tracked);
@@ -416,6 +423,7 @@ export class SolanaWalletStandardRegistry {
         : undefined;
       if (next) tracked.connectedSeq = ++this.connectSeq;
       tracked.connectWasReported = false;
+      tracked.attributed = false;
       return;
     }
 
@@ -437,6 +445,10 @@ export class SolanaWalletStandardRegistry {
 
     // Exclusion is not suppression: the connection lands centrally either way.
     this.deps.syncWalletState({ chainId, address });
+    // Restorable only if central state accepted it. While the visitor is
+    // suppressed nothing is learned, and a connection observed then must not
+    // come back through a later hand-off once tracking resumes.
+    tracked.attributed = this.deps.solanaAddress() === address;
 
     if (!this.deps.isAutocaptureEnabled("connect")) return;
     // FormoAnalytics.connect() deliberately resolves without enqueueing when
@@ -464,6 +476,7 @@ export class SolanaWalletStandardRegistry {
   ): void {
     tracked.connected = undefined;
     tracked.connectWasReported = false;
+    tracked.attributed = false;
 
     logger.info("SolanaWalletStandardRegistry: Wallet disconnected", {
       name: tracked.name,
@@ -484,19 +497,26 @@ export class SolanaWalletStandardRegistry {
       return;
     }
     // `disconnect()` clears the Solana namespace once the event is built.
-    // Put the slot back afterwards if another wallet tracked here held it.
-    // A store's wallet is the store's to restore (see SolanaManager).
+    // Put the slot back afterwards: to the wallet that held it, else to the
+    // newest remaining one, the same as the capture-off path. A store's
+    // wallet is the store's to restore (see SolanaManager).
     const held = this.deps.solanaAddress();
-    // Another wallet tracked here holds the slot, possibly on the same address.
-    const keep = held && this.trackedOn(held) ? held : undefined;
     // Taken before the await: a reset() or a new session landing meanwhile
     // makes the restore stale, and only the SDK can tell.
     const restore = this.deps.deferWalletRestore(previous.chainId);
     this.deps
       .disconnect(previous)
       .then(() => {
-        if (!keep || this.deps.solanaAddress()) return;
-        const owner = this.connectionOf(keep);
+        if (this.deps.solanaAddress()) return;
+        // The wallet that held the slot, if tracked here (possibly on the
+        // same address), else the newest remaining one.
+        // A slot held by another wallet goes back to that wallet only, if it
+        // is tracked here; a holder this registry does not know (a manual
+        // connect, a store's wallet) is not replaced by an unrelated wallet.
+        const owner =
+          held && held !== previous.address
+            ? this.connectionOf(held)
+            : this.connectionOf(previous.address) ?? this.newestConnection(previous.address);
         if (owner) restore(owner);
       })
       .catch((error) => {
@@ -583,7 +603,7 @@ export class SolanaWalletStandardRegistry {
   }
 
   /** The restorable connection on `address`, if any. */
-  private connectionOf(address: string): SolanaConnection | undefined {
+  private connectionOf(address: string | undefined): SolanaConnection | undefined {
     return this.trackedOn(address)?.connected;
   }
 
@@ -604,9 +624,13 @@ export class SolanaWalletStandardRegistry {
     return undefined;
   }
 
-  /** Live, and observed since the last reset(). */
+  /** Live, attributed, and observed since the last reset(). */
   private isRestorable(candidate: TrackedWallet): boolean {
-    return !!candidate.connected && (candidate.connectedSeq ?? 0) >= this.restorableFrom;
+    return (
+      !!candidate.connected &&
+      candidate.attributed &&
+      (candidate.connectedSeq ?? 0) >= this.restorableFrom
+    );
   }
 
   /** @see restorableFrom */

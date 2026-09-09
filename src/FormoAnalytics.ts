@@ -45,6 +45,7 @@ import {
   WrappedRequestFunction,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
+import { answerDropped } from "./utils/dropped";
 import {
   AutocaptureEventType,
   ITrackingPolicy,
@@ -414,7 +415,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     name?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     await this.trackPageHit(category, name, properties, context, callback);
   }
@@ -532,15 +533,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     if (chainId === null || chainId === undefined) {
       logger.warn("Connect: Chain ID cannot be null or undefined");
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
     if (!address) {
       logger.warn("Connect: Address cannot be empty");
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
 
     const validAddress = validateAddress(address, chainId);
@@ -548,7 +549,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.warn(
         `Connect: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
       );
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
 
     // connect() persists wallet/chain state (active-wallet cookie,
@@ -557,6 +558,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // (opt-out / timezone / host / path) leaves no session state.
     if (this.isTrackingSuppressed()) {
       logger.info("connect() skipped: tracking is suppressed for this visitor or environment");
+      answerDropped(callback, { chainId, address }, "suppressed");
       return;
     }
 
@@ -596,7 +598,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     const chainId = params?.chainId || this.currentChainId;
     const address = params?.address || this.currentAddress;
@@ -820,23 +822,23 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
       logger.warn("FormoAnalytics::chain: chainId cannot be empty or 0");
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
     if (isNaN(Number(chainId))) {
       logger.warn(
         "FormoAnalytics::chain: chainId must be a valid decimal number"
       );
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
     if (!address && !this.currentAddress) {
       logger.warn(
         "FormoAnalytics::chain: address was empty and no previous address has been recorded"
       );
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
 
     this.setChainState(chainId, {});
@@ -878,7 +880,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     await this.trackEvent(
       EventType.SIGNATURE,
@@ -932,7 +934,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     await this.trackEvent(
       EventType.TRANSACTION,
@@ -994,7 +996,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void>;
   async identify(
     paramsOrUser?:
@@ -1009,7 +1011,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       | IFormoEventProperties
       | { activeAddress?: string; properties?: IFormoEventProperties },
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     try {
       // Privy form: identify(user) / identify(user, { activeAddress? }).
@@ -1079,6 +1081,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.info(
           "identify() skipped: tracking is suppressed for this visitor, environment, or chain"
         );
+        answerDropped(callback, paramsOrUser, "suppressed");
         return;
       }
       if (!params) {
@@ -1168,7 +1171,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Runtime validation: address is required
       if (!address) {
         logger.warn?.("identify() called without address - address is required");
-        return;
+        return answerDropped(callback, paramsOrUser, "invalid");
       }
 
       // Explicit identify
@@ -1176,7 +1179,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const validAddress = validateAddress(address);
       if (!validAddress) {
         logger.warn?.("Invalid address provided to identify:", address);
-        return;
+        return answerDropped(callback, paramsOrUser, "invalid");
       }
       // Promote this wallet to the SDK's active identity - the (currentAddress,
       // currentUserId) pair later events are attributed to - unless the caller
@@ -1226,6 +1229,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             rdns || "empty"
           })`
         );
+        answerDropped(callback, paramsOrUser, "duplicate");
         return;
       }
 
@@ -1323,17 +1327,19 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     // Apply all policy checks before persisting the detection marker.
     if (!this.shouldTrack()) {
       logger.info("detect() skipped: tracking is suppressed for this visitor or environment");
+      answerDropped(callback, { providerName, rdns }, "suppressed");
       return;
     }
-    if (this.session.isWalletDetected(rdns))
-      return logger.warn(
-        `Detect: Wallet ${providerName} already detected in this session`
-      );
+    if (this.session.isWalletDetected(rdns)) {
+      logger.warn(`Detect: Wallet ${providerName} already detected in this session`);
+      answerDropped(callback, { providerName, rdns }, "duplicate");
+      return;
+    }
 
     this.session.markWalletDetected(rdns);
     await this.trackEvent(
@@ -1389,6 +1395,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           logger.warn(
             `FormoAnalytics::track: ${IDEMPOTENCY_KEY_PROPERTY} must be a non-empty string or safe integer`
           );
+          answerDropped(callback, { event, properties }, "invalid_key");
           return;
         }
       }
@@ -1569,7 +1576,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     name?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     const canTrack = this.shouldTrack();
     if (!this.isCleanedUp && canTrack) {
@@ -1619,7 +1626,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     payload?: any,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     try {
       // Gate on the chain the event actually carries. `connect`, `disconnect`,
@@ -1629,6 +1636,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // identify) fall back to the central value.
       if (!this.shouldTrack(payload?.chainId)) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
+        answerDropped(callback, payload, "suppressed");
         return;
       }
 

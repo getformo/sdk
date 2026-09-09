@@ -175,6 +175,100 @@ describe("EventManager", () => {
       expect(secondOptions.dedupKey).to.equal(firstOptions.dedupKey);
     });
 
+    it("fingerprints property bags built in a different order the same", async () => {
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { currency: "USD", amount: 10, meta: { a: 1, b: 2 } } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { amount: 10, meta: { b: 2, a: 1 }, currency: "USD" } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { currency: "USD", amount: 10, meta: { a: 1, b: 2 }, items: [1, 2] } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { currency: "USD", amount: 10, meta: { a: 1, b: 2 }, items: [2, 1] } });
+
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[1], "key order does not matter").to.equal(keys[0]);
+      expect(keys[3], "array order does").to.not.equal(keys[2]);
+    });
+
+    it("keeps an own __proto__ key in the fingerprint", async () => {
+      const withProto = JSON.parse('{"__proto__": {"a": 1}, "x": 1}');
+      const without = { x: 1 };
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: withProto });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: without });
+
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0]).to.not.equal(keys[1]);
+    });
+
+    it("answers the callback with the closed code when creation is cancelled by teardown", async () => {
+      const callback = sinon.stub();
+      const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);
+      eventManager.close(); // cleanup() while enrichment is pending
+      await pending;
+
+      expect(enqueueSpy.called).to.be.false;
+      expect(callback.calledOnce).to.be.true;
+      expect(callback.firstCall.args[0].code).to.equal("closed");
+    });
+
+    it("throws the native error on a cycle, and unboxes primitive wrappers", async () => {
+      const cyc: Record<string, unknown> = { a: 1 };
+      cyc.self = cyc;
+      let thrown: unknown;
+      try {
+        await eventManager.addEvent({ type: "track", event: "Purchase", properties: cyc });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).to.be.instanceOf(TypeError);
+
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { amount: new Number(1) as any } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { amount: new Number(2) as any } });
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0]).to.not.equal(keys[1]);
+    });
+
+    it("passes the property key to toJSON, and unboxes through the built-in methods", async () => {
+      const keyed = { toJSON: (k: string) => k };
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { x: keyed } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { y: keyed } });
+      // eslint-disable-next-line @typescript-eslint/no-wrapper-object-types
+      const boxed = new String("real") as String & { valueOf: () => string };
+      boxed.valueOf = () => "override";
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { s: boxed as any } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { s: "real" } });
+
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0], "different keys reach toJSON").to.not.equal(keys[1]);
+      expect(keys[2], "the wrapper unboxes to its real value").to.equal(keys[3]);
+    });
+
+    it("runs toJSON once per property, as JSON.stringify does", async () => {
+      const inner1 = { a: 1, toJSON: () => 0 };
+      const inner2 = { a: 2, toJSON: () => 0 };
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { p: { toJSON: () => inner1 } as any } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { p: { toJSON: () => inner2 } as any } });
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0], "the returned object's own hook is not run again").to.not.equal(keys[1]);
+    });
+
+    it("answers the callback when the address is blocked", async () => {
+      const callback = sinon.stub();
+      const blocked = "0x0000000000000000000000000000000000000000";
+      await eventManager.addEvent({ type: "connect", chainId: 1, address: blocked, callback } as any, blocked as any);
+
+      expect(enqueueSpy.called).to.be.false;
+      expect(callback.calledOnce).to.be.true;
+      expect(callback.firstCall.args[0].code).to.equal("blocked");
+    });
+
+    it("answers the callback when creation is cancelled by consent", async () => {
+      const callback = sinon.stub();
+      const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);
+      eventManager.clear(); // consent withdrawn while enrichment is pending
+      await pending;
+
+      expect(enqueueSpy.called, "nothing is queued").to.be.false;
+      expect(callback.calledOnce).to.be.true;
+      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+    });
+
     it("fingerprints the caller input as it was when track() was called", async () => {
       const properties: Record<string, unknown> = { market: "ZEC", volume: 3571 };
       const first = eventManager.addEvent({ type: "track", event: "Order Placed", properties });

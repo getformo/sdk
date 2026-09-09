@@ -231,6 +231,76 @@ describe("EventQueue", () => {
     // accepted instead of suppressed (#372). The hash now lives for the
     // full dedup window whatever the flush timing.
     describe("duplicate suppression", () => {
+      it("answers the callback of a dropped duplicate with a coded error", async () => {
+        const event = createMockEvent();
+        await eventQueue.enqueue(event);
+        await (eventQueue as any).pendingFlush;
+
+        const callback = sinon.stub();
+        await eventQueue.enqueue({ ...event }, callback);
+
+        expect(callback.calledOnce).to.be.true;
+        expect(callback.firstCall.args[0]).to.be.instanceOf(Error);
+        expect(callback.firstCall.args[0].code).to.equal("duplicate");
+        expect(callback.firstCall.args[2]).to.deep.equal([]);
+      });
+
+      it("answers the callback when consent is withdrawn at entry", async () => {
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          canSend: () => false,
+        });
+        const callback = sinon.stub();
+        await eventQueue.enqueue(createMockEvent(), callback);
+
+        expect(callback.calledOnce).to.be.true;
+        expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+      });
+
+      it("answers buffered callbacks when consent is withdrawn", async () => {
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+        });
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+        const callback = sinon.stub();
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
+        expect((eventQueue as any).queue).to.have.length(1);
+
+        eventQueue.clear();
+
+        expect(callback.calledOnce).to.be.true;
+        expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+      });
+
+      it("answers buffered callbacks with the closed code on close()", async () => {
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+        });
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+        const callback = sinon.stub();
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
+
+        eventQueue.close();
+
+        expect(callback.calledOnce).to.be.true;
+        expect(callback.firstCall.args[0].code).to.equal("closed");
+      });
+
+      it("answers the callback on a closed queue", async () => {
+        eventQueue.close();
+        const callback = sinon.stub();
+        await eventQueue.enqueue(createMockEvent(), callback);
+
+        expect(callback.calledOnce).to.be.true;
+        expect(callback.firstCall.args[0].code).to.equal("closed");
+      });
+
       it("drops an identical event sent right after the immediate first flush", async () => {
         const event = createMockEvent();
         await eventQueue.enqueue(event);

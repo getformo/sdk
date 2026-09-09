@@ -97,9 +97,18 @@ describe("SolanaStoreHandler", () => {
   beforeEach(() => {
     sandbox = sinon.createSandbox();
     mockFormo = {
-      connect: sandbox.stub().resolves(),
+      // connect() writes central state before its first await.
+      connect: sandbox.stub().callsFake(async (p: { address: string }) => {
+        (mockFormo as any).solanaAddress = p.address;
+      }),
       disconnect: sandbox.stub().resolves(),
       deferWalletRestore: sandbox.stub().returns(sandbox.stub()),
+      // Central state accepts every write here; the slot follows the last address synced.
+      syncWalletState: sandbox.stub().callsFake((p: { address?: string }) => {
+        (mockFormo as any).solanaAddress = p.address;
+      }),
+      solanaAddress: undefined,
+      restoreWalletState: sandbox.stub(),
       chain: sandbox.stub().resolves(),
       transaction: sandbox.stub().resolves(),
       signature: sandbox.stub().resolves(),

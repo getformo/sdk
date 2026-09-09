@@ -306,6 +306,21 @@ describe("WalletStateStore", () => {
       expect(s.address).to.be.undefined;
     });
 
+    it("moves a known wallet's chain while suppressed, but learns nothing new", () => {
+      const s = store();
+      s.syncWalletState({ chainId: SOL_CHAIN, address: SOL_A });
+      suppressed = true; // an excluded route
+
+      const stale = s.deferRestore(SOL_CHAIN); // an older hand-back still in flight
+      s.restore(900003, SOL_A); // the same wallet on another cluster
+      expect(s.chainId, "the known wallet follows its cluster").to.equal(900003);
+      stale({ chainId: SOL_CHAIN, address: SOL_A });
+      expect(s.chainId, "the older restore cannot write the old chain back").to.equal(900003);
+
+      s.restore(SOL_CHAIN, SOL_B); // a wallet not known: not learned
+      expect(s.solanaAddress).to.equal(SOL_A);
+    });
+
     it("refuses an invalid address", () => {
       const s = store();
 

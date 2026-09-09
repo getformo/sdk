@@ -89,7 +89,8 @@ export class SolanaStoreHandler {
   private onClusterChange?: (cluster: SolanaCluster) => void;
   private afterWalletDisconnect?: (
     wallet: { address: string; chainId: number },
-    restore: WalletRestore
+    restore: WalletRestore,
+    captured: boolean
   ) => void;
   private beforeWalletConnect?: (connection: {
     address: string;
@@ -112,11 +113,13 @@ export class SolanaStoreHandler {
       /**
        * Runs once the store's wallet has left central state. `restore` puts
        * a still-live wallet back; it refuses if the namespace changed hands
-       * or was reset while the disconnect was in flight.
+       * or was reset while the disconnect was in flight. `captured` says
+       * whether `disconnect()` ran, and so whether the slot was cleared.
        */
       afterWalletDisconnect?: (
         wallet: { address: string; chainId: number },
-        restore: WalletRestore
+        restore: WalletRestore,
+        captured: boolean
       ) => void;
     }
   ) {
@@ -151,18 +154,24 @@ export class SolanaStoreHandler {
     this.cluster = cluster;
     this.chainId = SOLANA_CHAIN_IDS[cluster];
 
-    if (previousCluster !== cluster && this.lastAddress) {
-      this.lastChainId = this.chainId;
+    if (previousCluster !== cluster) this.applyCluster();
+  }
 
-      if (this.formo.isAutocaptureEnabled("chain")) {
-        this.formo.chain({
-          chainId: this.chainId,
-          address: this.lastAddress,
-        }).catch((error) => {
-          logger.error("SolanaStoreHandler: Error emitting chain event", error);
-        });
-      }
-    }
+  /** Move the observed wallet to the current cluster. */
+  private applyCluster(): void {
+    if (!this.lastAddress) return;
+    this.lastChainId = this.chainId; // a later disconnect reports the cluster the wallet is on
+    // A connection observed before reset() stays out of central state until observed again.
+    if (!this.restorable) return;
+    // Central state moves first: a suppressed or excluded chain event
+    // must still leave later events on the cluster the wallet is on. A
+    // namespace write only; a cluster change does not make a background
+    // Solana wallet the active one over an EVM wallet that connected later.
+    this.formo.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
+    if (!this.formo.isAutocaptureEnabled("chain")) return;
+    this.formo.chain({ chainId: this.chainId, address: this.lastAddress }).catch((error) => {
+      logger.error("SolanaStoreHandler: Error emitting chain event", error);
+    });
   }
 
   /**
@@ -221,7 +230,6 @@ export class SolanaStoreHandler {
         this.lastWalletStatus = "connected";
         this.lastAddress = address;
         this.lastChainId = this.chainId;
-        this.restorable = true;
 
         logger.info("SolanaStoreHandler: Already connected on initialization", {
           address,
@@ -247,6 +255,10 @@ export class SolanaStoreHandler {
             logger.error("SolanaStoreHandler: Error emitting initial connect", error);
           });
         }
+        // Restorable only if central state accepted the write (the sync
+        // above, or connect()'s own write before its first await); nothing
+        // is learned while the visitor is suppressed.
+        this.restorable = this.formo.solanaAddress === address;
       }
     }
 
@@ -300,7 +312,6 @@ export class SolanaStoreHandler {
 
     this.lastAddress = address;
     this.lastChainId = chainId;
-    this.restorable = true;
 
     logger.info("SolanaStoreHandler: Wallet connected", {
       address,
@@ -323,6 +334,8 @@ export class SolanaStoreHandler {
         logger.error("SolanaStoreHandler: Error emitting connect", error);
       });
     }
+    // Restorable only if central state accepted the write, as at init.
+    this.restorable = this.formo.solanaAddress === address;
   }
 
   /**
@@ -354,15 +367,18 @@ export class SolanaStoreHandler {
     // the event is built voids the hand-back.
     const restore = this.formo.deferWalletRestore(departed.chainId);
     if (this.formo.isAutocaptureEnabled("disconnect")) {
-      this.formo.disconnect(departed)
-        .catch((error) => {
-          logger.error("SolanaStoreHandler: Error emitting disconnect", error);
-        })
+      this.formo.disconnect(departed).then(
         // disconnect() clears the namespace once the event is built; anyone
         // repopulating it must run after that.
-        .then(() => this.afterWalletDisconnect?.(departed, restore));
+        () => this.afterWalletDisconnect?.(departed, restore, true),
+        (error) => {
+          logger.error("SolanaStoreHandler: Error emitting disconnect", error);
+          // The slot was not cleared: hand it back as if capture were off.
+          this.afterWalletDisconnect?.(departed, restore, false);
+        }
+      );
     } else {
-      this.afterWalletDisconnect?.(departed, restore);
+      this.afterWalletDisconnect?.(departed, restore, false);
     }
 
     this.lastAddress = undefined;
@@ -412,18 +428,7 @@ export class SolanaStoreHandler {
       chainId: this.chainId,
     });
     this.onClusterChange?.(detected);
-
-    if (this.lastAddress) {
-      this.lastChainId = this.chainId;
-      if (this.formo.isAutocaptureEnabled("chain")) {
-        this.formo.chain({
-          chainId: this.chainId,
-          address: this.lastAddress,
-        }).catch((error) => {
-          logger.error("SolanaStoreHandler: Error emitting chain event", error);
-        });
-      }
-    }
+    this.applyCluster();
   }
 
   // ============================================================

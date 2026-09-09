@@ -5,7 +5,8 @@ import { EventFactory } from "./EventFactory";
 import { EVENT_CREATION_CANCELLED } from "./cancellation";
 import { IEventFactory, IEventManager } from "./type";
 import { isBlockedAddress } from "../utils/address";
-import { hash } from "../utils";
+import { hash, stableStringify } from "../utils";
+import { answerDropped } from "../utils/dropped";
 
 /**
  * A service to generate valid event payloads and queue them for processing
@@ -14,6 +15,8 @@ class EventManager implements IEventManager {
   eventQueue: IEventQueue;
   eventFactory: IEventFactory;
   private generation = 0;
+  /** Set by close(): a cancelled creation then reports teardown, not consent. */
+  private closed = false;
 
   /**
    *
@@ -53,11 +56,11 @@ class EventManager implements IEventManager {
     const dedupKey =
       event.type === "track"
         ? hash(
-            JSON.stringify({
+            stableStringify({
               event: _event,
               address: address ?? null,
               userId: userId ?? null,
-            })
+            }) ?? ""
           )
         : undefined;
 
@@ -65,19 +68,21 @@ class EventManager implements IEventManager {
     try {
       formoEvent = await this.eventFactory.create(_event, address, userId);
     } catch (error) {
-      if (error === EVENT_CREATION_CANCELLED) return;
-      throw error;
+      if (error !== EVENT_CREATION_CANCELLED) throw error;
+      return answerDropped(callback, _event, this.closed ? "closed" : "consent_withdrawn");
     }
 
     // Reject work invalidated while enrichment was pending.
-    if (!shouldContinue()) return;
+    if (!shouldContinue()) {
+      return answerDropped(callback, _event, this.closed ? "closed" : "consent_withdrawn");
+    }
 
     // Check if the final event has a blocked address - don't queue it
     if (formoEvent.address && isBlockedAddress(formoEvent.address)) {
       logger.warn(
         `Event blocked: Address ${formoEvent.address} is in the blocked list and cannot emit events`
       );
-      return;
+      return answerDropped(callback, _event, "blocked");
     }
 
     this.eventQueue.enqueue(
@@ -101,6 +106,7 @@ class EventManager implements IEventManager {
 
   /** Terminal shutdown on teardown: nothing can be sent after this. */
   close(): void {
+    this.closed = true;
     this.generation++;
     this.eventFactory.invalidate();
     this.eventQueue.close();
