@@ -3,7 +3,7 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
-import { initStorageManager, cookie } from "../src/storage";
+import { initStorageManager } from "../src/storage";
 
 /**
  * A Wallet Standard wallet injected before the SDK is reported the moment
