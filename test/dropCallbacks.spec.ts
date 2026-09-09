@@ -87,6 +87,17 @@ describe("drop callbacks on a real instance", () => {
     expect(codes(callback)).to.deep.equal(["invalid_key"]);
   });
 
+  it("answers connect(), chain() and identify() callbacks when the arguments are invalid", async () => {
+    formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
+    const connect = sandbox.stub(), chain = sandbox.stub(), identify = sandbox.stub();
+
+    await formo.connect({ chainId: 1, address: "not-an-address" as any }, undefined, undefined, connect);
+    await formo.chain({ chainId: 0 as any, address: undefined as any }, undefined, undefined, chain);
+    await formo.identify({ address: "not-an-address" as any, userId: "u1" }, undefined, undefined, identify);
+
+    expect([codes(connect), codes(chain), codes(identify)]).to.deep.equal([["invalid"], ["invalid"], ["invalid"]]);
+  });
+
   it("answers detect() and identify() callbacks for a repeat within the session", async () => {
     formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
     const first = sandbox.stub(), second = sandbox.stub();

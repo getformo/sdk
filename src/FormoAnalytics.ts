@@ -1179,7 +1179,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       const validAddress = validateAddress(address);
       if (!validAddress) {
         logger.warn?.("Invalid address provided to identify:", address);
-        return;
+        return answerDropped(callback, paramsOrUser, "invalid");
       }
       // Promote this wallet to the SDK's active identity - the (currentAddress,
       // currentUserId) pair later events are attributed to - unless the caller

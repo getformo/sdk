@@ -606,6 +606,19 @@ describe("SolanaManager", () => {
       expect(wallet.solanaAddress, "the departed wallet does not stay in the slot").to.be.undefined;
     });
 
+    it("does not re-learn a pre-reset store wallet on a cluster change", async () => {
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack") });
+      const manager = makeManager({ store });
+      manager.onReset(); // logout
+      wallet.reset();
+      mockFormo.chain.resetHistory();
+
+      store.setState({ cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: { status: "ready" } } });
+
+      expect(wallet.solanaAddress, "identity stays clear until the wallet is observed again").to.be.undefined;
+      expect(mockFormo.chain.called).to.be.false;
+    });
+
     it("keeps an active EVM wallet when a background Solana wallet's cluster changes", async () => {
       mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "chain");
       const store = makeStore({ wallet: connectedWallet("backpack", "Backpack") }); // devnet

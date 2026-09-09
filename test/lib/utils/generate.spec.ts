@@ -2,6 +2,18 @@ import { describe, it } from "mocha";
 import { expect } from "chai";
 import { stableStringify } from "../../../src/utils/generate";
 
+describe("stableStringify bigint through a hook", () => {
+  it("throws for a bigint returned by a toJSON hook, as JSON.stringify does", () => {
+    const proto = BigInt.prototype as unknown as { toJSON?: () => string };
+    proto.toJSON = function () { return this.toString(); };
+    try {
+      expect(() => stableStringify({ p: { toJSON: () => BigInt(1) } })).to.throw(TypeError);
+    } finally {
+      delete proto.toJSON;
+    }
+  });
+});
+
 describe("stableStringify", () => {
   it("sorts keys at every depth", () => {
     expect(stableStringify({ b: 2, a: { d: 1, c: [1] } })).to.equal('{"a":{"c":[1],"d":1},"b":2}');

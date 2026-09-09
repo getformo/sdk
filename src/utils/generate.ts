@@ -29,8 +29,12 @@ function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON:
       return canonical(Reflect.apply(hook, value, [key]), key, stack, true);
     }
   }
-  // A bigint without a hook is left to JSON.stringify, which throws on it.
-  if (typeof value === "bigint") return value;
+  // A bigint reached through a hook throws as JSON.stringify does; one with
+  // no hook of its own is left to JSON.stringify, which throws on it.
+  if (typeof value === "bigint") {
+    if (fromToJSON) throw new TypeError("Do not know how to serialize a BigInt");
+    return value;
+  }
   // A function with no hook is omitted, as JSON.stringify omits it.
   if (typeof value === "function") return undefined;
   // Unboxed through the built-in methods, not an override on the instance.
