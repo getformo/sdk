@@ -8,6 +8,7 @@ describe("stableStringify bigint through a hook", () => {
     proto.toJSON = function () { return this.toString(); };
     try {
       expect(() => stableStringify({ p: { toJSON: () => BigInt(1) } })).to.throw(TypeError);
+      expect(() => stableStringify({ p: { toJSON: () => Object(BigInt(1)) } })).to.throw(TypeError);
     } finally {
       delete proto.toJSON;
     }

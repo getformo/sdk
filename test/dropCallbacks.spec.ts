@@ -94,8 +94,10 @@ describe("drop callbacks on a real instance", () => {
     await formo.connect({ chainId: 1, address: "not-an-address" as any }, undefined, undefined, connect);
     await formo.chain({ chainId: 0 as any, address: undefined as any }, undefined, undefined, chain);
     await formo.identify({ address: "not-an-address" as any, userId: "u1" }, undefined, undefined, identify);
+    const missing = sandbox.stub();
+    await formo.identify({ address: undefined as any, userId: "u1" }, undefined, undefined, missing);
 
-    expect([codes(connect), codes(chain), codes(identify)]).to.deep.equal([["invalid"], ["invalid"], ["invalid"]]);
+    expect([codes(connect), codes(chain), codes(identify), codes(missing)]).to.deep.equal([["invalid"], ["invalid"], ["invalid"], ["invalid"]]);
   });
 
   it("answers detect() and identify() callbacks for a repeat within the session", async () => {

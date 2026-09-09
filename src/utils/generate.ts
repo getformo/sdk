@@ -40,6 +40,7 @@ function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON:
   // Unboxed through the built-in methods, not an override on the instance.
   // Guarded: a runtime without BigInt must not throw here on every object.
   if (typeof BigInt !== "undefined" && value instanceof BigInt) {
+    if (fromToJSON) throw new TypeError("Do not know how to serialize a BigInt");
     return BigInt.prototype.valueOf.call(value); // JSON.stringify throws on it
   }
   if (value instanceof Number) return Number.prototype.valueOf.call(value);
