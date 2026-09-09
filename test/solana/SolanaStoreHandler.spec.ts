@@ -100,6 +100,7 @@ describe("SolanaStoreHandler", () => {
       connect: sandbox.stub().resolves(),
       disconnect: sandbox.stub().resolves(),
       deferWalletRestore: sandbox.stub().returns(sandbox.stub()),
+      syncWalletState: sandbox.stub(),
       chain: sandbox.stub().resolves(),
       transaction: sandbox.stub().resolves(),
       signature: sandbox.stub().resolves(),

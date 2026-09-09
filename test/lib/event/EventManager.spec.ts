@@ -175,6 +175,28 @@ describe("EventManager", () => {
       expect(secondOptions.dedupKey).to.equal(firstOptions.dedupKey);
     });
 
+    it("fingerprints property bags built in a different order the same", async () => {
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { currency: "USD", amount: 10, meta: { a: 1, b: 2 } } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { amount: 10, meta: { b: 2, a: 1 }, currency: "USD" } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { currency: "USD", amount: 10, meta: { a: 1, b: 2 }, items: [1, 2] } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { currency: "USD", amount: 10, meta: { a: 1, b: 2 }, items: [2, 1] } });
+
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[1], "key order does not matter").to.equal(keys[0]);
+      expect(keys[3], "array order does").to.not.equal(keys[2]);
+    });
+
+    it("answers the callback when creation is cancelled by consent", async () => {
+      const callback = sinon.stub();
+      const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);
+      eventManager.clear(); // consent withdrawn while enrichment is pending
+      await pending;
+
+      expect(enqueueSpy.called, "nothing is queued").to.be.false;
+      expect(callback.calledOnce).to.be.true;
+      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+    });
+
     it("fingerprints the caller input as it was when track() was called", async () => {
       const properties: Record<string, unknown> = { market: "ZEC", volume: 3571 };
       const first = eventManager.addEvent({ type: "track", event: "Order Placed", properties });

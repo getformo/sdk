@@ -89,7 +89,8 @@ export class SolanaStoreHandler {
   private onClusterChange?: (cluster: SolanaCluster) => void;
   private afterWalletDisconnect?: (
     wallet: { address: string; chainId: number },
-    restore: WalletRestore
+    restore: WalletRestore,
+    captured: boolean
   ) => void;
   private beforeWalletConnect?: (connection: {
     address: string;
@@ -112,11 +113,13 @@ export class SolanaStoreHandler {
       /**
        * Runs once the store's wallet has left central state. `restore` puts
        * a still-live wallet back; it refuses if the namespace changed hands
-       * or was reset while the disconnect was in flight.
+       * or was reset while the disconnect was in flight. `captured` says
+       * whether `disconnect()` ran, and so whether the slot was cleared.
        */
       afterWalletDisconnect?: (
         wallet: { address: string; chainId: number },
-        restore: WalletRestore
+        restore: WalletRestore,
+        captured: boolean
       ) => void;
     }
   ) {
@@ -153,6 +156,9 @@ export class SolanaStoreHandler {
 
     if (previousCluster !== cluster && this.lastAddress) {
       this.lastChainId = this.chainId;
+      // Central state moves first: a suppressed or excluded chain event
+      // must still leave later events on the cluster the wallet is on.
+      this.formo.syncWalletState({ address: this.lastAddress, chainId: this.chainId });
 
       if (this.formo.isAutocaptureEnabled("chain")) {
         this.formo.chain({
@@ -360,9 +366,9 @@ export class SolanaStoreHandler {
         })
         // disconnect() clears the namespace once the event is built; anyone
         // repopulating it must run after that.
-        .then(() => this.afterWalletDisconnect?.(departed, restore));
+        .then(() => this.afterWalletDisconnect?.(departed, restore, true));
     } else {
-      this.afterWalletDisconnect?.(departed, restore);
+      this.afterWalletDisconnect?.(departed, restore, false);
     }
 
     this.lastAddress = undefined;
@@ -415,6 +421,8 @@ export class SolanaStoreHandler {
 
     if (this.lastAddress) {
       this.lastChainId = this.chainId;
+      // Central state moves first, as in setCluster().
+      this.formo.syncWalletState({ address: this.lastAddress, chainId: this.chainId });
       if (this.formo.isAutocaptureEnabled("chain")) {
         this.formo.chain({
           chainId: this.chainId,

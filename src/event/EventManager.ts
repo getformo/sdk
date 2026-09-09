@@ -1,15 +1,31 @@
-import { Address, APIEvent, Options } from "../types";
+import { Address, APIEvent, Options, EventCallback } from "../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
 import { EventFactory } from "./EventFactory";
 import { EVENT_CREATION_CANCELLED } from "./cancellation";
 import { IEventFactory, IEventManager } from "./type";
 import { isBlockedAddress } from "../utils/address";
-import { hash } from "../utils";
+import { hash, stableStringify } from "../utils";
 
 /**
  * A service to generate valid event payloads and queue them for processing
  */
+/** Answer a callback for an event dropped before it was queued. */
+function notDelivered(callback: EventCallback | undefined, event: unknown): void {
+  if (!callback) return;
+  try {
+    callback(
+      Object.assign(new Error("Event not sent: consent was withdrawn before delivery"), {
+        code: "consent_withdrawn",
+      }),
+      event,
+      []
+    );
+  } catch {
+    /* a throwing callback is the host's bug */
+  }
+}
+
 class EventManager implements IEventManager {
   eventQueue: IEventQueue;
   eventFactory: IEventFactory;
@@ -53,7 +69,7 @@ class EventManager implements IEventManager {
     const dedupKey =
       event.type === "track"
         ? hash(
-            JSON.stringify({
+            stableStringify({
               event: _event,
               address: address ?? null,
               userId: userId ?? null,
@@ -65,12 +81,12 @@ class EventManager implements IEventManager {
     try {
       formoEvent = await this.eventFactory.create(_event, address, userId);
     } catch (error) {
-      if (error === EVENT_CREATION_CANCELLED) return;
+      if (error === EVENT_CREATION_CANCELLED) return notDelivered(callback, _event);
       throw error;
     }
 
     // Reject work invalidated while enrichment was pending.
-    if (!shouldContinue()) return;
+    if (!shouldContinue()) return notDelivered(callback, _event);
 
     // Check if the final event has a blocked address - don't queue it
     if (formoEvent.address && isBlockedAddress(formoEvent.address)) {

@@ -6,8 +6,7 @@ import {
   getActionDescriptor,
   hash,
   millisecondsToSecond,
-  toDateHourMinute,
-} from "../utils";
+  toDateHourMinute, stableStringify } from "../utils";
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch, { FetchRetryError } from "../fetch";
@@ -19,6 +18,15 @@ const notDeliveredError = (): Error & { code: string } =>
     new Error("Events not sent: consent was withdrawn or the queue was cleared before delivery"),
     { code: "consent_withdrawn" }
   );
+/** The error handed to the callback of an event dropped as a duplicate. */
+const duplicateError = (): Error & { code: string } =>
+  Object.assign(
+    new Error("Event not sent: an identical event was accepted less than a minute ago"),
+    { code: "duplicate" }
+  );
+/** The error handed to the callback of an event a torn-down queue refused. */
+const closedError = (): Error & { code: string } =>
+  Object.assign(new Error("Event not sent: the queue is closed"), { code: "closed" });
 const safeCall = (fn: (...args: any[]) => any, ...args: any[]) => { try { fn(...args); } catch { /* swallow */ } };
 
 type QueueItem = {
@@ -230,7 +238,7 @@ export class EventQueue implements IEventQueue {
     if (stableContext) {
       for (const field of VOLATILE_CONTEXT_FIELDS) delete stableContext[field];
     }
-    return hash(JSON.stringify({ ...rest, context: stableContext }));
+    return hash(stableStringify({ ...rest, context: stableContext }));
   }
 
   /**
@@ -309,14 +317,16 @@ export class EventQueue implements IEventQueue {
     options?: EnqueueOptions
   ) {
     callback = callback || noop;
+    // Every drop below answers the callback with a coded error, as a drop
+    // mid-flush does; silence read as success.
     // A torn-down instance must never buffer, however late the caller
     // arrives. See close().
-    if (this.closed) return;
+    if (this.closed) return safeCall(callback, closedError(), event, []);
 
     // Refuse to buffer anything once consent is withdrawn.
     if (this.canSend && !this.canSend()) {
       this.clear();
-      return;
+      return safeCall(callback, notDeliveredError(), event, []);
     }
 
     const clearSeqAtEntry = this.clearSeq;
@@ -333,18 +343,18 @@ export class EventQueue implements IEventQueue {
     // suspended here, and on a queue that has not flushed yet its event
     // would push and flush immediately - the exact shape of the bug close()
     // exists to stop.
-    if (this.closed) return;
+    if (this.closed) return safeCall(callback, closedError(), event, []);
     // Consent can be withdrawn in the same gap. The flush gate would still
     // stop the send, but the contract of this path is to never buffer after
     // withdrawal, not merely to never send.
     if (this.canSend && !this.canSend()) {
       this.clear();
-      return;
+      return safeCall(callback, notDeliveredError(), event, []);
     }
     // A withdrawal that was already reversed by the time we resume still
     // counts: this event predates it, and clear() dropped everything that
     // was pending then. Sampling consent alone cannot see that.
-    if (this.clearSeq !== clearSeqAtEntry) return;
+    if (this.clearSeq !== clearSeqAtEntry) return safeCall(callback, notDeliveredError(), event, []);
 
     // check if an identical event was accepted within the dedup window
     if (this.isDuplicate(dedupKey)) {
@@ -354,7 +364,7 @@ export class EventQueue implements IEventQueue {
           DEDUP_WINDOW_MS
         )} seconds ago.`
       );
-      return;
+      return safeCall(callback, duplicateError(), event, []);
     }
 
     const queueItem: QueueItem = {

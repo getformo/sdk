@@ -2,6 +2,24 @@ import type { UUID } from "crypto";
 import { sha256 } from 'ethereum-cryptography/sha256';
 import { utf8ToBytes, bytesToHex } from 'ethereum-cryptography/utils';
 
+/**
+ * JSON with object keys in sorted order at every depth, so two property
+ * bags built in a different order serialize the same. Arrays keep their
+ * order; undefined values are omitted as JSON.stringify does.
+ */
+export function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.keys(v as Record<string, unknown>)
+          .sort()
+          .reduce<Record<string, unknown>>((acc, k) => {
+            acc[k] = (v as Record<string, unknown>)[k];
+            return acc;
+          }, {})
+      : v
+  );
+}
+
 export function hash(input: string): string {
   const bytes = utf8ToBytes(input);
   const hashBytes = sha256(bytes);

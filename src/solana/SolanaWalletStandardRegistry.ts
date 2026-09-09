@@ -133,6 +133,13 @@ interface TrackedWallet {
   connectedSeq?: number;
   /** Whether this registry, rather than a store, emitted its connect. */
   connectWasReported: boolean;
+  /**
+   * Whether the connection reached central state through this registry
+   * (reported, or reported then adopted by a store). A connection merely
+   * recorded while a store owned events has no connect event and must not
+   * be put back into the slot.
+   */
+  attributed: boolean;
 }
 
 /** Whether a chain identifier belongs to the Solana namespace. */
@@ -295,6 +302,7 @@ export class SolanaWalletStandardRegistry {
         name: wallet.name,
         rdns: solanaWalletRdns(wallet.name),
         connectWasReported: false,
+        attributed: false,
       };
       this.wallets.set(wallet, tracked);
       added.push(tracked);
@@ -416,6 +424,7 @@ export class SolanaWalletStandardRegistry {
         : undefined;
       if (next) tracked.connectedSeq = ++this.connectSeq;
       tracked.connectWasReported = false;
+      tracked.attributed = false;
       return;
     }
 
@@ -428,6 +437,7 @@ export class SolanaWalletStandardRegistry {
     tracked.connected = { address, chainId };
     tracked.connectedSeq = ++this.connectSeq;
     tracked.connectWasReported = false;
+    tracked.attributed = true;
 
     logger.info("SolanaWalletStandardRegistry: Wallet connected", {
       name: tracked.name,
@@ -464,6 +474,7 @@ export class SolanaWalletStandardRegistry {
   ): void {
     tracked.connected = undefined;
     tracked.connectWasReported = false;
+    tracked.attributed = false;
 
     logger.info("SolanaWalletStandardRegistry: Wallet disconnected", {
       name: tracked.name,
@@ -484,8 +495,9 @@ export class SolanaWalletStandardRegistry {
       return;
     }
     // `disconnect()` clears the Solana namespace once the event is built.
-    // Put the slot back afterwards if another wallet tracked here held it.
-    // A store's wallet is the store's to restore (see SolanaManager).
+    // Put the slot back afterwards: to the wallet that held it, else to the
+    // newest remaining one, the same as the capture-off path. A store's
+    // wallet is the store's to restore (see SolanaManager).
     const held = this.deps.solanaAddress();
     // Another wallet tracked here holds the slot, possibly on the same address.
     const keep = held && this.trackedOn(held) ? held : undefined;
@@ -495,8 +507,9 @@ export class SolanaWalletStandardRegistry {
     this.deps
       .disconnect(previous)
       .then(() => {
-        if (!keep || this.deps.solanaAddress()) return;
-        const owner = this.connectionOf(keep);
+        if (this.deps.solanaAddress()) return;
+        const owner =
+          (keep && this.connectionOf(keep)) || this.newestConnection(previous.address);
         if (owner) restore(owner);
       })
       .catch((error) => {
@@ -604,9 +617,13 @@ export class SolanaWalletStandardRegistry {
     return undefined;
   }
 
-  /** Live, and observed since the last reset(). */
+  /** Live, attributed, and observed since the last reset(). */
   private isRestorable(candidate: TrackedWallet): boolean {
-    return !!candidate.connected && (candidate.connectedSeq ?? 0) >= this.restorableFrom;
+    return (
+      !!candidate.connected &&
+      candidate.attributed &&
+      (candidate.connectedSeq ?? 0) >= this.restorableFrom
+    );
   }
 
   /** @see restorableFrom */
