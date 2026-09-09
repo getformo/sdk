@@ -35,7 +35,10 @@ function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON:
   // A function with no hook is omitted, as JSON.stringify omits it.
   if (typeof value === "function") return undefined;
   // Unboxed through the built-in methods, not an override on the instance.
-  if (value instanceof BigInt) return BigInt.prototype.valueOf.call(value); // JSON.stringify throws on it, as before
+  // Guarded: a browser without BigInt must not throw here on every object.
+  if (typeof BigInt !== "undefined" && value instanceof BigInt) {
+    return BigInt.prototype.valueOf.call(value); // JSON.stringify throws on it, as before
+  }
   if (value instanceof Number) return Number.prototype.valueOf.call(value);
   if (value instanceof String) return String.prototype.valueOf.call(value);
   if (value instanceof Boolean) return Boolean.prototype.valueOf.call(value);

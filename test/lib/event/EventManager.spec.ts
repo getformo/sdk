@@ -272,6 +272,17 @@ describe("EventManager", () => {
       expect(stableStringify({ p: { toJSON: hook } })).to.equal(JSON.stringify({ p: { toJSON: hook } }));
     });
 
+    it("serializes without BigInt in the runtime", async () => {
+      const { stableStringify } = await import("../../../src/utils/generate");
+      const saved = (globalThis as any).BigInt;
+      (globalThis as any).BigInt = undefined;
+      try {
+        expect(stableStringify({ b: 2, a: { d: 1, c: [1] } })).to.equal('{"a":{"c":[1],"d":1},"b":2}');
+      } finally {
+        (globalThis as any).BigInt = saved;
+      }
+    });
+
     it("rejects a boxed bigint and reads an array length once", async () => {
       const { stableStringify } = await import("../../../src/utils/generate");
       expect(() => stableStringify({ n: Object(BigInt(1)) })).to.throw(TypeError);
