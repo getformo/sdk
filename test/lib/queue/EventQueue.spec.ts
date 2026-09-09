@@ -171,7 +171,7 @@ describe("EventQueue", () => {
     expect(callback.calledOnce).to.equal(true);
     expect(callback.firstCall.args[0]).to.equal(undefined);
     expect(event.properties?.measurement).to.be.instanceOf(Number);
-    expect((event.properties?.measurement as Number).valueOf()).to.equal(2 ** 64);
+    expect(Number.prototype.valueOf.call(event.properties?.measurement)).to.equal(2 ** 64);
     eventQueue.close();
   });
 
