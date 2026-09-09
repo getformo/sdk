@@ -224,6 +224,21 @@ describe("EventManager", () => {
       expect(keys[0]).to.not.equal(keys[1]);
     });
 
+    it("passes the property key to toJSON, and unboxes through the built-in methods", async () => {
+      const keyed = { toJSON: (k: string) => k };
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { x: keyed } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { y: keyed } });
+      // eslint-disable-next-line @typescript-eslint/no-wrapper-object-types
+      const boxed = new String("real") as String & { valueOf: () => string };
+      boxed.valueOf = () => "override";
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { s: boxed as any } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { s: "real" } });
+
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0], "different keys reach toJSON").to.not.equal(keys[1]);
+      expect(keys[2], "the wrapper unboxes to its real value").to.equal(keys[3]);
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);

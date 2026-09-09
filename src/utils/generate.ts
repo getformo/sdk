@@ -10,33 +10,35 @@ import { utf8ToBytes, bytesToHex } from 'ethereum-cryptography/utils';
  * cycle throws. Returns undefined where JSON.stringify would.
  */
 export function stableStringify(value: unknown): string | undefined {
-  const out = canonical(value, new Set());
+  const out = canonical(value, "", new Set());
   return out === undefined ? undefined : JSON.stringify(out);
 }
 
 /** A sorted, cycle-checked clone that JSON.stringify serializes as-is. */
-function canonical(value: unknown, stack: Set<unknown>): unknown {
+function canonical(value: unknown, key: string, stack: Set<unknown>): unknown {
   if (value === null || typeof value !== "object") return value;
   const withToJSON = value as { toJSON?: unknown };
   if (typeof withToJSON.toJSON === "function") {
-    const out = (withToJSON.toJSON as () => unknown).call(value);
+    // With the property key, as JSON.stringify passes it.
+    const out = (withToJSON.toJSON as (k: string) => unknown).call(value, key);
     // A toJSON() that returns its own object serializes by its fields.
-    if (out !== value) return canonical(out, stack);
+    if (out !== value) return canonical(out, key, stack);
   }
-  if (value instanceof Number || value instanceof String || value instanceof Boolean) {
-    return value.valueOf();
-  }
+  // Unboxed through the built-in methods, not an override on the instance.
+  if (value instanceof Number) return Number.prototype.valueOf.call(value);
+  if (value instanceof String) return String.prototype.valueOf.call(value);
+  if (value instanceof Boolean) return Boolean.prototype.valueOf.call(value);
   if (stack.has(value)) throw new TypeError("Converting circular structure to JSON");
   stack.add(value);
   try {
     if (Array.isArray(value)) {
       const items: unknown[] = [];
-      for (let i = 0; i < value.length; i++) items.push(canonical(value[i], stack));
+      for (let i = 0; i < value.length; i++) items.push(canonical(value[i], String(i), stack));
       return items;
     }
     const record = value as Record<string, unknown>;
     const sorted: Record<string, unknown> = Object.create(null);
-    for (const key of Object.keys(record).sort()) sorted[key] = canonical(record[key], stack);
+    for (const k of Object.keys(record).sort()) sorted[k] = canonical(record[k], k, stack);
     return sorted;
   } finally {
     stack.delete(value);
