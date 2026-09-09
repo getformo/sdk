@@ -149,6 +149,31 @@ describe("EventQueue", () => {
     }
   });
 
+  it("retries the identical normalized payload through the real fetch wrapper", async () => {
+    const nativeFetch = sinon.stub();
+    nativeFetch.onFirstCall().resolves(makeResponse(503, "Unavailable"));
+    nativeFetch.onSecondCall().resolves(makeResponse(200, "OK"));
+    Object.defineProperty(globalThis, "fetch", { value: nativeFetch, configurable: true, writable: true });
+    eventQueue = new EventQueue("test-key", { apiHost: "https://api.example.com", retryCount: 1 });
+    const callback = sinon.spy();
+    const event = createMockEvent({
+      context: { measurement: -(2 ** 63) } as any,
+      properties: { measurement: 2 ** 64, amount: 12.5 },
+    });
+    await eventQueue.enqueue(event, callback);
+    await clock.tickAsync(1001);
+    await (eventQueue as any).pendingFlush;
+    expect(nativeFetch.callCount).to.equal(2);
+    expect(nativeFetch.firstCall.args[1].body).to.equal(nativeFetch.secondCall.args[1].body);
+    const [sent] = JSON.parse(nativeFetch.secondCall.args[1].body);
+    expect(sent.context.measurement).to.equal(String(-(2 ** 63)));
+    expect(sent.properties).to.deep.equal({ measurement: String(2 ** 64), amount: 12.5 });
+    expect(callback.calledOnce).to.equal(true);
+    expect(callback.firstCall.args[0]).to.equal(undefined);
+    expect(event.properties?.measurement).to.equal(2 ** 64);
+    eventQueue.close();
+  });
+
   describe("constructor", () => {
     it("should initialize with default options", () => {
       eventQueue = new EventQueue("test-key", {
@@ -230,6 +255,19 @@ describe("EventQueue", () => {
       const batches = (eventQueue as any).splitIntoBatches([{}], [event]);
       expect(batches).to.have.length(1);
       expect(batches[0].keepalive).to.equal(false);
+    });
+
+    it("splits normalized multibyte events without dropping or reordering items", () => {
+      const data = [0, 1, 2].map((index) => ({
+        index,
+        properties: { measurement: 2 ** 64, text: "界".repeat(11000) },
+      }));
+      const items = data.map((message) => ({ message }));
+      const batches = (eventQueue as any).splitIntoBatches(items, data);
+      expect(batches).to.have.length(3);
+      expect(batches.flatMap((batch: any) => batch.items)).to.deep.equal(items);
+      expect(batches.flatMap((batch: any) => batch.data)).to.deep.equal(data);
+      expect(batches.every((batch: any) => batch.keepalive)).to.equal(true);
     });
 
     it("should batch subsequent events instead of flushing each", async () => {

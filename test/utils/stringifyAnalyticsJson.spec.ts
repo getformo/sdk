@@ -8,8 +8,8 @@ describe("stringifyAnalyticsJson", () => {
     const result = JSON.parse(stringifyAnalyticsJson(input));
     ASSERT(result, { arbitrary: "262198996219020150000", nested: [String(-(2 ** 64)), { large: "1e+30" }], volume: -1500.05 });
     ASSERT(typeof input.arbitrary, "number");
-    // The gateway parses and reserializes properties: string encoding survives.
-    ASSERT(JSON.parse(JSON.stringify(result)), result);
+    // Assert the downstream wire form, not just an object's self-round-trip.
+    ASSERT(JSON.stringify(result), '{"arbitrary":"262198996219020150000","nested":["-18446744073709552000",{"large":"1e+30"}],"volume":-1500.05}');
   });
 
   it("preserves numeric types inside the signed/unsigned 64-bit parser range", () => {
@@ -22,6 +22,19 @@ describe("stringifyAnalyticsJson", () => {
     const input = { text: 'quote"\\newline\n', nil: null, missing: undefined, values: [NaN, Infinity, -Infinity, undefined], date: new Date("2026-09-09T00:00:00Z") };
     ASSERT(stringifyAnalyticsJson(input), JSON.stringify(input));
     ASSERT(JSON.parse(stringifyAnalyticsJson({ toJSON: () => ({ value: 1e30 }) })), { value: "1e+30" });
+  });
+
+  it("preserves text, booleans, tiny fractions and ordinary integer precision semantics", () => {
+    const input = { text: "18446744073709551616", flag: false, tiny: 1e-300, safe: Number.MAX_SAFE_INTEGER, alreadyRounded: Number.MAX_SAFE_INTEGER + 1, minusZero: -0 };
+    ASSERT(stringifyAnalyticsJson(input), JSON.stringify(input));
+  });
+
+  it("protects extreme fields returned by nested toJSON hooks", () => {
+    const input = { context: { toJSON: () => ({ measurement: Number.MAX_VALUE }) }, properties: { values: [-Number.MAX_VALUE, 1e21] } };
+    ASSERT(JSON.parse(stringifyAnalyticsJson(input)), {
+      context: { measurement: String(Number.MAX_VALUE) },
+      properties: { values: [String(-Number.MAX_VALUE), "1e+21"] },
+    });
   });
 
   it("retains native circular-reference errors", () => {
