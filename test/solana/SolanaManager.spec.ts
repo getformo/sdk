@@ -620,7 +620,7 @@ describe("SolanaManager", () => {
 
       store.setState({ wallet: { status: "disconnected" } });
       await settle();
-      expect(mockFormo.disconnect.lastCall?.args[0].chainId, "the departure names the current cluster").to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
+      expect(mockFormo.disconnect.lastCall?.args[0]?.chainId, "the departure names the current cluster").to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
     });
 
     it("keeps an active EVM wallet when a background Solana wallet's cluster changes", async () => {
