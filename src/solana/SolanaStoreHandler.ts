@@ -159,9 +159,10 @@ export class SolanaStoreHandler {
 
   /** Move the observed wallet to the current cluster. */
   private applyCluster(): void {
+    if (!this.lastAddress) return;
+    this.lastChainId = this.chainId; // a later disconnect reports the cluster the wallet is on
     // A connection observed before reset() stays out of central state until observed again.
-    if (!this.lastAddress || !this.restorable) return;
-    this.lastChainId = this.chainId;
+    if (!this.restorable) return;
     // Central state moves first: a suppressed or excluded chain event
     // must still leave later events on the cluster the wallet is on. A
     // namespace write only; a cluster change does not make a background

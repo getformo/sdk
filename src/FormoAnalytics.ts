@@ -1171,7 +1171,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // Runtime validation: address is required
       if (!address) {
         logger.warn?.("identify() called without address - address is required");
-        return;
+        return answerDropped(callback, paramsOrUser, "invalid");
       }
 
       // Explicit identify
