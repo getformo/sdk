@@ -537,11 +537,11 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     if (chainId === null || chainId === undefined) {
       logger.warn("Connect: Chain ID cannot be null or undefined");
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
     if (!address) {
       logger.warn("Connect: Address cannot be empty");
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
 
     const validAddress = validateAddress(address, chainId);
@@ -549,7 +549,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       logger.warn(
         `Connect: Invalid address provided ("${address}"). Please provide a valid EVM or Solana address.`
       );
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
 
     // connect() persists wallet/chain state (active-wallet cookie,
@@ -826,19 +826,19 @@ export class FormoAnalytics implements IFormoAnalytics {
   ): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
       logger.warn("FormoAnalytics::chain: chainId cannot be empty or 0");
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
     if (isNaN(Number(chainId))) {
       logger.warn(
         "FormoAnalytics::chain: chainId must be a valid decimal number"
       );
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
     if (!address && !this.currentAddress) {
       logger.warn(
         "FormoAnalytics::chain: address was empty and no previous address has been recorded"
       );
-      return;
+      return answerDropped(callback, { chainId, address }, "invalid");
     }
 
     this.setChainState(chainId, {});

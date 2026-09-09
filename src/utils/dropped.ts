@@ -8,6 +8,7 @@ export const DROP_REASONS = {
   closed: "the SDK was cleaned up before delivery",
   blocked: "the address is blocked",
   invalid_key: "the idempotency_key must be a non-empty string or a safe integer",
+  invalid: "the call carried a missing or invalid address or chain",
 } as const;
 
 export type DropCode = keyof typeof DROP_REASONS;
