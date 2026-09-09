@@ -10,14 +10,14 @@ export function stringifyAnalyticsJson(value: unknown): string {
       // Ordinary objects/arrays must not throw once per queue traversal node.
       // Skip tag inspection when a custom tag exists: it can be spoofed or have
       // a getter. The internal-slot check below handles those without reading it.
-      if (
-        !(Symbol.toStringTag in item) &&
-        Object.prototype.toString.call(item) !== "[object Number]"
-      ) {
-        return item;
-      }
-      // Definitive check for candidates, including cross-realm/tagged boxes.
       try {
+        if (
+          !(Symbol.toStringTag in item) &&
+          Object.prototype.toString.call(item) !== "[object Number]"
+        ) {
+          return item;
+        }
+        // Definitive check for candidates, including cross-realm/tagged boxes.
         Number.prototype.valueOf.call(item);
       } catch {
         return item;

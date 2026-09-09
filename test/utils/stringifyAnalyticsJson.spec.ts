@@ -4,6 +4,21 @@ import { stringifyAnalyticsJson } from "../../src/utils/stringifyAnalyticsJson";
 const ASSERT = (actual: unknown, expected: unknown) => { expect(actual).to.deep.equal(expected); };
 
 describe("stringifyAnalyticsJson", () => {
+  it("preserves JSON-serializable proxies whose tag probes throw", () => {
+    for (const trap of ["has", "get"]) {
+      const proxy = new Proxy({ amount: 12.5 }, {
+        has(target, key) {
+          if (trap === "has" && key === Symbol.toStringTag) throw new Error("has rejected");
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver) {
+          if (trap === "get" && key === Symbol.toStringTag) throw new Error("get rejected");
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      ASSERT(stringifyAnalyticsJson({ proxy }), JSON.stringify({ proxy }));
+    }
+  });
   it("avoids Number slot checks for ordinary nested payloads", () => {
     const original = Number.prototype.valueOf;
     let calls = 0;
