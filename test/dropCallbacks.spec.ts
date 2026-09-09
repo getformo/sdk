@@ -5,11 +5,7 @@ import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
 import { initStorageManager } from "../src/storage";
 
-/**
- * A Wallet Standard wallet injected before the SDK is reported the moment
- * discovery starts. The persisted snapshot must already be in place by then,
- * so the live connection lands on top of it and not under it.
- */
+/** A dropped event answers its callback with an error whose code names the gate. */
 describe("drop callbacks on a real instance", () => {
 
   let sandbox: sinon.SinonSandbox;
@@ -54,13 +50,19 @@ describe("drop callbacks on a real instance", () => {
 
   const codes = (calls: sinon.SinonStub) => calls.getCalls().map((c) => c.args[0]?.code);
 
-  it("answers a track() callback when tracking is off", async () => {
+  it("answers a track() callback when tracking is off, and when the visitor has opted out", async () => {
     formo = await FormoAnalytics.init("test-write-key", { tracking: false, flushAt: 1000 });
-    const callback = sandbox.stub();
+    const off = sandbox.stub();
+    await formo.track("Order Placed", { market: "SOL" }, undefined, off);
+    expect(codes(off)).to.deep.equal(["suppressed"]);
+    formo.cleanup();
 
-    await formo.track("Order Placed", { market: "SOL" }, undefined, callback);
-
-    expect(codes(callback)).to.deep.equal(["suppressed"]);
+    formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
+    formo.optOutTracking();
+    const optedOut = sandbox.stub();
+    await formo.track("Order Placed", { market: "SOL" }, undefined, optedOut);
+    expect(codes(optedOut)).to.deep.equal(["suppressed"]);
+    formo.optInTracking();
   });
 
   it("answers connect(), identify() and detect() callbacks at their own gates", async () => {
@@ -89,16 +91,5 @@ describe("drop callbacks on a real instance", () => {
     await formo.identify({ address: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf", userId: "u1" }, undefined, undefined, id1);
     await formo.identify({ address: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf", userId: "u1" }, undefined, undefined, id2);
     expect(codes(id2)).to.deep.equal(["duplicate"]);
-  });
-
-  it("answers a track() callback when the visitor has opted out", async () => {
-    formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
-    formo.optOutTracking();
-    const callback = sandbox.stub();
-
-    await formo.track("Order Placed", { market: "SOL" }, undefined, callback);
-
-    expect(codes(callback)).to.deep.equal(["suppressed"]);
-    formo.optInTracking();
   });
 });

@@ -154,23 +154,22 @@ export class SolanaStoreHandler {
     this.cluster = cluster;
     this.chainId = SOLANA_CHAIN_IDS[cluster];
 
-    if (previousCluster !== cluster && this.lastAddress) {
-      this.lastChainId = this.chainId;
-      // Central state moves first: a suppressed or excluded chain event
-      // must still leave later events on the cluster the wallet is on. A
-      // namespace write only; a cluster change does not make a background
-      // Solana wallet the active one over an EVM wallet that connected later.
-      this.formo.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
+    if (previousCluster !== cluster) this.applyCluster();
+  }
 
-      if (this.formo.isAutocaptureEnabled("chain")) {
-        this.formo.chain({
-          chainId: this.chainId,
-          address: this.lastAddress,
-        }).catch((error) => {
-          logger.error("SolanaStoreHandler: Error emitting chain event", error);
-        });
-      }
-    }
+  /** Move the observed wallet to the current cluster. */
+  private applyCluster(): void {
+    if (!this.lastAddress) return;
+    this.lastChainId = this.chainId;
+    // Central state moves first: a suppressed or excluded chain event
+    // must still leave later events on the cluster the wallet is on. A
+    // namespace write only; a cluster change does not make a background
+    // Solana wallet the active one over an EVM wallet that connected later.
+    this.formo.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
+    if (!this.formo.isAutocaptureEnabled("chain")) return;
+    this.formo.chain({ chainId: this.chainId, address: this.lastAddress }).catch((error) => {
+      logger.error("SolanaStoreHandler: Error emitting chain event", error);
+    });
   }
 
   /**
@@ -423,20 +422,7 @@ export class SolanaStoreHandler {
       chainId: this.chainId,
     });
     this.onClusterChange?.(detected);
-
-    if (this.lastAddress) {
-      this.lastChainId = this.chainId;
-      // Central state moves first, as in setCluster(); a namespace write only.
-      this.formo.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
-      if (this.formo.isAutocaptureEnabled("chain")) {
-        this.formo.chain({
-          chainId: this.chainId,
-          address: this.lastAddress,
-        }).catch((error) => {
-          logger.error("SolanaStoreHandler: Error emitting chain event", error);
-        });
-      }
-    }
+    this.applyCluster();
   }
 
   // ============================================================

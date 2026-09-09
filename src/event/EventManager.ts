@@ -1,4 +1,4 @@
-import { Address, APIEvent, Options, EventCallback } from "../types";
+import { Address, APIEvent, Options } from "../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
 import { EventFactory } from "./EventFactory";
@@ -6,25 +6,11 @@ import { EVENT_CREATION_CANCELLED } from "./cancellation";
 import { IEventFactory, IEventManager } from "./type";
 import { isBlockedAddress } from "../utils/address";
 import { hash, stableStringify } from "../utils";
+import { answerDropped } from "../utils/dropped";
 
 /**
  * A service to generate valid event payloads and queue them for processing
  */
-/** Answer a callback for an event dropped before it was queued. */
-function notDelivered(callback: EventCallback | undefined, event: unknown, closed: boolean): void {
-  if (!callback) return;
-  const error = closed
-    ? Object.assign(new Error("Event not sent: the SDK was cleaned up"), { code: "closed" })
-    : Object.assign(new Error("Event not sent: consent was withdrawn before delivery"), {
-        code: "consent_withdrawn",
-      });
-  try {
-    callback(error, event, []);
-  } catch {
-    /* a throwing callback is the host's bug */
-  }
-}
-
 class EventManager implements IEventManager {
   eventQueue: IEventQueue;
   eventFactory: IEventFactory;
@@ -82,26 +68,21 @@ class EventManager implements IEventManager {
     try {
       formoEvent = await this.eventFactory.create(_event, address, userId);
     } catch (error) {
-      if (error === EVENT_CREATION_CANCELLED) return notDelivered(callback, _event, this.closed);
-      throw error;
+      if (error !== EVENT_CREATION_CANCELLED) throw error;
+      return answerDropped(callback, _event, this.closed ? "closed" : "consent_withdrawn");
     }
 
     // Reject work invalidated while enrichment was pending.
-    if (!shouldContinue()) return notDelivered(callback, _event, this.closed);
+    if (!shouldContinue()) {
+      return answerDropped(callback, _event, this.closed ? "closed" : "consent_withdrawn");
+    }
 
     // Check if the final event has a blocked address - don't queue it
     if (formoEvent.address && isBlockedAddress(formoEvent.address)) {
       logger.warn(
         `Event blocked: Address ${formoEvent.address} is in the blocked list and cannot emit events`
       );
-      if (callback) {
-        try {
-          callback(Object.assign(new Error("Event not sent: the address is blocked"), { code: "blocked" }), _event, []);
-        } catch {
-          /* a throwing callback is the host's bug */
-        }
-      }
-      return;
+      return answerDropped(callback, _event, "blocked");
     }
 
     this.eventQueue.enqueue(

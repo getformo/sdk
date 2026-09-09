@@ -11,6 +11,9 @@ import { initStorageManager } from "../../src/storage";
 import { WalletStateStore } from "../../src/wallet/WalletStateStore";
 import type { Address, ChainID } from "../../src/types";
 
+/** Let a disconnect() continuation run. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
 /**
  * How the two Solana sources share one SDK.
  *
@@ -403,7 +406,7 @@ describe("SolanaManager", () => {
       mockFormo.restoreWalletState.resetHistory();
 
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(deferredRestores).to.deep.equal([{ address: ADDRESS, chainId: SOLANA_CHAIN_IDS.devnet }]);
       expect(wallet.solanaAddress).to.equal(ADDRESS);
@@ -419,7 +422,7 @@ describe("SolanaManager", () => {
       mockFormo.restoreWalletState.resetHistory();
 
       phantom.setAccounts([]); // the registry closes the connection it reported
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(wallet.solanaAddress, "the initial connection is live").to.equal(OTHER_ADDRESS);
     });
@@ -435,7 +438,7 @@ describe("SolanaManager", () => {
       mockFormo.restoreWalletState.resetHistory();
 
       phantom.setAccounts([]);
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(mockFormo.restoreWalletState.lastCall?.args[0], "the store's connector is still live").to.deep.equal({
         address: ADDRESS,
@@ -451,7 +454,7 @@ describe("SolanaManager", () => {
       mockFormo.syncWalletState.resetHistory();
 
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(mockFormo.disconnect.called, "no event with capture off").to.be.false;
       expect(mockFormo.syncWalletState.lastCall?.args[0]).to.deep.equal({
@@ -471,7 +474,7 @@ describe("SolanaManager", () => {
       mockFormo.syncWalletState.resetHistory();
 
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       // The departed wallet is cleared first: a restore is refused while
       // tracking is suppressed and must not leave it in the slot.
@@ -496,7 +499,7 @@ describe("SolanaManager", () => {
 
       // The store sees the disconnect before the Wallet Standard change.
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       const restored = mockFormo.restoreWalletState.getCalls().map((c) => c.args[0]?.address);
       expect(restored, "the departing address is not restored").to.not.include(ADDRESS);
@@ -514,7 +517,7 @@ describe("SolanaManager", () => {
       mockFormo.syncWalletState.resetHistory(); // count only what the disconnect writes
 
       phantom.setAccounts([]); // the registry closes its own connection
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       // Through the namespace-preserving writer only: a syncWalletState()
       // here would promote the Solana wallet over the EVM one.
@@ -540,7 +543,7 @@ describe("SolanaManager", () => {
       mockFormo.restoreWalletState.resetHistory();
 
       phantom.setAccounts([]);
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(deferredRestores, "Backpack predates the reset").to.deep.equal([]);
       expect(wallet.solanaAddress).to.be.undefined;
@@ -558,7 +561,7 @@ describe("SolanaManager", () => {
       mockFormo.restoreWalletState.resetHistory();
 
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(deferredRestores, "Phantom predates the reset").to.deep.equal([]);
       expect(mockFormo.restoreWalletState.called).to.be.false;
@@ -573,7 +576,7 @@ describe("SolanaManager", () => {
       // A connector change on the same account: the handler reports a
       // disconnect and a connect in one update.
       store.setState({ wallet: connectedWallet("phantom", "Phantom") });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(wallet.solanaAddress, "the reconnected wallet is not cleared").to.equal(ADDRESS);
       expect(wallet.address).to.equal(ADDRESS);
@@ -598,7 +601,7 @@ describe("SolanaManager", () => {
       mockFormo.disconnect.rejects(new Error("network"));
 
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(wallet.solanaAddress, "the departed wallet does not stay in the slot").to.be.undefined;
     });
@@ -625,7 +628,7 @@ describe("SolanaManager", () => {
       expect(mockFormo.connect.calledOnce, "no connect for the recorded wallet").to.be.true;
 
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(wallet.solanaAddress, "no connect event exists for it").to.be.undefined;
       expect(mockFormo.connect.calledOnce).to.be.true;
@@ -642,7 +645,7 @@ describe("SolanaManager", () => {
       expect(wallet.solanaAddress).to.equal(ADDRESS);
 
       phantom.setAccounts([]);
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(wallet.solanaAddress, "the same outcome as with capture off").to.equal(OTHER_ADDRESS);
     });
@@ -658,7 +661,7 @@ describe("SolanaManager", () => {
 
       expect(mockFormo.deferWalletRestore.calledOnce).to.be.true;
       expect(mockFormo.deferWalletRestore.calledBefore(mockFormo.disconnect)).to.be.true;
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
     });
 
     it("clears a departed store wallet behind an active EVM wallet when capture is off", async () => {
@@ -669,7 +672,7 @@ describe("SolanaManager", () => {
       mockFormo.syncWalletState.resetHistory();
 
       store.setState({ wallet: { status: "disconnected" } });
-      await new Promise((r) => setTimeout(r, 0));
+      await settle();
 
       expect(mockFormo.syncWalletState.lastCall?.args[0], "Solana slot cleared, EVM untouched").to.deep.equal({
         chainId: SOLANA_CHAIN_IDS.devnet,

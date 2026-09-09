@@ -134,10 +134,9 @@ interface TrackedWallet {
   /** Whether this registry, rather than a store, emitted its connect. */
   connectWasReported: boolean;
   /**
-   * Whether the connection reached central state through this registry
-   * (reported, or reported then adopted by a store). A connection merely
-   * recorded while a store owned events has no connect event and must not
-   * be put back into the slot.
+   * Whether the connection reached central state through this registry. A
+   * connection recorded while a store owned events, or observed while
+   * suppressed, has no connect event and must not be put back.
    */
   attributed: boolean;
 }
@@ -502,8 +501,6 @@ export class SolanaWalletStandardRegistry {
     // newest remaining one, the same as the capture-off path. A store's
     // wallet is the store's to restore (see SolanaManager).
     const held = this.deps.solanaAddress();
-    // Another wallet tracked here holds the slot, possibly on the same address.
-    const keep = held && this.trackedOn(held) ? held : undefined;
     // Taken before the await: a reset() or a new session landing meanwhile
     // makes the restore stale, and only the SDK can tell.
     const restore = this.deps.deferWalletRestore(previous.chainId);
@@ -511,8 +508,9 @@ export class SolanaWalletStandardRegistry {
       .disconnect(previous)
       .then(() => {
         if (this.deps.solanaAddress()) return;
-        const owner =
-          (keep && this.connectionOf(keep)) || this.newestConnection(previous.address);
+        // The wallet that held the slot, if tracked here (possibly on the
+        // same address), else the newest remaining one.
+        const owner = this.connectionOf(held) ?? this.newestConnection(previous.address);
         if (owner) restore(owner);
       })
       .catch((error) => {
@@ -599,7 +597,7 @@ export class SolanaWalletStandardRegistry {
   }
 
   /** The restorable connection on `address`, if any. */
-  private connectionOf(address: string): SolanaConnection | undefined {
+  private connectionOf(address: string | undefined): SolanaConnection | undefined {
     return this.trackedOn(address)?.connected;
   }
 

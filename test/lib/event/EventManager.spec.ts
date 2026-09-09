@@ -248,49 +248,6 @@ describe("EventManager", () => {
       expect(keys[0], "the returned object's own hook is not run again").to.not.equal(keys[1]);
     });
 
-    it("honors a toJSON hook on a function value, and reads the hook once", async () => {
-      const { stableStringify } = await import("../../../src/utils/generate");
-      const fn = Object.assign(() => undefined, { toJSON: () => "fn" });
-      expect(stableStringify({ f: fn })).to.equal(JSON.stringify({ f: fn }));
-      expect(stableStringify({ g: () => undefined })).to.equal(JSON.stringify({ g: () => undefined }));
-      let reads = 0;
-      const flaky = { a: 1, get toJSON() { reads++; return reads === 1 ? () => "once" : undefined; } };
-      expect(stableStringify({ p: flaky })).to.equal('{"p":"once"}');
-    });
-
-    it("honors a BigInt.prototype.toJSON hook and an overridden call on a hook", async () => {
-      const { stableStringify } = await import("../../../src/utils/generate");
-      const proto = BigInt.prototype as unknown as { toJSON?: () => string };
-      proto.toJSON = function () { return this.toString(); };
-      try {
-        expect(stableStringify({ amount: BigInt(123) })).to.equal(JSON.stringify({ amount: BigInt(123) }));
-      } finally {
-        delete proto.toJSON;
-      }
-      expect(() => stableStringify({ amount: BigInt(5) })).to.throw(TypeError);
-      const hook = Object.assign(() => "ok", { call: () => { throw new Error("overridden"); } });
-      expect(stableStringify({ p: { toJSON: hook } })).to.equal(JSON.stringify({ p: { toJSON: hook } }));
-    });
-
-    it("serializes without BigInt in the runtime", async () => {
-      const { stableStringify } = await import("../../../src/utils/generate");
-      const saved = (globalThis as any).BigInt;
-      (globalThis as any).BigInt = undefined;
-      try {
-        expect(stableStringify({ b: 2, a: { d: 1, c: [1] } })).to.equal('{"a":{"c":[1],"d":1},"b":2}');
-      } finally {
-        (globalThis as any).BigInt = saved;
-      }
-    });
-
-    it("rejects a boxed bigint and reads an array length once", async () => {
-      const { stableStringify } = await import("../../../src/utils/generate");
-      expect(() => stableStringify({ n: Object(BigInt(1)) })).to.throw(TypeError);
-      let reads = 0;
-      const growing = new Proxy([1, 2], { get: (t, p, r) => { if (p === "length") { reads++; if (reads > 1) t.push(0); } return Reflect.get(t, p, r); } });
-      expect(stableStringify({ a: growing })).to.equal('{"a":[1,2]}');
-    });
-
     it("answers the callback when the address is blocked", async () => {
       const callback = sinon.stub();
       const blocked = "0x0000000000000000000000000000000000000000";

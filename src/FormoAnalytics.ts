@@ -45,6 +45,7 @@ import {
   WrappedRequestFunction,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
+import { answerDropped } from "./utils/dropped";
 import {
   AutocaptureEventType,
   ITrackingPolicy,
@@ -414,7 +415,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     name?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     await this.trackPageHit(category, name, properties, context, callback);
   }
@@ -532,7 +533,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     if (chainId === null || chainId === undefined) {
       logger.warn("Connect: Chain ID cannot be null or undefined");
@@ -557,7 +558,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // (opt-out / timezone / host / path) leaves no session state.
     if (this.isTrackingSuppressed()) {
       logger.info("connect() skipped: tracking is suppressed for this visitor or environment");
-      this.answerSuppressed(callback, { chainId, address });
+      answerDropped(callback, { chainId, address }, "suppressed");
       return;
     }
 
@@ -597,7 +598,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     const chainId = params?.chainId || this.currentChainId;
     const address = params?.address || this.currentAddress;
@@ -720,30 +721,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.wallet.solanaAddress;
   }
 
-  /** Answer a callback for a call refused by a tracking gate; silence read as success. */
-  private answerSuppressed(callback: ((...args: unknown[]) => void) | undefined, message: unknown): void {
-    this.answerDropped(callback, message, "suppressed", "tracking is off for this visitor, environment, or chain");
-  }
-
-  /** Answer a callback for a call dropped as a repeat within the session. */
-  private answerDuplicate(callback: ((...args: unknown[]) => void) | undefined, message: unknown): void {
-    this.answerDropped(callback, message, "duplicate", "already reported in this session");
-  }
-
-  private answerDropped(
-    callback: ((...args: unknown[]) => void) | undefined,
-    message: unknown,
-    code: string,
-    reason: string
-  ): void {
-    if (!callback) return;
-    try {
-      callback(Object.assign(new Error(`Event not sent: ${reason}`), { code }), message, []);
-    } catch {
-      /* a throwing callback is the host's bug */
-    }
-  }
-
   private retryWalletDetection(): void {
     if (this.isCleanedUp) return;
     void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
@@ -845,7 +822,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     if (!chainId || Number(chainId) === 0) {
       logger.warn("FormoAnalytics::chain: chainId cannot be empty or 0");
@@ -903,7 +880,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     await this.trackEvent(
       EventType.SIGNATURE,
@@ -957,7 +934,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     await this.trackEvent(
       EventType.TRANSACTION,
@@ -1019,7 +996,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void>;
   async identify(
     paramsOrUser?:
@@ -1034,7 +1011,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       | IFormoEventProperties
       | { activeAddress?: string; properties?: IFormoEventProperties },
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     try {
       // Privy form: identify(user) / identify(user, { activeAddress? }).
@@ -1104,7 +1081,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.info(
           "identify() skipped: tracking is suppressed for this visitor, environment, or chain"
         );
-        this.answerSuppressed(callback, paramsOrUser);
+        answerDropped(callback, paramsOrUser, "suppressed");
         return;
       }
       if (!params) {
@@ -1252,7 +1229,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             rdns || "empty"
           })`
         );
-        this.answerDuplicate(callback, paramsOrUser);
+        answerDropped(callback, paramsOrUser, "duplicate");
         return;
       }
 
@@ -1350,17 +1327,17 @@ export class FormoAnalytics implements IFormoAnalytics {
     },
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     // Apply all policy checks before persisting the detection marker.
     if (!this.shouldTrack()) {
       logger.info("detect() skipped: tracking is suppressed for this visitor or environment");
-      this.answerSuppressed(callback, { providerName, rdns });
+      answerDropped(callback, { providerName, rdns }, "suppressed");
       return;
     }
     if (this.session.isWalletDetected(rdns)) {
       logger.warn(`Detect: Wallet ${providerName} already detected in this session`);
-      this.answerDuplicate(callback, { providerName, rdns });
+      answerDropped(callback, { providerName, rdns }, "duplicate");
       return;
     }
 
@@ -1598,7 +1575,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     name?: string,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     const canTrack = this.shouldTrack();
     if (!this.isCleanedUp && canTrack) {
@@ -1648,7 +1625,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     payload?: any,
     properties?: IFormoEventProperties,
     context?: IFormoEventContext,
-    callback?: (...args: unknown[]) => void
+    callback?: EventCallback
   ): Promise<void> {
     try {
       // Gate on the chain the event actually carries. `connect`, `disconnect`,
@@ -1658,7 +1635,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // identify) fall back to the central value.
       if (!this.shouldTrack(payload?.chainId)) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
-        this.answerSuppressed(callback, payload);
+        answerDropped(callback, payload, "suppressed");
         return;
       }
 
