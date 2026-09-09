@@ -248,6 +248,16 @@ describe("EventManager", () => {
       expect(keys[0], "the returned object's own hook is not run again").to.not.equal(keys[1]);
     });
 
+    it("honors a toJSON hook on a function value, and reads the hook once", async () => {
+      const { stableStringify } = await import("../../../src/utils/generate");
+      const fn = Object.assign(() => undefined, { toJSON: () => "fn" });
+      expect(stableStringify({ f: fn })).to.equal(JSON.stringify({ f: fn }));
+      expect(stableStringify({ g: () => undefined })).to.equal(JSON.stringify({ g: () => undefined }));
+      let reads = 0;
+      const flaky = { a: 1, get toJSON() { reads++; return reads === 1 ? () => "once" : undefined; } };
+      expect(stableStringify({ p: flaky })).to.equal('{"p":"once"}');
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);

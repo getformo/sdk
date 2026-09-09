@@ -16,15 +16,20 @@ export function stableStringify(value: unknown): string | undefined {
 
 /** A sorted, cycle-checked clone that JSON.stringify serializes as-is. */
 function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON: boolean): unknown {
-  if (value === null || typeof value !== "object") return value;
-  const withToJSON = value as { toJSON?: unknown };
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
   // toJSON() runs once per property, as in JSON.stringify: what it returns
   // is serialized as-is, its own hook included, and a hook that returns its
-  // own object serializes by its fields.
-  if (!fromToJSON && typeof withToJSON.toJSON === "function") {
-    const out = (withToJSON.toJSON as (k: string) => unknown).call(value, key);
-    if (out !== value) return canonical(out, key, stack, true);
+  // own object serializes by its fields. The hook is read once, so an
+  // accessor cannot hand back two different values.
+  if (!fromToJSON) {
+    const hook = (value as { toJSON?: unknown }).toJSON;
+    if (typeof hook === "function") {
+      const out = (hook as (k: string) => unknown).call(value, key);
+      if (out !== value) return canonical(out, key, stack, true);
+    }
   }
+  // A function with no hook is omitted, as JSON.stringify omits it.
+  if (typeof value === "function") return undefined;
   // Unboxed through the built-in methods, not an override on the instance.
   if (value instanceof Number) return Number.prototype.valueOf.call(value);
   if (value instanceof String) return String.prototype.valueOf.call(value);
@@ -41,9 +46,10 @@ function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON:
     const sorted: Record<string, unknown> = Object.create(null);
     for (const k of Object.keys(record).sort()) {
       const v = record[k];
-      // JSON omits these, and a toJSON function must not survive into the clone.
-      if (v === undefined || typeof v === "function" || typeof v === "symbol") continue;
-      sorted[k] = canonical(v, k, stack, false);
+      if (v === undefined || typeof v === "symbol") continue;
+      const c = canonical(v, k, stack, false);
+      // Omitted values (functions without a hook) never reach the clone.
+      if (c !== undefined) sorted[k] = c;
     }
     return sorted;
   } finally {
