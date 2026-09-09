@@ -16,7 +16,9 @@ export function stableStringify(value: unknown): string | undefined {
 
 /** A sorted, cycle-checked clone that JSON.stringify serializes as-is. */
 function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON: boolean): unknown {
-  if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
+  // Objects, functions and bigints can carry a toJSON hook, as in JSON.stringify.
+  const hookable = value !== null && (typeof value === "object" || typeof value === "function" || typeof value === "bigint");
+  if (!hookable) return value;
   // toJSON() runs once per property, as in JSON.stringify: what it returns
   // is serialized as-is, its own hook included, and a hook that returns its
   // own object serializes by its fields. The hook is read once, so an
@@ -24,10 +26,12 @@ function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON:
   if (!fromToJSON) {
     const hook = (value as { toJSON?: unknown }).toJSON;
     if (typeof hook === "function") {
-      const out = (hook as (k: string) => unknown).call(value, key);
+      const out: unknown = Reflect.apply(hook, value, [key]);
       if (out !== value) return canonical(out, key, stack, true);
     }
   }
+  // A bigint without a hook is left to JSON.stringify, which throws on it.
+  if (typeof value === "bigint") return value;
   // A function with no hook is omitted, as JSON.stringify omits it.
   if (typeof value === "function") return undefined;
   // Unboxed through the built-in methods, not an override on the instance.

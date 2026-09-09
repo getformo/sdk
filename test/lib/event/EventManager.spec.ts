@@ -258,6 +258,20 @@ describe("EventManager", () => {
       expect(stableStringify({ p: flaky })).to.equal('{"p":"once"}');
     });
 
+    it("honors a BigInt.prototype.toJSON hook and an overridden call on a hook", async () => {
+      const { stableStringify } = await import("../../../src/utils/generate");
+      const proto = BigInt.prototype as unknown as { toJSON?: () => string };
+      proto.toJSON = function () { return this.toString(); };
+      try {
+        expect(stableStringify({ amount: BigInt(123) })).to.equal(JSON.stringify({ amount: BigInt(123) }));
+      } finally {
+        delete proto.toJSON;
+      }
+      expect(() => stableStringify({ amount: BigInt(5) })).to.throw(TypeError);
+      const hook = Object.assign(() => "ok", { call: () => { throw new Error("overridden"); } });
+      expect(stableStringify({ p: { toJSON: hook } })).to.equal(JSON.stringify({ p: { toJSON: hook } }));
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);
