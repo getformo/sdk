@@ -210,6 +210,28 @@ describe("EventQueue", () => {
       expect(body).to.have.length(1);
     });
 
+    it("protects arbitrary nested numeric fields on the actual wire without changing input", async () => {
+      const properties = { measurement: 262198996219020150000, nested: [-(2 ** 64)], volume: -12.25 };
+      await eventQueue.enqueue(createMockEvent({ properties }));
+      await (eventQueue as any).pendingFlush;
+      const body = JSON.parse(fetchStub.firstCall.args[1].body);
+      expect(body[0].properties).to.deep.equal({
+        measurement: "262198996219020150000", nested: [String(-(2 ** 64))], volume: -12.25,
+      });
+      expect(properties.measurement).to.equal(262198996219020150000);
+    });
+
+    it("uses normalized wire bytes when deciding whether a single event fits keepalive", () => {
+      // Quoting each extreme integer makes this exceed the keepalive budget,
+      // although native JSON would fit. Exercise the precise boundary.
+      const event: any = { properties: { values: Array(2000).fill(2 ** 64), padding: "" } };
+      event.properties.padding = "x".repeat(65536 - JSON.stringify([event]).length);
+      expect(new TextEncoder().encode(JSON.stringify([event])).length).to.equal(65536);
+      const batches = (eventQueue as any).splitIntoBatches([{}], [event]);
+      expect(batches).to.have.length(1);
+      expect(batches[0].keepalive).to.equal(false);
+    });
+
     it("should batch subsequent events instead of flushing each", async () => {
       await eventQueue.enqueue(createMockEvent());
       await (eventQueue as any).pendingFlush;

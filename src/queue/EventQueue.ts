@@ -12,6 +12,7 @@ import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch, { FetchRetryError } from "../fetch";
 import { EnqueueOptions, IEventQueue } from "./type";
+import { stringifyAnalyticsJson } from "../utils/stringifyAnalyticsJson";
 const noop = () => {};
 /** The error handed to callbacks of events dropped by opt-out or reset mid-flush. */
 const notDeliveredError = (): Error & { code: string } =>
@@ -366,7 +367,7 @@ export class EventQueue implements IEventQueue {
     };
     // Measure once here (message only — JSON.stringify drops the
     // callback function anyway), then track the total incrementally.
-    queueItem.byteSize = JSON.stringify({
+    queueItem.byteSize = stringifyAnalyticsJson({
       message: queueItem.message,
     }).length;
     this.queue.push(queueItem);
@@ -507,7 +508,7 @@ export class EventQueue implements IEventQueue {
    * indicating whether keepalive is safe to use.
    */
   private splitIntoBatches(items: QueueItem[], data: IFormoEventFlushPayload[]): Batch[] {
-    const serialized = JSON.stringify(data);
+    const serialized = stringifyAnalyticsJson(data);
     if (EventQueue.byteLength(serialized) <= KEEPALIVE_PAYLOAD_LIMIT) {
       return [{ data, items, keepalive: true }];
     }
@@ -519,7 +520,7 @@ export class EventQueue implements IEventQueue {
 
     for (let i = 0; i < data.length; i++) {
       const event = data[i];
-      const eventSize = EventQueue.byteLength(JSON.stringify(event));
+      const eventSize = EventQueue.byteLength(stringifyAnalyticsJson(event));
       const sizeWithEvent = currentSize + (currentData.length > 0 ? 1 : 0) + eventSize;
 
       if (sizeWithEvent > KEEPALIVE_PAYLOAD_LIMIT) {
@@ -588,7 +589,7 @@ export class EventQueue implements IEventQueue {
         break;
       }
       try {
-        const body = JSON.stringify(batch.data);
+        const body = stringifyAnalyticsJson(batch.data);
         const response = await fetch(`${this.apiHost}`, {
           headers: EVENTS_API_REQUEST_HEADER(this.writeKey),
           method: "POST",
