@@ -4,6 +4,29 @@ import { stringifyAnalyticsJson } from "../../src/utils/stringifyAnalyticsJson";
 const ASSERT = (actual: unknown, expected: unknown) => { expect(actual).to.deep.equal(expected); };
 
 describe("stringifyAnalyticsJson", () => {
+  it("avoids Number slot checks for ordinary nested payloads", () => {
+    const original = Number.prototype.valueOf;
+    let calls = 0;
+    Number.prototype.valueOf = function () { calls++; return original.call(this); };
+    try {
+      const input = Array.from({ length: 100 }, () => ({ properties: { amount: 12.5, tags: ["a", "b"] } }));
+      ASSERT(stringifyAnalyticsJson(input), JSON.stringify(input));
+      ASSERT(calls, 0);
+      ASSERT(stringifyAnalyticsJson(new Number(1e30)), '"1e+30"');
+      ASSERT(calls, 2); // Slot validation, then native ToNumber conversion.
+    } finally {
+      Number.prototype.valueOf = original;
+    }
+  });
+
+  it("does not read custom tag getters and still normalizes tagged boxes", () => {
+    const fake = { keep: true };
+    const box = new Number(1e30);
+    for (const object of [fake, box]) {
+      Object.defineProperty(object, Symbol.toStringTag, { get() { throw new Error("tag must not be read"); } });
+    }
+    ASSERT(stringifyAnalyticsJson({ fake, box }), '{"fake":{"keep":true},"box":"1e+30"}');
+  });
   it("encodes nested integers outside the parser range without mutating inputs", () => {
     const input = { arbitrary: 262198996219020150000, nested: [-(2 ** 64), { large: 1e30 }], volume: -1500.05 };
     const result = JSON.parse(stringifyAnalyticsJson(input));
