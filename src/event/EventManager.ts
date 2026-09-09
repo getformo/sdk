@@ -11,16 +11,15 @@ import { hash, stableStringify } from "../utils";
  * A service to generate valid event payloads and queue them for processing
  */
 /** Answer a callback for an event dropped before it was queued. */
-function notDelivered(callback: EventCallback | undefined, event: unknown): void {
+function notDelivered(callback: EventCallback | undefined, event: unknown, closed: boolean): void {
   if (!callback) return;
-  try {
-    callback(
-      Object.assign(new Error("Event not sent: consent was withdrawn before delivery"), {
+  const error = closed
+    ? Object.assign(new Error("Event not sent: the SDK was cleaned up"), { code: "closed" })
+    : Object.assign(new Error("Event not sent: consent was withdrawn before delivery"), {
         code: "consent_withdrawn",
-      }),
-      event,
-      []
-    );
+      });
+  try {
+    callback(error, event, []);
   } catch {
     /* a throwing callback is the host's bug */
   }
@@ -30,6 +29,8 @@ class EventManager implements IEventManager {
   eventQueue: IEventQueue;
   eventFactory: IEventFactory;
   private generation = 0;
+  /** Set by close(): a cancelled creation then reports teardown, not consent. */
+  private closed = false;
 
   /**
    *
@@ -73,7 +74,7 @@ class EventManager implements IEventManager {
               event: _event,
               address: address ?? null,
               userId: userId ?? null,
-            })
+            }) ?? ""
           )
         : undefined;
 
@@ -81,12 +82,12 @@ class EventManager implements IEventManager {
     try {
       formoEvent = await this.eventFactory.create(_event, address, userId);
     } catch (error) {
-      if (error === EVENT_CREATION_CANCELLED) return notDelivered(callback, _event);
+      if (error === EVENT_CREATION_CANCELLED) return notDelivered(callback, _event, this.closed);
       throw error;
     }
 
     // Reject work invalidated while enrichment was pending.
-    if (!shouldContinue()) return notDelivered(callback, _event);
+    if (!shouldContinue()) return notDelivered(callback, _event, this.closed);
 
     // Check if the final event has a blocked address - don't queue it
     if (formoEvent.address && isBlockedAddress(formoEvent.address)) {
@@ -117,6 +118,7 @@ class EventManager implements IEventManager {
 
   /** Terminal shutdown on teardown: nothing can be sent after this. */
   close(): void {
+    this.closed = true;
     this.generation++;
     this.eventFactory.invalidate();
     this.eventQueue.close();

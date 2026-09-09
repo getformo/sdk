@@ -238,7 +238,7 @@ export class EventQueue implements IEventQueue {
     if (stableContext) {
       for (const field of VOLATILE_CONTEXT_FIELDS) delete stableContext[field];
     }
-    return hash(stableStringify({ ...rest, context: stableContext }));
+    return hash(stableStringify({ ...rest, context: stableContext }) ?? "");
   }
 
   /**
@@ -263,8 +263,15 @@ export class EventQueue implements IEventQueue {
     // every fingerprint, including delivered and in-flight ones, so no
     // identity-derived state survives clear() and tracking can resume cleanly.
     this.payloadHashes.clear();
+    this.dropBuffered(notDeliveredError());
+  }
+
+  /** Empty the buffer, answering every item's callback with `error`. */
+  private dropBuffered(error: Error): void {
+    const dropped = this.queue;
     this.queue = [];
     this.queueByteSize = 0;
+    for (const { message, callback } of dropped) safeCall(callback, error, message, []);
   }
 
   /**
@@ -295,8 +302,7 @@ export class EventQueue implements IEventQueue {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    this.queue = [];
-    this.queueByteSize = 0;
+    this.dropBuffered(closedError());
     this.flushed = false;
     // Terminal: nothing can be accepted again, so nothing needs suppressing.
     this.payloadHashes.clear();

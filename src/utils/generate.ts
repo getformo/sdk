@@ -4,20 +4,43 @@ import { utf8ToBytes, bytesToHex } from 'ethereum-cryptography/utils';
 
 /**
  * JSON with object keys in sorted order at every depth, so two property
- * bags built in a different order serialize the same. Arrays keep their
- * order; undefined values are omitted as JSON.stringify does.
+ * bags built in a different order serialize the same. Otherwise it follows
+ * JSON.stringify: toJSON() is honored, boxed primitives unbox, arrays keep
+ * their order and holes become null, undefined values are omitted, and a
+ * cycle throws. Returns undefined where JSON.stringify would.
  */
-export function stableStringify(value: unknown): string {
-  return JSON.stringify(value, (_key, v) =>
-    v && typeof v === "object" && !Array.isArray(v)
-      ? Object.keys(v as Record<string, unknown>)
-          .sort()
-          .reduce<Record<string, unknown>>((acc, k) => {
-            acc[k] = (v as Record<string, unknown>)[k];
-            return acc;
-          }, Object.create(null))
-      : v
-  );
+export function stableStringify(value: unknown): string | undefined {
+  const out = canonical(value, new Set());
+  return out === undefined ? undefined : JSON.stringify(out);
+}
+
+/** A sorted, cycle-checked clone that JSON.stringify serializes as-is. */
+function canonical(value: unknown, stack: Set<unknown>): unknown {
+  if (value === null || typeof value !== "object") return value;
+  const withToJSON = value as { toJSON?: unknown };
+  if (typeof withToJSON.toJSON === "function") {
+    const out = (withToJSON.toJSON as () => unknown).call(value);
+    // A toJSON() that returns its own object serializes by its fields.
+    if (out !== value) return canonical(out, stack);
+  }
+  if (value instanceof Number || value instanceof String || value instanceof Boolean) {
+    return value.valueOf();
+  }
+  if (stack.has(value)) throw new TypeError("Converting circular structure to JSON");
+  stack.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const items: unknown[] = [];
+      for (let i = 0; i < value.length; i++) items.push(canonical(value[i], stack));
+      return items;
+    }
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(record).sort()) sorted[key] = canonical(record[key], stack);
+    return sorted;
+  } finally {
+    stack.delete(value);
+  }
 }
 
 export function hash(input: string): string {

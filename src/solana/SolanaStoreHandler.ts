@@ -362,13 +362,16 @@ export class SolanaStoreHandler {
     // the event is built voids the hand-back.
     const restore = this.formo.deferWalletRestore(departed.chainId);
     if (this.formo.isAutocaptureEnabled("disconnect")) {
-      this.formo.disconnect(departed)
-        .catch((error) => {
-          logger.error("SolanaStoreHandler: Error emitting disconnect", error);
-        })
+      this.formo.disconnect(departed).then(
         // disconnect() clears the namespace once the event is built; anyone
         // repopulating it must run after that.
-        .then(() => this.afterWalletDisconnect?.(departed, restore, true));
+        () => this.afterWalletDisconnect?.(departed, restore, true),
+        (error) => {
+          logger.error("SolanaStoreHandler: Error emitting disconnect", error);
+          // The slot was not cleared: hand it back as if capture were off.
+          this.afterWalletDisconnect?.(departed, restore, false);
+        }
+      );
     } else {
       this.afterWalletDisconnect?.(departed, restore, false);
     }

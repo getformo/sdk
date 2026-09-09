@@ -592,6 +592,17 @@ describe("SolanaManager", () => {
       expect(wallet.solanaAddress).to.equal(ADDRESS);
     });
 
+    it("hands the slot back as with capture off when the disconnect event fails", async () => {
+      const store = makeStore({ wallet: connectedWallet("backpack", "Backpack") });
+      makeManager({ store });
+      mockFormo.disconnect.rejects(new Error("network"));
+
+      store.setState({ wallet: { status: "disconnected" } });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(wallet.solanaAddress, "the departed wallet does not stay in the slot").to.be.undefined;
+    });
+
     it("keeps an active EVM wallet when a background Solana wallet's cluster changes", async () => {
       mockFormo.isAutocaptureEnabled.callsFake((t: string) => t !== "chain");
       const store = makeStore({ wallet: connectedWallet("backpack", "Backpack") }); // devnet

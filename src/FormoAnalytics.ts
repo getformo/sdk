@@ -1629,6 +1629,18 @@ export class FormoAnalytics implements IFormoAnalytics {
       // identify) fall back to the central value.
       if (!this.shouldTrack(payload?.chainId)) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
+        // Answered like every other drop: silence read as success.
+        try {
+          callback?.(
+            Object.assign(new Error("Event not sent: tracking is off for this visitor, environment, or chain"), {
+              code: "suppressed",
+            }),
+            payload,
+            []
+          );
+        } catch {
+          /* a throwing callback is the host's bug */
+        }
         return;
       }
 

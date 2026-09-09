@@ -257,6 +257,41 @@ describe("EventQueue", () => {
         expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
       });
 
+      it("answers buffered callbacks when consent is withdrawn", async () => {
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+        });
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+        const callback = sinon.stub();
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
+        expect((eventQueue as any).queue).to.have.length(1);
+
+        eventQueue.clear();
+
+        expect(callback.calledOnce).to.be.true;
+        expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+      });
+
+      it("answers buffered callbacks with the closed code on close()", async () => {
+        eventQueue = new EventQueue("test-key", {
+          apiHost: "https://api.example.com",
+          flushAt: 20,
+          flushInterval: 30000,
+        });
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 1 } }));
+        await (eventQueue as any).pendingFlush;
+        const callback = sinon.stub();
+        await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
+
+        eventQueue.close();
+
+        expect(callback.calledOnce).to.be.true;
+        expect(callback.firstCall.args[0].code).to.equal("closed");
+      });
+
       it("answers the callback on a closed queue", async () => {
         eventQueue.close();
         const callback = sinon.stub();

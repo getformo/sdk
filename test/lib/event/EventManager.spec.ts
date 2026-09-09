@@ -196,6 +196,34 @@ describe("EventManager", () => {
       expect(keys[0]).to.not.equal(keys[1]);
     });
 
+    it("answers the callback with the closed code when creation is cancelled by teardown", async () => {
+      const callback = sinon.stub();
+      const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);
+      eventManager.close(); // cleanup() while enrichment is pending
+      await pending;
+
+      expect(enqueueSpy.called).to.be.false;
+      expect(callback.calledOnce).to.be.true;
+      expect(callback.firstCall.args[0].code).to.equal("closed");
+    });
+
+    it("throws the native error on a cycle, and unboxes primitive wrappers", async () => {
+      const cyc: Record<string, unknown> = { a: 1 };
+      cyc.self = cyc;
+      let thrown: unknown;
+      try {
+        await eventManager.addEvent({ type: "track", event: "Purchase", properties: cyc });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).to.be.instanceOf(TypeError);
+
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { amount: new Number(1) as any } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { amount: new Number(2) as any } });
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0]).to.not.equal(keys[1]);
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);
