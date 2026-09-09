@@ -63,6 +63,19 @@ describe("drop callbacks on a real instance", () => {
     expect(codes(callback)).to.deep.equal(["suppressed"]);
   });
 
+  it("answers connect(), identify() and detect() callbacks at their own gates", async () => {
+    formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
+    formo.optOutTracking();
+    const connect = sandbox.stub(), identify = sandbox.stub(), detect = sandbox.stub();
+
+    await formo.connect({ chainId: 1, address: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf" }, undefined, undefined, connect);
+    await formo.identify({ address: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf", userId: "u1" }, undefined, undefined, identify);
+    await formo.detect({ providerName: "MetaMask", rdns: "io.metamask" }, undefined, undefined, detect);
+
+    expect([codes(connect), codes(identify), codes(detect)]).to.deep.equal([["suppressed"], ["suppressed"], ["suppressed"]]);
+    formo.optInTracking();
+  });
+
   it("answers a track() callback when the visitor has opted out", async () => {
     formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
     formo.optOutTracking();

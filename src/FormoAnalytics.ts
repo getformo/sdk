@@ -557,6 +557,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // (opt-out / timezone / host / path) leaves no session state.
     if (this.isTrackingSuppressed()) {
       logger.info("connect() skipped: tracking is suppressed for this visitor or environment");
+      this.answerSuppressed(callback, { chainId, address });
       return;
     }
 
@@ -717,6 +718,22 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** The Solana wallet held centrally, whichever namespace is active. */
   get solanaAddress(): Address | undefined {
     return this.wallet.solanaAddress;
+  }
+
+  /** Answer a callback for a call refused by a tracking gate; silence read as success. */
+  private answerSuppressed(callback: ((...args: unknown[]) => void) | undefined, message: unknown): void {
+    if (!callback) return;
+    try {
+      callback(
+        Object.assign(new Error("Event not sent: tracking is off for this visitor, environment, or chain"), {
+          code: "suppressed",
+        }),
+        message,
+        []
+      );
+    } catch {
+      /* a throwing callback is the host's bug */
+    }
   }
 
   private retryWalletDetection(): void {
@@ -1079,6 +1096,7 @@ export class FormoAnalytics implements IFormoAnalytics {
         logger.info(
           "identify() skipped: tracking is suppressed for this visitor, environment, or chain"
         );
+        this.answerSuppressed(callback, paramsOrUser);
         return;
       }
       if (!params) {
@@ -1328,6 +1346,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Apply all policy checks before persisting the detection marker.
     if (!this.shouldTrack()) {
       logger.info("detect() skipped: tracking is suppressed for this visitor or environment");
+      this.answerSuppressed(callback, { providerName, rdns });
       return;
     }
     if (this.session.isWalletDetected(rdns))
@@ -1629,18 +1648,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // identify) fall back to the central value.
       if (!this.shouldTrack(payload?.chainId)) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
-        // Answered like every other drop: silence read as success.
-        try {
-          callback?.(
-            Object.assign(new Error("Event not sent: tracking is off for this visitor, environment, or chain"), {
-              code: "suppressed",
-            }),
-            payload,
-            []
-          );
-        } catch {
-          /* a throwing callback is the host's bug */
-        }
+        this.answerSuppressed(callback, payload);
         return;
       }
 

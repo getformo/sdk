@@ -239,6 +239,15 @@ describe("EventManager", () => {
       expect(keys[2], "the wrapper unboxes to its real value").to.equal(keys[3]);
     });
 
+    it("runs toJSON once per property, as JSON.stringify does", async () => {
+      const inner1 = { a: 1, toJSON: () => 0 };
+      const inner2 = { a: 2, toJSON: () => 0 };
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { p: { toJSON: () => inner1 } as any } });
+      await eventManager.addEvent({ type: "track", event: "Purchase", properties: { p: { toJSON: () => inner2 } as any } });
+      const keys = enqueueSpy.getCalls().map((c) => c.args[2].dedupKey);
+      expect(keys[0], "the returned object's own hook is not run again").to.not.equal(keys[1]);
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);

@@ -10,19 +10,20 @@ import { utf8ToBytes, bytesToHex } from 'ethereum-cryptography/utils';
  * cycle throws. Returns undefined where JSON.stringify would.
  */
 export function stableStringify(value: unknown): string | undefined {
-  const out = canonical(value, "", new Set());
+  const out = canonical(value, "", new Set(), false);
   return out === undefined ? undefined : JSON.stringify(out);
 }
 
 /** A sorted, cycle-checked clone that JSON.stringify serializes as-is. */
-function canonical(value: unknown, key: string, stack: Set<unknown>): unknown {
+function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON: boolean): unknown {
   if (value === null || typeof value !== "object") return value;
   const withToJSON = value as { toJSON?: unknown };
-  if (typeof withToJSON.toJSON === "function") {
-    // With the property key, as JSON.stringify passes it.
+  // toJSON() runs once per property, as in JSON.stringify: what it returns
+  // is serialized as-is, its own hook included, and a hook that returns its
+  // own object serializes by its fields.
+  if (!fromToJSON && typeof withToJSON.toJSON === "function") {
     const out = (withToJSON.toJSON as (k: string) => unknown).call(value, key);
-    // A toJSON() that returns its own object serializes by its fields.
-    if (out !== value) return canonical(out, key, stack);
+    if (out !== value) return canonical(out, key, stack, true);
   }
   // Unboxed through the built-in methods, not an override on the instance.
   if (value instanceof Number) return Number.prototype.valueOf.call(value);
@@ -33,12 +34,17 @@ function canonical(value: unknown, key: string, stack: Set<unknown>): unknown {
   try {
     if (Array.isArray(value)) {
       const items: unknown[] = [];
-      for (let i = 0; i < value.length; i++) items.push(canonical(value[i], String(i), stack));
+      for (let i = 0; i < value.length; i++) items.push(canonical(value[i], String(i), stack, false));
       return items;
     }
     const record = value as Record<string, unknown>;
     const sorted: Record<string, unknown> = Object.create(null);
-    for (const k of Object.keys(record).sort()) sorted[k] = canonical(record[k], k, stack);
+    for (const k of Object.keys(record).sort()) {
+      const v = record[k];
+      // JSON omits these, and a toJSON function must not survive into the clone.
+      if (v === undefined || typeof v === "function" || typeof v === "symbol") continue;
+      sorted[k] = canonical(v, k, stack, false);
+    }
     return sorted;
   } finally {
     stack.delete(value);
