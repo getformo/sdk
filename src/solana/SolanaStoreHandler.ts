@@ -230,7 +230,6 @@ export class SolanaStoreHandler {
         this.lastWalletStatus = "connected";
         this.lastAddress = address;
         this.lastChainId = this.chainId;
-        this.restorable = true;
 
         logger.info("SolanaStoreHandler: Already connected on initialization", {
           address,
@@ -256,6 +255,10 @@ export class SolanaStoreHandler {
             logger.error("SolanaStoreHandler: Error emitting initial connect", error);
           });
         }
+        // Restorable only if central state accepted the write (the sync
+        // above, or connect()'s own write before its first await); nothing
+        // is learned while the visitor is suppressed.
+        this.restorable = this.formo.solanaAddress === address;
       }
     }
 
@@ -309,7 +312,6 @@ export class SolanaStoreHandler {
 
     this.lastAddress = address;
     this.lastChainId = chainId;
-    this.restorable = true;
 
     logger.info("SolanaStoreHandler: Wallet connected", {
       address,
@@ -332,6 +334,8 @@ export class SolanaStoreHandler {
         logger.error("SolanaStoreHandler: Error emitting connect", error);
       });
     }
+    // Restorable only if central state accepted the write, as at init.
+    this.restorable = this.formo.solanaAddress === address;
   }
 
   /**

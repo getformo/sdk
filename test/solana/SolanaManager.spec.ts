@@ -30,6 +30,8 @@ describe("SolanaManager", () => {
   let wallet: WalletStateStore;
   /** Every deferred restore that was attempted, whether the store accepted it or not. */
   let deferredRestores: Array<{ address: string; chainId: number }>;
+  /** Central state learns nothing while the visitor is suppressed (opt-out). */
+  let suppressed = false;
   const EVM = "0x000000000000000000000000000000000000dEaD" as Address;
   let originalGlobals: Map<PropertyKey, PropertyDescriptor | undefined>;
   const managers: SolanaManager[] = [];
@@ -166,10 +168,11 @@ describe("SolanaManager", () => {
     });
     initStorageManager("test-write-key");
     deferredRestores = [];
+    suppressed = false;
     wallet = new WalletStateStore({
       isPersistedIdentityPurgeRequired: () => false,
       isPageExcluded: () => false,
-      isTrackingSuppressed: () => false,
+      isTrackingSuppressed: () => suppressed,
       crossSubdomainCookies: () => false,
       providerChainId: () => undefined,
       onProviderDisplaced: () => undefined,
@@ -179,6 +182,7 @@ describe("SolanaManager", () => {
     // manager is exercised against real state.
     mockFormo = {
       connect: sandbox.stub().callsFake(async (p: { chainId: ChainID; address: Address }) => {
+        if (suppressed) return; // connect() is gated on suppression before any write
         wallet.observe(wallet.namespaceOf(p.chainId));
         wallet.set(p.chainId, { address: p.address });
       }),
@@ -604,6 +608,19 @@ describe("SolanaManager", () => {
       await settle();
 
       expect(wallet.solanaAddress, "the departed wallet does not stay in the slot").to.be.undefined;
+    });
+
+    it("does not restore a store wallet that connected while the visitor was opted out", async () => {
+      const store = makeStore();
+      makeManager({ store });
+      suppressed = true; // opted out: nothing is learned
+      store.setState({ wallet: connectedWallet("backpack", "Backpack") });
+      expect(wallet.solanaAddress).to.be.undefined;
+      suppressed = false; // opted back in, identity purged
+
+      store.setState({ cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: { status: "ready" } } });
+
+      expect(wallet.solanaAddress, "no fresh observation, so nothing comes back").to.be.undefined;
     });
 
     it("does not re-learn a pre-reset store wallet on a cluster change", async () => {
