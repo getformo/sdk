@@ -1395,6 +1395,7 @@ export class FormoAnalytics implements IFormoAnalytics {
           logger.warn(
             `FormoAnalytics::track: ${IDEMPOTENCY_KEY_PROPERTY} must be a non-empty string or safe integer`
           );
+          answerDropped(callback, { event, properties }, "invalid_key");
           return;
         }
       }

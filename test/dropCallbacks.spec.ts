@@ -78,6 +78,15 @@ describe("drop callbacks on a real instance", () => {
     formo.optInTracking();
   });
 
+  it("answers a track() callback when the idempotency key is invalid", async () => {
+    formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
+    const callback = sandbox.stub();
+
+    await formo.track("Order Placed", { idempotency_key: "" }, undefined, callback);
+
+    expect(codes(callback)).to.deep.equal(["invalid_key"]);
+  });
+
   it("answers detect() and identify() callbacks for a repeat within the session", async () => {
     formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
     const first = sandbox.stub(), second = sandbox.stub();
