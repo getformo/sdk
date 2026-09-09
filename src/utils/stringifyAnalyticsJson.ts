@@ -6,6 +6,18 @@
  */
 export function stringifyAnalyticsJson(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) => {
+    if (typeof item === "object" && item !== null) {
+      // Check the Number internal slot, including boxes from another realm.
+      // instanceof misses those; toString can be spoofed by Symbol.toStringTag.
+      try {
+        Number.prototype.valueOf.call(item);
+      } catch {
+        return item;
+      }
+      // Match JSON's ToNumber conversion (including custom primitive hooks).
+      // Return the primitive so JSON does not invoke those hooks a second time.
+      item = +(item as unknown as number);
+    }
     if (
       typeof item === "number" &&
       Number.isInteger(item) &&

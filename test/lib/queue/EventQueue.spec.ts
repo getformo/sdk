@@ -158,7 +158,7 @@ describe("EventQueue", () => {
     const callback = sinon.spy();
     const event = createMockEvent({
       context: { measurement: -(2 ** 63) } as any,
-      properties: { measurement: 2 ** 64, amount: 12.5 },
+      properties: { measurement: new Number(2 ** 64), amount: 12.5 },
     });
     await eventQueue.enqueue(event, callback);
     await clock.tickAsync(1001);
@@ -170,7 +170,8 @@ describe("EventQueue", () => {
     expect(sent.properties).to.deep.equal({ measurement: String(2 ** 64), amount: 12.5 });
     expect(callback.calledOnce).to.equal(true);
     expect(callback.firstCall.args[0]).to.equal(undefined);
-    expect(event.properties?.measurement).to.equal(2 ** 64);
+    expect(event.properties?.measurement).to.be.instanceOf(Number);
+    expect((event.properties?.measurement as Number).valueOf()).to.equal(2 ** 64);
     eventQueue.close();
   });
 

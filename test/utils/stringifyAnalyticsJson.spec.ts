@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import { runInNewContext } from "vm";
 import { stringifyAnalyticsJson } from "../../src/utils/stringifyAnalyticsJson";
 const ASSERT = (actual: unknown, expected: unknown) => { expect(actual).to.deep.equal(expected); };
 
@@ -35,6 +36,50 @@ describe("stringifyAnalyticsJson", () => {
       context: { measurement: String(Number.MAX_VALUE) },
       properties: { values: [String(-Number.MAX_VALUE), "1e+21"] },
     });
+  });
+
+  it("normalizes boxed extreme numbers and preserves ordinary boxed values", () => {
+    const input = { upper: new Number(2 ** 64), lower: new Number(-(2 ** 63)), nested: [new Number(1e30)], normal: new Number(-12.5), infinity: new Number(Infinity) };
+    ASSERT(stringifyAnalyticsJson(input), '{"upper":"18446744073709552000","lower":"-9223372036854776000","nested":["1e+30"],"normal":-12.5,"infinity":null}');
+    ASSERT(input.upper.valueOf(), 2 ** 64);
+  });
+
+  it("uses custom boxed-number conversion exactly once", () => {
+    let calls = 0;
+    const box = new Number(1);
+    box.valueOf = () => { calls++; return 2 ** 64; };
+    ASSERT(stringifyAnalyticsJson({ box }), '{"box":"18446744073709552000"}');
+    ASSERT(calls, 1);
+    box.valueOf = () => { calls++; return 7; };
+    ASSERT(stringifyAnalyticsJson({ box }), '{"box":7}');
+    ASSERT(calls, 2);
+  });
+
+  it("does not treat number-like objects or spoofed tags as boxed numbers", () => {
+    const fake = { [Symbol.toStringTag]: "Number", valueOf: () => 2 ** 64, keep: true };
+    ASSERT(stringifyAnalyticsJson({ fake }), JSON.stringify({ fake }));
+    ASSERT(stringifyAnalyticsJson({ string: new String("hello"), bool: new Boolean(false) }), JSON.stringify({ string: new String("hello"), bool: new Boolean(false) }));
+  });
+
+  it("normalizes boxed numbers from another realm", () => {
+    const box = runInNewContext("new Number(2 ** 64)");
+    ASSERT(box instanceof Number, false);
+    ASSERT(stringifyAnalyticsJson({ box }), '{"box":"18446744073709552000"}');
+  });
+
+  it("honors Symbol.toPrimitive on boxed numbers with a number hint", () => {
+    const box = new Number(0);
+    Object.defineProperty(box, Symbol.toPrimitive, { value: (hint: string) => {
+      ASSERT(hint, "number");
+      return -(2 ** 63);
+    } });
+    ASSERT(stringifyAnalyticsJson({ box }), '{"box":"-9223372036854776000"}');
+  });
+
+  it("preserves boxed conversion errors", () => {
+    const box = new Number(1);
+    box.valueOf = () => { throw new TypeError("conversion failed"); };
+    expect(() => stringifyAnalyticsJson(box)).to.throw(TypeError);
   });
 
   it("retains native circular-reference errors", () => {
