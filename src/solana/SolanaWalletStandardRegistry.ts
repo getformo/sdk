@@ -437,7 +437,6 @@ export class SolanaWalletStandardRegistry {
     tracked.connected = { address, chainId };
     tracked.connectedSeq = ++this.connectSeq;
     tracked.connectWasReported = false;
-    tracked.attributed = true;
 
     logger.info("SolanaWalletStandardRegistry: Wallet connected", {
       name: tracked.name,
@@ -447,6 +446,10 @@ export class SolanaWalletStandardRegistry {
 
     // Exclusion is not suppression: the connection lands centrally either way.
     this.deps.syncWalletState({ chainId, address });
+    // Restorable only if central state accepted it. While the visitor is
+    // suppressed nothing is learned, and a connection observed then must not
+    // come back through a later hand-off once tracking resumes.
+    tracked.attributed = this.deps.solanaAddress() === address;
 
     if (!this.deps.isAutocaptureEnabled("connect")) return;
     // FormoAnalytics.connect() deliberately resolves without enqueueing when

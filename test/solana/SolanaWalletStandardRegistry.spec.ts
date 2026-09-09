@@ -29,6 +29,8 @@ describe("SolanaWalletStandardRegistry", () => {
   let autocapture: Record<string, boolean>;
   let willTrack: boolean;
   let currentAddress: string | undefined;
+  /** Central state refuses to learn while suppressed (opt-out, excluded host). */
+  let suppressed = false;
   /** The Solana slot, when it differs from what currentAddress implies. */
   let solanaSlot: string | undefined;
   let originalGlobals: Map<PropertyKey, PropertyDescriptor | undefined>;
@@ -144,6 +146,7 @@ describe("SolanaWalletStandardRegistry", () => {
     willTrack = true;
     currentAddress = undefined;
     solanaSlot = undefined;
+    suppressed = false;
     deps = {
       isAutocaptureEnabled: sandbox.stub().callsFake((t: string) => autocapture[t] !== false),
       willTrackEvent: sandbox.stub().callsFake(() => willTrack),
@@ -151,7 +154,14 @@ describe("SolanaWalletStandardRegistry", () => {
       connect: sandbox.stub().resolves(),
       disconnect: sandbox.stub().resolves(),
       chain: sandbox.stub().resolves(),
-      syncWalletState: sandbox.stub(),
+      // Central state accepts a write unless the visitor is suppressed, as the
+      // real store does; tests that pick an active wallet assign currentAddress
+      // afterwards.
+      syncWalletState: sandbox.stub().callsFake((p: { chainId: number; address?: string }) => {
+        if (suppressed) return;
+        if (p.address) currentAddress = p.address;
+        else if (currentAddress && !currentAddress.startsWith("0x")) currentAddress = undefined;
+      }),
       restoreWalletState: sandbox.stub(),
       // The deferred writer is the same stub, so restores assert in one place.
       deferWalletRestore: sandbox.stub().callsFake(() => deps.restoreWalletState),
@@ -627,6 +637,25 @@ describe("SolanaWalletStandardRegistry", () => {
         address: ADDRESS,
         chainId: SOLANA_CHAIN_IDS["mainnet-beta"],
       });
+    });
+
+    it("does not make a connection observed while suppressed restorable", () => {
+      autocapture = { disconnect: false };
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      const registry = makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      suppressed = true; // opted out: central state learns nothing
+      phantom.setAccounts([account(ADDRESS)]);
+      suppressed = false; // opted back in, identity purged
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+      deps.restoreWalletState.resetHistory();
+
+      backpack.setAccounts([]); // Backpack held the slot; Phantom must not take it
+
+      expect(deps.restoreWalletState.called, "Phantom was never learned").to.be.false;
+      expect(registry.newestConnection()).to.be.undefined;
     });
 
     it("does not hand the slot to a pre-reset wallet on a cluster switch", () => {
