@@ -76,6 +76,21 @@ describe("drop callbacks on a real instance", () => {
     formo.optInTracking();
   });
 
+  it("answers detect() and identify() callbacks for a repeat within the session", async () => {
+    formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
+    const first = sandbox.stub(), second = sandbox.stub();
+    const rdns = `io.test.${Date.now()}`; // unseen by any earlier test's session marker
+    await formo.detect({ providerName: "Test", rdns }, undefined, undefined, first);
+    await formo.detect({ providerName: "Test", rdns }, undefined, undefined, second);
+    expect(codes(first), "the first detect is not dropped").to.not.include("duplicate");
+    expect(codes(second)).to.deep.equal(["duplicate"]);
+
+    const id1 = sandbox.stub(), id2 = sandbox.stub();
+    await formo.identify({ address: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf", userId: "u1" }, undefined, undefined, id1);
+    await formo.identify({ address: "0x51377e9B985Bb90B7c091B9a7d30C93d4c9c1CEf", userId: "u1" }, undefined, undefined, id2);
+    expect(codes(id2)).to.deep.equal(["duplicate"]);
+  });
+
   it("answers a track() callback when the visitor has opted out", async () => {
     formo = await FormoAnalytics.init("test-write-key", { tracking: true, flushAt: 1000 });
     formo.optOutTracking();

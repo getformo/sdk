@@ -722,15 +722,23 @@ export class FormoAnalytics implements IFormoAnalytics {
 
   /** Answer a callback for a call refused by a tracking gate; silence read as success. */
   private answerSuppressed(callback: ((...args: unknown[]) => void) | undefined, message: unknown): void {
+    this.answerDropped(callback, message, "suppressed", "tracking is off for this visitor, environment, or chain");
+  }
+
+  /** Answer a callback for a call dropped as a repeat within the session. */
+  private answerDuplicate(callback: ((...args: unknown[]) => void) | undefined, message: unknown): void {
+    this.answerDropped(callback, message, "duplicate", "already reported in this session");
+  }
+
+  private answerDropped(
+    callback: ((...args: unknown[]) => void) | undefined,
+    message: unknown,
+    code: string,
+    reason: string
+  ): void {
     if (!callback) return;
     try {
-      callback(
-        Object.assign(new Error("Event not sent: tracking is off for this visitor, environment, or chain"), {
-          code: "suppressed",
-        }),
-        message,
-        []
-      );
+      callback(Object.assign(new Error(`Event not sent: ${reason}`), { code }), message, []);
     } catch {
       /* a throwing callback is the host's bug */
     }
@@ -1244,6 +1252,7 @@ export class FormoAnalytics implements IFormoAnalytics {
             rdns || "empty"
           })`
         );
+        this.answerDuplicate(callback, paramsOrUser);
         return;
       }
 
@@ -1349,10 +1358,11 @@ export class FormoAnalytics implements IFormoAnalytics {
       this.answerSuppressed(callback, { providerName, rdns });
       return;
     }
-    if (this.session.isWalletDetected(rdns))
-      return logger.warn(
-        `Detect: Wallet ${providerName} already detected in this session`
-      );
+    if (this.session.isWalletDetected(rdns)) {
+      logger.warn(`Detect: Wallet ${providerName} already detected in this session`);
+      this.answerDuplicate(callback, { providerName, rdns });
+      return;
+    }
 
     this.session.markWalletDetected(rdns);
     await this.trackEvent(
