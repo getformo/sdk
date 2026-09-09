@@ -616,6 +616,29 @@ describe("SolanaWalletStandardRegistry", () => {
       });
     });
 
+    it("does not replace an untracked holder of the slot with an unrelated wallet", async () => {
+      const phantom = makeWallet("Phantom");
+      const backpack = makeWallet("Backpack");
+      makeRegistry();
+      installWalletAfterApp(phantom);
+      installWalletAfterApp(backpack);
+      phantom.setAccounts([account(ADDRESS)]);
+      backpack.setAccounts([account(OTHER_ADDRESS)]);
+      const MANUAL = "3sEwLR3xzzRm3rPz6dkYq7XNdMh9SKxbbZHWJrvTfNbg"; // formo.connect(), not tracked here
+      currentAddress = MANUAL;
+      solanaSlot = MANUAL;
+      deps.disconnect.callsFake(async () => {
+        currentAddress = undefined;
+        solanaSlot = undefined;
+      });
+      deps.restoreWalletState.resetHistory();
+
+      phantom.setAccounts([]); // a background wallet leaves
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(deps.restoreWalletState.called, "Backpack must not take the manual wallet's slot").to.be.false;
+    });
+
     it("puts back a second wallet connected on the same address", async () => {
       const phantom = makeWallet("Phantom");
       const backpack = makeWallet("Backpack");

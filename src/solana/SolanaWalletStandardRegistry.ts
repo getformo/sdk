@@ -510,7 +510,13 @@ export class SolanaWalletStandardRegistry {
         if (this.deps.solanaAddress()) return;
         // The wallet that held the slot, if tracked here (possibly on the
         // same address), else the newest remaining one.
-        const owner = this.connectionOf(held) ?? this.newestConnection(previous.address);
+        // A slot held by another wallet goes back to that wallet only, if it
+        // is tracked here; a holder this registry does not know (a manual
+        // connect, a store's wallet) is not replaced by an unrelated wallet.
+        const owner =
+          held && held !== previous.address
+            ? this.connectionOf(held)
+            : this.connectionOf(previous.address) ?? this.newestConnection(previous.address);
         if (owner) restore(owner);
       })
       .catch((error) => {
