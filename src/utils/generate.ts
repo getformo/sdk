@@ -35,6 +35,7 @@ function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON:
   // A function with no hook is omitted, as JSON.stringify omits it.
   if (typeof value === "function") return undefined;
   // Unboxed through the built-in methods, not an override on the instance.
+  if (value instanceof BigInt) return BigInt.prototype.valueOf.call(value); // JSON.stringify throws on it, as before
   if (value instanceof Number) return Number.prototype.valueOf.call(value);
   if (value instanceof String) return String.prototype.valueOf.call(value);
   if (value instanceof Boolean) return Boolean.prototype.valueOf.call(value);
@@ -43,7 +44,8 @@ function canonical(value: unknown, key: string, stack: Set<unknown>, fromToJSON:
   try {
     if (Array.isArray(value)) {
       const items: unknown[] = [];
-      for (let i = 0; i < value.length; i++) items.push(canonical(value[i], String(i), stack, false));
+      const length = value.length; // read once, as JSON.stringify does
+      for (let i = 0; i < length; i++) items.push(canonical(value[i], String(i), stack, false));
       return items;
     }
     const record = value as Record<string, unknown>;

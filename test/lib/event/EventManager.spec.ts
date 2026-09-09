@@ -272,6 +272,14 @@ describe("EventManager", () => {
       expect(stableStringify({ p: { toJSON: hook } })).to.equal(JSON.stringify({ p: { toJSON: hook } }));
     });
 
+    it("rejects a boxed bigint and reads an array length once", async () => {
+      const { stableStringify } = await import("../../../src/utils/generate");
+      expect(() => stableStringify({ n: Object(BigInt(1)) })).to.throw(TypeError);
+      let reads = 0;
+      const growing = new Proxy([1, 2], { get: (t, p, r) => { if (p === "length") { reads++; if (reads > 1) t.push(0); } return Reflect.get(t, p, r); } });
+      expect(stableStringify({ a: growing })).to.equal('{"a":[1,2]}');
+    });
+
     it("answers the callback when creation is cancelled by consent", async () => {
       const callback = sinon.stub();
       const pending = eventManager.addEvent({ type: "track", event: "Purchase", callback } as any);
