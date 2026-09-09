@@ -257,6 +257,9 @@ export class WalletStateStore {
     // excluded route must not leave later events on the old chain.
     if (this.deps.isTrackingSuppressed()) {
       if (ns.address === valid && ns.chainId !== chainId) {
+        // Claim the namespace first, so an older deferred restore cannot
+        // write the previous chain back.
+        this.observe(namespace);
         ns.chainId = chainId;
         this.syncDerived();
       }

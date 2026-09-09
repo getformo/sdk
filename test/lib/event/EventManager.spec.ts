@@ -293,7 +293,8 @@ describe("EventManager", () => {
 
     it("answers the callback when the address is blocked", async () => {
       const callback = sinon.stub();
-      await eventManager.addEvent({ type: "connect", callback } as any, "0x0000000000000000000000000000000000000000" as any);
+      const blocked = "0x0000000000000000000000000000000000000000";
+      await eventManager.addEvent({ type: "connect", chainId: 1, address: blocked, callback } as any, blocked as any);
 
       expect(enqueueSpy.called).to.be.false;
       expect(callback.calledOnce).to.be.true;
