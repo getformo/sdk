@@ -1679,173 +1679,59 @@ describe("EventQueue", () => {
       expect(fetchStub.called).to.be.false;
     });
 
-    it("waits for a flush already on the wire before sending the rest", async () => {
-      // Keepalive bodies share one 64KB budget per page, so teardown must not
-      // put a second request on the wire beside the first: the pair can be
-      // rejected together. The buffer waits, then leaves on its own request.
+    it("sends the buffer even while another request is on the wire", async () => {
       useUniqueCryptoHashes();
       let release!: (value: Response) => void;
-      const inFlight = new Promise<Response>((r) => { release = r; });
-      const fetchStub = sinon.stub(fetchModule, "default").returns(inFlight as any);
+      const fetchStub = sinon
+        .stub(fetchModule, "default")
+        .returns(new Promise<Response>((r) => { release = r; }) as any);
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
         flushInterval: 10_000,
       });
 
-      // The first event goes out at once and stays unresolved; the second
-      // only buffers behind it.
       await eventQueue.enqueue(createMockEvent());
       await clock.tickAsync(0);
-      expect(fetchStub.callCount, "the first request is on the wire").to.equal(1);
+      expect(fetchStub.callCount, "the first request is unsettled").to.equal(1);
       await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
 
       eventQueue.close();
       await clock.tickAsync(0);
-      expect(
-        fetchStub.callCount,
-        "teardown adds nothing while the first request is unsettled"
-      ).to.equal(1);
 
-      fetchStub.returns(Promise.resolve(makeResponse(200, "OK")) as any);
+      expect(fetchStub.callCount, "teardown does not wait for it").to.equal(2);
       release(makeResponse(200, "OK"));
-      await clock.tickAsync(10);
-
-      expect(
-        fetchStub.callCount,
-        "the buffer leaves once the wire is free"
-      ).to.equal(2);
     });
 
-    it("waits for every unsettled request, not just the newest", async () => {
-      // A lifecycle drain can overlap an ordinary flush. If the newest
-      // settles first, teardown must still wait for the older one.
-      useUniqueCryptoHashes();
-      const releases: ((value: Response) => void)[] = [];
-      const fetchStub = sinon
-        .stub(fetchModule, "default")
-        .callsFake(() => new Promise<Response>((r) => releases.push(r)) as any);
-      eventQueue = new EventQueue("test-key", {
-        apiHost: "https://api.example.com",
-        flushInterval: 10_000,
-      });
-
-      await eventQueue.enqueue(createMockEvent());
-      await clock.tickAsync(0);
-      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
-      // A page-leave drain puts a second request on the wire beside the first.
-      void eventQueue.flush(undefined, true);
-      await clock.tickAsync(0);
-      expect(fetchStub.callCount, "two requests are unsettled").to.equal(2);
-
-      await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
-      eventQueue.close();
-      // The newer request settles; the first is still open.
-      releases[1](makeResponse(200, "OK"));
-      await clock.tickAsync(10);
-      expect(
-        fetchStub.callCount,
-        "teardown still waits for the older request"
-      ).to.equal(2);
-
-      releases[0](makeResponse(200, "OK"));
-      await clock.tickAsync(10);
-      expect(fetchStub.callCount, "and sends once the wire is free").to.equal(3);
-    });
-
-    it("answers the deferred buffer when consent goes while it waits", async () => {
-      // The deferred drain makes the consent call itself: clear() cannot
-      // empty a closed queue.
+    it("abandons unsent chunks when consent goes after close()", async () => {
+      // The chunks were spliced before the withdrawal, so only the sequence
+      // can stop them: an opt-in would otherwise let sendBatches post them.
       useUniqueCryptoHashes();
       let allowed = true;
-      let release!: (value: Response) => void;
-      const fetchStub = sinon
-        .stub(fetchModule, "default")
-        .returns(new Promise<Response>((r) => { release = r; }) as any);
-      eventQueue = new EventQueue("test-key", {
-        apiHost: "https://api.example.com",
-        flushInterval: 10_000,
-        canSend: () => allowed,
-      });
-
-      await eventQueue.enqueue(createMockEvent());
-      await clock.tickAsync(0);
-      const callback = sinon.stub();
-      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
-
-      eventQueue.close();
-      allowed = false;
-      release(makeResponse(200, "OK"));
-      await clock.tickAsync(10);
-
-      expect(fetchStub.callCount, "a withdrawn visitor sends nothing").to.equal(1);
-      expect(callback.calledOnce, "the callback is answered").to.be.true;
-      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
-      expect((eventQueue as any).queue, "and the buffer is empty").to.have.length(0);
-    });
-
-    it("keeps a withdrawal that happened while teardown waited", async () => {
-      // An opt-out reversed before the wire frees up must not let events
-      // that predate it pass the drain's consent check.
-      useUniqueCryptoHashes();
-      let allowed = true;
-      let release!: (value: Response) => void;
-      const fetchStub = sinon
-        .stub(fetchModule, "default")
-        .returns(new Promise<Response>((r) => { release = r; }) as any);
-      eventQueue = new EventQueue("test-key", {
-        apiHost: "https://api.example.com",
-        flushInterval: 10_000,
-        canSend: () => allowed,
-      });
-
-      await eventQueue.enqueue(createMockEvent());
-      await clock.tickAsync(0);
-      const callback = sinon.stub();
-      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
-
-      eventQueue.close();
-      // Withdrawn and granted again, both while the wire is busy.
-      allowed = false;
-      eventQueue.clear();
-      allowed = true;
-      release(makeResponse(200, "OK"));
-      await clock.tickAsync(10);
-
-      expect(
-        fetchStub.callCount,
-        "events that predate the withdrawal stay unsent"
-      ).to.equal(1);
-      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
-    });
-
-    it("does not queue behind a request that cannot use keepalive", async () => {
-      // An oversized event goes without keepalive, so it takes none of the
-      // budget: waiting for it would strand the teardown batch.
-      useUniqueCryptoHashes();
-      let release!: (value: Response) => void;
-      const fetchStub = sinon
-        .stub(fetchModule, "default")
-        .returns(new Promise<Response>((r) => { release = r; }) as any);
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",
         flushInterval: 10_000,
         maxQueueSize: 1024 * 1024,
       });
+      (eventQueue as any).canSend = () => allowed;
 
-      // Over the 64KB keepalive limit on its own.
-      await eventQueue.enqueue(createMockEvent({ properties: { big: "x".repeat(70_000) } }));
+      // Two oversized events, so the flush splits into two requests.
+      await eventQueue.enqueue(createMockEvent({ properties: { big: "x".repeat(40_000) } }));
       await clock.tickAsync(0);
-      expect(fetchStub.callCount, "the oversized event is on the wire").to.equal(1);
-      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      await eventQueue.enqueue(createMockEvent({ properties: { big: "y".repeat(40_000) } }));
+      await eventQueue.enqueue(createMockEvent({ properties: { big: "z".repeat(40_000) } }));
+      const before = fetchStub.callCount;
 
       eventQueue.close();
-      await clock.tickAsync(0);
+      allowed = false;
+      eventQueue.clear();
+      allowed = true;
+      await clock.tickAsync(50);
 
       expect(
-        fetchStub.callCount,
-        "the ordinary batch leaves at once"
-      ).to.equal(2);
-      release(makeResponse(200, "OK"));
+        fetchStub.callCount - before,
+        "at most the chunk already on the wire"
+      ).to.be.at.most(1);
     });
 
     it("sends the batch the timer was holding, then never fires that timer", async () => {

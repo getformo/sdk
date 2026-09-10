@@ -139,9 +139,6 @@ export class EventQueue implements IEventQueue {
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
   private closed = false;
-  // Unsettled keepalive requests. `pendingFlush` cannot answer "is anything
-  // on the wire?": it outlives its own resolution and names only the newest.
-  private inFlight = new Set<Promise<unknown>>();
   // Undoes the page-leave listeners installed in the constructor.
   private disposePageLeave: (() => void) | null = null;
 
@@ -235,10 +232,11 @@ export class EventQueue implements IEventQueue {
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
-    // A closed queue is terminal: no clearSeq bump, so chunks close() let
-    // finish are untouched. The buffer is still emptied, or a withdrawal
-    // reversed while teardown waits would let those events out.
+    // Terminal, but a withdrawal still invalidates: bump the sequence so
+    // chunks of a flush already in flight are abandoned rather than posted
+    // once consent returns, and empty what is buffered.
     if (this.closed) {
+      this.clearSeq++;
       this.dropBuffered(dropError("consent_withdrawn"));
       return;
     }
@@ -293,23 +291,16 @@ export class EventQueue implements IEventQueue {
       this.timer = null;
     }
     // Send the buffer before going inert, or a remount loses every event that
-    // has not met the batch timer. flush() still honours consent.
-    //
-    // One request at a time: keepalive bodies share a 64KB budget per page,
-    // so a second can push the pair over it. The buffer waits instead, and
-    // nothing can join it once closed. (allSettled is ES2020; this targets
-    // ES5 with no polyfill.)
-    const active = this.inFlight.size
-      ? Promise.all(Array.from(this.inFlight, (request) => request.then(noop, noop)))
-      : null;
-    if (this.queue.length && !active) void this.flush(undefined, true);
+    // has not met the batch timer. It runs before the closed flag so flush()
+    // can still act, and it honours consent. Waiting for a request already on
+    // the wire would be kinder to the page's keepalive budget, but it would
+    // hold accepted events across a window in which consent can change and
+    // the page can cancel the request; a rejected send only repeats the loss
+    // this method exists to stop.
+    if (this.queue.length) void this.flush(undefined, true);
     this.closed = true;
-    if (this.queue.length && active) {
-      void active.then(() => this.drainAtClose());
-    } else {
-      // Whatever a consent gate held back is answered, not silently forgotten.
-      this.dropBuffered(dropError("closed"));
-    }
+    // Whatever the consent gate held back is answered, not silently dropped.
+    this.dropBuffered(dropError("closed"));
     this.flushed = false;
     // Terminal: nothing can be accepted again, so nothing needs suppressing.
     this.payloadHashes.clear();
@@ -317,20 +308,6 @@ export class EventQueue implements IEventQueue {
       safeCall(this.disposePageLeave);
       this.disposePageLeave = null;
     }
-  }
-
-  /**
-   * The deferred half of close(): send the buffer once the wire is free.
-   * Consent is gated here because flush() would delegate to clear(), which
-   * cannot empty a closed queue.
-   */
-  private drainAtClose(): void {
-    if (!this.queue.length) return;
-    if (this.canSend && !this.canSend()) {
-      this.dropBuffered(dropError("consent_withdrawn"));
-      return;
-    }
-    void this.flush(undefined, true);
   }
 
   /** True once close() has run. Exposed for teardown assertions. */
@@ -530,15 +507,6 @@ export class EventQueue implements IEventQueue {
         // propagate as unhandled rejections to the host app
       });
 
-    // Track it until it settles, so close() waits for every request rather
-    // than the last one started. An oversized batch goes without keepalive
-    // (see splitIntoBatches) and takes none of the budget, so it is not
-    // tracked: a teardown batch must not queue behind it.
-    if (batches.some((batch) => batch.keepalive)) {
-      this.inFlight.add(request);
-      const settled = () => this.inFlight.delete(request);
-      void request.then(settled, settled);
-    }
     return (this.pendingFlush = request);
   }
 
