@@ -305,8 +305,11 @@ export class EventQueue implements IEventQueue {
     // pair over it and lose both. If a flush is already in flight the buffer
     // simply waits where it is and leaves on its own request afterwards;
     // nothing can join it, because a closed queue accepts nothing.
+    // Promise.all over settled-either-way promises, not Promise.allSettled:
+    // the package targets ES5 with the ES2015 library and ships no Promise
+    // polyfill, and allSettled arrived in ES2020 (Safari 13.1).
     const active = this.inFlight.size
-      ? Promise.allSettled(Array.from(this.inFlight))
+      ? Promise.all(Array.from(this.inFlight, (request) => request.then(noop, noop)))
       : null;
     if (this.queue.length && !active) void this.flush(undefined, true);
     this.closed = true;
