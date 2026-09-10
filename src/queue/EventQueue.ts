@@ -139,11 +139,12 @@ export class EventQueue implements IEventQueue {
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
   private closed = false;
-  // Flushes whose requests are still unsettled. `pendingFlush` keeps the last
-  // flush's promise even after it resolves, so it cannot answer "is anything
-  // on the wire right now?" - which is what close() needs to decide whether a
-  // second keepalive request would share the page's budget with a live one.
-  private inFlight = 0;
+  // Every flush whose request is still unsettled. `pendingFlush` cannot answer
+  // "is anything on the wire right now?": it keeps the last flush's promise
+  // after that promise resolves, and it names only the newest request when
+  // several overlap. close() needs both answers before it adds a request of
+  // its own, so it needs the set.
+  private inFlight = new Set<Promise<unknown>>();
   // Undoes the page-leave listeners installed in the constructor.
   private disposePageLeave: (() => void) | null = null;
 
@@ -304,11 +305,13 @@ export class EventQueue implements IEventQueue {
     // pair over it and lose both. If a flush is already in flight the buffer
     // simply waits where it is and leaves on its own request afterwards;
     // nothing can join it, because a closed queue accepts nothing.
-    const waitFor = this.queue.length && this.inFlight > 0 ? this.pendingFlush : null;
-    if (this.queue.length && !waitFor) void this.flush(undefined, true);
+    const active = this.inFlight.size
+      ? Promise.allSettled(Array.from(this.inFlight))
+      : null;
+    if (this.queue.length && !active) void this.flush(undefined, true);
     this.closed = true;
-    if (waitFor) {
-      void waitFor.catch(noop).then(() => this.flush(undefined, true));
+    if (this.queue.length && active) {
+      void active.then(() => this.drainAtClose());
     } else {
       // Whatever a consent gate held back is answered, not silently forgotten.
       this.dropBuffered(dropError("closed"));
@@ -320,6 +323,23 @@ export class EventQueue implements IEventQueue {
       safeCall(this.disposePageLeave);
       this.disposePageLeave = null;
     }
+  }
+
+  /**
+   * The deferred half of close(): send the buffer once the wire is free.
+   *
+   * Consent can be withdrawn while close() waits. flush() would notice and
+   * call clear(), but clear() is inert on a closed queue, so the events would
+   * sit in the buffer forever with their callbacks unanswered. Gate here
+   * instead, where the drop can still be reported.
+   */
+  private drainAtClose(): void {
+    if (!this.queue.length) return;
+    if (this.canSend && !this.canSend()) {
+      this.dropBuffered(dropError("consent_withdrawn"));
+      return;
+    }
+    void this.flush(undefined, true);
   }
 
   /** True once close() has run. Exposed for teardown assertions. */
@@ -496,10 +516,8 @@ export class EventQueue implements IEventQueue {
     // Split into chunks that fit within the browser's 64KB keepalive limit.
     const batches = this.splitIntoBatches(items, data);
 
-    this.inFlight++;
-    return (this.pendingFlush = this.sendBatches(batches, data, clearSeqAtFlush)
+    const request = this.sendBatches(batches, data, clearSeqAtFlush)
       .then((firstError) => {
-        this.inFlight--;
         if (firstError) {
           safeCall(callback, firstError, data);
           if (typeof this.errorHandler === "function") {
@@ -511,7 +529,6 @@ export class EventQueue implements IEventQueue {
         return Promise.resolve(data);
       })
       .catch((err) => {
-        this.inFlight--;
         // Defensive: should not be reachable since sendBatches catches
         // all errors internally, but guard against unexpected failures.
         safeCall(callback, err, data);
@@ -520,7 +537,14 @@ export class EventQueue implements IEventQueue {
         }
         // Do NOT re-throw — analytics errors should never
         // propagate as unhandled rejections to the host app
-      }));
+      });
+
+    // Remember the request until it settles, so close() can wait for every
+    // one of them rather than for whichever was started last.
+    this.inFlight.add(request);
+    const settled = () => this.inFlight.delete(request);
+    void request.then(settled, settled);
+    return (this.pendingFlush = request);
   }
 
   /**

@@ -1717,6 +1717,74 @@ describe("EventQueue", () => {
       ).to.equal(2);
     });
 
+    it("waits for every unsettled request, not just the newest", async () => {
+      // Two requests can be on the wire at once: a lifecycle drain overlapping
+      // an ordinary flush. If the newest settles first, teardown must still
+      // wait for the older one before adding a body to the shared budget.
+      useUniqueCryptoHashes();
+      const releases: ((value: Response) => void)[] = [];
+      const fetchStub = sinon
+        .stub(fetchModule, "default")
+        .callsFake(() => new Promise<Response>((r) => releases.push(r)) as any);
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushInterval: 10_000,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(0);
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+      // A page-leave drain puts a second request on the wire beside the first.
+      void eventQueue.flush(undefined, true);
+      await clock.tickAsync(0);
+      expect(fetchStub.callCount, "two requests are unsettled").to.equal(2);
+
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 3 } }));
+      eventQueue.close();
+      // The newer request settles; the first is still open.
+      releases[1](makeResponse(200, "OK"));
+      await clock.tickAsync(10);
+      expect(
+        fetchStub.callCount,
+        "teardown still waits for the older request"
+      ).to.equal(2);
+
+      releases[0](makeResponse(200, "OK"));
+      await clock.tickAsync(10);
+      expect(fetchStub.callCount, "and sends once the wire is free").to.equal(3);
+    });
+
+    it("answers the deferred buffer when consent goes while it waits", async () => {
+      // clear() is inert on a closed queue, so the deferred drain has to make
+      // the consent decision itself or the events are stranded unanswered.
+      useUniqueCryptoHashes();
+      let allowed = true;
+      let release!: (value: Response) => void;
+      const fetchStub = sinon
+        .stub(fetchModule, "default")
+        .returns(new Promise<Response>((r) => { release = r; }) as any);
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushInterval: 10_000,
+        canSend: () => allowed,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(0);
+      const callback = sinon.stub();
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
+
+      eventQueue.close();
+      allowed = false;
+      release(makeResponse(200, "OK"));
+      await clock.tickAsync(10);
+
+      expect(fetchStub.callCount, "a withdrawn visitor sends nothing").to.equal(1);
+      expect(callback.calledOnce, "the callback is answered").to.be.true;
+      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+      expect((eventQueue as any).queue, "and the buffer is empty").to.have.length(0);
+    });
+
     it("sends the batch the timer was holding, then never fires that timer", async () => {
       useUniqueCryptoHashes();
       const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
