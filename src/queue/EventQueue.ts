@@ -273,12 +273,23 @@ export class EventQueue implements IEventQueue {
    * instance may be destroyed while the continuation is in flight. Enforcing
    * it here means no holder of a stale reference can ever send.
    *
-   * What close() deliberately does NOT stop is a flush already in flight.
-   * Those events were accepted while the instance was alive, so they are
-   * real data; abandoning them would turn every unmount into silent loss.
+   * What close() deliberately does NOT stop is a flush already in flight, nor
+   * the buffer it is handed. Those events were accepted while the instance
+   * was alive, so they are real data; abandoning them would turn every
+   * unmount into silent loss.
    */
   close(): void {
     if (this.closed) return;
+    // Send what is buffered before going inert. A teardown is not a reason to
+    // discard accepted events: an app that re-creates the SDK (a changed
+    // option, a framework remount) would otherwise lose everything that had
+    // not yet met the batch timer, and autocaptured events carry no callback
+    // to even report the loss. This is the page-leave path: drain the buffer
+    // into one keepalive request and do not await it. flush() still honours
+    // consent, so a withdrawn visitor sends nothing. It must run before the
+    // closed flag, which makes the queue inert, and it empties the buffer
+    // synchronously, so the drop below only answers what a gate held back.
+    if (this.queue.length) void this.flush(undefined, true);
     this.closed = true;
     // Drop work that has not entered a flush, but do not advance clearSeq:
     // sendBatches uses that sequence specifically for consent/reset

@@ -275,7 +275,10 @@ describe("EventQueue", () => {
         expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
       });
 
-      it("answers buffered callbacks with the closed code on close()", async () => {
+      it("delivers buffered events on close(), answering their callbacks", async () => {
+        // A teardown is not a reason to discard accepted events, so close()
+        // sends what is buffered and the callback reports delivery. The
+        // `closed` code is for what arrives after that point (next test).
         eventQueue = new EventQueue("test-key", {
           apiHost: "https://api.example.com",
           flushAt: 20,
@@ -287,9 +290,10 @@ describe("EventQueue", () => {
         await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
 
         eventQueue.close();
+        await (eventQueue as any).pendingFlush;
 
         expect(callback.calledOnce).to.be.true;
-        expect(callback.firstCall.args[0].code).to.equal("closed");
+        expect(callback.firstCall.args[0], "delivered, so no error").to.be.undefined;
       });
 
       it("answers the callback on a closed queue", async () => {
@@ -1676,7 +1680,7 @@ describe("EventQueue", () => {
       expect(fetchStub.called).to.be.false;
     });
 
-    it("should stop a flush already scheduled on the batch timer", async () => {
+    it("sends the batch the timer was holding, then never fires that timer", async () => {
       useUniqueCryptoHashes();
       const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
       eventQueue = new EventQueue("test-key", {
@@ -1691,10 +1695,16 @@ describe("EventQueue", () => {
       await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
 
       eventQueue.close();
+      await clock.tickAsync(0);
+      const afterClose = fetchStub.callCount;
       await clock.tickAsync(30_000);
 
       expect(afterFirst).to.equal(1);
-      expect(fetchStub.callCount).to.equal(afterFirst);
+      expect(afterClose, "close() delivers what the timer was holding").to.equal(2);
+      expect(
+        fetchStub.callCount,
+        "and the cancelled timer adds nothing later"
+      ).to.equal(afterClose);
     });
 
     it("should let every chunk of an in-flight split flush finish", async () => {

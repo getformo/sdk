@@ -139,6 +139,103 @@ describe("Teardown closes the event queue", () => {
     ).to.include("connect");
   });
 
+  /**
+   * Names of the events these teardown-delivery tests raise, in wire order.
+   * A track carries its name in `event`, an autocaptured connect in `type`;
+   * both are matched by name so an event leaked by another spec (issue #338)
+   * cannot be counted here.
+   */
+  const delivered = (sent: { stub: sinon.SinonStub }): string[] =>
+    sent.stub.args
+      .flatMap((call: any) => {
+        try {
+          return JSON.parse(call?.[1]?.body ?? "[]");
+        } catch {
+          return [];
+        }
+      })
+      .filter((e: any) => e?.type === "connect" || e?.event === "custom-event")
+      .map((e: any) => e.event ?? e.type);
+
+  /**
+   * The queue sends the first event of a page load immediately and batches
+   * from then on, so a warm-up event is what puts the queue into its batching
+   * state. Everything raised after it stays in the buffer until a rule fires.
+   */
+  const warmUp = async (formo: any, sent: any) => {
+    await formo.track("custom-event", { warmUp: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(delivered(sent).length, "the first event goes out on its own").to.equal(1);
+  };
+
+  it("delivers events still buffered when cleanup() runs", async () => {
+    // The shape found by the browser run of the Solana example: the app
+    // changes an option (its cluster), the provider re-creates the SDK, and
+    // the connect raised a moment earlier was still in the buffer. Teardown
+    // must send it, not discard it.
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      // High enough that nothing leaves on its own: only cleanup() can send.
+      flushAt: 50,
+      flushInterval: 60_000,
+    } as any);
+    const sent = watchWire();
+    await warmUp(formo, sent);
+
+    await formo.connect({ chainId: 1, address: ADDRESS as `0x${string}` });
+    await formo.track("custom-event", { a: 1 });
+    expect(delivered(sent).length, "nothing has met the batch rules yet").to.equal(1);
+
+    formo.cleanup();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(delivered(sent), "buffered events survive teardown").to.deep.equal([
+      "custom-event",
+      "connect",
+      "custom-event",
+    ]);
+  });
+
+  it("answers the callback of a buffered event that teardown delivered", async () => {
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      flushAt: 50,
+      flushInterval: 60_000,
+    } as any);
+    const sent = watchWire();
+    await warmUp(formo, sent);
+    const answered: unknown[] = [];
+
+    await formo.track("custom-event", { a: 1 }, undefined, (error: unknown) =>
+      answered.push(error)
+    );
+    formo.cleanup();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(answered.length, "the callback is answered once").to.equal(1);
+    expect(answered[0], "delivered, so no error").to.be.undefined;
+  });
+
+  it("sends nothing buffered when consent was withdrawn before cleanup()", async () => {
+    const formo = await FormoAnalytics.init("test-write-key", {
+      tracking: true,
+      flushAt: 50,
+      flushInterval: 60_000,
+    } as any);
+    const sent = watchWire();
+    await warmUp(formo, sent);
+
+    await formo.track("custom-event", { a: 1 });
+    formo.optOutTracking();
+    formo.cleanup();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(
+      delivered(sent).length,
+      "an opted-out visitor sends nothing more at teardown"
+    ).to.equal(1);
+  });
+
   it("releases the queue's page-leave listeners on cleanup()", async () => {
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
     const queue = (formo as any).eventManager.eventQueue;
