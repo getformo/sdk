@@ -1,4 +1,5 @@
 import { FormoAnalytics } from "../src/FormoAnalytics";
+import * as fetchModule from "../src/fetch";
 
 /**
  * Mocha root hooks: clean up every SDK instance a test creates.
@@ -34,6 +35,13 @@ export const mochaHooks = {
   },
 
   afterEach() {
+    // cleanup() now delivers whatever an instance still had buffered. This
+    // hook runs after the spec's own afterEach, so its fetch stub is already
+    // restored: stub again here, or a leaked instance's teardown reaches the
+    // network and its retry timers run on into later specs.
+    const realFetch = (fetchModule as { default: unknown }).default;
+    (fetchModule as { default: unknown }).default = async () =>
+      ({ ok: true, status: 200, statusText: "OK", text: async () => "" }) as Response;
     while (live.length) {
       try {
         live.pop()?.cleanup();
@@ -42,6 +50,7 @@ export const mochaHooks = {
         // failed teardown must not mask the test's own result.
       }
     }
+    (fetchModule as { default: unknown }).default = realFetch;
   },
 
   afterAll() {

@@ -23,6 +23,9 @@ type QueueItem = {
   // exactly its own entry and not a newer one for the same key. See
   // releaseFingerprints.
   dedupKey: string;
+  // Consent generation at acceptance. A later withdrawal invalidates this
+  // item even when the flush that carries it started afterwards.
+  consentGen: number;
   dedupToken: number;
   // Serialized size of this item, computed once at enqueue so the queue
   // byte total can be tracked incrementally (avoids an O(n) re-serialize
@@ -380,6 +383,7 @@ export class EventQueue implements IEventQueue {
       callback: cb,
       dedupKey,
       dedupToken: this.acceptanceSeq,
+      consentGen: consentGeneration(this.writeKey),
       byteSize: 0,
     };
     // Measure once here (message only — JSON.stringify drops the
@@ -466,16 +470,29 @@ export class EventQueue implements IEventQueue {
       }
     }
 
-    const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
+    const spliced = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
+    // An item accepted before a withdrawal never goes, even if consent has
+    // since been granted again and this flush started under the new one.
+    const now = consentGeneration(this.writeKey);
+    const items: QueueItem[] = [];
+    for (const item of spliced) {
+      if (item.consentGen === now) items.push(item);
+      else safeCall(item.callback, dropError("consent_withdrawn"), item.message, []);
+    }
 
     // Decrement the running byte total by exactly what left the queue. The
     // dedup hashes stay: they expire on their own clock, not on flush.
-    for (const item of items) {
+    for (const item of spliced) {
       this.queueByteSize -= item.byteSize;
     }
     // Re-anchor to the exact invariant when the queue empties, so any
     // accumulated drift can never wedge the size gate.
     if (this.queue.length === 0) this.queueByteSize = 0;
+
+    if (!items.length) {
+      safeCall(callback);
+      return Promise.resolve();
+    }
 
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();

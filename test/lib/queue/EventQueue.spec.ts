@@ -1764,6 +1764,33 @@ describe("EventQueue", () => {
       ).to.be.at.most(1);
     });
 
+    it("drops events accepted before a withdrawal that has since been reversed", async () => {
+      // The flush starts under the restored consent, so only the generation
+      // carried by each accepted item can tell that it predates the opt-out.
+      useUniqueCryptoHashes();
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("reversed-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 50,
+        flushInterval: 60_000,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(0);
+      const callback = sinon.stub();
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
+      const before = fetchStub.callCount;
+
+      // Another instance withdraws and restores consent, then this queue is
+      // torn down and tries to deliver what it still holds.
+      withdrawConsent("reversed-key");
+      eventQueue.close();
+      await clock.tickAsync(10);
+
+      expect(fetchStub.callCount, "nothing accepted before the opt-out goes").to.equal(before);
+      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+    });
+
     it("sends the batch the timer was holding, then never fires that timer", async () => {
       useUniqueCryptoHashes();
       const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
