@@ -239,8 +239,15 @@ export class EventQueue implements IEventQueue {
    */
   clear(): void {
     // A closed queue is terminal. In particular, a later clear() must not
-    // invalidate chunks that close() deliberately allowed to finish.
-    if (this.closed) return;
+    // invalidate chunks that close() deliberately allowed to finish, so it
+    // does not advance clearSeq or touch the lifecycle. It must still empty
+    // the buffer: close() can be waiting for the wire with events held, and
+    // a withdrawal that is reversed before that wait ends would otherwise
+    // leave them to pass a later consent check and go out.
+    if (this.closed) {
+      this.dropBuffered(dropError("consent_withdrawn"));
+      return;
+    }
     this.clearSeq++;
     // Start a fresh queue lifecycle. A post-clear event should get the same
     // immediate-send treatment as the first event on page load, and it must
@@ -543,10 +550,16 @@ export class EventQueue implements IEventQueue {
       });
 
     // Remember the request until it settles, so close() can wait for every
-    // one of them rather than for whichever was started last.
-    this.inFlight.add(request);
-    const settled = () => this.inFlight.delete(request);
-    void request.then(settled, settled);
+    // one of them rather than for whichever was started last. Only requests
+    // that use keepalive are tracked: an oversized batch is sent without it
+    // (see splitIntoBatches), takes nothing from the budget close() is
+    // protecting, and can be cancelled with the page, so making a teardown
+    // batch queue behind it would strand exactly what this is here to save.
+    if (batches.some((batch) => batch.keepalive)) {
+      this.inFlight.add(request);
+      const settled = () => this.inFlight.delete(request);
+      void request.then(settled, settled);
+    }
     return (this.pendingFlush = request);
   }
 

@@ -1785,6 +1785,74 @@ describe("EventQueue", () => {
       expect((eventQueue as any).queue, "and the buffer is empty").to.have.length(0);
     });
 
+    it("keeps a withdrawal that happened while teardown waited", async () => {
+      // clear() cannot advance the lifecycle on a closed queue, but it must
+      // still empty the buffer: an opt-out reversed before the wire frees up
+      // would otherwise leave events that predate it to pass the drain's
+      // consent check and go out.
+      useUniqueCryptoHashes();
+      let allowed = true;
+      let release!: (value: Response) => void;
+      const fetchStub = sinon
+        .stub(fetchModule, "default")
+        .returns(new Promise<Response>((r) => { release = r; }) as any);
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushInterval: 10_000,
+        canSend: () => allowed,
+      });
+
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(0);
+      const callback = sinon.stub();
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
+
+      eventQueue.close();
+      // Withdrawn and granted again, both while the wire is busy.
+      allowed = false;
+      eventQueue.clear();
+      allowed = true;
+      release(makeResponse(200, "OK"));
+      await clock.tickAsync(10);
+
+      expect(
+        fetchStub.callCount,
+        "events that predate the withdrawal stay unsent"
+      ).to.equal(1);
+      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
+    });
+
+    it("does not queue behind a request that cannot use keepalive", async () => {
+      // An oversized single event is sent without keepalive, so it takes
+      // nothing from the budget the teardown wait protects. Waiting for it
+      // would strand the batch that this path exists to deliver.
+      useUniqueCryptoHashes();
+      let release!: (value: Response) => void;
+      const fetchStub = sinon
+        .stub(fetchModule, "default")
+        .returns(new Promise<Response>((r) => { release = r; }) as any);
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushInterval: 10_000,
+        maxQueueSize: 1024 * 1024,
+      });
+
+      // Over the 64KB keepalive limit on its own.
+      await eventQueue.enqueue(createMockEvent({ properties: { big: "x".repeat(70_000) } }));
+      await clock.tickAsync(0);
+      expect(fetchStub.callCount, "the oversized event is on the wire").to.equal(1);
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+
+      eventQueue.close();
+      await clock.tickAsync(0);
+
+      expect(
+        fetchStub.callCount,
+        "the ordinary batch leaves at once"
+      ).to.equal(2);
+      release(makeResponse(200, "OK"));
+    });
+
     it("sends the batch the timer was holding, then never fires that timer", async () => {
       useUniqueCryptoHashes();
       const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
