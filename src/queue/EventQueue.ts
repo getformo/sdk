@@ -6,7 +6,7 @@ import {
   getActionDescriptor,
   hash,
   millisecondsToSecond,
-  toDateHourMinute, stableStringify } from "../utils";
+  toDateHourMinute, stableStringify, consentGeneration } from "../utils";
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch, { FetchRetryError } from "../fetch";
@@ -437,6 +437,9 @@ export class EventQueue implements IEventQueue {
     // Capture before any wait. A pre-clear waiter belongs to the old queue
     // lifecycle and must never resume into events accepted after clear().
     const clearSeqAtFlush = this.clearSeq;
+    // Consent belongs to the write key, not to this instance: a withdrawal
+    // made through a replacement SDK never reaches our clear().
+    const consentAtFlush = consentGeneration(this.writeKey);
     if (this.pendingFlush) {
       // During page leave (drainAll), skip awaiting the pending flush.
       // Browser lifecycle events (pagehide/beforeunload) do not wait for
@@ -484,7 +487,7 @@ export class EventQueue implements IEventQueue {
     // Split into chunks that fit within the browser's 64KB keepalive limit.
     const batches = this.splitIntoBatches(items, data);
 
-    const request = this.sendBatches(batches, data, clearSeqAtFlush)
+    const request = this.sendBatches(batches, data, clearSeqAtFlush, consentAtFlush)
       .then((firstError) => {
         if (firstError) {
           safeCall(callback, firstError, data);
@@ -579,7 +582,8 @@ export class EventQueue implements IEventQueue {
   private async sendBatches(
     batches: Batch[],
     allData: IFormoEventFlushPayload[],
-    clearSeqAtFlush: number
+    clearSeqAtFlush: number,
+    consentAtFlush: number
   ): Promise<Error | undefined> {
     let firstError: Error | undefined;
 
@@ -593,7 +597,8 @@ export class EventQueue implements IEventQueue {
       // in the gap counts even if consent is back: these items predate it.
       if (
         (this.canSend && !this.canSend()) ||
-        this.clearSeq !== clearSeqAtFlush
+        this.clearSeq !== clearSeqAtFlush ||
+        consentGeneration(this.writeKey) !== consentAtFlush
       ) {
         // Report the drop to every abandoned item and to the flush. Silence
         // here read as success.

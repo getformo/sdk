@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { EventQueue } from "../../../src/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
 import * as fetchModule from "../../../src/fetch";
+import { withdrawConsent } from "../../../src/utils/consent";
 import { logger } from "../../../src/logger/Logger";
 
 describe("EventQueue", () => {
@@ -1731,6 +1732,35 @@ describe("EventQueue", () => {
       expect(
         fetchStub.callCount - before,
         "at most the chunk already on the wire"
+      ).to.be.at.most(1);
+    });
+
+    it("abandons chunks when another instance withdraws consent", async () => {
+      // Consent belongs to the write key. A withdrawal made through a
+      // replacement SDK never reaches this queue's clear(), so the shared
+      // generation is what stops its remaining chunks.
+      useUniqueCryptoHashes();
+      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
+      eventQueue = new EventQueue("shared-key", {
+        apiHost: "https://api.example.com",
+        flushInterval: 10_000,
+        maxQueueSize: 1024 * 1024,
+      });
+
+      // Three oversized events, so the flush posts several chunks in turn.
+      await eventQueue.enqueue(createMockEvent({ properties: { big: "x".repeat(40_000) } }));
+      await clock.tickAsync(0);
+      await eventQueue.enqueue(createMockEvent({ properties: { big: "y".repeat(40_000) } }));
+      await eventQueue.enqueue(createMockEvent({ properties: { big: "z".repeat(40_000) } }));
+      const before = fetchStub.callCount;
+
+      void eventQueue.flush(undefined, true);
+      withdrawConsent("shared-key");
+      await clock.tickAsync(50);
+
+      expect(
+        fetchStub.callCount - before,
+        "at most the chunk already dispatched"
       ).to.be.at.most(1);
     });
 
