@@ -36,7 +36,13 @@ export const mochaHooks = {
   afterEach() {
     while (live.length) {
       try {
-        live.pop()?.cleanup();
+        const instance = live.pop();
+        // cleanup() now delivers whatever is still buffered. This hook runs
+        // after the spec restored its own fetch stub, so empty the buffer
+        // first: a leaked instance must not reach the network or leave retry
+        // timers running into later specs.
+        (instance as unknown as { eventManager?: { clear(): void } })?.eventManager?.clear();
+        instance?.cleanup();
       } catch {
         // A spec may have stubbed the instance into an unusable shape; a
         // failed teardown must not mask the test's own result.

@@ -232,10 +232,14 @@ export class EventQueue implements IEventQueue {
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
-    // A closed queue is terminal. In particular, a later clear() must not
-    // invalidate chunks that close() deliberately allowed to finish.
-    if (this.closed) return;
     this.clearSeq++;
+    // A closed queue keeps no lifecycle to reset, but the withdrawal still
+    // counts: the bump above abandons the unsent chunks of a flush in
+    // flight, and the buffer is emptied here.
+    if (this.closed) {
+      this.dropBuffered(dropError("consent_withdrawn"));
+      return;
+    }
     // Start a fresh queue lifecycle. A post-clear event should get the same
     // immediate-send treatment as the first event on page load, and it must
     // not wait on a request that belongs to the abandoned lifecycle.
@@ -273,21 +277,28 @@ export class EventQueue implements IEventQueue {
    * instance may be destroyed while the continuation is in flight. Enforcing
    * it here means no holder of a stale reference can ever send.
    *
-   * What close() deliberately does NOT stop is a flush already in flight.
-   * Those events were accepted while the instance was alive, so they are
-   * real data; abandoning them would turn every unmount into silent loss.
+   * What close() deliberately does NOT stop is a flush already in flight, nor
+   * the buffer it sends first: those events were accepted while the instance
+   * was alive, and dropping them makes every unmount a silent loss.
    */
   close(): void {
     if (this.closed) return;
-    this.closed = true;
-    // Drop work that has not entered a flush, but do not advance clearSeq:
-    // sendBatches uses that sequence specifically for consent/reset
-    // invalidation, whereas chunks already spliced by an in-flight flush are
-    // accepted work and must finish during terminal teardown.
+    // clearSeq is not advanced: it invalidates on consent/reset, and chunks
+    // already spliced by a flush are accepted work that must finish.
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    // Send the buffer before going inert, or a remount loses every event that
+    // has not met the batch timer. It runs before the closed flag so flush()
+    // can still act, and it honours consent. Waiting for a request already on
+    // the wire would be kinder to the page's keepalive budget, but it would
+    // hold accepted events across a window in which consent can change and
+    // the page can cancel the request; a rejected send only repeats the loss
+    // this method exists to stop.
+    if (this.queue.length) void this.flush(undefined, true);
+    this.closed = true;
+    // Whatever the consent gate held back is answered, not silently dropped.
     this.dropBuffered(dropError("closed"));
     this.flushed = false;
     // Terminal: nothing can be accepted again, so nothing needs suppressing.
@@ -472,7 +483,7 @@ export class EventQueue implements IEventQueue {
     // Split into chunks that fit within the browser's 64KB keepalive limit.
     const batches = this.splitIntoBatches(items, data);
 
-    return (this.pendingFlush = this.sendBatches(batches, data, clearSeqAtFlush)
+    const request = this.sendBatches(batches, data, clearSeqAtFlush)
       .then((firstError) => {
         if (firstError) {
           safeCall(callback, firstError, data);
@@ -493,7 +504,9 @@ export class EventQueue implements IEventQueue {
         }
         // Do NOT re-throw — analytics errors should never
         // propagate as unhandled rejections to the host app
-      }));
+      });
+
+    return (this.pendingFlush = request);
   }
 
   /**
