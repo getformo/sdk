@@ -7,6 +7,57 @@
  * @see https://github.com/solana-foundation/framework-kit
  */
 
+import type { AutocaptureEventType } from "../tracking/TrackingPolicy";
+import type { TransactionStatus } from "../types/events";
+import type { WalletRestore } from "../wallet/WalletStateStore";
+
+/** A wallet in a Solana namespace: who, and on which cluster. */
+export interface SolanaConnection {
+  address: string;
+  chainId: number;
+}
+
+/**
+ * What a Solana capture path needs from the SDK that owns it.
+ *
+ * Both paths take this rather than the SDK class: it names the surface they
+ * use, it lets a test build one without the class, and it keeps the SDK from
+ * depending on this module and back again.
+ */
+export interface SolanaCaptureDeps {
+  isAutocaptureEnabled(eventType: AutocaptureEventType): boolean;
+  connect(
+    params: SolanaConnection,
+    properties: { providerName: string; rdns: string }
+  ): Promise<void>;
+  disconnect(params: SolanaConnection): Promise<void>;
+  chain(params: SolanaConnection): Promise<void>;
+  /**
+   * Put a still-connected wallet back after a disconnect cleared the Solana
+   * namespace, without taking the active slot from another namespace.
+   * @see FormoAnalytics.restoreWalletState
+   */
+  restoreWalletState(params: SolanaConnection): void;
+  /**
+   * A restore decided before `disconnect()` is awaited and written after.
+   * Refused if the namespace changed hands or was reset meanwhile.
+   * @see FormoAnalytics.deferWalletRestore
+   */
+  deferWalletRestore(chainId: number): WalletRestore;
+  /** The wallet held in the Solana namespace, active or not. */
+  solanaAddress(): string | undefined;
+}
+
+/** What the framework-kit store handler adds to the shared surface. */
+export interface SolanaStoreHandlerDeps extends SolanaCaptureDeps {
+  transaction(params: {
+    status: TransactionStatus;
+    chainId: number;
+    address: string;
+    transactionHash?: string;
+  }): Promise<void>;
+}
+
 /**
  * Solana cluster/network types
  * Solana doesn't use chainId like EVM, instead it uses cluster names

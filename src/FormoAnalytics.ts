@@ -42,7 +42,6 @@ import {
   Options,
   SignatureStatus,
   TransactionStatus,
-  WrappedRequestFunction,
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
 import { answerDropped } from "./utils/dropped";
@@ -60,7 +59,6 @@ import {
 } from "./provider";
 import { EvmEventTracker } from "./evm/EvmEventTracker";
 import { EvmRequestTracker } from "./evm/EvmRequestTracker";
-import { parseChainId } from "./utils/chain";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
@@ -69,9 +67,6 @@ import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
 
 
-/**
- * Constants for provider switching reasons
- */
 export class FormoAnalytics implements IFormoAnalytics {
   // Per-chain namespace state - isolates EVM and Solana connection state
   /** Wallet identity, chain state and the active-wallet cookie. */
@@ -93,10 +88,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.wallet.evmChainId;
   }
 
-  private _announcedConnect = new WeakMap<
-    EIP1193Provider,
-    { address: string; chainId: number }
-  >();
 
   private session: FormoAnalyticsSession;
   private eventManager: IEventManager;
@@ -108,9 +99,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   private evmRequests: EvmRequestTracker;
   /** Every "may we track this?" rule. See src/tracking/TrackingPolicy.ts. */
   private trackingPolicy: ITrackingPolicy;
-  // Cache for injected provider detection to avoid redundant operations
-  // Flag to prevent concurrent processing of accountsChanged events
-  // Set to efficiently track seen providers for deduplication and O(1) lookup
   /**
    * Wagmi event handler for tracking wallet events via Wagmi v2
    * Only initialized when options.wagmi is provided
@@ -144,7 +132,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** Page-hit hooks installed in trackPageHits() so cleanup() can undo them. */
   private _onPopStateListener?: (e: Event) => void;
   private _onLocationChangeListener?: (e: Event) => void;
-  private _pageHooksDisposed = false;
   private _pageGeneration = 0;
 
   config: Config;
@@ -499,7 +486,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     // history.pushState/replaceState wrappers so an orphaned instance (e.g.
     // from a re-mount in React Strict Mode / HMR) stops emitting page events
     // with stale state.
-    this._pageHooksDisposed = true;
     if (typeof window !== "undefined") {
       if (this._onPopStateListener) {
         window.removeEventListener("popstate", this._onPopStateListener);
@@ -726,12 +712,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     void this.evmEvents.detectWallets(this.evmEvents.detectableProviders());
   }
 
-
-  /** @see WalletStateStore.clearProvider */
-  private clearActiveProvider(): void {
-    this.wallet.clearProvider();
-  }
-
   /** @see WalletStateStore.backfill */
   private backfillActiveWallet(
     address: Address,
@@ -746,20 +726,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.wallet.clearStaleEvmWalletOnSwitchWhileSuppressed(address);
   }
 
-  /** @see EvmProviderRegistry.addListener */
-  private addProviderListener(
-    provider: EIP1193Provider,
-    event: string,
-    listener: (...args: unknown[]) => void
-  ): void {
-    this.evm.addListener(provider, event, listener);
-  }
-
-  /** @see EvmProviderRegistry.removeListeners */
-  private removeProviderListeners(provider: EIP1193Provider): void {
-    this.evm.removeListeners(provider);
-  }
-
   /** @see EvmProviderRegistry.infoFor */
   private getProviderInfo(provider: EIP1193Provider): {
     name: string;
@@ -768,13 +734,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.evm.infoFor(provider);
   }
 
-  /** @see EvmProviderRegistry.isWrapped */
-  private isProviderAlreadyWrapped(
-    provider: EIP1193Provider,
-    currentRequest: WrappedRequestFunction | undefined
-  ): boolean {
-    return this.evm.isWrapped(provider, currentRequest);
-  }
 
   /** @see EvmProviderRegistry.resolveChainId */
   private resolveChainIdForProvider(provider?: EIP1193Provider): number {
@@ -796,12 +755,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.evm.addressOf(provider);
   }
 
-  /** @see EvmProviderRegistry.accountsOf */
-  private async getAccounts(
-    provider?: EIP1193Provider
-  ): Promise<Address[] | null> {
-    return this.evm.accountsOf(provider);
-  }
 
   /**
    * Emits a chain network change event.
@@ -1419,10 +1372,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   */
 
   /**
-   * Opt out of tracking.
-   * @returns {void}
-   */
-  /**
    * Whether an event carrying this chain would currently be sent.
    *
    * Exposed for integrations that keep their own "already reported" state.
@@ -1435,6 +1384,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.shouldTrack(chainId);
   }
 
+  /** Stop tracking this visitor, and forget the identity already collected. */
   public optOutTracking(): void {
     logger.info("Opting out of tracking");
 
@@ -1499,21 +1449,6 @@ export class FormoAnalytics implements IFormoAnalytics {
   /*
     SDK tracking and event listener functions
   */
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
   private async onLocationChange(): Promise<void> {
     if (this._currentUrl !== window.location.href) {
@@ -1601,7 +1536,7 @@ export class FormoAnalytics implements IFormoAnalytics {
       // between scheduling and firing (e.g. provider remount in React Strict
       // Mode / HMR). Otherwise the orphan instance would queue a page event
       // here with its stale, never-populated `currentAddress`.
-      if (this._pageHooksDisposed || generation !== this._pageGeneration) return;
+      if (this.isCleanedUp || generation !== this._pageGeneration) return;
       (async () => {
         try {
           await this.trackEvent(
@@ -1691,8 +1626,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     Utility functions
   */
 
-
-
   get providers(): readonly EIP6963ProviderDetail[] {
     return this.evm.all;
   }
@@ -1722,86 +1655,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     return this.solanaManager;
   }
 
-
-
-
-
-
-
-  private async getCurrentChainId(provider?: EIP1193Provider): Promise<number> {
-    const p = provider || this.provider;
-    if (!p) {
-      logger.error("Provider not set for chain ID");
-      return 0;
-    }
-
-    let chainIdHex;
-    try {
-      chainIdHex = await p.request<string>({
-        method: "eth_chainId",
-      });
-      if (!chainIdHex) {
-        logger.info("Chain id not found");
-        return 0;
-      }
-      return parseChainId(chainIdHex);
-    } catch (err) {
-      logger.error("eth_chainId threw an error:", err);
-      return 0;
-    }
-  }
-
-
-
-
-
-
-
-  // Explicitly untrack a provider: remove listeners, clear wrapper flag
-  // and tracking
-
-  /**
-   * Track an EIP-1193 provider the page constructed itself.
-   *
-   * Discovery covers EIP-6963 announcements and `window.ethereum`, which is
-   * every injected wallet and nothing else. WalletConnect and Ledger
-   * providers are built by the app (`EthereumProvider.init(...)`) and
-   * announce nothing, so their sessions were invisible: connects,
-   * signatures, and transactions all silently missing. Hand the provider
-   * here once it exists and it takes the exact pipeline a discovered
-   * provider takes - detect event, lifecycle listeners, request wrapper -
-   * and a session that is already live is adopted from the provider's
-   * synchronous state.
-   *
-   * Metadata resolution order: the caller's `info` overrides win; then a
-   * WalletConnect session's peer metadata, which names the REAL wallet on
-   * the far side of the transport (for example "Ledger Live"); then flag
-   * sniffing; then a generic fallback. One deliberate exception: a caller
-   * name of exactly "WalletConnect" is the generic transport name, so the
-   * live peer still replaces it on events - name the provider anything
-   * else to pin it verbatim.
-   *
-   * No-op outside the EIP-1193 path: in wagmi mode the connector system
-   * already tracks these sessions, and wrapping the same provider twice
-   * would double-report every event.
-   *
-   * With several live SDK instances (multi write-key pages) registering
-   * the SAME provider, request-derived events (signatures, transactions)
-   * go to the most recently CREATED live instance, regardless of the
-   * order registrations happen to land in - the same single-observer
-   * semantics discovery has always had for the request wrapper. Lifecycle events (connect, chain, disconnect) reach every
-   * instance. Fanning request observations out to all instances is a
-   * separate feature.
-   *
-   * @returns true when the provider is (now) tracked, false when it was
-   * refused (wagmi mode, EVM disabled, or not a valid EIP-1193 provider).
-   *
-   * @example
-   * ```typescript
-   * const wcProvider = await EthereumProvider.init({ projectId, chains });
-   * formo.registerProvider(wcProvider);
-   * ```
-   */
   /**
    * INTERNAL. Install the request wrapper on a wagmi connector's provider.
    *
@@ -1857,6 +1710,48 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
   }
 
+  /**
+   * Track an EIP-1193 provider the page constructed itself.
+   *
+   * Discovery covers EIP-6963 announcements and `window.ethereum`, which is
+   * every injected wallet and nothing else. WalletConnect and Ledger
+   * providers are built by the app (`EthereumProvider.init(...)`) and
+   * announce nothing, so their sessions were invisible: connects,
+   * signatures, and transactions all silently missing. Hand the provider
+   * here once it exists and it takes the exact pipeline a discovered
+   * provider takes - detect event, lifecycle listeners, request wrapper -
+   * and a session that is already live is adopted from the provider's
+   * synchronous state.
+   *
+   * Metadata resolution order: the caller's `info` overrides win; then a
+   * WalletConnect session's peer metadata, which names the REAL wallet on
+   * the far side of the transport (for example "Ledger Live"); then flag
+   * sniffing; then a generic fallback. One deliberate exception: a caller
+   * name of exactly "WalletConnect" is the generic transport name, so the
+   * live peer still replaces it on events - name the provider anything
+   * else to pin it verbatim.
+   *
+   * No-op outside the EIP-1193 path: in wagmi mode the connector system
+   * already tracks these sessions, and wrapping the same provider twice
+   * would double-report every event.
+   *
+   * With several live SDK instances (multi write-key pages) registering
+   * the SAME provider, request-derived events (signatures, transactions)
+   * go to the most recently CREATED live instance, regardless of the
+   * order registrations happen to land in - the same single-observer
+   * semantics discovery has always had for the request wrapper. Lifecycle events (connect, chain, disconnect) reach every
+   * instance. Fanning request observations out to all instances is a
+   * separate feature.
+   *
+   * @returns true when the provider is (now) tracked, false when it was
+   * refused (wagmi mode, EVM disabled, or not a valid EIP-1193 provider).
+   *
+   * @example
+   * ```typescript
+   * const wcProvider = await EthereumProvider.init({ projectId, chains });
+   * formo.registerProvider(wcProvider);
+   * ```
+   */
   public registerProvider(
     provider: EIP1193Provider,
     info?: { name?: string; rdns?: string; icon?: `data:image/${string}` }
@@ -1938,18 +1833,5 @@ export class FormoAnalytics implements IFormoAnalytics {
   } {
     return { ...this.evm.counts, activeProvider: !!this._provider };
   }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }

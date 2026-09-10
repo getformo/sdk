@@ -32,8 +32,10 @@ import { SolanaStoreHandler } from "./SolanaStoreHandler";
 import { SolanaWalletStandardRegistry } from "./SolanaWalletStandardRegistry";
 import {
   SOLANA_CLUSTERS_BY_ID,
+  SolanaCaptureDeps,
   SolanaCluster,
   SolanaOptions,
+  SolanaStoreHandlerDeps,
 } from "./types";
 import { SolanaClientStore } from "./storeTypes";
 
@@ -70,11 +72,9 @@ export class SolanaManager {
     }
     this.registry = new SolanaWalletStandardRegistry(
       {
-        isAutocaptureEnabled: (t) => this.formo.isAutocaptureEnabled(t),
+        ...this.captureDeps(),
         willTrackEvent: (chainId) => this.formo.willTrackEvent(chainId),
         detect: (params) => this.formo.detect(params),
-        connect: (params, properties) =>
-          this.formo.connect(params, properties),
         // A registry disconnect clears the Solana namespace once its event
         // is built. If the store's wallet held the slot, put it back.
         disconnect: (params) => {
@@ -84,7 +84,6 @@ export class SolanaManager {
             if (live && !this.formo.solanaAddress) restore(live);
           });
         },
-        chain: (params) => this.formo.chain(params),
         // Same hand-back as the disconnect wrapper, for the capture-off path.
         syncWalletState: (params) => {
           this.formo.syncWalletState(params);
@@ -92,21 +91,39 @@ export class SolanaManager {
           const live = this.storeHandler?.restorableConnection();
           if (live && !this.formo.solanaAddress) this.formo.restoreWalletState(live);
         },
-        restoreWalletState: (params) => this.formo.restoreWalletState(params),
-        deferWalletRestore: (chainId) => this.formo.deferWalletRestore(chainId),
         currentAddress: () => this.formo.currentAddress,
-        solanaAddress: () => this.formo.solanaAddress,
         ownsWalletEvents: () => !this.storeOwnsWalletEvents,
       },
       { cluster }
     );
   }
 
+  /**
+   * The SDK surface both capture paths share. Neither takes the SDK class
+   * itself: naming the surface keeps this module from depending on the class
+   * that owns it, and lets a test build one without it.
+   */
+  private captureDeps(): SolanaCaptureDeps {
+    return {
+      isAutocaptureEnabled: (type) => this.formo.isAutocaptureEnabled(type),
+      connect: (params, properties) => this.formo.connect(params, properties),
+      disconnect: (params) => this.formo.disconnect(params),
+      chain: (params) => this.formo.chain(params),
+      restoreWalletState: (params) => this.formo.restoreWalletState(params),
+      deferWalletRestore: (chainId) => this.formo.deferWalletRestore(chainId),
+      solanaAddress: () => this.formo.solanaAddress,
+    };
+  }
+
   private attachStore(
     store: SolanaClientStore,
     cluster?: SolanaCluster
   ): void {
-    this.storeHandler = new SolanaStoreHandler(this.formo, store, {
+    const deps: SolanaStoreHandlerDeps = {
+      ...this.captureDeps(),
+      transaction: (params) => this.formo.transaction(params),
+    };
+    this.storeHandler = new SolanaStoreHandler(deps, store, {
       cluster,
       // The registry reports until the store observes a connection, so it
       // must follow the store's endpoint in the meantime.
