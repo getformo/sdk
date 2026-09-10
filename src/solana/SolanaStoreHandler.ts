@@ -13,7 +13,6 @@
  * @see https://github.com/solana-foundation/framework-kit
  */
 
-import { FormoAnalytics } from "../FormoAnalytics";
 import { TransactionStatus } from "../types/events";
 import { logger } from "../logger";
 import type { WalletRestore } from "../wallet/WalletStateStore";
@@ -25,6 +24,7 @@ import {
 import {
   SOLANA_CHAIN_IDS,
   SolanaCluster,
+  SolanaStoreHandlerDeps,
   UnsubscribeFn,
   solanaWalletRdns,
 } from "./types";
@@ -47,7 +47,7 @@ function cleanupOldEntries(
 }
 
 export class SolanaStoreHandler {
-  private formo: FormoAnalytics;
+  private deps: SolanaStoreHandlerDeps;
   private store: SolanaClientStore;
   private unsubscribers: UnsubscribeFn[] = [];
   private cluster: SolanaCluster;
@@ -99,7 +99,7 @@ export class SolanaStoreHandler {
   }) => boolean;
 
   constructor(
-    formoAnalytics: FormoAnalytics,
+    deps: SolanaStoreHandlerDeps,
     store: SolanaClientStore,
     options?: {
       cluster?: SolanaCluster;
@@ -123,7 +123,7 @@ export class SolanaStoreHandler {
       ) => void;
     }
   ) {
-    this.formo = formoAnalytics;
+    this.deps = deps;
     this.store = store;
     this.explicitCluster = !!options?.cluster;
     this.beforeWalletConnect = options?.beforeWalletConnect;
@@ -167,9 +167,9 @@ export class SolanaStoreHandler {
     // must still leave later events on the cluster the wallet is on. A
     // namespace write only; a cluster change does not make a background
     // Solana wallet the active one over an EVM wallet that connected later.
-    this.formo.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
-    if (!this.formo.isAutocaptureEnabled("chain")) return;
-    this.formo.chain({ chainId: this.chainId, address: this.lastAddress }).catch((error) => {
+    this.deps.restoreWalletState({ address: this.lastAddress, chainId: this.chainId });
+    if (!this.deps.isAutocaptureEnabled("chain")) return;
+    this.deps.chain({ chainId: this.chainId, address: this.lastAddress }).catch((error) => {
       logger.error("SolanaStoreHandler: Error emitting chain event", error);
     });
   }
@@ -244,8 +244,8 @@ export class SolanaStoreHandler {
             chainId: this.chainId,
             rdns,
           }) ?? true;
-        if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
-          this.formo.connect(
+        if (shouldEmit && this.deps.isAutocaptureEnabled("connect")) {
+          this.deps.connect(
             { chainId: this.chainId, address },
             {
               providerName: connectorName,
@@ -258,7 +258,7 @@ export class SolanaStoreHandler {
         // Restorable only if central state accepted the write (the sync
         // above, or connect()'s own write before its first await); nothing
         // is learned while the visitor is suppressed.
-        this.restorable = this.formo.solanaAddress === address;
+        this.restorable = this.deps.solanaAddress() === address;
       }
     }
 
@@ -323,8 +323,8 @@ export class SolanaStoreHandler {
     const rdns = solanaWalletRdns(connectorName);
     const shouldEmit =
       this.beforeWalletConnect?.({ address, chainId, rdns }) ?? true;
-    if (shouldEmit && this.formo.isAutocaptureEnabled("connect")) {
-      this.formo.connect(
+    if (shouldEmit && this.deps.isAutocaptureEnabled("connect")) {
+      this.deps.connect(
         { chainId, address },
         {
           providerName: connectorName,
@@ -335,7 +335,7 @@ export class SolanaStoreHandler {
       });
     }
     // Restorable only if central state accepted the write, as at init.
-    this.restorable = this.formo.solanaAddress === address;
+    this.restorable = this.deps.solanaAddress() === address;
   }
 
   /**
@@ -365,9 +365,9 @@ export class SolanaStoreHandler {
     const departed = { address: this.lastAddress, chainId: this.lastChainId ?? this.chainId };
     // Taken before the await, so a reset() or a new session landing while
     // the event is built voids the hand-back.
-    const restore = this.formo.deferWalletRestore(departed.chainId);
-    if (this.formo.isAutocaptureEnabled("disconnect")) {
-      this.formo.disconnect(departed).then(
+    const restore = this.deps.deferWalletRestore(departed.chainId);
+    if (this.deps.isAutocaptureEnabled("disconnect")) {
+      this.deps.disconnect(departed).then(
         // disconnect() clears the namespace once the event is built; anyone
         // repopulating it must run after that.
         () => this.afterWalletDisconnect?.(departed, restore, true),
@@ -490,7 +490,7 @@ export class SolanaStoreHandler {
     this.processedTransactions.add(dedupeKey);
     cleanupOldEntries(this.processedTransactions);
 
-    if (!this.formo.isAutocaptureEnabled("transaction")) {
+    if (!this.deps.isAutocaptureEnabled("transaction")) {
       return;
     }
 
@@ -505,7 +505,7 @@ export class SolanaStoreHandler {
           // correctly even if the wallet disconnects before the tx settles.
           this.transactionSenders.set(key, { address, chainId });
 
-          this.formo.transaction({
+          this.deps.transaction({
             status: TransactionStatus.STARTED,
             chainId,
             address,
@@ -525,7 +525,7 @@ export class SolanaStoreHandler {
             this.transactionSenders.set(key, { address, chainId });
           }
           const sender = this.transactionSenders.get(key)!;
-          this.formo.transaction({
+          this.deps.transaction({
             status: TransactionStatus.BROADCASTED,
             chainId: sender.chainId,
             address: sender.address,
@@ -547,7 +547,7 @@ export class SolanaStoreHandler {
           signature,
         });
 
-        this.formo.transaction({
+        this.deps.transaction({
           status: TransactionStatus.CONFIRMED,
           chainId: txChainId,
           address: txAddress,
@@ -581,7 +581,7 @@ export class SolanaStoreHandler {
           prevStatus,
         });
 
-        this.formo.transaction({
+        this.deps.transaction({
           status,
           chainId: txChainId,
           address: txAddress,

@@ -32,12 +32,11 @@
  */
 
 import { logger } from "../logger";
-import type { WalletRestore } from "../wallet/WalletStateStore";
-import type { AutocaptureEventType } from "../tracking/TrackingPolicy";
 import { isBlockedSolanaAddress, isSolanaAddress } from "./address";
 import {
   DEFAULT_SOLANA_CHAIN_ID,
   SOLANA_CHAIN_IDS,
+  SolanaCaptureDeps,
   SolanaCluster,
   UnsubscribeFn,
   solanaWalletRdns,
@@ -64,16 +63,9 @@ const CLUSTER_BY_CHAIN: Record<string, SolanaCluster> = {
 };
 
 /** What the registry needs from the SDK that owns it. */
-export interface SolanaWalletStandardRegistryDeps {
-  isAutocaptureEnabled(eventType: AutocaptureEventType): boolean;
+export interface SolanaWalletStandardRegistryDeps extends SolanaCaptureDeps {
   willTrackEvent(chainId: number): boolean;
   detect(params: { providerName: string; rdns: string }): Promise<void>;
-  connect(
-    params: { chainId: number; address: string },
-    properties: { providerName: string; rdns: string }
-  ): Promise<void>;
-  disconnect(params: { chainId: number; address: string }): Promise<void>;
-  chain(params: { chainId: number; address: string }): Promise<void>;
   /**
    * Record wallet and chain state centrally WITHOUT emitting an event.
    *
@@ -85,22 +77,8 @@ export interface SolanaWalletStandardRegistryDeps {
    * @see FormoAnalytics.syncWalletState
    */
   syncWalletState(params: { chainId: number; address?: string }): void;
-  /**
-   * Put a still-connected wallet back after a disconnect cleared the Solana
-   * namespace, without taking the active slot from another namespace.
-   * @see FormoAnalytics.restoreWalletState
-   */
-  restoreWalletState(params: { chainId: number; address: string }): void;
-  /**
-   * A restore decided before `disconnect()` is awaited and written after.
-   * Refused if the namespace changed hands or was reset meanwhile.
-   * @see FormoAnalytics.deferWalletRestore
-   */
-  deferWalletRestore(chainId: number): WalletRestore;
   /** The wallet the SDK currently treats as active, across namespaces. */
   currentAddress(): string | undefined;
-  /** The wallet held in the Solana namespace, active or not. */
-  solanaAddress(): string | undefined;
   /**
    * Whether THIS registry reports connections.
    *

@@ -2,7 +2,6 @@ import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import * as sinon from "sinon";
 import { SolanaStoreHandler } from "../../src/solana/SolanaStoreHandler";
-import { FormoAnalytics } from "../../src/FormoAnalytics";
 import { SOLANA_CHAIN_IDS } from "../../src/solana/types";
 import {
   SolanaClientStore,
@@ -12,7 +11,10 @@ import {
 
 describe("SolanaStoreHandler", () => {
   let sandbox: sinon.SinonSandbox;
-  let mockFormo: sinon.SinonStubbedInstance<FormoAnalytics>;
+  // Stubs, so the assertions below can read calledOnce/firstCall. The
+  // handler only needs the members of SolanaStoreHandlerDeps.
+  let mockFormo: any;
+  let solanaAddress: string | undefined;
 
   const MOCK_ADDRESS = "FDKJvWcJNe6wecbgDYDFPCfgs14aJnVsUfWQRYWLn4Tn";
 
@@ -96,24 +98,27 @@ describe("SolanaStoreHandler", () => {
 
   beforeEach(() => {
     sandbox = sinon.createSandbox();
+    // The wallet the Solana namespace holds. The handler reads it back to
+    // decide whether a connection is its own to restore.
+    solanaAddress = undefined;
     mockFormo = {
       // connect() writes central state before its first await.
       connect: sandbox.stub().callsFake(async (p: { address: string }) => {
-        (mockFormo as any).solanaAddress = p.address;
+        solanaAddress = p.address;
       }),
       disconnect: sandbox.stub().resolves(),
       deferWalletRestore: sandbox.stub().returns(sandbox.stub()),
       // Central state accepts every write here; the slot follows the last address synced.
       syncWalletState: sandbox.stub().callsFake((p: { address?: string }) => {
-        (mockFormo as any).solanaAddress = p.address;
+        solanaAddress = p.address;
       }),
-      solanaAddress: undefined,
+      solanaAddress: () => solanaAddress,
       restoreWalletState: sandbox.stub(),
       chain: sandbox.stub().resolves(),
       transaction: sandbox.stub().resolves(),
       signature: sandbox.stub().resolves(),
       isAutocaptureEnabled: sandbox.stub().returns(true),
-    } as any;
+    };
   });
 
   afterEach(() => {
@@ -127,14 +132,14 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "https://api.devnet.solana.com", status: "ready" },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
       handler.cleanup();
     });
 
     it("should auto-detect cluster from store endpoint", () => {
       const store = createMockStore(); // default endpoint is devnet
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
       handler.cleanup();
     });
@@ -143,14 +148,14 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "https://custom-rpc.example.com", status: { status: "ready" } },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["mainnet-beta"]);
       handler.cleanup();
     });
 
     it("should use provided cluster", () => {
       const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store, { cluster: "devnet" });
+      const handler = new SolanaStoreHandler(mockFormo, store, { cluster: "devnet" });
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
       handler.cleanup();
     });
@@ -161,7 +166,7 @@ describe("SolanaStoreHandler", () => {
   describe("Wallet Connection Tracking", () => {
     it("should emit connect event when wallet transitions to connected", () => {
       const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store, { cluster: "devnet" });
+      const handler = new SolanaStoreHandler(mockFormo, store, { cluster: "devnet" });
 
       store._setState({
         wallet: {
@@ -195,7 +200,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       // Initial connect event
       expect(mockFormo.connect.calledOnce).to.be.true;
@@ -221,7 +226,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       expect(mockFormo.connect.calledOnce).to.be.true;
 
@@ -249,7 +254,7 @@ describe("SolanaStoreHandler", () => {
         },
       });
 
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       expect(mockFormo.connect.calledOnce).to.be.true;
       expect(mockFormo.connect.firstCall.args[0].address).to.equal(MOCK_ADDRESS);
@@ -259,7 +264,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should not emit connect for disconnected wallet on init", () => {
       const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       expect(mockFormo.connect.called).to.be.false;
 
@@ -268,7 +273,7 @@ describe("SolanaStoreHandler", () => {
 
     it("should block system addresses", () => {
       const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       store._setState({
         wallet: {
@@ -300,7 +305,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       // Initial connect
       expect(mockFormo.connect.calledOnce).to.be.true;
@@ -339,7 +344,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       expect(mockFormo.connect.calledOnce).to.be.true;
       expect(mockFormo.connect.firstCall.args[1]!.providerName).to.equal("Phantom");
@@ -384,7 +389,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      handler = new SolanaStoreHandler(mockFormo as any, store);
+      handler = new SolanaStoreHandler(mockFormo, store);
       // Clear the connect call from init
       mockFormo.transaction.resetHistory();
     });
@@ -552,7 +557,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
       mockFormo.transaction.resetHistory();
 
       // Start transaction
@@ -587,7 +592,7 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
 
@@ -598,7 +603,7 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "https://api.testnet.solana.com", status: { status: "ready" } },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["testnet"]);
 
@@ -609,7 +614,7 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "http://localhost:8899", status: { status: "ready" } },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["localnet"]);
 
@@ -620,7 +625,7 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store, {
+      const handler = new SolanaStoreHandler(mockFormo, store, {
         cluster: "mainnet-beta",
       });
 
@@ -642,7 +647,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
 
       // Switch to mainnet
@@ -662,7 +667,7 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       store._setState({
         cluster: { endpoint: "https://api.mainnet-beta.solana.com", status: { status: "ready" } },
@@ -679,7 +684,7 @@ describe("SolanaStoreHandler", () => {
       const store = createMockStore({
         cluster: { endpoint: "https://api.devnet.solana.com", status: { status: "ready" } },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
       expect(handler.getChainId()).to.equal(SOLANA_CHAIN_IDS["devnet"]);
 
       // Batch both wallet connect + cluster change in one setState
@@ -711,7 +716,7 @@ describe("SolanaStoreHandler", () => {
       mockFormo.isAutocaptureEnabled.returns(false);
 
       const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       store._setState({
         wallet: {
@@ -744,7 +749,7 @@ describe("SolanaStoreHandler", () => {
   describe("setCluster", () => {
     it("should update chainId", () => {
       const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store, {
+      const handler = new SolanaStoreHandler(mockFormo, store, {
         cluster: "mainnet-beta",
       });
 
@@ -766,7 +771,7 @@ describe("SolanaStoreHandler", () => {
           },
         },
       });
-      const handler = new SolanaStoreHandler(mockFormo as any, store, {
+      const handler = new SolanaStoreHandler(mockFormo, store, {
         cluster: "mainnet-beta",
       });
 
@@ -784,7 +789,7 @@ describe("SolanaStoreHandler", () => {
   describe("Cleanup", () => {
     it("should unsubscribe from store on cleanup", () => {
       const store = createMockStore();
-      const handler = new SolanaStoreHandler(mockFormo as any, store);
+      const handler = new SolanaStoreHandler(mockFormo, store);
 
       handler.cleanup();
 
