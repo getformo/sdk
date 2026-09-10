@@ -1680,6 +1680,43 @@ describe("EventQueue", () => {
       expect(fetchStub.called).to.be.false;
     });
 
+    it("waits for a flush already on the wire before sending the rest", async () => {
+      // Keepalive bodies share one 64KB budget per page, so teardown must not
+      // put a second request on the wire beside the first: the pair can be
+      // rejected together. The buffer waits, then leaves on its own request.
+      useUniqueCryptoHashes();
+      let release!: (value: Response) => void;
+      const inFlight = new Promise<Response>((r) => { release = r; });
+      const fetchStub = sinon.stub(fetchModule, "default").returns(inFlight as any);
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushInterval: 10_000,
+      });
+
+      // The first event goes out at once and stays unresolved; the second
+      // only buffers behind it.
+      await eventQueue.enqueue(createMockEvent());
+      await clock.tickAsync(0);
+      expect(fetchStub.callCount, "the first request is on the wire").to.equal(1);
+      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }));
+
+      eventQueue.close();
+      await clock.tickAsync(0);
+      expect(
+        fetchStub.callCount,
+        "teardown adds nothing while the first request is unsettled"
+      ).to.equal(1);
+
+      fetchStub.returns(Promise.resolve(makeResponse(200, "OK")) as any);
+      release(makeResponse(200, "OK"));
+      await clock.tickAsync(10);
+
+      expect(
+        fetchStub.callCount,
+        "the buffer leaves once the wire is free"
+      ).to.equal(2);
+    });
+
     it("sends the batch the timer was holding, then never fires that timer", async () => {
       useUniqueCryptoHashes();
       const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));

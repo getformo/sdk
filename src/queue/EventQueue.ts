@@ -139,6 +139,11 @@ export class EventQueue implements IEventQueue {
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
   private closed = false;
+  // Flushes whose requests are still unsettled. `pendingFlush` keeps the last
+  // flush's promise even after it resolves, so it cannot answer "is anything
+  // on the wire right now?" - which is what close() needs to decide whether a
+  // second keepalive request would share the page's budget with a live one.
+  private inFlight = 0;
   // Undoes the page-leave listeners installed in the constructor.
   private disposePageLeave: (() => void) | null = null;
 
@@ -280,26 +285,34 @@ export class EventQueue implements IEventQueue {
    */
   close(): void {
     if (this.closed) return;
-    // Send what is buffered before going inert. A teardown is not a reason to
-    // discard accepted events: an app that re-creates the SDK (a changed
-    // option, a framework remount) would otherwise lose everything that had
-    // not yet met the batch timer, and autocaptured events carry no callback
-    // to even report the loss. This is the page-leave path: drain the buffer
-    // into one keepalive request and do not await it. flush() still honours
-    // consent, so a withdrawn visitor sends nothing. It must run before the
-    // closed flag, which makes the queue inert, and it empties the buffer
-    // synchronously, so the drop below only answers what a gate held back.
-    if (this.queue.length) void this.flush(undefined, true);
-    this.closed = true;
-    // Drop work that has not entered a flush, but do not advance clearSeq:
-    // sendBatches uses that sequence specifically for consent/reset
-    // invalidation, whereas chunks already spliced by an in-flight flush are
-    // accepted work and must finish during terminal teardown.
+    // Do not advance clearSeq: sendBatches uses that sequence specifically
+    // for consent/reset invalidation, whereas chunks already spliced by an
+    // in-flight flush are accepted work and must finish during teardown.
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    this.dropBuffered(dropError("closed"));
+    // Send what is buffered before going inert. A teardown is not a reason to
+    // discard accepted events: an app that re-creates the SDK (a changed
+    // option, a framework remount) would otherwise lose everything that had
+    // not yet met the batch timer, and autocaptured events carry no callback
+    // to even report the loss. flush() still honours consent, so a withdrawn
+    // visitor sends nothing.
+    //
+    // One request at a time. Keepalive bodies share a single 64KB budget per
+    // page, so dispatching a second while one is on the wire can push the
+    // pair over it and lose both. If a flush is already in flight the buffer
+    // simply waits where it is and leaves on its own request afterwards;
+    // nothing can join it, because a closed queue accepts nothing.
+    const waitFor = this.queue.length && this.inFlight > 0 ? this.pendingFlush : null;
+    if (this.queue.length && !waitFor) void this.flush(undefined, true);
+    this.closed = true;
+    if (waitFor) {
+      void waitFor.catch(noop).then(() => this.flush(undefined, true));
+    } else {
+      // Whatever a consent gate held back is answered, not silently forgotten.
+      this.dropBuffered(dropError("closed"));
+    }
     this.flushed = false;
     // Terminal: nothing can be accepted again, so nothing needs suppressing.
     this.payloadHashes.clear();
@@ -483,8 +496,10 @@ export class EventQueue implements IEventQueue {
     // Split into chunks that fit within the browser's 64KB keepalive limit.
     const batches = this.splitIntoBatches(items, data);
 
+    this.inFlight++;
     return (this.pendingFlush = this.sendBatches(batches, data, clearSeqAtFlush)
       .then((firstError) => {
+        this.inFlight--;
         if (firstError) {
           safeCall(callback, firstError, data);
           if (typeof this.errorHandler === "function") {
@@ -496,6 +511,7 @@ export class EventQueue implements IEventQueue {
         return Promise.resolve(data);
       })
       .catch((err) => {
+        this.inFlight--;
         // Defensive: should not be reachable since sendBatches catches
         // all errors internally, but guard against unexpected failures.
         safeCall(callback, err, data);
