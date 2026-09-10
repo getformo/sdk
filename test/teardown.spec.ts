@@ -140,10 +140,8 @@ describe("Teardown closes the event queue", () => {
   });
 
   /**
-   * Names of the events these teardown-delivery tests raise, in wire order.
-   * A track carries its name in `event`, an autocaptured connect in `type`;
-   * both are matched by name so an event leaked by another spec (issue #338)
-   * cannot be counted here.
+   * The events these tests raise, in wire order, matched by name so a leak
+   * from another spec (issue #338) cannot be counted.
    */
   const delivered = (sent: { stub: sinon.SinonStub }): string[] =>
     sent.stub.args
@@ -158,9 +156,8 @@ describe("Teardown closes the event queue", () => {
       .map((e: any) => e.event ?? e.type);
 
   /**
-   * The queue sends the first event of a page load immediately and batches
-   * from then on, so a warm-up event is what puts the queue into its batching
-   * state. Everything raised after it stays in the buffer until a rule fires.
+   * The first event of a page load is sent at once and the queue batches from
+   * then on, so a warm-up event is what makes later ones buffer.
    */
   const warmUp = async (formo: any, sent: any) => {
     await formo.track("custom-event", { warmUp: true });
@@ -169,10 +166,8 @@ describe("Teardown closes the event queue", () => {
   };
 
   it("delivers events still buffered when cleanup() runs", async () => {
-    // The shape found by the browser run of the Solana example: the app
-    // changes an option (its cluster), the provider re-creates the SDK, and
-    // the connect raised a moment earlier was still in the buffer. Teardown
-    // must send it, not discard it.
+    // Found by the browser run of the Solana example: a cluster change
+    // re-creates the SDK while the connect is still buffered.
     const formo = await FormoAnalytics.init("test-write-key", {
       tracking: true,
       // High enough that nothing leaves on its own: only cleanup() can send.

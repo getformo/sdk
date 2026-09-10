@@ -139,11 +139,8 @@ export class EventQueue implements IEventQueue {
   // Terminal shutdown flag. Once set, enqueue() and flush() are no-ops for
   // the rest of this instance's life. See close().
   private closed = false;
-  // Every flush whose request is still unsettled. `pendingFlush` cannot answer
-  // "is anything on the wire right now?": it keeps the last flush's promise
-  // after that promise resolves, and it names only the newest request when
-  // several overlap. close() needs both answers before it adds a request of
-  // its own, so it needs the set.
+  // Unsettled keepalive requests. `pendingFlush` cannot answer "is anything
+  // on the wire?": it outlives its own resolution and names only the newest.
   private inFlight = new Set<Promise<unknown>>();
   // Undoes the page-leave listeners installed in the constructor.
   private disposePageLeave: (() => void) | null = null;
@@ -238,12 +235,9 @@ export class EventQueue implements IEventQueue {
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
-    // A closed queue is terminal. In particular, a later clear() must not
-    // invalidate chunks that close() deliberately allowed to finish, so it
-    // does not advance clearSeq or touch the lifecycle. It must still empty
-    // the buffer: close() can be waiting for the wire with events held, and
-    // a withdrawal that is reversed before that wait ends would otherwise
-    // leave them to pass a later consent check and go out.
+    // A closed queue is terminal: no clearSeq bump, so chunks close() let
+    // finish are untouched. The buffer is still emptied, or a withdrawal
+    // reversed while teardown waits would let those events out.
     if (this.closed) {
       this.dropBuffered(dropError("consent_withdrawn"));
       return;
@@ -287,34 +281,24 @@ export class EventQueue implements IEventQueue {
    * it here means no holder of a stale reference can ever send.
    *
    * What close() deliberately does NOT stop is a flush already in flight, nor
-   * the buffer it is handed. Those events were accepted while the instance
-   * was alive, so they are real data; abandoning them would turn every
-   * unmount into silent loss.
+   * the buffer it sends first: those events were accepted while the instance
+   * was alive, and dropping them makes every unmount a silent loss.
    */
   close(): void {
     if (this.closed) return;
-    // Do not advance clearSeq: sendBatches uses that sequence specifically
-    // for consent/reset invalidation, whereas chunks already spliced by an
-    // in-flight flush are accepted work and must finish during teardown.
+    // clearSeq is not advanced: it invalidates on consent/reset, and chunks
+    // already spliced by a flush are accepted work that must finish.
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    // Send what is buffered before going inert. A teardown is not a reason to
-    // discard accepted events: an app that re-creates the SDK (a changed
-    // option, a framework remount) would otherwise lose everything that had
-    // not yet met the batch timer, and autocaptured events carry no callback
-    // to even report the loss. flush() still honours consent, so a withdrawn
-    // visitor sends nothing.
+    // Send the buffer before going inert, or a remount loses every event that
+    // has not met the batch timer. flush() still honours consent.
     //
-    // One request at a time. Keepalive bodies share a single 64KB budget per
-    // page, so dispatching a second while one is on the wire can push the
-    // pair over it and lose both. If a flush is already in flight the buffer
-    // simply waits where it is and leaves on its own request afterwards;
-    // nothing can join it, because a closed queue accepts nothing.
-    // Promise.all over settled-either-way promises, not Promise.allSettled:
-    // the package targets ES5 with the ES2015 library and ships no Promise
-    // polyfill, and allSettled arrived in ES2020 (Safari 13.1).
+    // One request at a time: keepalive bodies share a 64KB budget per page,
+    // so a second can push the pair over it. The buffer waits instead, and
+    // nothing can join it once closed. (allSettled is ES2020; this targets
+    // ES5 with no polyfill.)
     const active = this.inFlight.size
       ? Promise.all(Array.from(this.inFlight, (request) => request.then(noop, noop)))
       : null;
@@ -337,11 +321,8 @@ export class EventQueue implements IEventQueue {
 
   /**
    * The deferred half of close(): send the buffer once the wire is free.
-   *
-   * Consent can be withdrawn while close() waits. flush() would notice and
-   * call clear(), but clear() is inert on a closed queue, so the events would
-   * sit in the buffer forever with their callbacks unanswered. Gate here
-   * instead, where the drop can still be reported.
+   * Consent is gated here because flush() would delegate to clear(), which
+   * cannot empty a closed queue.
    */
   private drainAtClose(): void {
     if (!this.queue.length) return;
@@ -549,12 +530,10 @@ export class EventQueue implements IEventQueue {
         // propagate as unhandled rejections to the host app
       });
 
-    // Remember the request until it settles, so close() can wait for every
-    // one of them rather than for whichever was started last. Only requests
-    // that use keepalive are tracked: an oversized batch is sent without it
-    // (see splitIntoBatches), takes nothing from the budget close() is
-    // protecting, and can be cancelled with the page, so making a teardown
-    // batch queue behind it would strand exactly what this is here to save.
+    // Track it until it settles, so close() waits for every request rather
+    // than the last one started. An oversized batch goes without keepalive
+    // (see splitIntoBatches) and takes none of the budget, so it is not
+    // tracked: a teardown batch must not queue behind it.
     if (batches.some((batch) => batch.keepalive)) {
       this.inFlight.add(request);
       const settled = () => this.inFlight.delete(request);

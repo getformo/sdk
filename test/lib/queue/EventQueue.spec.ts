@@ -276,9 +276,8 @@ describe("EventQueue", () => {
       });
 
       it("delivers buffered events on close(), answering their callbacks", async () => {
-        // A teardown is not a reason to discard accepted events, so close()
-        // sends what is buffered and the callback reports delivery. The
-        // `closed` code is for what arrives after that point (next test).
+        // close() sends the buffer, so the callback reports delivery. The
+        // `closed` code is for events raised after that (next test).
         eventQueue = new EventQueue("test-key", {
           apiHost: "https://api.example.com",
           flushAt: 20,
@@ -1718,9 +1717,8 @@ describe("EventQueue", () => {
     });
 
     it("waits for every unsettled request, not just the newest", async () => {
-      // Two requests can be on the wire at once: a lifecycle drain overlapping
-      // an ordinary flush. If the newest settles first, teardown must still
-      // wait for the older one before adding a body to the shared budget.
+      // A lifecycle drain can overlap an ordinary flush. If the newest
+      // settles first, teardown must still wait for the older one.
       useUniqueCryptoHashes();
       const releases: ((value: Response) => void)[] = [];
       const fetchStub = sinon
@@ -1755,8 +1753,8 @@ describe("EventQueue", () => {
     });
 
     it("answers the deferred buffer when consent goes while it waits", async () => {
-      // clear() is inert on a closed queue, so the deferred drain has to make
-      // the consent decision itself or the events are stranded unanswered.
+      // The deferred drain makes the consent call itself: clear() cannot
+      // empty a closed queue.
       useUniqueCryptoHashes();
       let allowed = true;
       let release!: (value: Response) => void;
@@ -1786,10 +1784,8 @@ describe("EventQueue", () => {
     });
 
     it("keeps a withdrawal that happened while teardown waited", async () => {
-      // clear() cannot advance the lifecycle on a closed queue, but it must
-      // still empty the buffer: an opt-out reversed before the wire frees up
-      // would otherwise leave events that predate it to pass the drain's
-      // consent check and go out.
+      // An opt-out reversed before the wire frees up must not let events
+      // that predate it pass the drain's consent check.
       useUniqueCryptoHashes();
       let allowed = true;
       let release!: (value: Response) => void;
@@ -1823,9 +1819,8 @@ describe("EventQueue", () => {
     });
 
     it("does not queue behind a request that cannot use keepalive", async () => {
-      // An oversized single event is sent without keepalive, so it takes
-      // nothing from the budget the teardown wait protects. Waiting for it
-      // would strand the batch that this path exists to deliver.
+      // An oversized event goes without keepalive, so it takes none of the
+      // budget: waiting for it would strand the teardown batch.
       useUniqueCryptoHashes();
       let release!: (value: Response) => void;
       const fetchStub = sinon
