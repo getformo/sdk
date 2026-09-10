@@ -46,7 +46,6 @@ import {
 } from "./types";
 import { validateAddress, validateAndChecksumAddress } from "./utils/address";
 import { answerDropped } from "./utils/dropped";
-import { withdrawConsent } from "./utils/consent";
 import {
   AutocaptureEventType,
   ITrackingPolicy,
@@ -1442,9 +1441,6 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Set opt-out flag in persistent storage using direct cookie access
     // This must be done before switching storage to ensure persistence
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
-    // Every queue for this write key, including one already torn down whose
-    // clear() nothing can reach, must abandon work accepted before now.
-    withdrawConsent(this.writeKey);
     this._pageGeneration++;
     // Drop anything already buffered so a pending timer/pagehide flush
     // cannot ship events after consent withdrawal.

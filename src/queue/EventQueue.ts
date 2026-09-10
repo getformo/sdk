@@ -6,7 +6,7 @@ import {
   getActionDescriptor,
   hash,
   millisecondsToSecond,
-  toDateHourMinute, stableStringify, consentGeneration } from "../utils";
+  toDateHourMinute, stableStringify } from "../utils";
 import { logger } from "../logger";
 import { EVENTS_API_REQUEST_HEADER } from "../constants";
 import fetch, { FetchRetryError } from "../fetch";
@@ -23,9 +23,6 @@ type QueueItem = {
   // exactly its own entry and not a newer one for the same key. See
   // releaseFingerprints.
   dedupKey: string;
-  // Consent generation at acceptance. A later withdrawal invalidates this
-  // item even when the flush that carries it started afterwards.
-  consentGen: number;
   dedupToken: number;
   // Serialized size of this item, computed once at enqueue so the queue
   // byte total can be tracked incrementally (avoids an O(n) re-serialize
@@ -235,15 +232,14 @@ export class EventQueue implements IEventQueue {
    * withdrawal / SDK teardown so nothing buffered can be sent later.
    */
   clear(): void {
-    // Terminal, but a withdrawal still invalidates: bump the sequence so
-    // chunks of a flush already in flight are abandoned rather than posted
-    // once consent returns, and empty what is buffered.
+    this.clearSeq++;
+    // A closed queue keeps no lifecycle to reset, but the withdrawal still
+    // counts: the bump above abandons the unsent chunks of a flush in
+    // flight, and the buffer is emptied here.
     if (this.closed) {
-      this.clearSeq++;
       this.dropBuffered(dropError("consent_withdrawn"));
       return;
     }
-    this.clearSeq++;
     // Start a fresh queue lifecycle. A post-clear event should get the same
     // immediate-send treatment as the first event on page load, and it must
     // not wait on a request that belongs to the abandoned lifecycle.
@@ -383,7 +379,6 @@ export class EventQueue implements IEventQueue {
       callback: cb,
       dedupKey,
       dedupToken: this.acceptanceSeq,
-      consentGen: consentGeneration(this.writeKey),
       byteSize: 0,
     };
     // Measure once here (message only — JSON.stringify drops the
@@ -441,9 +436,6 @@ export class EventQueue implements IEventQueue {
     // Capture before any wait. A pre-clear waiter belongs to the old queue
     // lifecycle and must never resume into events accepted after clear().
     const clearSeqAtFlush = this.clearSeq;
-    // Consent belongs to the write key, not to this instance: a withdrawal
-    // made through a replacement SDK never reaches our clear().
-    const consentAtFlush = consentGeneration(this.writeKey);
     if (this.pendingFlush) {
       // During page leave (drainAll), skip awaiting the pending flush.
       // Browser lifecycle events (pagehide/beforeunload) do not wait for
@@ -470,29 +462,16 @@ export class EventQueue implements IEventQueue {
       }
     }
 
-    const spliced = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
-    // An item accepted before a withdrawal never goes, even if consent has
-    // since been granted again and this flush started under the new one.
-    const now = consentGeneration(this.writeKey);
-    const items: QueueItem[] = [];
-    for (const item of spliced) {
-      if (item.consentGen === now) items.push(item);
-      else safeCall(item.callback, dropError("consent_withdrawn"), item.message, []);
-    }
+    const items = this.queue.splice(0, drainAll ? this.queue.length : this.flushAt);
 
     // Decrement the running byte total by exactly what left the queue. The
     // dedup hashes stay: they expire on their own clock, not on flush.
-    for (const item of spliced) {
+    for (const item of items) {
       this.queueByteSize -= item.byteSize;
     }
     // Re-anchor to the exact invariant when the queue empties, so any
     // accumulated drift can never wedge the size gate.
     if (this.queue.length === 0) this.queueByteSize = 0;
-
-    if (!items.length) {
-      safeCall(callback);
-      return Promise.resolve();
-    }
 
     // Generate sent_at once for the entire batch
     const sentAt = new Date().toISOString();
@@ -504,7 +483,7 @@ export class EventQueue implements IEventQueue {
     // Split into chunks that fit within the browser's 64KB keepalive limit.
     const batches = this.splitIntoBatches(items, data);
 
-    const request = this.sendBatches(batches, data, clearSeqAtFlush, consentAtFlush)
+    const request = this.sendBatches(batches, data, clearSeqAtFlush)
       .then((firstError) => {
         if (firstError) {
           safeCall(callback, firstError, data);
@@ -599,8 +578,7 @@ export class EventQueue implements IEventQueue {
   private async sendBatches(
     batches: Batch[],
     allData: IFormoEventFlushPayload[],
-    clearSeqAtFlush: number,
-    consentAtFlush: number
+    clearSeqAtFlush: number
   ): Promise<Error | undefined> {
     let firstError: Error | undefined;
 
@@ -614,8 +592,7 @@ export class EventQueue implements IEventQueue {
       // in the gap counts even if consent is back: these items predate it.
       if (
         (this.canSend && !this.canSend()) ||
-        this.clearSeq !== clearSeqAtFlush ||
-        consentGeneration(this.writeKey) !== consentAtFlush
+        this.clearSeq !== clearSeqAtFlush
       ) {
         // Report the drop to every abandoned item and to the flush. Silence
         // here read as success.

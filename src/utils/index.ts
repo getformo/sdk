@@ -4,4 +4,3 @@ export * from "./converter";
 export * from "./generate";
 export * from "./hash";
 export * from "./timezone";
-export * from "./consent";

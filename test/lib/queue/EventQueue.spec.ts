@@ -5,7 +5,6 @@ import { JSDOM } from "jsdom";
 import { EventQueue } from "../../../src/queue/EventQueue";
 import { IFormoEvent } from "../../../src/types";
 import * as fetchModule from "../../../src/fetch";
-import { withdrawConsent } from "../../../src/utils/consent";
 import { logger } from "../../../src/logger/Logger";
 
 describe("EventQueue", () => {
@@ -1733,62 +1732,6 @@ describe("EventQueue", () => {
         fetchStub.callCount - before,
         "at most the chunk already on the wire"
       ).to.be.at.most(1);
-    });
-
-    it("abandons chunks when another instance withdraws consent", async () => {
-      // Consent belongs to the write key. A withdrawal made through a
-      // replacement SDK never reaches this queue's clear(), so the shared
-      // generation is what stops its remaining chunks.
-      useUniqueCryptoHashes();
-      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
-      eventQueue = new EventQueue("shared-key", {
-        apiHost: "https://api.example.com",
-        flushInterval: 10_000,
-        maxQueueSize: 1024 * 1024,
-      });
-
-      // Three oversized events, so the flush posts several chunks in turn.
-      await eventQueue.enqueue(createMockEvent({ properties: { big: "x".repeat(40_000) } }));
-      await clock.tickAsync(0);
-      await eventQueue.enqueue(createMockEvent({ properties: { big: "y".repeat(40_000) } }));
-      await eventQueue.enqueue(createMockEvent({ properties: { big: "z".repeat(40_000) } }));
-      const before = fetchStub.callCount;
-
-      void eventQueue.flush(undefined, true);
-      withdrawConsent("shared-key");
-      await clock.tickAsync(50);
-
-      expect(
-        fetchStub.callCount - before,
-        "at most the chunk already dispatched"
-      ).to.be.at.most(1);
-    });
-
-    it("drops events accepted before a withdrawal that has since been reversed", async () => {
-      // The flush starts under the restored consent, so only the generation
-      // carried by each accepted item can tell that it predates the opt-out.
-      useUniqueCryptoHashes();
-      const fetchStub = sinon.stub(fetchModule, "default").resolves(makeResponse(200, "OK"));
-      eventQueue = new EventQueue("reversed-key", {
-        apiHost: "https://api.example.com",
-        flushAt: 50,
-        flushInterval: 60_000,
-      });
-
-      await eventQueue.enqueue(createMockEvent());
-      await clock.tickAsync(0);
-      const callback = sinon.stub();
-      await eventQueue.enqueue(createMockEvent({ properties: { n: 2 } }), callback);
-      const before = fetchStub.callCount;
-
-      // Another instance withdraws and restores consent, then this queue is
-      // torn down and tries to deliver what it still holds.
-      withdrawConsent("reversed-key");
-      eventQueue.close();
-      await clock.tickAsync(10);
-
-      expect(fetchStub.callCount, "nothing accepted before the opt-out goes").to.equal(before);
-      expect(callback.firstCall.args[0].code).to.equal("consent_withdrawn");
     });
 
     it("sends the batch the timer was holding, then never fires that timer", async () => {
