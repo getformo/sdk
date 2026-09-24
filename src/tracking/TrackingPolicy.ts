@@ -26,6 +26,13 @@ export interface TrackingContext {
    * wagmi mutation naming an explicit chain.
    */
   chainId?: ChainID;
+  /**
+   * The page the event describes, when it is not the current one. A web
+   * vitals report describes the page as loaded, and an SPA may have moved
+   * to another route by the time it is sent. Host and path exclusions are
+   * checked against this URL when it is given.
+   */
+  url?: string;
 }
 
 /** What the policy needs from the SDK it advises. */
@@ -104,30 +111,43 @@ export class TrackingPolicy implements ITrackingPolicy {
    * current-page-level and transient, so a SPA navigating back to an allowed
    * path resumes tracking for later actions.
    */
-  private isEnvironmentExcluded(): boolean {
+  private isEnvironmentExcluded(url?: string): boolean {
+    const page = this.pageLocation(url);
     return (
       this.isTimezoneExcluded() ||
-      this.isHostExcluded() ||
-      this.isPathExcluded()
+      this.isHostExcluded(page) ||
+      this.isPathExcluded(page)
     );
   }
 
+  /** The page to check: `url` when given and valid, else the current page. */
+  private pageLocation(url?: string): { hostname: string; pathname: string } | undefined {
+    if (url) {
+      try {
+        const { hostname, pathname } = new URL(url);
+        return { hostname, pathname };
+      } catch {
+        // An unparsable URL falls back to the current page.
+      }
+    }
+    if (typeof window === "undefined") return undefined;
+    return window.location;
+  }
+
   /** Exact match against `tracking.excludeHosts`. */
-  private isHostExcluded(): boolean {
+  private isHostExcluded(page = this.pageLocation()): boolean {
     const tracking = this.trackingOptions();
-    if (!tracking) return false;
-    if (typeof window === "undefined") return false;
+    if (!tracking || !page) return false;
     const { excludeHosts = [] } = tracking;
-    return excludeHosts.includes(window.location.hostname);
+    return excludeHosts.includes(page.hostname);
   }
 
   /** Exact match against `tracking.excludePaths`. */
-  private isPathExcluded(): boolean {
+  private isPathExcluded(page = this.pageLocation()): boolean {
     const tracking = this.trackingOptions();
-    if (!tracking) return false;
-    if (typeof window === "undefined") return false;
+    if (!tracking || !page) return false;
     const { excludePaths = [] } = tracking;
-    return excludePaths.includes(window.location.pathname);
+    return excludePaths.includes(page.pathname);
   }
 
   /**
@@ -229,7 +249,7 @@ export class TrackingPolicy implements ITrackingPolicy {
 
     const configured = this.trackingOptions();
     if (configured) {
-      if (this.isEnvironmentExcluded()) return false;
+      if (this.isEnvironmentExcluded(context?.url)) return false;
 
       const { excludeChains = [] } = configured;
       if (excludeChains.length > 0 && this.isChainRefused(excludeChains, context)) {

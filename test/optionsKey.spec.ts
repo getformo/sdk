@@ -62,6 +62,11 @@ describe("computeOptionsKey", () => {
     );
   });
 
+  it("does not throw for a webVitals value that is not an object", () => {
+    expect(() => computeOptionsKey({ webVitals: true as never })).to.not.throw();
+    expect(computeOptionsKey({ webVitals: true as never })).to.not.equal(computeOptionsKey({}));
+  });
+
   it("handles absent options", () => {
     expect(computeOptionsKey(undefined)).to.equal("undefined");
   });

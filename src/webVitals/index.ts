@@ -7,11 +7,14 @@
  *
  * - One report per hard page load, sent when the page is first hidden (tab
  *   switch, close, navigation away). The library makes its final CLS, INP
- *   and LCP reports in its own `visibilitychange` listener, so ours must run
- *   after it. `visibilitychange` is fired at `document` and bubbles, so we
- *   listen on `window` in the bubble phase: that runs after every listener
- *   on `document` (web-vitals 4.x, which adds its CLS listener late, after
- *   FCP) and on `window` in the capture phase (5.x and 6.x).
+ *   and LCP reports in its own hidden listener, on `window` in the capture
+ *   phase (5.x and 6.x). Ours is on `window` in the capture phase too, added
+ *   after the library's, so it runs right after it: its reports are in, and
+ *   the page-leave flush (a `document` listener) has not run yet, so the
+ *   report goes out in the same keepalive request as the buffered events.
+ *   The capture phase also works where `visibilitychange` does not bubble.
+ *   web-vitals 4.x listens on `document` and is too late for this; the SDK
+ *   needs 5.x or later.
  * - SPA route changes and back/forward cache restores are not reported on
  *   their own; CLS and INP cover the whole life of the page, as CrUX does.
  * - A metric the browser does not support is left out, not reported as 0.
@@ -90,6 +93,8 @@ export class WebVitalsCollector {
   private url: string;
   private navigationType = "navigate";
   private reported = false;
+  /** Cleared by stop(): the library keeps its callbacks, which must not keep the SDK alive. */
+  private onReport?: (report: WebVitalsReport) => void;
 
   /**
    * Start measuring with the library the app passed in. Returns undefined
@@ -115,8 +120,9 @@ export class WebVitalsCollector {
 
   private constructor(
     library: WebVitalsLibrary,
-    private readonly onReport: (report: WebVitalsReport) => void
+    onReport: (report: WebVitalsReport) => void
   ) {
+    this.onReport = onReport;
     this.url = window.location.href;
     const origin = typeof performance !== "undefined" ? performance.timeOrigin : undefined;
     this.startTime =
@@ -132,28 +138,29 @@ export class WebVitalsCollector {
       }
     }
 
-    // On window, bubble phase: last in the event path, so the library's
-    // final reports are in whatever order the listeners were added.
-    // Captured now, not read again at removal: teardown can run after the
-    // host swapped these globals, and removing from another object silently
-    // leaves the listener attached.
+    // On window, capture phase, added after the library's own listener:
+    // see the note at the top of this file. Captured now, not read again
+    // at removal: teardown can run after the host swapped these globals,
+    // and removing from another object silently leaves the listener
+    // attached.
     const windowTarget = window;
     const documentTarget = document;
     const onVisibilityChange = () => {
       if (documentTarget.visibilityState === "hidden") this.send();
     };
     const onPageHide = () => this.send();
-    windowTarget.addEventListener("visibilitychange", onVisibilityChange);
-    windowTarget.addEventListener("pagehide", onPageHide);
+    windowTarget.addEventListener("visibilitychange", onVisibilityChange, true);
+    windowTarget.addEventListener("pagehide", onPageHide, true);
     this.disposers.push(
-      () => windowTarget.removeEventListener("visibilitychange", onVisibilityChange),
-      () => windowTarget.removeEventListener("pagehide", onPageHide)
+      () => windowTarget.removeEventListener("visibilitychange", onVisibilityChange, true),
+      () => windowTarget.removeEventListener("pagehide", onPageHide, true)
     );
   }
 
   /** Stop without reporting. The library keeps its observers; its reports are ignored. */
   stop(): void {
     this.reported = true;
+    this.onReport = undefined;
     for (const dispose of this.disposers) dispose();
     this.disposers.length = 0;
   }
@@ -180,10 +187,11 @@ export class WebVitalsCollector {
   private send(): void {
     if (this.reported) return;
     const metrics = this.collect();
+    const onReport = this.onReport;
     this.stop();
-    if (Object.keys(metrics).length === 0) return;
+    if (!onReport || Object.keys(metrics).length === 0) return;
     try {
-      this.onReport({
+      onReport({
         metrics,
         navigationType: this.navigationType,
         url: this.url,

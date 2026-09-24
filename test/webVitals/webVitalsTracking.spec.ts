@@ -44,6 +44,14 @@ describe("Web vitals tracking", () => {
   let fetchStub: sinon.SinonStub;
   const saved: Record<string, PropertyDescriptor | undefined> = {};
   const TIME_ORIGIN = Date.UTC(2026, 8, 24, 10, 0, 0);
+  let instances: FormoAnalytics[] = [];
+  const init = async (
+    options: Parameters<typeof FormoAnalytics.init>[1]
+  ): Promise<FormoAnalytics> => {
+    const instance = await FormoAnalytics.init("test-write-key", options);
+    instances.push(instance);
+    return instance;
+  };
 
   const setGlobal = (name: string, value: unknown) =>
     Object.defineProperty(global, name, { value, writable: true, configurable: true });
@@ -100,6 +108,10 @@ describe("Web vitals tracking", () => {
   });
 
   afterEach(() => {
+    // Before the globals go: a live instance's 300 ms page-hit timer must
+    // not run against the next test's environment.
+    instances.forEach((instance) => instance.cleanup());
+    instances = [];
     sandbox.restore();
     for (const name of GLOBALS) {
       const descriptor = saved[name];
@@ -110,7 +122,7 @@ describe("Web vitals tracking", () => {
   });
 
   it("sends one web_vitals event for the landing page when the page is hidden", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", {
+    const analytics = await init({
       solana: false,
       webVitals: fakeLibrary(),
     });
@@ -149,7 +161,10 @@ describe("Web vitals tracking", () => {
     const pages = sentEvents().filter((e) => e.type === "page");
     expect(pages.map((e) => e.properties.path)).to.include("/dashboard");
 
-    // Sent in its own keepalive request, not left for the batch timer.
+    // Sent in a keepalive request, not left for the batch timer. (With a
+    // browser-dispatched event it shares the page-leave request; an event
+    // dispatched from script runs microtasks only after every listener, so
+    // that is checked in a real browser, not here.)
     const vitalsCall = fetchStub
       .getCalls()
       .find((call) => call.args[1].body.includes('"web_vitals"'))!;
@@ -159,13 +174,13 @@ describe("Web vitals tracking", () => {
   });
 
   it("does not measure without the library (opt-in)", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", { solana: false });
+    const analytics = await init({ solana: false });
     expect((analytics as any).webVitals).to.equal(undefined);
   });
 
   it("warns and does not measure when webVitals is not the library", async () => {
     const warn = sandbox.stub(logger, "warn");
-    const analytics = await FormoAnalytics.init("test-write-key", {
+    const analytics = await init({
       solana: false,
       webVitals: true as any,
     });
@@ -174,7 +189,7 @@ describe("Web vitals tracking", () => {
   });
 
   it("measures even when wallet autocapture is off", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", {
+    const analytics = await init({
       solana: false,
       autocapture: false,
       webVitals: fakeLibrary(),
@@ -183,7 +198,7 @@ describe("Web vitals tracking", () => {
   });
 
   it("does not send when webVitals is removed after init", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", {
+    const analytics = await init({
       solana: false,
       webVitals: fakeLibrary(),
     });
@@ -200,7 +215,7 @@ describe("Web vitals tracking", () => {
   });
 
   it("does not send for a visitor who opted out", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", {
+    const analytics = await init({
       solana: false,
       webVitals: fakeLibrary(),
     });
@@ -216,8 +231,59 @@ describe("Web vitals tracking", () => {
     );
   });
 
+  it("does not send measurements from before an opt-out, even after opting back in", async () => {
+    const analytics = await init({ solana: false, webVitals: fakeLibrary() });
+    const addEvent = sandbox.stub((analytics as any).eventManager, "addEvent").resolves();
+    report("FCP", 640);
+
+    analytics.optOutTracking();
+    analytics.optInTracking();
+    report("LCP", 900);
+    hide();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(addEvent.getCalls().map((c) => (c.args[0] as any).type)).to.not.include(
+      "web_vitals"
+    );
+  });
+
+  it("applies path exclusions to the landing page, not the current route", async () => {
+    const analytics = await init({
+      solana: false,
+      webVitals: fakeLibrary(),
+      tracking: { excludePaths: ["/landing"] },
+    });
+    const addEvent = sandbox.stub((analytics as any).eventManager, "addEvent").resolves();
+    report("FCP", 640);
+
+    // The SPA moves to an allowed route before the page is hidden.
+    jsdom.window.history.pushState({}, "", "/dashboard");
+    hide();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(addEvent.getCalls().map((c) => (c.args[0] as any).type)).to.not.include(
+      "web_vitals"
+    );
+  });
+
+  it("sends for an allowed landing page after a move to an excluded route", async () => {
+    const analytics = await init({
+      solana: false,
+      webVitals: fakeLibrary(),
+      tracking: { excludePaths: ["/private"] },
+    });
+    const addEvent = sandbox.stub((analytics as any).eventManager, "addEvent").resolves();
+    report("FCP", 640);
+
+    jsdom.window.history.pushState({}, "", "/private");
+    hide();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(addEvent.getCalls().map((c) => (c.args[0] as any).type)).to.include("web_vitals");
+  });
+
   it("cleanup() stops measuring", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", {
+    const analytics = await init({
       solana: false,
       webVitals: fakeLibrary(),
     });

@@ -69,7 +69,10 @@ const MIN_QUEUE_SIZE = 200; // 200 bytes
 // Browsers enforce a 64KB limit on the total body size of in-flight
 // keepalive fetch requests. Payloads exceeding this are silently cancelled,
 // producing a TypeError: Failed to fetch that cannot be resolved by retrying.
-const KEEPALIVE_PAYLOAD_LIMIT = 64 * 1_024; // 64kB
+// A batch is kept 4kB under it: a web vitals report is made as the page is
+// hidden, often after the page-leave batch is already in flight, and needs
+// room in the same budget (it is about 1.5kB).
+const KEEPALIVE_PAYLOAD_LIMIT = 64 * 1_024 - 4 * 1_024; // 60kB
 
 const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 30 SECONDS
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
@@ -527,7 +530,7 @@ export class EventQueue implements IEventQueue {
 
   /**
    * Splits events into batches that respect the browser's 64KB keepalive
-   * payload size limit. Each batch pairs its serialized data with the
+   * payload size limit, less the reserve for a web vitals report. Each batch pairs its serialized data with the
    * original queue items (for per-item callback reporting) and a flag
    * indicating whether keepalive is safe to use.
    */

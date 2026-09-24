@@ -85,7 +85,12 @@ export const computeOptionsKey = (options?: Options): string => {
     wagmiEip1193Fallback: !!options.wagmi?.eip1193Fallback,
     hasReady: !!options.ready,
     // The web-vitals module: a different library object re-initializes.
-    webVitalsId: optionObjectId(options.webVitals),
+    webVitalsId:
+      typeof options.webVitals === "object" || typeof options.webVitals === "function"
+        ? optionObjectId(options.webVitals as object)
+        : options.webVitals === undefined
+          ? undefined
+          : String(options.webVitals),
   };
 
   try {

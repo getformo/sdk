@@ -1229,12 +1229,14 @@ describe("EventQueue", () => {
       // Should have been split into multiple fetch calls
       expect(fetchStub.callCount).to.be.greaterThan(1);
 
-      // All sub-batches should use keepalive: true and fit under 64KB
+      // All sub-batches should use keepalive: true and fit under 60KB
       for (let i = 0; i < fetchStub.callCount; i++) {
         const fetchInit = fetchStub.getCall(i).args[1];
         expect(fetchInit.keepalive).to.be.true;
         const byteSize = new TextEncoder().encode(fetchInit.body).byteLength;
-        expect(byteSize).to.be.at.most(64 * 1024);
+        // 4KB under the browser's 64KB budget, kept free for a web
+        // vitals report sent while this batch is in flight.
+        expect(byteSize).to.be.at.most(60 * 1024);
       }
     });
 

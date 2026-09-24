@@ -1411,6 +1411,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     // This must be done before switching storage to ensure persistence
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
     this._pageGeneration++;
+    // Measurements taken before the withdrawal must never be sent, not even
+    // after a later opt-in. The collector belongs to this page load, so it
+    // is not restarted.
+    this.webVitals?.stop();
+    this.webVitals = undefined;
     // Drop anything already buffered so a pending timer/pagehide flush
     // cannot ship events after consent withdrawal.
     this.eventManager.clear();
@@ -1599,7 +1604,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       // it is authoritative: it can name a provider or a wagmi mutation chain
       // that is not the active one. Events without a chain (page, track,
       // identify) fall back to the central value.
-      if (!this.shouldTrack(payload?.chainId)) {
+      // A web vitals report describes the page as loaded, which an SPA may
+      // have left: host and path exclusions apply to that page.
+      const url = type === EventType.WEB_VITALS ? payload?.url : undefined;
+      if (!this.shouldTrack(payload?.chainId, url)) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
         answerDropped(callback, payload, "suppressed");
         return;
@@ -1639,8 +1647,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /** @see TrackingPolicy.shouldTrack */
-  private shouldTrack(eventChainId?: ChainID): boolean {
-    return this.trackingPolicy.shouldTrack({ chainId: eventChainId });
+  private shouldTrack(eventChainId?: ChainID, url?: string): boolean {
+    return this.trackingPolicy.shouldTrack({ chainId: eventChainId, url });
   }
 
   /**

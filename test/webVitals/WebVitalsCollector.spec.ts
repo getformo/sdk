@@ -118,18 +118,29 @@ describe("WebVitalsCollector", () => {
     expect(reports[0].metrics).to.deep.equal({ fcp: 700, cls: 0.1235, inp: 184 });
   });
 
-  it("includes a final report from a document listener added after ours", () => {
-    // web-vitals 4.x listens on document, and adds its CLS listener only
-    // once FCP is in: after the SDK started.
-    let cls: Callback = () => {};
-    start({ onCLS: (cb: Callback) => (cls = cb), onFCP: () => {} });
-    jsdom.window.document.addEventListener("visibilitychange", () => {
-      if (jsdom.window.document.visibilityState === "hidden") cls({ name: "CLS", value: 0.2 });
-    });
+  it("sends before the page-leave flush, a document listener", () => {
+    const order: string[] = [];
+    const lib = fakeLibrary(jsdom.window as unknown as Window);
+    WebVitalsCollector.start(lib.library, () => order.push("report"));
+    // EventQueue's page-leave flush listens on document.
+    jsdom.window.document.addEventListener("visibilitychange", () => order.push("flush"));
+    lib.report("FCP", 700);
 
     hide();
 
-    expect(reports[0].metrics).to.deep.equal({ cls: 0.2 });
+    expect(order).to.deep.equal(["report", "flush"]);
+  });
+
+  it("sends when visibilitychange does not bubble", () => {
+    const lib = fakeLibrary(jsdom.window as unknown as Window);
+    start(lib.library);
+    lib.report("FCP", 700);
+    Object.defineProperty(jsdom.window.document, "visibilityState", {
+      value: "hidden",
+      configurable: true,
+    });
+    jsdom.window.document.dispatchEvent(new jsdom.window.Event("visibilitychange"));
+    expect(reports).to.have.length(1);
   });
 
   it("sends on pagehide when no visibilitychange came first", () => {
