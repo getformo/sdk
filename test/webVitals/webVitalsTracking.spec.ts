@@ -6,35 +6,24 @@ import { webcrypto } from "crypto";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
 import { initStorageManager } from "../../src/storage";
 import * as fetchModule from "../../src/fetch";
+import { logger } from "../../src/logger";
 
-type FakeEntry = Record<string, unknown> & { startTime: number };
+type Callback = (metric: { name: string; value: number; navigationType?: string }) => void;
 
-class FakeObserver {
-  static supportedEntryTypes = ["paint", "largest-contentful-paint", "layout-shift", "event"];
-  static instances: FakeObserver[] = [];
-  type?: string;
-  disconnected = false;
-  constructor(private readonly callback: (list: { getEntries(): FakeEntry[] }) => void) {
-    FakeObserver.instances.push(this);
+/** A stand-in for the `web-vitals` module, driven by `report`. */
+let callbacks: Record<string, Callback> = {};
+const fakeLibrary = () => {
+  callbacks = {};
+  const library: Record<string, (cb: Callback) => void> = {};
+  for (const name of ["LCP", "INP", "CLS", "FCP", "TTFB"]) {
+    library[`on${name}`] = (cb) => {
+      callbacks[name] = cb;
+    };
   }
-  observe(options: { type: string }) {
-    this.type = options.type;
-  }
-  disconnect() {
-    this.disconnected = true;
-  }
-  takeRecords() {
-    return [];
-  }
-  deliver(entries: FakeEntry[]) {
-    this.callback({ getEntries: () => entries });
-  }
-}
-
-const emit = (type: string, entries: FakeEntry[]) =>
-  FakeObserver.instances
-    .filter((o) => o.type === type && !o.disconnected)
-    .forEach((o) => o.deliver(entries));
+  return library;
+};
+const report = (name: string, value: number) =>
+  callbacks[name]?.({ name, value, navigationType: "navigate" });
 
 const GLOBALS = [
   "window",
@@ -47,7 +36,6 @@ const GLOBALS = [
   "crypto",
   "history",
   "performance",
-  "PerformanceObserver",
 ];
 
 describe("Web vitals tracking", () => {
@@ -97,14 +85,8 @@ describe("Web vitals tracking", () => {
     setGlobal("sessionStorage", jsdom.window.sessionStorage);
     setGlobal("crypto", webcrypto);
     setGlobal("history", jsdom.window.history);
-    setGlobal("PerformanceObserver", FakeObserver);
-    setGlobal("performance", {
-      timeOrigin: TIME_ORIGIN,
-      now: () => 5000,
-      getEntriesByType: (type: string) =>
-        type === "navigation" ? [{ type: "navigate", responseStart: 95 }] : [],
-    });
-    FakeObserver.instances = [];
+    setGlobal("performance", { timeOrigin: TIME_ORIGIN, now: () => 5000 });
+    callbacks = {};
 
     fetchStub = sandbox.stub(fetchModule, "default").resolves({
       ok: true,
@@ -125,11 +107,16 @@ describe("Web vitals tracking", () => {
   });
 
   it("sends one web_vitals event for the landing page when the page is hidden", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", { solana: false });
+    const analytics = await FormoAnalytics.init("test-write-key", {
+      solana: false,
+      webVitals: fakeLibrary(),
+    });
 
-    emit("paint", [{ name: "first-contentful-paint", startTime: 640 }]);
-    emit("largest-contentful-paint", [{ startTime: 1310.6 }]);
-    emit("event", [{ startTime: 2000, duration: 120, interactionId: 7 }]);
+    report("TTFB", 95);
+    report("FCP", 640);
+    report("LCP", 1310.6);
+    report("INP", 120);
+    report("CLS", 0);
 
     // An SPA route change after the load: the report still describes /landing.
     jsdom.window.history.pushState({}, "", "/dashboard");
@@ -168,25 +155,39 @@ describe("Web vitals tracking", () => {
     analytics.cleanup();
   });
 
-  it("does not measure when autocapture.webVitals is false", async () => {
-    await FormoAnalytics.init("test-write-key", {
-      solana: false,
-      autocapture: { webVitals: false },
-    });
-    expect(FakeObserver.instances).to.have.length(0);
-  });
-
-  it("does not measure when autocapture is false", async () => {
-    await FormoAnalytics.init("test-write-key", { solana: false, autocapture: false });
-    expect(FakeObserver.instances).to.have.length(0);
-  });
-
-  it("does not send when web vitals are turned off after init", async () => {
+  it("does not measure without the library (opt-in)", async () => {
     const analytics = await FormoAnalytics.init("test-write-key", { solana: false });
-    const addEvent = sandbox.stub((analytics as any).eventManager, "addEvent").resolves();
-    emit("paint", [{ name: "first-contentful-paint", startTime: 640 }]);
+    expect((analytics as any).webVitals).to.equal(undefined);
+  });
 
-    analytics.options.autocapture = { webVitals: false };
+  it("warns and does not measure when webVitals is not the library", async () => {
+    const warn = sandbox.stub(logger, "warn");
+    const analytics = await FormoAnalytics.init("test-write-key", {
+      solana: false,
+      webVitals: true as any,
+    });
+    expect((analytics as any).webVitals).to.equal(undefined);
+    expect(warn.getCalls().some((c) => String(c.args[0]).includes("webVitals"))).to.equal(true);
+  });
+
+  it("measures even when wallet autocapture is off", async () => {
+    const analytics = await FormoAnalytics.init("test-write-key", {
+      solana: false,
+      autocapture: false,
+      webVitals: fakeLibrary(),
+    });
+    expect((analytics as any).webVitals).to.not.equal(undefined);
+  });
+
+  it("does not send when webVitals is removed after init", async () => {
+    const analytics = await FormoAnalytics.init("test-write-key", {
+      solana: false,
+      webVitals: fakeLibrary(),
+    });
+    const addEvent = sandbox.stub((analytics as any).eventManager, "addEvent").resolves();
+    report("FCP", 640);
+
+    analytics.options.webVitals = undefined;
     hide();
     await new Promise((r) => setTimeout(r, 20));
 
@@ -196,9 +197,12 @@ describe("Web vitals tracking", () => {
   });
 
   it("does not send for a visitor who opted out", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", { solana: false });
+    const analytics = await FormoAnalytics.init("test-write-key", {
+      solana: false,
+      webVitals: fakeLibrary(),
+    });
     const addEvent = sandbox.stub((analytics as any).eventManager, "addEvent").resolves();
-    emit("paint", [{ name: "first-contentful-paint", startTime: 640 }]);
+    report("FCP", 640);
 
     analytics.optOutTracking();
     hide();
@@ -210,9 +214,15 @@ describe("Web vitals tracking", () => {
   });
 
   it("cleanup() stops measuring", async () => {
-    const analytics = await FormoAnalytics.init("test-write-key", { solana: false });
-    expect(FakeObserver.instances.length).to.be.greaterThan(0);
+    const analytics = await FormoAnalytics.init("test-write-key", {
+      solana: false,
+      webVitals: fakeLibrary(),
+    });
+    const addEvent = sandbox.stub((analytics as any).eventManager, "addEvent").resolves();
+    report("FCP", 640);
     analytics.cleanup();
-    expect(FakeObserver.instances.every((o) => o.disconnected)).to.equal(true);
+    hide();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(addEvent.called).to.equal(false);
   });
 });

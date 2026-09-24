@@ -363,10 +363,16 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.trackPageHit();
     this.trackPageHits();
 
-    if (this.isAutocaptureEnabled("webVitals")) {
-      this.webVitals = WebVitalsCollector.start((report) =>
+    // Opt-in: only an app that passed the web-vitals library is measured.
+    if (options.webVitals !== undefined) {
+      this.webVitals = WebVitalsCollector.start(options.webVitals, (report) =>
         this.trackWebVitals(report)
       );
+      if (!this.webVitals) {
+        logger.warn(
+          "FormoAnalytics: `webVitals` must be the web-vitals library (an object with onLCP, onINP, ...); web vitals are not measured"
+        );
+      }
     }
   }
 
@@ -1572,7 +1578,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   /** Send the web vitals of this page load. Called once, as the page is hidden. */
   private trackWebVitals(report: WebVitalsReport): void {
     // Options are mutable: an app may turn web vitals off after init.
-    if (this.isCleanedUp || !this.isAutocaptureEnabled("webVitals")) return;
+    if (this.isCleanedUp || !this.options.webVitals) return;
     void this.trackEvent(
       EventType.WEB_VITALS,
       { url: report.url, startTime: report.startTime },

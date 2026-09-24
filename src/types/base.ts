@@ -9,6 +9,7 @@ import {
 import { EIP1193Provider } from "./provider";
 import { SolanaOptions } from "../solana/types";
 import type { PrivyUser } from "../privy/types";
+import type { WebVitalsLibrary } from "../webVitals";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID
@@ -185,7 +186,7 @@ export interface TrackingOptions {
 }
 
 /**
- * Configuration options for controlling event autocapture
+ * Configuration options for controlling wallet event autocapture
  * All events are enabled by default unless explicitly set to false
  */
 export interface AutocaptureOptions {
@@ -218,13 +219,6 @@ export interface AutocaptureOptions {
    * @default true
    */
   chain?: boolean;
-
-  /**
-   * Measure Core Web Vitals (LCP, INP, CLS, FCP, TTFB) and send one
-   * `web_vitals` event per page load, when the page is first hidden
-   * @default true
-   */
-  webVitals?: boolean;
 }
 
 /**
@@ -295,13 +289,25 @@ export interface Options {
    */
   crossSubdomainCookies?: boolean;
   /**
-   * Control event autocapture (wallet events and web vitals)
-   * - `false`: Disable all autocapture
-   * - `true`: Enable all autocaptured events (default)
+   * Control wallet event autocapture
+   * - `false`: Disable all wallet autocapture
+   * - `true`: Enable all wallet events (default)
    * - `AutocaptureOptions`: Granular control over specific events
    * @default true
    */
   autocapture?: boolean | AutocaptureOptions;
+  /**
+   * Core Web Vitals. Off unless the `web-vitals` library is passed in; the
+   * SDK does not bundle it. With it, the SDK sends one `web_vitals` event per
+   * page load (LCP, INP, CLS, FCP, TTFB), when the page is first hidden.
+   * @example
+   * import * as webVitals from "web-vitals";
+   * FormoAnalytics.init(writeKey, { webVitals });
+   * @example
+   * // HTML snippet, after loading web-vitals' IIFE build
+   * formofy(writeKey, { webVitals: window.webVitals });
+   */
+  webVitals?: WebVitalsLibrary;
   /**
    * EVM provider tracking.
    * Set to `false` to disable all EVM provider detection and tracking
