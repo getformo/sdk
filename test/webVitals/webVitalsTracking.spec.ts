@@ -53,7 +53,10 @@ describe("Web vitals tracking", () => {
       value: "hidden",
       configurable: true,
     });
-    jsdom.window.document.dispatchEvent(new jsdom.window.Event("visibilitychange"));
+    // Browsers fire it at document with bubbles set (HTML spec).
+    jsdom.window.document.dispatchEvent(
+      new jsdom.window.Event("visibilitychange", { bubbles: true })
+    );
   };
 
   const sentEvents = () =>

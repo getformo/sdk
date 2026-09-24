@@ -118,6 +118,20 @@ describe("WebVitalsCollector", () => {
     expect(reports[0].metrics).to.deep.equal({ fcp: 700, cls: 0.1235, inp: 184 });
   });
 
+  it("includes a final report from a document listener added after ours", () => {
+    // web-vitals 4.x listens on document, and adds its CLS listener only
+    // once FCP is in: after the SDK started.
+    let cls: Callback = () => {};
+    start({ onCLS: (cb: Callback) => (cls = cb), onFCP: () => {} });
+    jsdom.window.document.addEventListener("visibilitychange", () => {
+      if (jsdom.window.document.visibilityState === "hidden") cls({ name: "CLS", value: 0.2 });
+    });
+
+    hide();
+
+    expect(reports[0].metrics).to.deep.equal({ cls: 0.2 });
+  });
+
   it("sends on pagehide when no visibilitychange came first", () => {
     const lib = fakeLibrary(jsdom.window as unknown as Window);
     start(lib.library);

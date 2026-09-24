@@ -7,9 +7,11 @@
  *
  * - One report per hard page load, sent when the page is first hidden (tab
  *   switch, close, navigation away). The library makes its final CLS, INP
- *   and LCP reports in its own `visibilitychange` listener, which runs
- *   before ours: it listens on `window` in the capture phase, we listen on
- *   `document`, and ours is added after the library's.
+ *   and LCP reports in its own `visibilitychange` listener, so ours must run
+ *   after it. `visibilitychange` is fired at `document` and bubbles, so we
+ *   listen on `window` in the bubble phase: that runs after every listener
+ *   on `document` (web-vitals 4.x, which adds its CLS listener late, after
+ *   FCP) and on `window` in the capture phase (5.x and 6.x).
  * - SPA route changes and back/forward cache restores are not reported on
  *   their own; CLS and INP cover the whole life of the page, as CrUX does.
  * - A metric the browser does not support is left out, not reported as 0.
@@ -130,7 +132,8 @@ export class WebVitalsCollector {
       }
     }
 
-    // Added after the library's listeners, so its final reports are in.
+    // On window, bubble phase: last in the event path, so the library's
+    // final reports are in whatever order the listeners were added.
     // Captured now, not read again at removal: teardown can run after the
     // host swapped these globals, and removing from another object silently
     // leaves the listener attached.
@@ -140,10 +143,10 @@ export class WebVitalsCollector {
       if (documentTarget.visibilityState === "hidden") this.send();
     };
     const onPageHide = () => this.send();
-    documentTarget.addEventListener("visibilitychange", onVisibilityChange);
+    windowTarget.addEventListener("visibilitychange", onVisibilityChange);
     windowTarget.addEventListener("pagehide", onPageHide);
     this.disposers.push(
-      () => documentTarget.removeEventListener("visibilitychange", onVisibilityChange),
+      () => windowTarget.removeEventListener("visibilitychange", onVisibilityChange),
       () => windowTarget.removeEventListener("pagehide", onPageHide)
     );
   }
