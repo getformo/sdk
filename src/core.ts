@@ -26,3 +26,5 @@ export {
 } from "./solana";
 export type { SolanaOptions, SolanaCluster } from "./solana";
 export type { SolanaClientStore, SolanaClientState } from "./solana";
+
+export type { ReplayOptions, RecordFn } from "./replay/types";

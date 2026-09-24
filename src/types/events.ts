@@ -107,6 +107,11 @@ export interface TrackAPIEvent {
   points?: number;
 }
 
+/** One chunk of a session replay. Sent by the replay recorder, not queued. */
+export interface ReplayAPIEvent {
+  type: "replay";
+}
+
 export type APIEvent = {
   properties?: IFormoEventProperties;
   context?: IFormoEventContext;
@@ -121,6 +126,7 @@ export type APIEvent = {
   | ConnectAPIEvent
   | DisconnectAPIEvent
   | TrackAPIEvent
+  | ReplayAPIEvent
 );
 
 export enum SignatureStatus {

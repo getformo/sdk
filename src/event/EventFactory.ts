@@ -57,7 +57,9 @@ class EventFactory implements IEventFactory {
   constructor(
     options?: Options,
     /** Consulted once per event, after the only await in creation. */
-    private readonly canCreate: () => boolean = () => true
+    private readonly canCreate: () => boolean = () => true,
+    /** The replay being recorded, stamped on every event's context. */
+    private readonly replayId: () => string | undefined = () => undefined
   ) {
     this.options = options;
     const tracking = options?.tracking;
@@ -166,7 +168,7 @@ class EventFactory implements IEventFactory {
    * trailing slashes stripped from non-root paths. The input is returned
    * unchanged when it is empty or cannot be parsed (e.g. an empty referrer).
    */
-  private redactUrl(href: string): string {
+  redactUrl(href: string): string {
     if (!href) return href;
     try {
       const url = new URL(href);
@@ -495,6 +497,9 @@ class EventFactory implements IEventFactory {
     if (generation !== this.generation || !this.canCreate()) {
       throw EVENT_CREATION_CANCELLED;
     }
+    // Links the event to the moment in the replay where it happened.
+    const replayId = this.replayId();
+    if (replayId) enrichedContext.replay_id = replayId;
     const commonEventData = {
       context: enrichedContext,
       original_timestamp: getCurrentTimeFormatted(),
@@ -806,6 +811,12 @@ class EventFactory implements IEventFactory {
           event.function_name,
           event.function_args,
           event.properties,
+          event.context
+        );
+        break;
+      case "replay":
+        formoEvent = await this.getEnrichedEvent(
+          { type: "replay", properties: event.properties ?? {} },
           event.context
         );
         break;

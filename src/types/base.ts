@@ -9,6 +9,7 @@ import {
 import { EIP1193Provider } from "./provider";
 import { SolanaOptions } from "../solana/types";
 import type { PrivyUser } from "../privy/types";
+import type { ReplayOptions } from "../replay/types";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID
@@ -362,4 +363,14 @@ export interface Options {
    */
   errorHandler?: (err: Error) => void;
   ready?: (formo: IFormoAnalytics) => void;
+  /**
+   * Session replay, recorded with rrweb. Off by default.
+   * - `true`: record every tab with the default privacy settings
+   * - `ReplayOptions`: sampling, masking, and where rrweb comes from
+   *
+   * Inputs are masked by default. Mark other sensitive elements with
+   * `data-formo-mask` (text hidden) or `data-formo-block` (not recorded).
+   * @default false
+   */
+  replay?: boolean | ReplayOptions;
 }

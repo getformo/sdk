@@ -62,6 +62,7 @@ import { EvmRequestTracker } from "./evm/EvmRequestTracker";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
+import { ReplayRecorder } from "./replay/ReplayRecorder";
 // Internal: the Privy identify is reached through identify(user), not exported.
 import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
@@ -110,6 +111,9 @@ export class FormoAnalytics implements IFormoAnalytics {
    * Only initialized when options.solana is provided or via formo.solana.
    */
   private solanaManager?: SolanaManager;
+
+  /** Session replay. Only initialized when options.replay is set. */
+  private replay?: ReplayRecorder;
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -302,7 +306,8 @@ export class FormoAnalytics implements IFormoAnalytics {
         canSend: () => !this.hasOptedOutTracking(),
       }),
       options,
-      () => !this.hasOptedOutTracking()
+      () => !this.hasOptedOutTracking(),
+      () => this.replay?.replayId
     );
 
     // Check consent status on initialization
@@ -358,6 +363,24 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.trackPageHit();
     this.trackPageHits();
+
+    if (options.replay) {
+      this.replay = new ReplayRecorder({
+        writeKey,
+        apiHost: options.apiHost || EVENTS_API_HOST,
+        options: typeof options.replay === "object" ? options.replay : {},
+        canSend: () => !this.hasOptedOutTracking(),
+        canRecord: () => !this.trackingPolicy.isTrackingSuppressed(),
+        createEnvelope: (properties) =>
+          this.eventManager.createEvent(
+            { type: "replay", properties },
+            this.currentAddress,
+            this.currentUserId
+          ),
+        redactUrl: (href) => this.eventManager.redactUrl(href),
+      });
+      void this.replay.start();
+    }
   }
 
   static async init(
@@ -424,6 +447,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // EVM provider reference so tracking can resume on the next connect.
     this.wallet.reset();
     this.solanaManager?.onReset();
+    this.replay?.reset();
 
     cookie().remove(SESSION_USER_ID_KEY);
     cookie().remove(SESSION_WALLET_IDENTIFIED_KEY);
@@ -447,6 +471,10 @@ export class FormoAnalytics implements IFormoAnalytics {
   public cleanup(): void {
     this.isCleanedUp = true;
     logger.debug("FormoAnalytics: Cleaning up resources");
+
+    // Send what the recorder holds, then stop it.
+    this.replay?.stop();
+    this.replay = undefined;
 
     // Close the queue, don't just empty it. clear() only drops what is
     // buffered at this instant; asynchronous work already in flight (event
@@ -1395,6 +1423,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     // Drop anything already buffered so a pending timer/pagehide flush
     // cannot ship events after consent withdrawal.
     this.eventManager.clear();
+    this.replay?.stop(true);
     // Identity is purged below; registered sessions must be re-learned
     // on opt-in, and nothing else would retry an already-adopted one.
     this.evmEvents.markRegisteredAdoptionsPending();
@@ -1430,6 +1459,7 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     // Remove opt-out flag
     removeConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY);
+    void this.replay?.start();
 
     // Retry wallet adoption skipped while opted out.
     this.wagmiHandler?.retryAdoption();

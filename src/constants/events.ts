@@ -8,6 +8,7 @@ export enum EventType {
   SIGNATURE = "signature",
   TRANSACTION = "transaction",
   TRACK = "track",
+  REPLAY = "replay",
 }
 
 export enum EventChannel {

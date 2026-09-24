@@ -1,4 +1,4 @@
-import { Address, APIEvent, Options } from "../types";
+import { Address, APIEvent, IFormoEvent, Options } from "../types";
 import { logger } from "../logger";
 import { IEventQueue } from "../queue";
 import { EventFactory } from "./EventFactory";
@@ -26,10 +26,23 @@ class EventManager implements IEventManager {
   constructor(
     eventQueue: IEventQueue,
     options?: Options,
-    private readonly canAcceptEvent: () => boolean = () => true
+    private readonly canAcceptEvent: () => boolean = () => true,
+    replayId?: () => string | undefined
   ) {
     this.eventQueue = eventQueue;
-    this.eventFactory = new EventFactory(options, () => this.canAcceptEvent());
+    this.eventFactory = new EventFactory(
+      options,
+      () => this.canAcceptEvent(),
+      replayId
+    );
+  }
+
+  createEvent(event: APIEvent, address?: Address, userId?: string): Promise<IFormoEvent> {
+    return this.eventFactory.create(event, address, userId);
+  }
+
+  redactUrl(href: string): string {
+    return this.eventFactory.redactUrl(href);
   }
 
   /**
