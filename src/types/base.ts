@@ -185,7 +185,7 @@ export interface TrackingOptions {
 }
 
 /**
- * Configuration options for controlling wallet event autocapture
+ * Configuration options for controlling event autocapture
  * All events are enabled by default unless explicitly set to false
  */
 export interface AutocaptureOptions {
@@ -218,6 +218,13 @@ export interface AutocaptureOptions {
    * @default true
    */
   chain?: boolean;
+
+  /**
+   * Measure Core Web Vitals (LCP, INP, CLS, FCP, TTFB) and send one
+   * `web_vitals` event per page load, when the page is first hidden
+   * @default true
+   */
+  webVitals?: boolean;
 }
 
 /**
@@ -288,9 +295,9 @@ export interface Options {
    */
   crossSubdomainCookies?: boolean;
   /**
-   * Control wallet event autocapture
-   * - `false`: Disable all wallet autocapture
-   * - `true`: Enable all wallet events (default)
+   * Control event autocapture (wallet events and web vitals)
+   * - `false`: Disable all autocapture
+   * - `true`: Enable all autocaptured events (default)
    * - `AutocaptureOptions`: Granular control over specific events
    * @default true
    */

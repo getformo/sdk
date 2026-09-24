@@ -62,6 +62,7 @@ import { EvmRequestTracker } from "./evm/EvmRequestTracker";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
+import { WebVitalsCollector, WebVitalsReport } from "./webVitals";
 // Internal: the Privy identify is reached through identify(user), not exported.
 import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
@@ -133,6 +134,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _onPopStateListener?: (e: Event) => void;
   private _onLocationChangeListener?: (e: Event) => void;
   private _pageGeneration = 0;
+
+  /** Measures Core Web Vitals for this page load; stopped by cleanup(). */
+  private webVitals?: WebVitalsCollector;
 
   config: Config;
   /**
@@ -358,6 +362,12 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.trackPageHit();
     this.trackPageHits();
+
+    if (this.isAutocaptureEnabled("webVitals")) {
+      this.webVitals = WebVitalsCollector.start((report) =>
+        this.trackWebVitals(report)
+      );
+    }
   }
 
   static async init(
@@ -481,6 +491,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         this.evmEvents.untrackProvider(provider);
       }
     }
+
+    this.webVitals?.stop();
+    this.webVitals = undefined;
 
     // Tear down page-hit hooks: remove window listeners and silence the
     // history.pushState/replaceState wrappers so an orphaned instance (e.g.
@@ -1554,6 +1567,17 @@ export class FormoAnalytics implements IFormoAnalytics {
         }
       })();
     }, 300);
+  }
+
+  /** Send the web vitals of this page load. Called once, as the page is hidden. */
+  private trackWebVitals(report: WebVitalsReport): void {
+    // Options are mutable: an app may turn web vitals off after init.
+    if (this.isCleanedUp || !this.isAutocaptureEnabled("webVitals")) return;
+    void this.trackEvent(
+      EventType.WEB_VITALS,
+      { url: report.url, startTime: report.startTime },
+      { ...report.metrics, navigation_type: report.navigationType }
+    );
   }
 
   private async trackEvent(

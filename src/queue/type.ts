@@ -5,6 +5,11 @@ export type EnqueueOptions = {
   dedupKey?: string;
   /** Stable business identifier supplied by the caller. */
   idempotencyKey?: string;
+  /**
+   * Send now, with keepalive, instead of waiting for the batch. For events
+   * made while the page is being left, after the page-leave flush has run.
+   */
+  flush?: boolean;
 };
 
 export interface IEventQueue {

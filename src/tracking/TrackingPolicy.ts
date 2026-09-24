@@ -2,13 +2,14 @@ import { ChainID, Options, TrackingOptions } from "../types";
 import { getTimezone } from "../utils/timezone";
 import { isLocalhost } from "../validators";
 
-/** Wallet event kinds that `autocapture` can switch on or off individually. */
+/** Event kinds that `autocapture` can switch on or off individually. */
 export type AutocaptureEventType =
   | "connect"
   | "disconnect"
   | "signature"
   | "transaction"
-  | "chain";
+  | "chain"
+  | "webVitals";
 
 /**
  * What the policy knows about the event being considered.
@@ -242,7 +243,7 @@ export class TrackingPolicy implements ITrackingPolicy {
     return !isLocalhost();
   }
 
-  /** Whether a wallet event kind is enabled for autocapture. Defaults to on. */
+  /** Whether an event kind is enabled for autocapture. Defaults to on. */
   isAutocaptureEnabled(eventType: AutocaptureEventType): boolean {
     const { autocapture } = this.deps.options();
     if (autocapture === undefined) return true;

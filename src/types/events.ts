@@ -106,6 +106,13 @@ export interface TrackAPIEvent {
   currency?: string;
   points?: number;
 }
+export interface WebVitalsAPIEvent {
+  type: "web_vitals";
+  /** The URL the measured page was loaded with. */
+  url: string;
+  /** Epoch ms of the navigation start of the measured page. */
+  startTime: number;
+}
 
 export type APIEvent = {
   properties?: IFormoEventProperties;
@@ -121,6 +128,7 @@ export type APIEvent = {
   | ConnectAPIEvent
   | DisconnectAPIEvent
   | TrackAPIEvent
+  | WebVitalsAPIEvent
 );
 
 export enum SignatureStatus {

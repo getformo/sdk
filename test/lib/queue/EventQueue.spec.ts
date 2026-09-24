@@ -1184,6 +1184,35 @@ describe("EventQueue", () => {
       expect(fetchInit.keepalive).to.be.true;
     });
 
+    it("sends an event enqueued with flush at once, even after the first flush", async () => {
+      useUniqueCryptoHashes();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      // The first event of a page load is always sent at once.
+      await eventQueue.enqueue(createMockEvent());
+      expect(fetchStub.callCount).to.equal(1);
+
+      // Batched: waits for the timer.
+      await eventQueue.enqueue(createMockEvent({ type: "track", event: "later" }));
+      expect(fetchStub.callCount).to.equal(1);
+
+      // A web vitals report made while the page is left: sent now, with
+      // everything still buffered, in a keepalive request.
+      await eventQueue.enqueue(createMockEvent({ type: "web_vitals" }), undefined, {
+        flush: true,
+      });
+      expect(fetchStub.callCount).to.equal(2);
+      const init = fetchStub.secondCall.args[1];
+      expect(init.keepalive).to.be.true;
+      const sent = JSON.parse(init.body).map((e: IFormoEvent) => e.type);
+      expect(sent).to.deep.equal(["track", "web_vitals"]);
+    });
+
     it("should split large payload into multiple requests with keepalive: true", async () => {
       useUniqueCryptoHashes();
 

@@ -393,6 +393,12 @@ export class EventQueue implements IEventQueue {
       `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
     );
 
+    if (options?.flush) {
+      this.flushed = true;
+      void this.flush(undefined, true);
+      return;
+    }
+
     if (!this.flushed) {
       this.flushed = true;
       this.flush();

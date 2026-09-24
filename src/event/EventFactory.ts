@@ -20,7 +20,7 @@ import {
 } from "../types";
 import { toSnakeCase, getTimezone } from "../utils";
 import { validateAddress } from "../utils/address";
-import { getCurrentTimeFormatted } from "../utils/timestamp";
+import { getCurrentTimeFormatted, getFormattedTimestamp } from "../utils/timestamp";
 import { isUndefined } from "../validators";
 import { logger } from "../logger";
 import mergeDeepRight from "../utils/mergeDeepRight";
@@ -725,6 +725,34 @@ class EventFactory implements IEventFactory {
     return this.getEnrichedEvent(trackEvent, context);
   }
 
+  /**
+   * A web vitals report describes one page load, so it is placed at that
+   * load: `page_url` is the URL the page loaded with (not a later SPA route)
+   * and the timestamp is the navigation start. The timestamp also keeps the
+   * report older than the page event of the same load, so it never becomes
+   * a visitor's "last event".
+   */
+  async generateWebVitalsEvent(
+    url: string,
+    startTime: number,
+    properties?: IFormoEventProperties,
+    context?: IFormoEventContext
+  ): Promise<IFormoEvent> {
+    const webVitalsEvent: Partial<IFormoEvent> = {
+      properties: { ...(properties ?? {}) },
+      type: "web_vitals",
+    };
+    const enriched = await this.getEnrichedEvent(webVitalsEvent, {
+      ...(context ?? {}),
+      page_url: this.redactUrl(url),
+    });
+    const loadedAt = new Date(startTime);
+    if (!Number.isNaN(loadedAt.getTime())) {
+      enriched.original_timestamp = getFormattedTimestamp(loadedAt);
+    }
+    return enriched;
+  }
+
   // Returns an event with type, context, properties, and common properties
   async create(
     event: APIEvent,
@@ -805,6 +833,14 @@ class EventFactory implements IEventFactory {
           event.transactionHash,
           event.function_name,
           event.function_args,
+          event.properties,
+          event.context
+        );
+        break;
+      case "web_vitals":
+        formoEvent = await this.generateWebVitalsEvent(
+          event.url,
+          event.startTime,
           event.properties,
           event.context
         );
