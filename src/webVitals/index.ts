@@ -2,7 +2,7 @@
  * Core Web Vitals, measured by Google's `web-vitals` library. The SDK does
  * not depend on the library: the app passes it in (`webVitals` option), so
  * web vitals are opt-in and cost nothing for apps that do not use them.
- * Only the shape below is read, so any 4.x to 6.x build works, including
+ * Only the shape below is read, so a 5.x or 6.x build works, including
  * the IIFE build's `window.webVitals`.
  *
  * - One report per hard page load, sent when the page is first hidden (tab
@@ -72,6 +72,18 @@ const MAX_MS = 15 * 60 * 1000;
  */
 const LATER_NAVIGATIONS = new Set(["back-forward-cache", "soft-navigation"]);
 
+/**
+ * Keys that already sent their report in this document, on `window` so that
+ * every SDK instance (and every copy of the bundle) sees the same set. An app
+ * that re-creates the SDK, as the React provider does when its options
+ * change, must not send a second report for the same page load.
+ */
+const REPORTED = Symbol.for("formo.webVitalsReported");
+const reportedKeys = (): Set<string> => {
+  const holder = window as unknown as Record<symbol, Set<string> | undefined>;
+  return (holder[REPORTED] ??= new Set<string>());
+};
+
 /** True when `value` has at least one of the library's `on*` functions. */
 export const isWebVitalsLibrary = (value: unknown): value is WebVitalsLibrary =>
   value !== null &&
@@ -102,7 +114,9 @@ export class WebVitalsCollector {
    */
   static start(
     library: unknown,
-    onReport: (report: WebVitalsReport) => void
+    onReport: (report: WebVitalsReport) => void,
+    /** One report per document for each key (the SDK passes its write key). */
+    key = ""
   ): WebVitalsCollector | undefined {
     if (
       !isWebVitalsLibrary(library) ||
@@ -112,18 +126,37 @@ export class WebVitalsCollector {
       return undefined;
     }
     try {
-      return new WebVitalsCollector(library, onReport);
+      if (reportedKeys().has(key)) return undefined;
+      return new WebVitalsCollector(library, onReport, key);
     } catch {
       return undefined;
     }
   }
 
+  /**
+   * The URL the document was loaded with. The navigation entry keeps it even
+   * when an SPA changed the route before the SDK started; `location` is the
+   * fallback for browsers without Navigation Timing 2.
+   */
+  private static landingUrl(): string {
+    try {
+      const entry = performance.getEntriesByType?.("navigation")?.[0];
+      if (entry && typeof entry.name === "string" && /^https?:/.test(entry.name)) {
+        return entry.name;
+      }
+    } catch {
+      // Fall back to the current URL.
+    }
+    return window.location.href;
+  }
+
   private constructor(
     library: WebVitalsLibrary,
-    onReport: (report: WebVitalsReport) => void
+    onReport: (report: WebVitalsReport) => void,
+    private readonly key: string
   ) {
     this.onReport = onReport;
-    this.url = window.location.href;
+    this.url = WebVitalsCollector.landingUrl();
     const origin = typeof performance !== "undefined" ? performance.timeOrigin : undefined;
     this.startTime =
       typeof origin === "number" && origin > 0 ? origin : Date.now();
@@ -190,6 +223,10 @@ export class WebVitalsCollector {
     const onReport = this.onReport;
     this.stop();
     if (!onReport || Object.keys(metrics).length === 0) return;
+    // Another instance for the same key may have reported this page load.
+    const reported = reportedKeys();
+    if (reported.has(this.key)) return;
+    reported.add(this.key);
     try {
       onReport({
         metrics,

@@ -232,6 +232,40 @@ describe("WebVitalsCollector", () => {
     expect(reports[0].metrics).to.deep.equal({ fcp: 600, ttfb: 90 });
   });
 
+  it("takes the landing URL from the navigation entry, not the current route", () => {
+    setGlobal("performance", {
+      timeOrigin: TIME_ORIGIN,
+      now: () => 1000,
+      getEntriesByType: (type: string) =>
+        type === "navigation" ? [{ name: "https://example.com/first-load" }] : [],
+    });
+    const lib = fakeLibrary(jsdom.window as unknown as Window);
+    start(lib.library);
+    lib.report("FCP", 700);
+    hide();
+    expect(reports[0].url).to.equal("https://example.com/first-load");
+  });
+
+  it("sends one report per page load for a key, across collectors", () => {
+    const lib = fakeLibrary(jsdom.window as unknown as Window);
+    // The SDK was re-created (React provider options change) before the hide.
+    const first = WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-a");
+    const second = WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-a");
+    expect(first).to.not.equal(undefined);
+    expect(second).to.not.equal(undefined);
+    lib.report("FCP", 700);
+    hide();
+    expect(reports).to.have.length(1);
+    // Re-created after the report: nothing to start.
+    expect(WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-a")).to.equal(
+      undefined
+    );
+    // Another project on the same page still reports.
+    expect(WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-b")).to.not.equal(
+      undefined
+    );
+  });
+
   it("does not start without the library", () => {
     expect(start(undefined)).to.equal(undefined);
     expect(start(true)).to.equal(undefined);

@@ -247,6 +247,18 @@ describe("Web vitals tracking", () => {
     );
   });
 
+  it("does not measure for a visitor who opted out before init", async () => {
+    const first = await init({ solana: false });
+    first.optOutTracking();
+    first.cleanup();
+
+    const analytics = await init({ solana: false, webVitals: fakeLibrary() });
+    expect((analytics as any).webVitals).to.equal(undefined);
+    // Opting in later on this page load does not start measuring either.
+    analytics.optInTracking();
+    expect((analytics as any).webVitals).to.equal(undefined);
+  });
+
   it("applies path exclusions to the landing page, not the current route", async () => {
     const analytics = await init({
       solana: false,

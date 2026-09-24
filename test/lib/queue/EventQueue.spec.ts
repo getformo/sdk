@@ -1271,6 +1271,25 @@ describe("EventQueue", () => {
       expect(maxInFlight).to.equal(1);
     });
 
+    it("keeps keepalive for a single event between 60KB and 64KB", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+      const event = createMockEvent({ properties: { blob: "x".repeat(62 * 1024) } });
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(fetchStub.callCount).to.equal(1);
+      const init = fetchStub.firstCall.args[1];
+      const size = new TextEncoder().encode(init.body).byteLength;
+      expect(size).to.be.greaterThan(60 * 1024);
+      expect(size).to.be.at.most(64 * 1024);
+      expect(init.keepalive).to.be.true;
+    });
+
     it("should disable keepalive for a single event exceeding 64KB", async () => {
       eventQueue = new EventQueue("test-key", {
         apiHost: "https://api.example.com",

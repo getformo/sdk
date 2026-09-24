@@ -62,7 +62,7 @@ import { EvmRequestTracker } from "./evm/EvmRequestTracker";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
-import { WebVitalsCollector, WebVitalsReport } from "./webVitals";
+import { WebVitalsCollector, WebVitalsReport, isWebVitalsLibrary } from "./webVitals";
 // Internal: the Privy identify is reached through identify(user), not exported.
 import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
@@ -364,11 +364,15 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.trackPageHits();
 
     // Opt-in: only an app that passed the web-vitals library is measured.
-    if (options.webVitals !== undefined) {
-      this.webVitals = WebVitalsCollector.start(options.webVitals, (report) =>
-        this.trackWebVitals(report)
+    // Not for a visitor who opted out: a later opt-in on this page must not
+    // send what was measured while opted out.
+    if (options.webVitals !== undefined && !this.hasOptedOutTracking()) {
+      this.webVitals = WebVitalsCollector.start(
+        options.webVitals,
+        (report) => this.trackWebVitals(report),
+        this.writeKey
       );
-      if (!this.webVitals) {
+      if (!this.webVitals && !isWebVitalsLibrary(options.webVitals)) {
         logger.warn(
           "FormoAnalytics: `webVitals` must be the web-vitals library (an object with onLCP, onINP, ...); web vitals are not measured"
         );
