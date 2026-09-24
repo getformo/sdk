@@ -170,6 +170,19 @@ describe("ReplayRecorder", () => {
     recorder.stop(true);
   });
 
+  it("sends a full snapshot at once, gzipped, without waiting for the interval", async () => {
+    const fake = fakeRecord();
+    const recorder = new ReplayRecorder(makeDeps({ options: { record: fake.record } }));
+    await recorder.start();
+    clock.tick(0);
+    await settle(recorder);
+
+    const [chunk] = sent();
+    expect(chunk.properties.has_full_snapshot).to.equal(true);
+    expect(chunk.properties.encoding).to.equal("gzip-base64");
+    recorder.stop(true);
+  });
+
   it("passes privacy defaults and custom selectors to rrweb", async () => {
     const fake = fakeRecord();
     const recorder = new ReplayRecorder(

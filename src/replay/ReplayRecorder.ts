@@ -86,8 +86,12 @@ export class ReplayRecorder {
   private bufferChars = 0;
   private flushTimer?: ReturnType<typeof setInterval>;
   private removeLeaveListeners?: () => void;
-  /** Chunks go out one at a time, in index order. */
+  /**
+   * Timed flushes go out one at a time, in index order. The page-leave send
+   * cannot wait and goes out of band; the reader orders by chunk_index.
+   */
   private sending: Promise<void> = Promise.resolve();
+  private snapshotFlushScheduled = false;
   /** Last envelope built, for the synchronous flush on page leave. */
   private template?: IFormoEvent;
   /** Bumped by stop(); an in-flight start() across a bump gives up. */
@@ -300,7 +304,25 @@ export class ReplayRecorder {
     this.bufferChars += JSON.stringify(event).length;
     if (this.bufferChars >= REPLAY_MAX_BUFFER_CHARS && !this.snapshotting) {
       this.flush();
+    } else if (event.type === RRWEB_EVENT_FULL_SNAPSHOT) {
+      this.scheduleSnapshotFlush();
     }
+  }
+
+  /**
+   * Send a full snapshot as soon as rrweb has emitted it, gzipped. Without
+   * this it could wait up to a flush interval and meet a page leave, whose
+   * synchronous path cannot compress: an uncompressed snapshot is often past
+   * the keepalive limit, the send is cancelled, and the replay is left with
+   * nothing to render from.
+   */
+  private scheduleSnapshotFlush(): void {
+    if (this.snapshotFlushScheduled) return;
+    this.snapshotFlushScheduled = true;
+    setTimeout(() => {
+      this.snapshotFlushScheduled = false;
+      if (this.stopRecording) this.flush();
+    }, 0);
   }
 
   private takeFullSnapshot(): void {
