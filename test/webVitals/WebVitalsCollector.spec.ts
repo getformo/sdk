@@ -266,6 +266,33 @@ describe("WebVitalsCollector", () => {
     );
   });
 
+  it("asks the library for every change, so a pagehide report has the latest values", () => {
+    const opts: Array<Record<string, unknown> | undefined> = [];
+    const library: Record<string, unknown> = {};
+    for (const name of ["LCP", "INP", "CLS", "FCP", "TTFB"]) {
+      library[`on${name}`] = (_cb: Callback, o?: Record<string, unknown>) => opts.push(o);
+    }
+    start(library);
+    expect(opts).to.have.length(5);
+    opts.forEach((o) => expect(o).to.deep.equal({ reportAllChanges: true }));
+  });
+
+  it("sends the latest values when pagehide comes before visibilitychange", () => {
+    // Chrome on a navigation or a close: beforeunload, pagehide,
+    // visibilitychange, unload. With reportAllChanges the library has
+    // already reported CLS and INP when pagehide fires.
+    const lib = fakeLibrary(jsdom.window as unknown as Window);
+    start(lib.library);
+    lib.report("FCP", 300);
+    lib.report("CLS", 0.05);
+    lib.report("INP", 120);
+    lib.report("CLS", 0.08);
+    jsdom.window.dispatchEvent(new jsdom.window.Event("pagehide"));
+    hide();
+    expect(reports).to.have.length(1);
+    expect(reports[0].metrics).to.deep.equal({ fcp: 300, cls: 0.08, inp: 120 });
+  });
+
   it("does not start without the library", () => {
     expect(start(undefined)).to.equal(undefined);
     expect(start(true)).to.equal(undefined);

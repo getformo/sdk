@@ -6,15 +6,20 @@
  * the IIFE build's `window.webVitals`.
  *
  * - One report per hard page load, sent when the page is first hidden (tab
- *   switch, close, navigation away). The library makes its final CLS, INP
- *   and LCP reports in its own hidden listener, on `window` in the capture
- *   phase (5.x and 6.x). Ours is on `window` in the capture phase too, added
- *   after the library's, so it runs right after it: its reports are in, and
- *   the page-leave flush (a `document` listener) has not run yet, so the
- *   report goes out in the same keepalive request as the buffered events.
- *   The capture phase also works where `visibilitychange` does not bubble.
- *   web-vitals 4.x listens on `document` and is too late for this; the SDK
- *   needs 5.x or later.
+ *   switch, close, navigation away).
+ * - The library is called with `reportAllChanges`, so it reports every new
+ *   CLS, INP and LCP value as it happens and the collector always holds the
+ *   latest one. Without it the library reports those only on
+ *   `visibilitychange`, and on a navigation or a close the browser fires
+ *   `pagehide` first (beforeunload, pagehide, visibilitychange, unload): a
+ *   report made at `pagehide` would lose them.
+ * - On a tab switch, the library's own final reports come from its hidden
+ *   listener on `window` in the capture phase (5.x and 6.x). Ours is on
+ *   `window` in the capture phase too, added after the library's, so it
+ *   runs right after it, and before the page-leave flush (a `document`
+ *   listener): the report goes out in the same keepalive request as the
+ *   buffered events. The capture phase also works where `visibilitychange`
+ *   does not bubble. The SDK needs web-vitals 5.x or later.
  * - SPA route changes and back/forward cache restores are not reported on
  *   their own; CLS and INP cover the whole life of the page, as CrUX does.
  * - A metric the browser does not support is left out, not reported as 0.
@@ -165,7 +170,7 @@ export class WebVitalsCollector {
       const on = library[`on${name}`];
       if (typeof on !== "function") continue;
       try {
-        on((metric) => this.onMetric(metric));
+        on((metric) => this.onMetric(metric), { reportAllChanges: true });
       } catch {
         // One metric the browser cannot measure must not stop the others.
       }
