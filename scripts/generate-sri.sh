@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 VERSION=$1
 REPO="getformo/sdk"
@@ -9,7 +9,12 @@ PACKAGE_NAME="@formo/analytics"
 # Get the tarball from CDN and compute SRI
 URL="https://cdn.formo.so/analytics@${VERSION}"
 echo "Fetching: $URL"
-HASH=$(curl -sSL --compressed $URL | openssl dgst -sha384 -binary | openssl base64 -A)
+BUNDLE=$(mktemp)
+trap 'rm -f "$BUNDLE"' EXIT
+curl --fail -sSL --compressed "$URL" -o "$BUNDLE"
+# An empty body hashes to sha384-OLBgp1Gs...; never publish that.
+test -s "$BUNDLE" || { echo "Empty response from $URL"; exit 1; }
+HASH=$(openssl dgst -sha384 -binary "$BUNDLE" | openssl base64 -A)
 
 echo "Hash: $HASH"
 

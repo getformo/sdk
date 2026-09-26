@@ -156,11 +156,46 @@ jobs:
         with:
           generate_release_notes: true
 
+      - name: Download published tarball
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-package
+          path: package
+
+      # The hash comes from the tarball that was published, never from the
+      # network: a CDN error body (or an empty one, whose hash is the
+      # well-known sha384-OLBgp1Gs...) must not reach the release notes.
+      # The CDN is then polled until it serves the same bytes, because it
+      # can return 5xx for a minute or two after npm publish.
       - name: Add CDN integrity hash
+        shell: bash
         run: |
-          sleep 30
+          set -euo pipefail
+          mapfile -t TARBALLS < <(find "$PWD/package" -maxdepth 1 -name '*.tgz' -type f)
+          test "${#TARBALLS[@]}" -eq 1 || { echo "Expected exactly one tarball"; exit 1; }
+          mkdir inspect
+          tar -xzf "${TARBALLS[0]}" -C inspect
+          BUNDLE=inspect/package/dist/index.umd.min.js
+          test -s "$BUNDLE" || { echo "Missing or empty $BUNDLE in tarball"; exit 1; }
+          HASH=$(openssl dgst -sha384 -binary "$BUNDLE" | openssl base64 -A)
+
           URL="https://cdn.formo.so/analytics@$VERSION"
-          HASH=$(curl --fail --silent --show-error --location --compressed "$URL" | openssl dgst -sha384 -binary | openssl base64 -A)
+          CDN_HASH=""
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error --location --compressed --max-time 60 -o cdn-bundle.js "$URL" && test -s cdn-bundle.js; then
+              CDN_HASH=$(openssl dgst -sha384 -binary cdn-bundle.js | openssl base64 -A)
+              test "$CDN_HASH" = "$HASH" && break
+              echo "Attempt $attempt: CDN hash $CDN_HASH does not match tarball hash $HASH"
+            else
+              echo "Attempt $attempt: CDN fetch failed"
+            fi
+            sleep 30
+          done
+          test "$CDN_HASH" = "$HASH" || {
+            echo "Error: $URL did not serve the published bundle (sha384-$HASH) in time"
+            exit 1
+          }
+
           gh release view "$TAG" --json body --jq .body > release-notes.md
           cat >> release-notes.md <<EOF
 
