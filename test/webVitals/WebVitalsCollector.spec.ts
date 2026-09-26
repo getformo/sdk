@@ -237,8 +237,8 @@ describe("WebVitalsCollector", () => {
   });
 
   it("falls back to the legacy navigationStart when timeOrigin is missing", () => {
+    // No timeOrigin at all, as in older Safari and WebViews.
     setGlobal("performance", {
-      timeOrigin: 0,
       now: () => 1000,
       timing: { navigationStart: TIME_ORIGIN - 5000 },
     });
