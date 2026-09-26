@@ -6,6 +6,7 @@ import { webcrypto } from "crypto";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
 import { initStorageManager } from "../../src/storage";
 import * as fetchModule from "../../src/fetch";
+import * as browsers from "../../src/browser/browsers";
 import { logger } from "../../src/logger";
 
 type Callback = (metric: { name: string; value: number; navigationType?: string }) => void;
@@ -171,6 +172,19 @@ describe("Web vitals tracking", () => {
     expect(vitalsCall.args[1].keepalive).to.equal(true);
 
     analytics.cleanup();
+  });
+
+  it("starts browser detection as soon as it measures, not at page leave", async () => {
+    const detect = sandbox.stub(browsers, "detectBrowser").resolves("chrome");
+    await init({ solana: false, webVitals: fakeLibrary() });
+    // Right after init: before the 300 ms page hit and before any page leave.
+    expect(detect.called).to.equal(true);
+  });
+
+  it("does not start browser detection early without the library", async () => {
+    const detect = sandbox.stub(browsers, "detectBrowser").resolves("chrome");
+    await init({ solana: false });
+    expect(detect.called).to.equal(false);
   });
 
   it("does not measure without the library (opt-in)", async () => {

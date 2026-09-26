@@ -63,6 +63,7 @@ import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
 import { WebVitalsCollector, WebVitalsReport, isWebVitalsLibrary } from "./webVitals";
+import { detectBrowser } from "./browser/browsers";
 // Internal: the Privy identify is reached through identify(user), not exported.
 import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
@@ -372,6 +373,11 @@ export class FormoAnalytics implements IFormoAnalytics {
         (report) => this.trackWebVitals(report),
         this.writeKey
       );
+      // The report is created as the page is left, and event creation awaits
+      // browser detection (an async Brave check). Start it now, so the
+      // result is cached long before any page leave and the report reaches
+      // the keepalive request in the same task.
+      if (this.webVitals) void detectBrowser();
       if (!this.webVitals && !isWebVitalsLibrary(options.webVitals)) {
         logger.warn(
           "FormoAnalytics: `webVitals` must be the web-vitals library (an object with onLCP, onINP, ...); web vitals are not measured"
