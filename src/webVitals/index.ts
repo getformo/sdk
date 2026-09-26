@@ -158,6 +158,24 @@ export class WebVitalsCollector {
     return window.location.href;
   }
 
+  /**
+   * Epoch ms of the navigation start: `performance.timeOrigin`, else the
+   * legacy `performance.timing.navigationStart` (older Safari and WebViews),
+   * and only then the current time.
+   */
+  private static navigationStart(): number {
+    try {
+      const origin = performance.timeOrigin;
+      if (typeof origin === "number" && origin > 0) return origin;
+      const legacy = (performance as { timing?: { navigationStart?: number } }).timing
+        ?.navigationStart;
+      if (typeof legacy === "number" && legacy > 0) return legacy;
+    } catch {
+      // No Performance API: fall back to now.
+    }
+    return Date.now();
+  }
+
   private constructor(
     library: WebVitalsLibrary,
     onReport: WebVitalsReporter,
@@ -165,9 +183,7 @@ export class WebVitalsCollector {
   ) {
     this.onReport = onReport;
     this.url = WebVitalsCollector.landingUrl();
-    const origin = typeof performance !== "undefined" ? performance.timeOrigin : undefined;
-    this.startTime =
-      typeof origin === "number" && origin > 0 ? origin : Date.now();
+    this.startTime = WebVitalsCollector.navigationStart();
 
     for (const name of METRICS) {
       const on = library[`on${name}`];

@@ -236,6 +236,19 @@ describe("WebVitalsCollector", () => {
     expect(reports[0].metrics).to.deep.equal({ fcp: 600, ttfb: 90 });
   });
 
+  it("falls back to the legacy navigationStart when timeOrigin is missing", () => {
+    setGlobal("performance", {
+      timeOrigin: 0,
+      now: () => 1000,
+      timing: { navigationStart: TIME_ORIGIN - 5000 },
+    });
+    const lib = fakeLibrary(jsdom.window as unknown as Window);
+    start(lib.library);
+    lib.report("FCP", 700);
+    hide();
+    expect(reports[0].startTime).to.equal(TIME_ORIGIN - 5000);
+  });
+
   it("takes the landing URL from the navigation entry, not the current route", () => {
     setGlobal("performance", {
       timeOrigin: TIME_ORIGIN,
