@@ -9,6 +9,7 @@ import {
 import { EIP1193Provider } from "./provider";
 import { SolanaOptions } from "../solana/types";
 import type { PrivyUser } from "../privy/types";
+import type { WebVitalsLibrary } from "../webVitals";
 
 export type Nullable<T> = T | null;
 // Decimal chain ID
@@ -295,6 +296,18 @@ export interface Options {
    * @default true
    */
   autocapture?: boolean | AutocaptureOptions;
+  /**
+   * Core Web Vitals. Off unless the `web-vitals` library is passed in; the
+   * SDK does not bundle it. With it, the SDK sends one `web_vitals` event per
+   * page load (LCP, INP, CLS, FCP, TTFB), when the page is first hidden.
+   * @example
+   * import * as webVitals from "web-vitals";
+   * FormoAnalytics.init(writeKey, { webVitals });
+   * @example
+   * // HTML snippet, after loading web-vitals' IIFE build
+   * formofy(writeKey, { webVitals: window.webVitals });
+   */
+  webVitals?: WebVitalsLibrary;
   /**
    * EVM provider tracking.
    * Set to `false` to disable all EVM provider detection and tracking

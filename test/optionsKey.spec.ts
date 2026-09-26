@@ -53,6 +53,20 @@ describe("computeOptionsKey", () => {
     );
   });
 
+  it("changes when the web-vitals library is added or replaced", () => {
+    const webVitals = { onLCP: () => {} };
+    expect(computeOptionsKey({ webVitals })).to.equal(computeOptionsKey({ webVitals }));
+    expect(computeOptionsKey({ webVitals })).to.not.equal(computeOptionsKey({}));
+    expect(computeOptionsKey({ webVitals })).to.not.equal(
+      computeOptionsKey({ webVitals: { onLCP: () => {} } })
+    );
+  });
+
+  it("does not throw for a webVitals value that is not an object", () => {
+    expect(() => computeOptionsKey({ webVitals: true as never })).to.not.throw();
+    expect(computeOptionsKey({ webVitals: true as never })).to.not.equal(computeOptionsKey({}));
+  });
+
   it("handles absent options", () => {
     expect(computeOptionsKey(undefined)).to.equal("undefined");
   });

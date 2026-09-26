@@ -70,6 +70,11 @@ const MIN_QUEUE_SIZE = 200; // 200 bytes
 // keepalive fetch requests. Payloads exceeding this are silently cancelled,
 // producing a TypeError: Failed to fetch that cannot be resolved by retrying.
 const KEEPALIVE_PAYLOAD_LIMIT = 64 * 1_024; // 64kB
+// Events are grouped into batches of at most 60kB, 4kB under the limit: a
+// web vitals report is made as the page is hidden, often while the
+// page-leave batch is in flight, and needs room in the same budget (it is
+// about 1.5kB). A single event up to the full limit still uses keepalive.
+const KEEPALIVE_BATCH_TARGET = KEEPALIVE_PAYLOAD_LIMIT - 4 * 1_024; // 60kB
 
 const DEFAULT_FLUSH_INTERVAL = 1_000 * 30; // 30 SECONDS
 const MAX_FLUSH_INTERVAL = 1_000 * 300; // 5 MINUTES
@@ -393,6 +398,12 @@ export class EventQueue implements IEventQueue {
       `Event enqueued: ${getActionDescriptor(event.type, event.properties)}`
     );
 
+    if (options?.flush) {
+      this.flushed = true;
+      void this.flush(undefined, true);
+      return;
+    }
+
     if (!this.flushed) {
       this.flushed = true;
       this.flush();
@@ -521,13 +532,14 @@ export class EventQueue implements IEventQueue {
 
   /**
    * Splits events into batches that respect the browser's 64KB keepalive
-   * payload size limit. Each batch pairs its serialized data with the
+   * payload size limit. Batches aim for KEEPALIVE_BATCH_TARGET, which leaves
+   * room for a web vitals report; one event alone may use the full limit. Each batch pairs its serialized data with the
    * original queue items (for per-item callback reporting) and a flag
    * indicating whether keepalive is safe to use.
    */
   private splitIntoBatches(items: QueueItem[], data: IFormoEventFlushPayload[]): Batch[] {
     const serialized = JSON.stringify(data);
-    if (EventQueue.byteLength(serialized) <= KEEPALIVE_PAYLOAD_LIMIT) {
+    if (EventQueue.byteLength(serialized) <= KEEPALIVE_BATCH_TARGET) {
       return [{ data, items, keepalive: true }];
     }
 
@@ -541,7 +553,7 @@ export class EventQueue implements IEventQueue {
       const eventSize = EventQueue.byteLength(JSON.stringify(event));
       const sizeWithEvent = currentSize + (currentData.length > 0 ? 1 : 0) + eventSize;
 
-      if (sizeWithEvent > KEEPALIVE_PAYLOAD_LIMIT) {
+      if (sizeWithEvent > KEEPALIVE_BATCH_TARGET) {
         if (currentData.length > 0) {
           batches.push({ data: currentData, items: currentItems, keepalive: true });
         }

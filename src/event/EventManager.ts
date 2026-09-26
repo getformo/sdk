@@ -93,7 +93,10 @@ class EventManager implements IEventManager {
         } else logger.info(`Events sent successfully: ${data.length} events`);
         callback?.(err, _, data);
       },
-      { dedupKey, idempotencyKey }
+      // A web vitals report is made as the page is hidden, after the
+      // page-leave flush has already run. Waiting for the batch timer would
+      // lose it when the page is closed.
+      { dedupKey, idempotencyKey, flush: event.type === "web_vitals" }
     );
   }
 

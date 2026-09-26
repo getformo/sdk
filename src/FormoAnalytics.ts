@@ -62,6 +62,8 @@ import { EvmRequestTracker } from "./evm/EvmRequestTracker";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
+import { WebVitalsCollector, WebVitalsReport, isWebVitalsLibrary } from "./webVitals";
+import { detectBrowser } from "./browser/browsers";
 // Internal: the Privy identify is reached through identify(user), not exported.
 import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
@@ -133,6 +135,9 @@ export class FormoAnalytics implements IFormoAnalytics {
   private _onPopStateListener?: (e: Event) => void;
   private _onLocationChangeListener?: (e: Event) => void;
   private _pageGeneration = 0;
+
+  /** Measures Core Web Vitals for this page load; stopped by cleanup(). */
+  private webVitals?: WebVitalsCollector;
 
   config: Config;
   /**
@@ -358,6 +363,27 @@ export class FormoAnalytics implements IFormoAnalytics {
 
     this.trackPageHit();
     this.trackPageHits();
+
+    // Opt-in: only an app that passed the web-vitals library is measured.
+    // Not for a visitor who opted out: a later opt-in on this page must not
+    // send what was measured while opted out.
+    if (options.webVitals !== undefined && !this.hasOptedOutTracking()) {
+      this.webVitals = WebVitalsCollector.start(
+        options.webVitals,
+        (report) => this.trackWebVitals(report),
+        this.writeKey
+      );
+      // The report is created as the page is left, and event creation awaits
+      // browser detection (an async Brave check). Start it now, so the
+      // result is cached long before any page leave and the report reaches
+      // the keepalive request in the same task.
+      if (this.webVitals) void detectBrowser();
+      if (!this.webVitals && !isWebVitalsLibrary(options.webVitals)) {
+        logger.warn(
+          "FormoAnalytics: `webVitals` must be the web-vitals library (an object with onLCP, onINP, ...); web vitals are not measured"
+        );
+      }
+    }
   }
 
   static async init(
@@ -481,6 +507,9 @@ export class FormoAnalytics implements IFormoAnalytics {
         this.evmEvents.untrackProvider(provider);
       }
     }
+
+    this.webVitals?.stop();
+    this.webVitals = undefined;
 
     // Tear down page-hit hooks: remove window listeners and silence the
     // history.pushState/replaceState wrappers so an orphaned instance (e.g.
@@ -1392,6 +1421,11 @@ export class FormoAnalytics implements IFormoAnalytics {
     // This must be done before switching storage to ensure persistence
     setConsentFlag(this.writeKey, CONSENT_OPT_OUT_KEY, "true");
     this._pageGeneration++;
+    // Measurements taken before the withdrawal must never be sent, not even
+    // after a later opt-in. The collector belongs to this page load, so it
+    // is not restarted.
+    this.webVitals?.stop();
+    this.webVitals = undefined;
     // Drop anything already buffered so a pending timer/pagehide flush
     // cannot ship events after consent withdrawal.
     this.eventManager.clear();
@@ -1556,6 +1590,22 @@ export class FormoAnalytics implements IFormoAnalytics {
     }, 300);
   }
 
+  /** Send the web vitals of this page load. Called once, as the page is hidden. */
+  private trackWebVitals(report: WebVitalsReport): boolean {
+    // Options are mutable: an app may turn web vitals off after init.
+    if (this.isCleanedUp || !this.options.webVitals) return false;
+    // Checked here too (trackEvent checks it again), so a suppressed report
+    // is not counted as this page load's report: another live instance with
+    // the same write key may still send it.
+    if (!this.shouldTrack(undefined, report.url)) return false;
+    void this.trackEvent(
+      EventType.WEB_VITALS,
+      { url: report.url, startTime: report.startTime },
+      { ...report.metrics, navigation_type: report.navigationType }
+    );
+    return true;
+  }
+
   private async trackEvent(
     type: TEventType,
     payload?: any,
@@ -1569,7 +1619,10 @@ export class FormoAnalytics implements IFormoAnalytics {
       // it is authoritative: it can name a provider or a wagmi mutation chain
       // that is not the active one. Events without a chain (page, track,
       // identify) fall back to the central value.
-      if (!this.shouldTrack(payload?.chainId)) {
+      // A web vitals report describes the page as loaded, which an SPA may
+      // have left: host and path exclusions apply to that page.
+      const url = type === EventType.WEB_VITALS ? payload?.url : undefined;
+      if (!this.shouldTrack(payload?.chainId, url)) {
         logger.info(`Skipping ${type} event due to tracking configuration`);
         answerDropped(callback, payload, "suppressed");
         return;
@@ -1609,8 +1662,8 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /** @see TrackingPolicy.shouldTrack */
-  private shouldTrack(eventChainId?: ChainID): boolean {
-    return this.trackingPolicy.shouldTrack({ chainId: eventChainId });
+  private shouldTrack(eventChainId?: ChainID, url?: string): boolean {
+    return this.trackingPolicy.shouldTrack({ chainId: eventChainId, url });
   }
 
   /**

@@ -1184,6 +1184,35 @@ describe("EventQueue", () => {
       expect(fetchInit.keepalive).to.be.true;
     });
 
+    it("sends an event enqueued with flush at once, even after the first flush", async () => {
+      useUniqueCryptoHashes();
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+
+      // The first event of a page load is always sent at once.
+      await eventQueue.enqueue(createMockEvent());
+      expect(fetchStub.callCount).to.equal(1);
+
+      // Batched: waits for the timer.
+      await eventQueue.enqueue(createMockEvent({ type: "track", event: "later" }));
+      expect(fetchStub.callCount).to.equal(1);
+
+      // A web vitals report made while the page is left: sent now, with
+      // everything still buffered, in a keepalive request.
+      await eventQueue.enqueue(createMockEvent({ type: "web_vitals" }), undefined, {
+        flush: true,
+      });
+      expect(fetchStub.callCount).to.equal(2);
+      const init = fetchStub.secondCall.args[1];
+      expect(init.keepalive).to.be.true;
+      const sent = JSON.parse(init.body).map((e: IFormoEvent) => e.type);
+      expect(sent).to.deep.equal(["track", "web_vitals"]);
+    });
+
     it("should split large payload into multiple requests with keepalive: true", async () => {
       useUniqueCryptoHashes();
 
@@ -1200,12 +1229,14 @@ describe("EventQueue", () => {
       // Should have been split into multiple fetch calls
       expect(fetchStub.callCount).to.be.greaterThan(1);
 
-      // All sub-batches should use keepalive: true and fit under 64KB
+      // All sub-batches should use keepalive: true and fit under 60KB
       for (let i = 0; i < fetchStub.callCount; i++) {
         const fetchInit = fetchStub.getCall(i).args[1];
         expect(fetchInit.keepalive).to.be.true;
         const byteSize = new TextEncoder().encode(fetchInit.body).byteLength;
-        expect(byteSize).to.be.at.most(64 * 1024);
+        // 4KB under the browser's 64KB budget, kept free for a web
+        // vitals report sent while this batch is in flight.
+        expect(byteSize).to.be.at.most(60 * 1024);
       }
     });
 
@@ -1238,6 +1269,25 @@ describe("EventQueue", () => {
 
       expect(fetchStub.callCount).to.be.greaterThan(1);
       expect(maxInFlight).to.equal(1);
+    });
+
+    it("keeps keepalive for a single event between 60KB and 64KB", async () => {
+      eventQueue = new EventQueue("test-key", {
+        apiHost: "https://api.example.com",
+        flushAt: 20,
+        flushInterval: 30000,
+        retryCount: 1,
+      });
+      const event = createMockEvent({ properties: { blob: "x".repeat(62 * 1024) } });
+      await eventQueue.enqueue(event);
+      await eventQueue.flush();
+
+      expect(fetchStub.callCount).to.equal(1);
+      const init = fetchStub.firstCall.args[1];
+      const size = new TextEncoder().encode(init.body).byteLength;
+      expect(size).to.be.greaterThan(60 * 1024);
+      expect(size).to.be.at.most(64 * 1024);
+      expect(init.keepalive).to.be.true;
     });
 
     it("should disable keepalive for a single event exceeding 64KB", async () => {
