@@ -1585,14 +1585,19 @@ export class FormoAnalytics implements IFormoAnalytics {
   }
 
   /** Send the web vitals of this page load. Called once, as the page is hidden. */
-  private trackWebVitals(report: WebVitalsReport): void {
+  private trackWebVitals(report: WebVitalsReport): boolean {
     // Options are mutable: an app may turn web vitals off after init.
-    if (this.isCleanedUp || !this.options.webVitals) return;
+    if (this.isCleanedUp || !this.options.webVitals) return false;
+    // Checked here too (trackEvent checks it again), so a suppressed report
+    // is not counted as this page load's report: another live instance with
+    // the same write key may still send it.
+    if (!this.shouldTrack(undefined, report.url)) return false;
     void this.trackEvent(
       EventType.WEB_VITALS,
       { url: report.url, startTime: report.startTime },
       { ...report.metrics, navigation_type: report.navigationType }
     );
+    return true;
   }
 
   private async trackEvent(

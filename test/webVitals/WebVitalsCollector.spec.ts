@@ -16,12 +16,14 @@ type Callback = (metric: WebVitalsMetric) => void;
  * in its own hidden listener, which it adds on window in the capture phase.
  */
 const fakeLibrary = (win: Window, names = ["LCP", "INP", "CLS", "FCP", "TTFB"]) => {
-  const callbacks: Record<string, Callback> = {};
+  // Every on* call registers its own callback, as in the real library: two
+  // collectors on one page each get every report.
+  const callbacks: Record<string, Callback[]> = {};
   const onHidden: Array<() => void> = [];
   const library: Record<string, unknown> = {};
   for (const name of names) {
     library[`on${name}`] = (cb: Callback) => {
-      callbacks[name] = cb;
+      (callbacks[name] ??= []).push(cb);
     };
   }
   win.addEventListener(
@@ -32,7 +34,9 @@ const fakeLibrary = (win: Window, names = ["LCP", "INP", "CLS", "FCP", "TTFB"]) 
     true
   );
   const report = (name: string, value: number, extra: Partial<WebVitalsMetric> = {}) =>
-    callbacks[name]?.({ name, value, navigationType: "navigate", ...extra });
+    (callbacks[name] ?? []).forEach((cb) =>
+      cb({ name, value, navigationType: "navigate", ...extra })
+    );
   const reportOnHidden = (name: string, value: number) =>
     onHidden.push(() => report(name, value));
   return { library, report, reportOnHidden };
@@ -248,14 +252,17 @@ describe("WebVitalsCollector", () => {
 
   it("sends one report per page load for a key, across collectors", () => {
     const lib = fakeLibrary(jsdom.window as unknown as Window);
-    // The SDK was re-created (React provider options change) before the hide.
-    const first = WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-a");
-    const second = WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-a");
+    const firstReports: WebVitalsReport[] = [];
+    const secondReports: WebVitalsReport[] = [];
+    // The SDK was re-created (React provider options change) before the hide:
+    // both collectors are live and both receive every metric.
+    const first = WebVitalsCollector.start(lib.library, (r) => firstReports.push(r), "key-a");
+    const second = WebVitalsCollector.start(lib.library, (r) => secondReports.push(r), "key-a");
     expect(first).to.not.equal(undefined);
     expect(second).to.not.equal(undefined);
     lib.report("FCP", 700);
     hide();
-    expect(reports).to.have.length(1);
+    expect(firstReports.length + secondReports.length).to.equal(1);
     // Re-created after the report: nothing to start.
     expect(WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-a")).to.equal(
       undefined
@@ -264,6 +271,18 @@ describe("WebVitalsCollector", () => {
     expect(WebVitalsCollector.start(lib.library, (r) => reports.push(r), "key-b")).to.not.equal(
       undefined
     );
+  });
+
+  it("does not claim the page load when a collector's report is not accepted", () => {
+    const lib = fakeLibrary(jsdom.window as unknown as Window);
+    const accepted: WebVitalsReport[] = [];
+    // An older instance with tracking off suppresses its report...
+    WebVitalsCollector.start(lib.library, () => false, "key-a");
+    // ...so the live instance for the same key still sends it.
+    WebVitalsCollector.start(lib.library, (r) => accepted.push(r), "key-a");
+    lib.report("FCP", 700);
+    hide();
+    expect(accepted).to.have.length(1);
   });
 
   it("asks the library for every change, so a pagehide report has the latest values", () => {

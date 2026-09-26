@@ -55,6 +55,9 @@ export type WebVitalsMetrics = {
   ttfb?: number;
 };
 
+/** Receives the report. Returning exactly `false` means it was not accepted (not sent). */
+export type WebVitalsReporter = (report: WebVitalsReport) => unknown;
+
 export type WebVitalsReport = {
   metrics: WebVitalsMetrics;
   /** The library's navigationType: navigate, reload, back-forward, prerender, restore. */
@@ -111,7 +114,7 @@ export class WebVitalsCollector {
   private navigationType = "navigate";
   private reported = false;
   /** Cleared by stop(): the library keeps its callbacks, which must not keep the SDK alive. */
-  private onReport?: (report: WebVitalsReport) => void;
+  private onReport?: WebVitalsReporter;
 
   /**
    * Start measuring with the library the app passed in. Returns undefined
@@ -119,7 +122,7 @@ export class WebVitalsCollector {
    */
   static start(
     library: unknown,
-    onReport: (report: WebVitalsReport) => void,
+    onReport: WebVitalsReporter,
     /** One report per document for each key (the SDK passes its write key). */
     key = ""
   ): WebVitalsCollector | undefined {
@@ -157,7 +160,7 @@ export class WebVitalsCollector {
 
   private constructor(
     library: WebVitalsLibrary,
-    onReport: (report: WebVitalsReport) => void,
+    onReport: WebVitalsReporter,
     private readonly key: string
   ) {
     this.onReport = onReport;
@@ -231,14 +234,17 @@ export class WebVitalsCollector {
     // Another instance for the same key may have reported this page load.
     const reported = reportedKeys();
     if (reported.has(this.key)) return;
-    reported.add(this.key);
     try {
-      onReport({
+      const accepted = onReport({
         metrics,
         navigationType: this.navigationType,
         url: this.url,
         startTime: this.startTime,
       });
+      // Claim the page load only when the report was accepted: an instance
+      // that suppresses it (tracking off, web vitals turned off) must not
+      // stop another live instance for the same key from reporting.
+      if (accepted !== false) reported.add(this.key);
     } catch {
       // A failing reporter must not break the host page's unload.
     }
