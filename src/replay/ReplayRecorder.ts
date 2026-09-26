@@ -1,9 +1,8 @@
-import { EVENTS_API_REQUEST_HEADER } from "../constants";
+// Only dependency-free modules: this file is the CDN replay bundle's core,
+// and anything it imports ships in that bundle.
 import fetchWithRetry, { FetchRetryError } from "../fetch";
-import { logger } from "../logger";
-import { IFormoEvent, IFormoEventProperties } from "../types";
-import { generateNativeUUID } from "../utils/generate";
-import { isNetworkError } from "../validators";
+import type { IFormoEvent, IFormoEventProperties } from "../types/events";
+import { isNetworkError } from "../validators/network";
 import {
   REPLAY_FLUSH_INTERVAL_MS,
   REPLAY_GATE_TTL_MS,
@@ -21,7 +20,6 @@ import {
   RRWEB_SOURCE_TOUCH_MOVE,
 } from "./constants";
 import { encodeReplayData, ReplayEncoding } from "./encode";
-import { loadRecorder } from "./loader";
 import {
   clearReplaySession,
   createReplaySession,
@@ -30,21 +28,13 @@ import {
   ReplaySessionState,
   saveReplaySession,
 } from "./session";
-import { RecordFn, ReplayEvent, ReplayOptions } from "./types";
-
-export interface ReplayRecorderDeps {
-  writeKey: string;
-  apiHost: string;
-  options: ReplayOptions;
-  /** Consent only. Gates every send. */
-  canSend: () => boolean;
-  /** Consent plus visitor and page exclusions. Gates what is recorded. */
-  canRecord: () => boolean;
-  /** Identity and context for a chunk, built the way every event is. */
-  createEnvelope: (properties: IFormoEventProperties) => Promise<IFormoEvent>;
-  /** The SDK's URL redaction, applied to the page URL rrweb records. */
-  redactUrl: (href: string) => string;
-}
+import {
+  RecordFn,
+  ReplayController,
+  ReplayEvent,
+  ReplayRecorderDeps,
+  ReplayRecorderFactory,
+} from "./types";
 
 /** Only real user input keeps a replay alive or wakes it from idle. */
 function isUserInput(event: ReplayEvent): boolean {
@@ -59,15 +49,15 @@ function isUserInput(event: ReplayEvent): boolean {
   );
 }
 
-function joinSelectors(base: string, extra?: string): string {
-  return extra ? `${base}, ${extra}` : base;
-}
-
 function isRetryable(error: FetchRetryError | null, response: Response | null) {
   if (error && isNetworkError(error)) return true;
   const status = response?.status ?? error?.response?.status;
   if (!status) return false;
   return (status >= 500 && status <= 599) || status === 429;
+}
+
+function joinSelectors(base: string, extra?: string): string {
+  return extra ? `${base}, ${extra}` : base;
 }
 
 /**
@@ -78,7 +68,7 @@ function isRetryable(error: FetchRetryError | null, response: Response | null) {
  * event. It bypasses the event queue: chunks are far larger than the queue's
  * batches, and must go out in order.
  */
-export class ReplayRecorder {
+export class ReplayRecorder implements ReplayController {
   private state?: ReplaySessionState;
   private record?: RecordFn;
   private stopRecording?: () => void;
@@ -94,9 +84,6 @@ export class ReplayRecorder {
   private snapshotFlushScheduled = false;
   /** Last envelope built, for the synchronous flush on page leave. */
   private template?: IFormoEvent;
-  /** Bumped by stop(); an in-flight start() across a bump gives up. */
-  private generation = 0;
-  private starting = false;
   /** No user input for REPLAY_IDLE_PAUSE_MS: stop buffering DOM changes. */
   private paused = false;
   /** Set while this class asks rrweb for a snapshot, which it must keep. */
@@ -116,28 +103,22 @@ export class ReplayRecorder {
 
   /** Begin recording, when consent, exclusions and sampling allow it. */
   async start(): Promise<void> {
-    if (this.stopRecording || this.starting) return;
+    if (this.stopRecording) return;
     if (typeof window === "undefined" || !this.deps.canRecord()) return;
 
     const state = this.resolveSession(Date.now());
     if (!state.sampled) {
-      logger.info("Session replay: this tab is not in the sample");
+      this.deps.logger.info("Session replay: this tab is not in the sample");
       return;
     }
 
-    this.starting = true;
-    const generation = this.generation;
-    try {
-      const record =
-        this.deps.options.record ?? (await loadRecorder(this.deps.options.scriptUrl));
-      if (generation !== this.generation || !this.deps.canRecord()) return;
-      this.record = record;
-      this.begin();
-    } catch (error) {
-      logger.warn("Session replay: recorder unavailable", error);
-    } finally {
-      this.starting = false;
+    const record = this.deps.options.record;
+    if (typeof record !== "function") {
+      this.deps.logger.warn("Session replay: no rrweb record function, not recording");
+      return;
     }
+    this.record = record;
+    this.begin();
   }
 
   /**
@@ -145,12 +126,11 @@ export class ReplayRecorder {
    * withdrawal). Without it, they are sent first (teardown).
    */
   stop(discard = false): void {
-    this.generation++;
     try {
       if (discard) this.clearBuffer();
       else this.flushOnLeave();
     } catch (error) {
-      logger.warn("Session replay: final chunk not sent", error);
+      this.deps.logger.warn("Session replay: final chunk not sent", error);
     } finally {
       // Always stop, or rrweb and the flush timer outlive the instance.
       this.halt();
@@ -168,26 +148,35 @@ export class ReplayRecorder {
       this.halt();
     }
     this.state = undefined;
-    clearReplaySession();
+    clearReplaySession(this.deps.storage);
     if (wasRecording) void this.start();
   }
 
   private resolveSession(now: number): ReplaySessionState {
-    const stored = this.state ?? loadReplaySession();
+    const stored = this.state ?? loadReplaySession(this.deps.storage);
     if (stored && !isReplaySessionExpired(stored, now)) {
       this.state = stored;
     } else {
-      this.state = createReplaySession(this.deps.options.sampleRate ?? 1, now);
-      saveReplaySession(this.state);
+      this.state = this.newSession(now);
     }
     return this.state;
+  }
+
+  private newSession(now: number): ReplaySessionState {
+    const state = createReplaySession(
+      this.deps.generateId(),
+      this.deps.options.sampleRate ?? 1,
+      now
+    );
+    saveReplaySession(this.deps.storage, state);
+    return state;
   }
 
   private begin(): void {
     // A page load counts as activity: without this, a reload after a few
     // idle minutes would pause at once and drop the first snapshot.
     this.state!.lastActivityAt = Date.now();
-    saveReplaySession(this.state!);
+    saveReplaySession(this.deps.storage, this.state!);
     this.paused = false;
     this.gateDropped = false;
     this.flushTimer = setInterval(() => this.flush(), REPLAY_FLUSH_INTERVAL_MS);
@@ -224,7 +213,7 @@ export class ReplayRecorder {
         }) || (() => {})
       );
     } catch (error) {
-      logger.error("Session replay: rrweb failed to start", error);
+      this.deps.logger.error("Session replay: rrweb failed to start", error);
       return undefined;
     }
   }
@@ -234,7 +223,7 @@ export class ReplayRecorder {
     try {
       this.stopRecording?.();
     } catch (error) {
-      logger.warn("Session replay: rrweb failed to stop", error);
+      this.deps.logger.warn("Session replay: rrweb failed to stop", error);
     }
     this.stopRecording = undefined;
     if (this.flushTimer) clearInterval(this.flushTimer);
@@ -282,7 +271,7 @@ export class ReplayRecorder {
       state.lastActivityAt = now;
       if (now - this.lastSavedActivityAt > REPLAY_FLUSH_INTERVAL_MS) {
         this.lastSavedActivityAt = now;
-        saveReplaySession(state);
+        saveReplaySession(this.deps.storage, state);
       }
       if (this.paused) {
         this.paused = false;
@@ -336,7 +325,7 @@ export class ReplayRecorder {
         this.stopRecording = this.startRrweb();
       }
     } catch (error) {
-      logger.warn("Session replay: snapshot failed", error);
+      this.deps.logger.warn("Session replay: snapshot failed", error);
     } finally {
       this.snapshotting = false;
     }
@@ -350,8 +339,7 @@ export class ReplayRecorder {
     if (!isReplaySessionExpired(this.state, Date.now())) return;
     this.flush();
     this.halt();
-    this.state = createReplaySession(this.deps.options.sampleRate ?? 1, Date.now());
-    saveReplaySession(this.state);
+    this.state = this.newSession(Date.now());
     if (this.state.sampled) this.begin();
   }
 
@@ -371,7 +359,7 @@ export class ReplayRecorder {
     const events = this.buffer;
     this.clearBuffer();
     const chunkIndex = state.nextChunk++;
-    saveReplaySession(state);
+    saveReplaySession(this.deps.storage, state);
     return { replayId: state.id, chunkIndex, events };
   }
 
@@ -380,7 +368,7 @@ export class ReplayRecorder {
     if (!chunk) return;
     this.sending = this.sending
       .then(() => this.sendChunk(chunk.replayId, chunk.chunkIndex, chunk.events))
-      .catch((error) => logger.warn("Session replay: chunk not sent", error));
+      .catch((error) => this.deps.logger.warn("Session replay: chunk not sent", error));
   }
 
   private chunkProperties(
@@ -461,7 +449,7 @@ export class ReplayRecorder {
       ),
     };
     void this.post(envelope, chunk.events[0].timestamp).catch((error) =>
-      logger.warn("Session replay: chunk not sent on page leave", error)
+      this.deps.logger.warn("Session replay: chunk not sent on page leave", error)
     );
   }
 
@@ -470,13 +458,18 @@ export class ReplayRecorder {
       {
         ...envelope,
         original_timestamp: new Date(firstTimestamp).toISOString(),
-        message_id: generateNativeUUID(),
+        message_id: this.deps.generateId(),
         sent_at: new Date().toISOString(),
       },
     ]);
     const response = await fetchWithRetry(this.deps.apiHost, {
       method: "POST",
-      headers: EVENTS_API_REQUEST_HEADER(this.deps.writeKey),
+      // Same headers as EVENTS_API_REQUEST_HEADER, which lives beside the
+      // timezone table in constants/config and would bloat this bundle.
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.deps.writeKey}`,
+      },
       body,
       keepalive: body.length <= REPLAY_KEEPALIVE_MAX_CHARS,
       retries: 2,
@@ -503,3 +496,6 @@ export class ReplayRecorder {
     };
   }
 }
+
+export const createReplayRecorder: ReplayRecorderFactory = (deps) =>
+  new ReplayRecorder(deps);

@@ -2,10 +2,16 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
-import { initStorageManager } from "../../src/storage";
+import { initStorageManager, session } from "../../src/storage";
 import * as fetchModule from "../../src/fetch";
-import { ReplayRecorder, ReplayRecorderDeps } from "../../src/replay/ReplayRecorder";
-import { RecordFn, ReplayEmit, ReplayEvent } from "../../src/replay/types";
+import { ReplayRecorder } from "../../src/replay/ReplayRecorder";
+import {
+  RecordFn,
+  ReplayEmit,
+  ReplayEvent,
+  ReplayRecorderDeps,
+} from "../../src/replay/types";
+import { generateNativeUUID } from "../../src/utils/generate";
 import { clearReplaySession } from "../../src/replay/session";
 import {
   REPLAY_FLUSH_INTERVAL_MS,
@@ -72,6 +78,9 @@ describe("ReplayRecorder", () => {
       writeKey: "test-write-key",
       apiHost: "https://events.example/v0/raw_events",
       options: {},
+      storage: session(),
+      generateId: generateNativeUUID,
+      logger: { info() {}, warn() {}, error() {} },
       canSend: () => true,
       canRecord: () => true,
       createEnvelope: async (properties) =>
@@ -116,7 +125,7 @@ describe("ReplayRecorder", () => {
     initStorageManager("test-write-key");
     // The storage manager is a process-wide singleton bound to the first
     // spec's jsdom, so clear through it rather than this jsdom's storage.
-    clearReplaySession();
+    clearReplaySession(session());
     clock = sinon.useFakeTimers({
       now: new Date("2026-09-24T10:00:00Z"),
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],

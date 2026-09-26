@@ -62,7 +62,8 @@ import { EvmRequestTracker } from "./evm/EvmRequestTracker";
 import { WagmiEventHandler } from "./wagmi";
 import { isSolanaChainId } from "./solana";
 import { SolanaManager } from "./solana/SolanaManager";
-import { ReplayRecorder } from "./replay/ReplayRecorder";
+import { createReplay } from "./replay/createReplay";
+import type { ReplayController, ReplayOptions } from "./replay/types";
 // Internal: the Privy identify is reached through identify(user), not exported.
 import { identifyPrivyUser } from "./privy/utils";
 import type { PrivyUser } from "./privy";
@@ -113,7 +114,7 @@ export class FormoAnalytics implements IFormoAnalytics {
   private solanaManager?: SolanaManager;
 
   /** Session replay. Only initialized when options.replay is set. */
-  private replay?: ReplayRecorder;
+  private replay?: ReplayController;
 
   /**
    * Flag indicating if Wagmi mode is enabled
@@ -365,21 +366,7 @@ export class FormoAnalytics implements IFormoAnalytics {
     this.trackPageHits();
 
     if (options.replay) {
-      this.replay = new ReplayRecorder({
-        writeKey,
-        apiHost: options.apiHost || EVENTS_API_HOST,
-        options: typeof options.replay === "object" ? options.replay : {},
-        canSend: () => !this.hasOptedOutTracking(),
-        canRecord: () => !this.trackingPolicy.isTrackingSuppressed(),
-        createEnvelope: (properties) =>
-          this.eventManager.createEvent(
-            { type: "replay", properties },
-            this.currentAddress,
-            this.currentUserId
-          ),
-        redactUrl: (href) => this.eventManager.redactUrl(href),
-      });
-      void this.replay.start();
+      void this.initReplay(options.replay === true ? {} : options.replay);
     }
   }
 
@@ -526,6 +513,34 @@ export class FormoAnalytics implements IFormoAnalytics {
     }
 
     logger.debug("FormoAnalytics: Cleanup complete");
+  }
+
+  /**
+   * Set up session replay. The recorder is bundled by the app through
+   * `@formo/analytics/replay`, or loaded from a CDN here, so the core SDK
+   * carries none of it.
+   */
+  private initReplay(options: ReplayOptions): Promise<void> {
+    return createReplay(options, {
+        writeKey: this.writeKey,
+        apiHost: this.options.apiHost || EVENTS_API_HOST,
+        canSend: () => !this.hasOptedOutTracking(),
+        canRecord: () => !this.trackingPolicy.isTrackingSuppressed(),
+        createEnvelope: (properties) =>
+          this.eventManager.createEvent(
+            { type: "replay", properties },
+            this.currentAddress,
+            this.currentUserId
+          ),
+        redactUrl: (href) => this.eventManager.redactUrl(href),
+      })
+      .then((replay) => {
+        // Torn down while the bundle loaded: never start.
+        if (this.isCleanedUp) return;
+        this.replay = replay;
+        return replay.start();
+      })
+      .catch((error) => logger.warn("Session replay unavailable", error));
   }
 
   /**

@@ -14,7 +14,9 @@
     "dist/cjs/src",
     "dist/esm/src",
     "dist/index.umd.min.js",
-    "dist/index.umd.min.js.LICENSE.txt"
+    "dist/index.umd.min.js.LICENSE.txt",
+    "dist/replay.umd.min.js",
+    "dist/replay.umd.min.js.LICENSE.txt"
   ],
   "exports": {
     ".": {
@@ -25,6 +27,11 @@
       "types": "./dist/esm/src/core.d.ts",
       "import": "./dist/esm/src/core.js",
       "require": "./dist/cjs/src/core.js"
+    },
+    "./replay": {
+      "types": "./dist/esm/src/replay/index.d.ts",
+      "import": "./dist/esm/src/replay/index.js",
+      "require": "./dist/cjs/src/replay/index.js"
     }
   },
   "sideEffects": [
@@ -47,6 +54,7 @@
     "mipd": "0.0.7"
   },
   "devDependencies": {
+    "@rrweb/record": "2.1.6",
     "@size-limit/esbuild": "^12.1.0",
     "@size-limit/file": "^12.1.0",
     "@types/chai": "^4.3.20",
@@ -73,12 +81,12 @@
   },
   "scripts": {
     "prebuild": "pnpm clean",
-    "build": "pnpm build-cjs && pnpm build-esm && pnpm run webpack:prod && pnpm clean-build",
+    "build": "pnpm build-cjs && pnpm build-esm && pnpm run webpack:prod && pnpm clean-build && node scripts/replay-integrity.js",
     "build-cjs": "tsc --build",
     "build-esm": "tsc -m es6 --outdir dist/esm",
     "webpack:prod": "webpack --mode=production",
     "clean": "rm -rf dist",
-    "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\;",
+    "clean-build": "find dist -name '*.map' -delete && find dist -name '*.tsbuildinfo' -delete && find dist -name 'test' -type d -exec rm -rf {} \\; && rm -f dist/cjs/src/replay/bundle.* dist/esm/src/replay/bundle.*",
     "lint": "eslint '{src,test}/**/*.{ts,tsx}'",
     "test": "mocha --require ts-node/register --project tsconfig.test.json --require test/rootHooks.ts 'test/**/*.ts'",
     "test-watch": "nodemon --config test.nodemon.json",
@@ -91,7 +99,11 @@
   "size-limit": [
     {
       "path": "dist/index.umd.min.js",
-      "limit": "69.5 KB"
+      "limit": "66.5 KB"
+    },
+    {
+      "path": "dist/replay.umd.min.js",
+      "limit": "27 KB"
     }
   ],
   "peerDependencies": {

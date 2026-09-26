@@ -3,10 +3,11 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../../src/FormoAnalytics";
-import { initStorageManager } from "../../src/storage";
+import { initStorageManager, session } from "../../src/storage";
 import * as fetchModule from "../../src/fetch";
 import { clearReplaySession } from "../../src/replay/session";
 import { RecordFn, ReplayEmit } from "../../src/replay/types";
+import { replay } from "../../src/replay";
 
 /** SDK-level wiring: options, identity on chunks, event links, consent. */
 describe("Session replay through FormoAnalytics", () => {
@@ -62,7 +63,7 @@ describe("Session replay through FormoAnalytics", () => {
       });
     }
     initStorageManager("test-write-key");
-    clearReplaySession();
+    clearReplaySession(session());
     fetchStub = sandbox.stub(fetchModule, "default").resolves({
       ok: true,
       status: 200,
@@ -89,7 +90,7 @@ describe("Session replay through FormoAnalytics", () => {
     const formo = await FormoAnalytics.init("test-write-key", {
       tracking: true,
       apiHost: "https://proxy.example/ingest",
-      replay: { record: fake.record },
+      replay: replay({ record: fake.record }),
     });
     const replayId = (formo as any).replay.replayId;
     expect(replayId).to.be.a("string");
@@ -114,7 +115,7 @@ describe("Session replay through FormoAnalytics", () => {
     const fake = fakeRecord();
     const formo = await FormoAnalytics.init("test-write-key", {
       tracking: true,
-      replay: { record: fake.record },
+      replay: replay({ record: fake.record }),
     });
     formo.optOutTracking();
     expect(fake.stop.calledOnce).to.equal(true);
@@ -128,7 +129,7 @@ describe("Session replay through FormoAnalytics", () => {
     const fake = fakeRecord();
     const formo = await FormoAnalytics.init("test-write-key", {
       tracking: true,
-      replay: { record: fake.record },
+      replay: replay({ record: fake.record }),
     });
     formo.cleanup();
     expect(fake.stop.calledOnce).to.equal(true);

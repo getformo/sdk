@@ -1,10 +1,9 @@
-import { session } from "../storage";
-import { generateNativeUUID } from "../utils/generate";
 import {
   REPLAY_IDLE_TIMEOUT_MS,
   REPLAY_MAX_DURATION_MS,
   REPLAY_SESSION_KEY,
 } from "./constants";
+import { ReplayStorage } from "./types";
 
 /**
  * One replay per browser tab. sessionStorage keeps it across reloads and
@@ -44,9 +43,11 @@ function isReplaySessionState(value: unknown): value is ReplaySessionState {
   );
 }
 
-export function loadReplaySession(): ReplaySessionState | undefined {
+export function loadReplaySession(
+  storage: ReplayStorage
+): ReplaySessionState | undefined {
   try {
-    const stored = session().get(REPLAY_SESSION_KEY);
+    const stored = storage.get(REPLAY_SESSION_KEY);
     const parsed = typeof stored === "string" ? JSON.parse(stored) : stored;
     return isReplaySessionState(parsed) ? parsed : undefined;
   } catch {
@@ -54,29 +55,33 @@ export function loadReplaySession(): ReplaySessionState | undefined {
   }
 }
 
-export function saveReplaySession(state: ReplaySessionState): void {
+export function saveReplaySession(
+  storage: ReplayStorage,
+  state: ReplaySessionState
+): void {
   try {
-    session().set(REPLAY_SESSION_KEY, JSON.stringify(state));
+    storage.set(REPLAY_SESSION_KEY, JSON.stringify(state));
   } catch {
     // Storage can be full or blocked. The replay still runs for this page.
   }
 }
 
-export function clearReplaySession(): void {
+export function clearReplaySession(storage: ReplayStorage): void {
   try {
-    session().remove(REPLAY_SESSION_KEY);
+    storage.remove(REPLAY_SESSION_KEY);
   } catch {
     /* nothing stored */
   }
 }
 
 export function createReplaySession(
+  id: string,
   sampleRate: number,
   now: number
 ): ReplaySessionState {
   const rate = Math.min(1, Math.max(0, sampleRate));
   return {
-    id: generateNativeUUID(),
+    id,
     sampled: Math.random() < rate,
     startedAt: now,
     lastActivityAt: now,

@@ -1,13 +1,3 @@
-/**
- * Pinned rrweb recorder for script-tag installs. The UMD build defines
- * `window.rrwebRecord`. The integrity hash was taken from the npm tarball of
- * the same version and matches the file jsDelivr serves.
- */
-export const REPLAY_SCRIPT_URL =
-  "https://cdn.jsdelivr.net/npm/@rrweb/record@2.1.6/umd/record.min.js";
-export const REPLAY_SCRIPT_INTEGRITY =
-  "sha384-UXg/O1bVryk2M3h7gqexGANyLz+zFnrl1KWPxii4mUPP42AwGp1LvfeGjURH/0F9";
-
 /** sessionStorage key for the current tab's replay. */
 export const REPLAY_SESSION_KEY = "replay-session";
 
