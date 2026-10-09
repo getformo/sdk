@@ -286,6 +286,11 @@ async function runTwoWallets(opts) {
   const active = makeProvider({ chainId: 1, ...(opts.provider ?? {}) });
   const other = makeProvider({ chainId: 137, exposeChainId: !!(opts.otherAnnounces) });
   globalThis.window.ethereum = active;
+  // A real extension answers every `eip6963:requestProvider`, so it stays in
+  // the SDK's announcement list when another wallet announces later.
+  if (opts.answersRequests) {
+    dom.window.addEventListener("eip6963:requestProvider", () => announce6963(active));
+  }
   announce6963(active);
   const formo = await FormoAnalytics.init("wk_e2e", { tracking: true, flushAt: 1, flushInterval: 10, ...opts.sdk });
   await settle();
@@ -301,6 +306,12 @@ async function runTwoWallets(opts) {
   await settle();
   other.rpcCalls.length = 0;   // only count what the signature costs
   rec("otherDiscovered");
+
+  // The app's own event, after the other wallet changed network.
+  if (opts.trackAfter) {
+    await formo.track("Swap Completed");
+    await settle(); rec("trackAfterOther");
+  }
 
   await other.request({ method: "personal_sign", params: ["0x6869", ADDR_A] });
   await settle(); rec("signViaOther");

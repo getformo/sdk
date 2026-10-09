@@ -44,6 +44,8 @@ export const SCENARIOS = [
     expect: { signExplicitAccount: [`signature:requested@137/${B}`, `signature:confirmed@137/${B}`] } },
   { name: "eip1193: a second wallet's signature is NOT labelled with the active wallet's chain (#329)", mode: "twowallets",
     expect: { signViaOther: [`signature:requested@0/${A}`, `signature:confirmed@0/${A}`] }, rpcMustNotInclude: ["eth_chainId"] },
+  { name: "eip1193: another wallet changing network keeps the active wallet's address on track()", mode: "twowallets", opts: { answersRequests: true, otherAnnounces: true, trackAfter: true },
+    expect: { otherDiscovered: [`detect@-/${A}`], trackAfterOther: [`track(Swap Completed)@-/${A}`] } },
   { name: "eip1193: a provider with no chain exposed reports 0, never a guess", mode: "cold",
     expect: { accountsChanged: [`connect@0/${A}`], signature: [`signature:requested@0/${A}`, `signature:confirmed@0/${A}`] } },
   { name: "eip1193: a provider whose eth_chainId fails still reports 0", mode: "unknownchain",

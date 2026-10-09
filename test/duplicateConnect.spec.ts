@@ -342,16 +342,18 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     formo.cleanup?.();
   });
 
-  it("drops a displaced provider's record on a chain-driven switch", async () => {
-    // `handleProviderMismatch()` replaces the active provider through
-    // `setChainState()`, which does not go via the `_provider` setter. A's
-    // record has to be cleared there too, or coming back to A is suppressed.
+  it("keeps the active wallet when another wallet changes network", async () => {
+    // Two extensions installed (Rabby and MetaMask, say): one network switch
+    // fires `chainChanged` on both. The background wallet's event used to
+    // take the active slot and clear the address, so every later track()
+    // went out with no address. Default options, so chain autocapture is on.
     const a = makeProvider([ADDRESS]);
-    const bAccounts = [OTHER];
-    const b = makeProvider(bAccounts);
+    const b = makeProvider([OTHER]);
     (global as any).window.ethereum = a;
     const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
-    const connect = sandbox.stub(formo, "connect").resolves();
+    const sent: { type: string; address?: string }[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any, address: any) => { sent.push({ type: e.type, address }); });
     for (const p of [a, b]) {
       (formo as any).evmEvents.registerAccountsChangedListener(p);
       (formo as any).evmEvents.registerConnectListener(p);
@@ -361,25 +363,86 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     a.emit("connect", { chainId: "0x1" });
     a.emit("accountsChanged", [ADDRESS]);
     await new Promise((r) => setTimeout(r, 60));
-    expect(connect.callCount, "A reported").to.equal(1);
+    expect(formo.currentAddress?.toLowerCase(), "A connected").to.equal(ADDRESS.toLowerCase());
 
-    // B takes the active slot via a chain event, not a disconnect. This goes
-    // through handleProviderMismatch -> setChainState, which never touches the
-    // `_provider` setter.
     b.emit("chainChanged", "0x89");
     await new Promise((r) => setTimeout(r, 60));
-    expect((formo as any)._provider, "B displaced A").to.equal(b);
 
-    // B then stops holding accounts, so A can take the slot back. Without
-    // this the SDK correctly refuses to let a background wallet steal it.
-    bAccounts.length = 0;
+    expect((formo as any)._provider, "B did not displace A").to.equal(a);
+    expect(formo.currentAddress?.toLowerCase(), "A's address kept").to.equal(ADDRESS.toLowerCase());
+    expect(formo.currentChainId, "A's chain kept").to.equal(1);
 
+    await formo.track("Swap Completed");
+    const swap = sent.filter((e) => e.type === "track").pop();
+    expect(swap?.address?.toLowerCase(), "track() carries A's address").to.equal(ADDRESS.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("still switches to another wallet that reports accounts after changing network", async () => {
+    // A chain change no longer moves the slot, so a real switch must still
+    // arrive through the account signal. A is active, B changes network and
+    // then reports a different account: that is a switch to B.
+    const a = makeProvider([ADDRESS]);
+    const b = makeProvider([OTHER]);
+    (global as any).window.ethereum = a;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    const sent: { type: string; address?: string }[] = [];
+    sandbox.stub((formo as any).eventManager, "addEvent")
+      .callsFake(async (e: any, address: any) => { sent.push({ type: e.type, address: e.address ?? address }); });
+    for (const p of [a, b]) {
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
+      (formo as any).evmEvents.registerChainChangedListener(p);
+    }
+
+    a.emit("connect", { chainId: "0x1" });
     a.emit("accountsChanged", [ADDRESS]);
-    await new Promise((r) => setTimeout(r, 80));
-    expect(
-      connect.callCount,
-      "A's return is reported after being displaced"
-    ).to.be.greaterThan(1);
+    await waitFor(() => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(), "A to connect");
+
+    b.emit("chainChanged", "0x89");
+    await settle();
+    expect((formo as any)._provider, "a chain change alone is not a switch").to.equal(a);
+
+    b.emit("accountsChanged", [OTHER]);
+    await waitFor(() => formo.currentAddress?.toLowerCase() === OTHER.toLowerCase(), "B to take the slot");
+
+    expect((formo as any)._provider, "B is active").to.equal(b);
+    const connects = sent.filter((e) => e.type === "connect").map((e) => e.address?.toLowerCase());
+    expect(connects, "B's connect is reported").to.include(OTHER.toLowerCase());
+    formo.cleanup?.();
+  });
+
+  it("keeps an active Solana session when an EVM wallet changes network", async () => {
+    // A chain event from an EVM wallet must not relabel a Solana session as
+    // EVM or touch the EVM wallet tracked behind it.
+    const SOL_CHAIN = 900001;
+    const SOL_A = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+    const a = makeProvider([ADDRESS]);
+    const b = makeProvider([OTHER]);
+    (global as any).window.ethereum = a;
+    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
+    sandbox.stub((formo as any).eventManager, "addEvent").resolves();
+    for (const p of [a, b]) {
+      (formo as any).evmEvents.registerAccountsChangedListener(p);
+      (formo as any).evmEvents.registerConnectListener(p);
+      (formo as any).evmEvents.registerChainChangedListener(p);
+    }
+
+    a.emit("connect", { chainId: "0x1" });
+    a.emit("accountsChanged", [ADDRESS]);
+    await waitFor(() => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(), "A to connect");
+    await settle();
+    await formo.connect({ chainId: SOL_CHAIN, address: SOL_A as any });
+    await settle();
+    expect(formo.currentAddress, "Solana is active").to.equal(SOL_A);
+
+    b.emit("chainChanged", "0x89");
+    await settle();
+
+    expect(formo.currentAddress, "the Solana session stays active").to.equal(SOL_A);
+    expect(formo.currentChainId).to.equal(SOL_CHAIN);
+    expect((formo as any)._provider, "the EVM wallet behind it is kept").to.equal(a);
+    expect((formo as any)._evmAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
     formo.cleanup?.();
   });
 
@@ -537,10 +600,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
 
   it("abandons a wallet switch that a third provider overtook mid-disconnect", async () => {
     // A is active. B signals a switch and stalls awaiting A's disconnect
-    // event. While it stalls, C changes network - which counts as a wallet
-    // switch and makes C active - and then reports its own connect. A's
-    // disconnect correctly leaves C alone, but B's continuation used to clear
-    // C anyway and install itself, unreporting a live connection.
+    // event. While it stalls, C connects and becomes active. A's disconnect
+    // correctly leaves C alone, but B's continuation used to clear C anyway
+    // and install itself, unreporting a live connection.
     const THIRD = "0x2F4bD6D2A5b7a19a49b6Cf2C0a0F1A5d33e8b7C1" as const;
     const providerA = makeProvider([ADDRESS]);
     const providerB = makeProvider([OTHER]);
@@ -575,10 +637,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     providerB.emit("accountsChanged", [OTHER]);
     await waitFor(() => parked, "the switch to park on A's disconnect event");
 
-    // C overtakes: a chain change claims the active slot, then C connects.
-    providerC.emit("chainChanged", "0x89");
-    await settle();
-    providerC.emit("connect", { chainId: "0x89" });
+    // C overtakes. Another wallet's chain change no longer claims the slot,
+    // so C takes it through connect(), which takes its own place in the order.
+    await formo.connect({ chainId: 137, address: THIRD });
     await waitFor(
       () => formo.currentAddress?.toLowerCase() === THIRD.toLowerCase(),
       "C to claim the slot before the stalled handler resumes"
@@ -701,10 +762,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     providerB.emit("accountsChanged", [OTHER]);
     await waitFor(() => probeParked, "the switch to park on its accounts probe");
 
-    // C claims the namespace while the probe is stalled.
-    providerC.emit("chainChanged", "0x89");
-    await settle();
-    providerC.emit("connect", { chainId: "0x89" });
+    // C claims the namespace while the probe is stalled. Another wallet's
+    // chain change no longer claims the slot, so C takes it through connect().
+    await formo.connect({ chainId: 137, address: THIRD });
     await waitFor(
       () => formo.currentAddress?.toLowerCase() === THIRD.toLowerCase(),
       "C to claim the namespace during the probe"

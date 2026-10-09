@@ -1056,17 +1056,19 @@ export class EvmEventTracker {
     this.registry.rememberChain(provider, nextChainId);
 
     // Beyond that, a chain event from a NON-active provider is observation
-    // only when chain autocapture is off.
+    // only. Another wallet changing network is not a wallet switch.
     //
-    // This listener is now registered unconditionally, so that a signature can
-    // be labelled with its signer's chain. `handleProviderMismatch()` treats a
-    // chain event from another wallet as a wallet switch and clears the active
-    // wallet's address and chain. That is the established behaviour of the
-    // chain feature and stays exactly as it was, but it must not start firing
-    // for apps that never asked for chain tracking: a second wallet switching
-    // network would silently erase the active wallet's attribution.
-    // Observation only when chain autocapture is off, whether or not an
-    // active provider has been established yet.
+    // This used to go through `handleProviderMismatch()`, which took the
+    // active slot and cleared the active wallet's address. With two
+    // extensions installed (Rabby and MetaMask, say), one network switch
+    // fires `chainChanged` on both, so every `track()` after it went out with
+    // no address until the next connect or identify. A real switch still
+    // arrives as `accountsChanged`, `connect` or a request through the other
+    // wallet, and those paths move the slot.
+    if (this.isProviderMismatch(provider)) return;
+
+    // With no active provider yet, a chain event only claims the slot when
+    // chain autocapture is on.
     //
     // `isProviderMismatch()` is false while `_provider` is undefined, which is
     // exactly the state left by restoring a wallet from the active-wallet
@@ -1077,19 +1079,6 @@ export class EvmEventTracker {
     // another wallet changing network.
     if (!this.deps.isAutocaptureEnabled("chain") && provider !== this.wallet.provider) {
       return;
-    }
-
-    // Only handle chain changes for the active provider (or if none is set yet)
-    // A chain event from a non-active EVM provider is only a wallet switch
-    // on the EVM side. While Solana holds the active slot it is background
-    // noise: letting it through relabelled the session as EVM with no wallet
-    // and wiped the EVM wallet we were tracking, on the strength of a network
-    // change in a wallet nobody was using. The chain itself is still
-    // recorded above, so a later request through that provider is labelled
-    // correctly.
-    if (this.isProviderMismatch(provider)) {
-      if (this.wallet.activeNamespace === "solana") return;
-      this.handleProviderMismatch(provider);
     }
 
     // Chain changes only matter for connected users
@@ -1663,17 +1652,4 @@ export class EvmEventTracker {
       }
     }
   }
-
-  /**
-   * Handle provider mismatch by switching to the new provider and invalidating old tokens
-   * @param provider The new provider to switch to
-   */
-  private handleProviderMismatch(provider: EIP1193Provider): void {
-    // If this is a different provider, allow the switch
-    if (this.wallet.provider) {
-      // Clear any provider-specific state when switching
-      this.wallet.set('evm', { address: undefined, chainId: undefined, provider });
-    } else {
-      this.wallet.provider = provider;
-    }
-  }}
+}
