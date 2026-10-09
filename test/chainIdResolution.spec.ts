@@ -343,9 +343,8 @@ describe("Chain id resolution for autocaptured requests", () => {
     (formo as any)._provider = active;
     (formo as any).setChainState("evm", { chainId: ACTIVE_CHAIN });
     const other = providerOnChain(OTHER_CHAIN);
-    // Seeded directly rather than through onChainChanged: a `chainChanged`
-    // from a different provider is a deliberate wallet switch and moves the
-    // active provider. Here the point is a *non-active* provider signing.
+    // Seeded directly rather than through onChainChanged: the point here is
+    // a *non-active* provider signing, not its chain announcement.
     (formo as any).rememberProviderChain(other, OTHER_CHAIN);
 
     const OTHER_ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -428,9 +427,8 @@ describe("Chain id resolution for autocaptured requests", () => {
 
   it("does not let an inactive wallet's chain change seize the active slot", async () => {
     // chainChanged is now observed unconditionally so signatures can be
-    // labelled. handleProviderMismatch treats another wallet's chain event as
-    // a wallet switch and clears the active wallet - that must not start
-    // happening for apps that never asked for chain tracking.
+    // labelled. Another wallet's chain event must never be taken for a wallet
+    // switch, with chain tracking off as well as on.
     const tracker = await makeFormo({
       tracking: true,
       autocapture: { chain: false, signature: true },
@@ -447,6 +445,53 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((tracker as any)._evmChainId, "active chain unchanged").to.equal(ACTIVE_CHAIN);
     // But its chain was still learned, which is the point of observing.
     expect((tracker as any).resolveChainIdForProvider(other)).to.equal(OTHER_CHAIN);
+  });
+
+  it("keeps the active wallet when another wallet changes network (default options)", async () => {
+    // Two extensions installed: one network switch fires chainChanged on
+    // both. The background wallet's event used to take the active slot and
+    // clear the address whenever chain autocapture was on, which it is by
+    // default, so every later track() went out with no address.
+    const tracker = await makeFormo({ tracking: true });
+    const addEvent = sandbox.stub((tracker as any).eventManager, "addEvent").resolves();
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (tracker as any)._provider = active;
+    (tracker as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    const other = providerOnChain(OTHER_CHAIN);
+    await (tracker as any).evmEvents.onChainChanged(other, `0x${OTHER_CHAIN.toString(16)}`);
+
+    expect((tracker as any)._provider, "active provider unchanged").to.equal(active);
+    expect((tracker as any)._evmAddress, "active address unchanged").to.equal(ADDRESS);
+    expect((tracker as any)._evmChainId, "active chain unchanged").to.equal(ACTIVE_CHAIN);
+    expect((tracker as any).resolveChainIdForProvider(other), "other chain learned").to.equal(OTHER_CHAIN);
+    expect(
+      addEvent.getCalls().filter((c) => c.args[0]?.type === "chain"),
+      "no chain event for a wallet that is not active"
+    ).to.have.length(0);
+
+    await tracker.track("Swap Completed");
+    const track = addEvent.getCalls().find((c) => c.args[0]?.type === "track");
+    expect(track?.args[1], "track() keeps the active wallet's address").to.equal(ADDRESS);
+  });
+
+  it("still reports the active wallet's own network change", async () => {
+    // The guard is for OTHER wallets only. The active wallet changing network
+    // must still move the central chain and emit a chain event.
+    const tracker = await makeFormo({ tracking: true });
+    const addEvent = sandbox.stub((tracker as any).eventManager, "addEvent").resolves();
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (tracker as any)._provider = active;
+    (tracker as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+
+    await (tracker as any).evmEvents.onChainChanged(active, `0x${OTHER_CHAIN.toString(16)}`);
+
+    expect((tracker as any)._provider).to.equal(active);
+    expect((tracker as any)._evmAddress).to.equal(ADDRESS);
+    expect((tracker as any)._evmChainId, "central chain follows the active wallet").to.equal(OTHER_CHAIN);
+    const chain = addEvent.getCalls().filter((c) => c.args[0]?.type === "chain");
+    expect(chain, "one chain event").to.have.length(1);
+    expect(chain[0].args[0].chainId).to.equal(OTHER_CHAIN);
   });
 
   it("keeps a provider's announced chain after another becomes active", async () => {
@@ -787,10 +832,10 @@ describe("Chain id resolution for autocaptured requests", () => {
       removeListener: sandbox.stub(),
       request: sandbox.stub().resolves("0xsigned"),
     };
-    // Seeded directly, NOT via onChainChanged: that method treats a chain
-    // event from a different provider as a wallet switch, makes it active and
-    // clears central state, so the secondary chain would become the central
-    // one and the test would pass even against the old central-chain gate.
+    // Seeded directly, NOT via onChainChanged, so the test does not depend on
+    // how chain events from a non-active provider are handled. Before that
+    // path became observation only, it made the secondary chain the central
+    // one, and the test would pass even against the old central-chain gate.
     (excluded as any).rememberProviderChain(other, OTHER_CHAIN);
     (excluded as any).evmRequests.registerRequestListeners(other);
     await other.request({ method: "personal_sign", params: ["0x68690000", ADDRESS] });
