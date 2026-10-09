@@ -412,40 +412,6 @@ describe("Duplicate connect on the EIP-1193 path", () => {
     formo.cleanup?.();
   });
 
-  it("keeps an active Solana session when an EVM wallet changes network", async () => {
-    // A chain event from an EVM wallet must not relabel a Solana session as
-    // EVM or touch the EVM wallet tracked behind it.
-    const SOL_CHAIN = 900001;
-    const SOL_A = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
-    const a = makeProvider([ADDRESS]);
-    const b = makeProvider([OTHER]);
-    (global as any).window.ethereum = a;
-    const formo = await FormoAnalytics.init("test-write-key", { tracking: true });
-    sandbox.stub((formo as any).eventManager, "addEvent").resolves();
-    for (const p of [a, b]) {
-      (formo as any).evmEvents.registerAccountsChangedListener(p);
-      (formo as any).evmEvents.registerConnectListener(p);
-      (formo as any).evmEvents.registerChainChangedListener(p);
-    }
-
-    a.emit("connect", { chainId: "0x1" });
-    a.emit("accountsChanged", [ADDRESS]);
-    await waitFor(() => formo.currentAddress?.toLowerCase() === ADDRESS.toLowerCase(), "A to connect");
-    await settle();
-    await formo.connect({ chainId: SOL_CHAIN, address: SOL_A as any });
-    await settle();
-    expect(formo.currentAddress, "Solana is active").to.equal(SOL_A);
-
-    b.emit("chainChanged", "0x89");
-    await settle();
-
-    expect(formo.currentAddress, "the Solana session stays active").to.equal(SOL_A);
-    expect(formo.currentChainId).to.equal(SOL_CHAIN);
-    expect((formo as any)._provider, "the EVM wallet behind it is kept").to.equal(a);
-    expect((formo as any)._evmAddress?.toLowerCase()).to.equal(ADDRESS.toLowerCase());
-    formo.cleanup?.();
-  });
-
   it("still emits for an account switch after the wallet is known", async () => {
     // `accountsChanged` must keep reporting a NEW wallet, so the fix cannot
     // simply gate both handlers on the connection transition.
@@ -1097,9 +1063,9 @@ describe("Duplicate connect on the EIP-1193 path", () => {
   });
 
   it("does not let a background EVM chain change steal the slot from a live Solana wallet", async () => {
-    // A chain event from a non-active EVM provider counts as a wallet switch
-    // on the EVM side. While a Solana wallet holds the active slot, that
-    // switch must not relabel the session as EVM and clear the Solana wallet.
+    // A chain event from a non-active EVM provider is observation only. While
+    // a Solana wallet holds the active slot, it must not relabel the session
+    // as EVM or clear the Solana wallet.
     const SOL = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
     const evmA = makeProvider([ADDRESS]);
     const evmB = makeProvider([OTHER]);
