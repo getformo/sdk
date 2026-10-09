@@ -1063,12 +1063,16 @@ export class EvmEventTracker {
     // extensions installed (Rabby and MetaMask, say), one network switch
     // fires `chainChanged` on both, so every `track()` after it went out with
     // no address until the next connect or identify. A real switch still
-    // arrives as `accountsChanged`, `connect` or a request through the other
-    // wallet, and those paths move the slot.
+    // arrives as `accountsChanged` from the other wallet, which moves the
+    // slot.
     if (this.isProviderMismatch(provider)) return;
 
     // With no active provider yet, a chain event only claims the slot when
-    // chain autocapture is on.
+    // chain autocapture is on. That is kept on purpose: for a wallet set by
+    // `syncWalletState()`, `identify()` or the cookie with no provider yet,
+    // its own chain event is what associates it and moves central state off
+    // an excluded chain ("retries detection when EIP-1193 leaves an excluded
+    // chain").
     //
     // `isProviderMismatch()` is false while `_provider` is undefined, which is
     // exactly the state left by restoring a wallet from the active-wallet

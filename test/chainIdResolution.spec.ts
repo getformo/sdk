@@ -447,38 +447,33 @@ describe("Chain id resolution for autocaptured requests", () => {
     expect((tracker as any).resolveChainIdForProvider(other)).to.equal(OTHER_CHAIN);
   });
 
-  for (const [label, autocapture] of [
-    ["default options", undefined],
-    ["chain autocapture on", { chain: true }],
-  ] as const) {
-    it(`keeps the active wallet when another wallet changes network (${label})`, async () => {
-      // Two extensions installed: one network switch fires chainChanged on
-      // both. The background wallet's event used to take the active slot and
-      // clear the address whenever chain autocapture was on, which it is by
-      // default, so every later track() went out with no address.
-      const tracker = await makeFormo({ tracking: true, ...(autocapture ? { autocapture } : {}) });
-      const addEvent = sandbox.stub((tracker as any).eventManager, "addEvent").resolves();
-      const active = providerOnChain(ACTIVE_CHAIN);
-      (tracker as any)._provider = active;
-      (tracker as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
+  it("keeps the active wallet when another wallet changes network (default options)", async () => {
+    // Two extensions installed: one network switch fires chainChanged on
+    // both. The background wallet's event used to take the active slot and
+    // clear the address whenever chain autocapture was on, which it is by
+    // default, so every later track() went out with no address.
+    const tracker = await makeFormo({ tracking: true });
+    const addEvent = sandbox.stub((tracker as any).eventManager, "addEvent").resolves();
+    const active = providerOnChain(ACTIVE_CHAIN);
+    (tracker as any)._provider = active;
+    (tracker as any).setChainState("evm", { chainId: ACTIVE_CHAIN, address: ADDRESS });
 
-      const other = providerOnChain(OTHER_CHAIN);
-      await (tracker as any).evmEvents.onChainChanged(other, `0x${OTHER_CHAIN.toString(16)}`);
+    const other = providerOnChain(OTHER_CHAIN);
+    await (tracker as any).evmEvents.onChainChanged(other, `0x${OTHER_CHAIN.toString(16)}`);
 
-      expect((tracker as any)._provider, "active provider unchanged").to.equal(active);
-      expect((tracker as any)._evmAddress, "active address unchanged").to.equal(ADDRESS);
-      expect((tracker as any)._evmChainId, "active chain unchanged").to.equal(ACTIVE_CHAIN);
-      expect((tracker as any).resolveChainIdForProvider(other), "other chain learned").to.equal(OTHER_CHAIN);
-      expect(
-        addEvent.getCalls().filter((c) => c.args[0]?.type === "chain"),
-        "no chain event for a wallet that is not active"
-      ).to.have.length(0);
+    expect((tracker as any)._provider, "active provider unchanged").to.equal(active);
+    expect((tracker as any)._evmAddress, "active address unchanged").to.equal(ADDRESS);
+    expect((tracker as any)._evmChainId, "active chain unchanged").to.equal(ACTIVE_CHAIN);
+    expect((tracker as any).resolveChainIdForProvider(other), "other chain learned").to.equal(OTHER_CHAIN);
+    expect(
+      addEvent.getCalls().filter((c) => c.args[0]?.type === "chain"),
+      "no chain event for a wallet that is not active"
+    ).to.have.length(0);
 
-      await tracker.track("Swap Completed");
-      const track = addEvent.getCalls().find((c) => c.args[0]?.type === "track");
-      expect(track?.args[1], "track() keeps the active wallet's address").to.equal(ADDRESS);
-    });
-  }
+    await tracker.track("Swap Completed");
+    const track = addEvent.getCalls().find((c) => c.args[0]?.type === "track");
+    expect(track?.args[1], "track() keeps the active wallet's address").to.equal(ADDRESS);
+  });
 
   it("still reports the active wallet's own network change", async () => {
     // The guard is for OTHER wallets only. The active wallet changing network
