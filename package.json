@@ -1,6 +1,27 @@
 {
   "name": "@formo/analytics",
   "version": "1.42.1",
+  "description": "Formo Web SDK: analytics and attribution for onchain apps. Track page views, wallet connects, transactions, and custom events in your website or web app.",
+  "keywords": [
+    "onchain-analytics",
+    "onchain-attribution",
+    "wallet-analytics",
+    "product-analytics",
+    "web-analytics",
+    "attribution",
+    "wagmi",
+    "privy",
+    "solana",
+    "evm",
+    "dapp",
+    "ethereum",
+    "analytics",
+    "sdk"
+  ],
+  "homepage": "https://docs.formo.so/sdks/web",
+  "bugs": {
+    "url": "https://github.com/getformo/sdk/issues"
+  },
   "packageManager": "pnpm@11.1.1",
   "repository": {
     "type": "git",

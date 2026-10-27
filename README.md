@@ -15,15 +15,20 @@
   </p>
 </p>
 
+## What is the Formo Web SDK?
+
+The Formo Web SDK is [open source](https://github.com/getformo/sdk) and implements the standard [Events API](https://docs.formo.so/data/events/overview#events-api). Use it to add analytics and attribution to your onchain app: track page views, wallet connects, transactions, and custom events in your website or web app.
+
 ## Installation
 
 The Formo Web SDK is a Javascript library that allows you to track user event data from your website and app.
 
-You can install Formo on:
-- [Wagmi](https://docs.formo.so/install#wagmi) (recommended)
-- [HTML Snippet](https://docs.formo.so/install#html-snippet)
-- [React](https://docs.formo.so/install#react)
-- [Next.js](https://docs.formo.so/install#next-js)
+There are several ways to install the Formo SDK:
+- [Wagmi](https://docs.formo.so/sdks/web#wagmi) is recommended for EVM apps
+- [Solana](https://docs.formo.so/sdks/web#solana-integration) for Solana apps
+- [HTML Snippet](https://docs.formo.so/sdks/web#html-snippet) is recommended for static websites
+- [React & Next.js (without Wagmi)](https://docs.formo.so/sdks/web#react--nextjs-without-wagmi)
+- [Angular](https://docs.formo.so/sdks/web#angular) for Angular apps using the bare EIP-1193 provider
 
 ## Configuration
 
