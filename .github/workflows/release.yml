@@ -182,16 +182,28 @@ jobs:
           HASH=$(openssl dgst -sha384 -binary "$BUNDLE" | openssl base64 -A)
 
           URL="https://cdn.formo.so/analytics@$VERSION"
-          if curl --fail --silent --location --compressed --max-time 60 -o cdn-bundle.js "$URL" && test -s cdn-bundle.js; then
-            CDN_HASH=$(openssl dgst -sha384 -binary cdn-bundle.js | openssl base64 -A)
-            if test "$CDN_HASH" != "$HASH"; then
-              echo "::error::$URL serves sha384-$CDN_HASH, but the published bundle is sha384-$HASH. Investigate before pinning."
+          # Only a 404 means "not pinned yet". Anything else that is not the
+          # published bytes (5xx, network error, empty body) fails the job so
+          # it stays visible; rerun it once the CDN is healthy.
+          STATUS=$(curl --silent --show-error --location --compressed --max-time 60 -o cdn-bundle.js -w '%{http_code}' "$URL") || STATUS="000 (curl exit $?)"
+          case "$STATUS" in
+            200)
+              test -s cdn-bundle.js || { echo "::error::$URL returned 200 with an empty body."; exit 1; }
+              CDN_HASH=$(openssl dgst -sha384 -binary cdn-bundle.js | openssl base64 -A)
+              if test "$CDN_HASH" != "$HASH"; then
+                echo "::error::$URL serves sha384-$CDN_HASH, but the published bundle is sha384-$HASH. Investigate before pinning."
+                exit 1
+              fi
+              echo "cdn.formo.so already serves analytics@$VERSION (sha384-$HASH)"
+              ;;
+            404)
+              echo "::warning::cdn.formo.so does not serve $VERSION yet. In getformo/formono run 'pnpm --filter @formo/cdn pin $VERSION', merge the PR, then deploy with 'pnpm --filter @formo/cdn run deploy'."
+              ;;
+            *)
+              echo "::error::Could not check $URL (HTTP $STATUS). The npm release is published; rerun this job when the CDN responds."
               exit 1
-            fi
-            echo "cdn.formo.so already serves analytics@$VERSION (sha384-$HASH)"
-          else
-            echo "::warning::cdn.formo.so does not serve $VERSION yet. In getformo/formono run 'pnpm --filter @formo/cdn pin $VERSION', merge the PR, then deploy with 'pnpm --filter @formo/cdn run deploy'."
-          fi
+              ;;
+          esac
 
           gh release view "$TAG" --json body --jq .body > release-notes.md
           cat >> release-notes.md <<EOF
