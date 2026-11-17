@@ -78,7 +78,7 @@ jobs:
           if (reports.length !== 1) throw new Error(`Expected one tarball, got ${reports.length}`)
           const forbidden = reports[0].files
             .map(({ path }) => path)
-            .filter((path) => /(^|\/)(\.env|.*\.(pem|key|p12|pfx))$/i.test(path))
+            .filter((path) => /(^|\/)(\.envrc|\.env(?!\.example$)(\..+)?|.*\.(pem|key|p12|pfx))$/i.test(path))
           if (forbidden.length) throw new Error(`Sensitive files in package: ${forbidden.join(', ')}`)
           console.log(reports[0].files.map(({ path }) => path).join('\n'))
           NODE
