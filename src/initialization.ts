@@ -134,6 +134,8 @@ export function formofyFromScriptTag(script: Element | null): void {
  * data-write-key="...">` would otherwise choose the write key.
  */
 export function executingScript(doc: Document): Element | null {
+  // Some test setups assign a global document without the Document class.
+  if (typeof Document === "undefined") return null;
   const get = Object.getOwnPropertyDescriptor(Document.prototype, "currentScript")?.get;
   return (get?.call(doc) as Element | null | undefined) ?? null;
 }

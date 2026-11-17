@@ -537,6 +537,16 @@ describe("formofy", () => {
       expect(init.called).to.be.false;
     });
 
+    it("returns null instead of throwing when the Document class is not global", () => {
+      const prev = (global as { Document?: unknown }).Document;
+      delete (global as { Document?: unknown }).Document;
+      try {
+        expect(executingScript(dom.window.document)).to.equal(null);
+      } finally {
+        if (prev !== undefined) (global as { Document?: unknown }).Document = prev;
+      }
+    });
+
     it("shares one instance with an onload formofy() call for the same key", async () => {
       const a = instance("wk_tag");
       (a as unknown as { identify: () => Promise<void> }).identify = () => Promise.resolve();
