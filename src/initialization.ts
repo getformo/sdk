@@ -117,13 +117,25 @@ export function formofy(writeKey: string, options?: Options): void {
  * snippet: init, then identify the already-connected wallet.
  */
 export function formofyFromScriptTag(script: Element | null): void {
-  const writeKey = script?.getAttribute("data-write-key");
+  if (script?.tagName !== "SCRIPT") return;
+  const writeKey = script.getAttribute("data-write-key");
   if (!writeKey) return;
   // identify() with no params auto-identifies connected wallets. The public
   // overloads omit that form, so call it the way the JS snippet does.
   formofy(writeKey, {
     ready: (formo) => void (formo as unknown as { identify(): Promise<void> }).identify(),
   });
+}
+
+/**
+ * The executing <script>, read through Document.prototype's getter. Plain
+ * `document.currentScript` can be clobbered: Document lets named elements
+ * shadow its properties, so injected `<img name="currentScript"
+ * data-write-key="...">` would otherwise choose the write key.
+ */
+export function executingScript(doc: Document): Element | null {
+  const get = Object.getOwnPropertyDescriptor(Document.prototype, "currentScript")?.get;
+  return (get?.call(doc) as Element | null | undefined) ?? null;
 }
 
 /**

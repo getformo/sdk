@@ -3,7 +3,7 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
-import { formofy, formofyFromScriptTag, _resetFormofy } from "../src/initialization";
+import { executingScript, formofy, formofyFromScriptTag, _resetFormofy } from "../src/initialization";
 
 // One live instance per page. Tag managers, React strict mode, and hot
 // reloads all call formofy() more than once; a second instance doubles
@@ -512,6 +512,26 @@ describe("formofy", () => {
       formofyFromScriptTag(tag('src="https://cdn.formo.so/analytics@1.0.0"'));
       formofyFromScriptTag(tag('src="/app.js" data-write-key=""'));
       formofyFromScriptTag(null);
+      await tick();
+
+      expect(init.called).to.be.false;
+    });
+
+    it("reads currentScript from the prototype getter and refuses non-script elements", async () => {
+      const doc = dom.window.document;
+      // jsdom does not emulate named-property shadowing of document, so the
+      // clobbering itself is covered by the browser check; here, the getter is
+      // read from the prototype and a non-script element is refused.
+      doc.body.innerHTML = '<img name="currentScript" data-write-key="wk_attacker">';
+
+      const prev = (global as { Document?: unknown }).Document;
+      (global as { Document?: unknown }).Document = dom.window.Document;
+      try {
+        expect(executingScript(doc)).to.equal(null);
+      } finally {
+        (global as { Document?: unknown }).Document = prev;
+      }
+      formofyFromScriptTag(doc.querySelector("img"));
       await tick();
 
       expect(init.called).to.be.false;
