@@ -111,6 +111,36 @@ export function formofy(writeKey: string, options?: Options): void {
 }
 
 /**
+ * Script-tag auto-init. `<script src="https://cdn.formo.so/analytics@x"
+ * data-write-key="KEY">` starts the SDK with no inline `onload` handler,
+ * which a strict Content Security Policy blocks. Matches the dashboard
+ * snippet: init, then identify the already-connected wallet.
+ */
+export function formofyFromScriptTag(script: Element | null): void {
+  if (script?.tagName !== "SCRIPT") return;
+  const writeKey = script.getAttribute("data-write-key");
+  if (!writeKey) return;
+  // identify() with no params auto-identifies connected wallets. The public
+  // overloads omit that form, so call it the way the JS snippet does.
+  formofy(writeKey, {
+    ready: (formo) => void (formo as unknown as { identify(): Promise<void> }).identify(),
+  });
+}
+
+/**
+ * The executing <script>, read through Document.prototype's getter. Plain
+ * `document.currentScript` can be clobbered: Document lets named elements
+ * shadow its properties, so injected `<img name="currentScript"
+ * data-write-key="...">` would otherwise choose the write key.
+ */
+export function executingScript(doc: Document): Element | null {
+  // Some test setups assign a global document without the Document class.
+  if (typeof Document === "undefined") return null;
+  const get = Object.getOwnPropertyDescriptor(Document.prototype, "currentScript")?.get;
+  return (get?.call(doc) as Element | null | undefined) ?? null;
+}
+
+/**
  * What formofy() should build on: the live entry, unless the app has since
  * put an instance of its own on window.formo, which then wins and the
  * cached one is retired so both do not send.
