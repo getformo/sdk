@@ -111,6 +111,22 @@ export function formofy(writeKey: string, options?: Options): void {
 }
 
 /**
+ * Script-tag auto-init. `<script src="https://cdn.formo.so/analytics@x"
+ * data-write-key="KEY">` starts the SDK with no inline `onload` handler,
+ * which a strict Content Security Policy blocks. Matches the dashboard
+ * snippet: init, then identify the already-connected wallet.
+ */
+export function formofyFromScriptTag(script: Element | null): void {
+  const writeKey = script?.getAttribute("data-write-key");
+  if (!writeKey) return;
+  // identify() with no params auto-identifies connected wallets. The public
+  // overloads omit that form, so call it the way the JS snippet does.
+  formofy(writeKey, {
+    ready: (formo) => void (formo as unknown as { identify(): Promise<void> }).identify(),
+  });
+}
+
+/**
  * What formofy() should build on: the live entry, unless the app has since
  * put an instance of its own on window.formo, which then wins and the
  * cached one is retired so both do not send.

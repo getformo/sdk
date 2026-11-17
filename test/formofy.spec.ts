@@ -3,7 +3,7 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 import { JSDOM } from "jsdom";
 import { FormoAnalytics } from "../src/FormoAnalytics";
-import { formofy, _resetFormofy } from "../src/initialization";
+import { formofy, formofyFromScriptTag, _resetFormofy } from "../src/initialization";
 
 // One live instance per page. Tag managers, React strict mode, and hot
 // reloads all call formofy() more than once; a second instance doubles
@@ -487,5 +487,46 @@ describe("formofy", () => {
 
     expect(ready2.calledOnceWith(a)).to.be.true;
     expect(error.calledOnce).to.be.true;
+  });
+  describe("formofyFromScriptTag", () => {
+    const tag = (attrs: string) => {
+      dom.window.document.body.innerHTML = `<script ${attrs}></script>`;
+      return dom.window.document.querySelector("script");
+    };
+
+    it("starts the SDK from data-write-key and identifies, with no inline handler", async () => {
+      const a = instance("wk_tag");
+      (a as unknown as { identify: sinon.SinonSpy }).identify = sinon.spy(() => Promise.resolve());
+      init.resolves(a);
+
+      formofyFromScriptTag(tag('src="https://cdn.formo.so/analytics@1.0.0" data-write-key="wk_tag"'));
+      await tick();
+
+      expect(init.calledOnce).to.be.true;
+      expect(init.firstCall.args[0]).to.equal("wk_tag");
+      expect(window.formo).to.equal(a);
+      expect((a as unknown as { identify: sinon.SinonSpy }).identify.calledOnce).to.be.true;
+    });
+
+    it("does nothing for a tag without data-write-key or with no current script", async () => {
+      formofyFromScriptTag(tag('src="https://cdn.formo.so/analytics@1.0.0"'));
+      formofyFromScriptTag(tag('src="/app.js" data-write-key=""'));
+      formofyFromScriptTag(null);
+      await tick();
+
+      expect(init.called).to.be.false;
+    });
+
+    it("shares one instance with an onload formofy() call for the same key", async () => {
+      const a = instance("wk_tag");
+      (a as unknown as { identify: () => Promise<void> }).identify = () => Promise.resolve();
+      init.resolves(a);
+
+      formofyFromScriptTag(tag('data-write-key="wk_tag"'));
+      formofy("wk_tag");
+      await tick();
+
+      expect(init.calledOnce).to.be.true;
+    });
   });
 });

@@ -72,7 +72,7 @@ script-src 'self' https://cdn.formo.so;
 
 Allowlist exact hosts rather than `https://*.formo.so`, and always pair the CDN allowlist with the SRI `integrity` hash above: the allowlist trusts the domain, and the hash pins the exact file.
 
-Under a strict CSP, do not initialize the SDK from an inline `onload="..."` attribute. Inline event handlers require `'unsafe-inline'`, so the SDK would load but never initialize. Call `window.formofy(...)` from a deferred script served from your own origin (or a nonced script) instead.
+Under a strict CSP, do not initialize the SDK from an inline `onload="..."` attribute. Inline event handlers require `'unsafe-inline'`, so the SDK would load but never initialize. Call `window.formofy(...)` from a deferred script served from your own origin (or a nonced script) instead. Or set the write key on the SDK tag itself, `<script src="https://cdn.formo.so/analytics@<VERSION>" integrity="sha384-<HASH>" crossorigin="anonymous" defer data-write-key="<YOUR_WRITE_KEY>"></script>`, and the SDK initializes itself and calls `identify()`, with no inline code.
 
 The SDK does **not** require `unsafe-eval` or `unsafe-inline`. It uses no `eval()`, `innerHTML`, `document.write()`, or dynamic script injection. All network communication uses the standard `fetch()` API.
 
