@@ -165,8 +165,10 @@ jobs:
       # The hash comes from the tarball that was published, never from the
       # network: a CDN error body (or an empty one, whose hash is the
       # well-known sha384-OLBgp1Gs...) must not reach the release notes.
-      # The CDN is then polled until it serves the same bytes, because it
-      # can return 5xx for a minute or two after npm publish.
+      # cdn.formo.so serves only versions pinned in getformo/formono
+      # apps/cdn/src/pinned.json, and pinning is a manual, reviewed step after
+      # this workflow. So a missing version only warns. Different bytes for
+      # this version fail the job: that needs a person to investigate.
       - name: Add CDN integrity hash
         shell: bash
         run: |
@@ -180,21 +182,16 @@ jobs:
           HASH=$(openssl dgst -sha384 -binary "$BUNDLE" | openssl base64 -A)
 
           URL="https://cdn.formo.so/analytics@$VERSION"
-          CDN_HASH=""
-          for attempt in $(seq 1 20); do
-            if curl --fail --silent --show-error --location --compressed --max-time 60 -o cdn-bundle.js "$URL" && test -s cdn-bundle.js; then
-              CDN_HASH=$(openssl dgst -sha384 -binary cdn-bundle.js | openssl base64 -A)
-              test "$CDN_HASH" = "$HASH" && break
-              echo "Attempt $attempt: CDN hash $CDN_HASH does not match tarball hash $HASH"
-            else
-              echo "Attempt $attempt: CDN fetch failed"
+          if curl --fail --silent --location --compressed --max-time 60 -o cdn-bundle.js "$URL" && test -s cdn-bundle.js; then
+            CDN_HASH=$(openssl dgst -sha384 -binary cdn-bundle.js | openssl base64 -A)
+            if test "$CDN_HASH" != "$HASH"; then
+              echo "::error::$URL serves sha384-$CDN_HASH, but the published bundle is sha384-$HASH. Investigate before pinning."
+              exit 1
             fi
-            sleep 30
-          done
-          test "$CDN_HASH" = "$HASH" || {
-            echo "Error: $URL did not serve the published bundle (sha384-$HASH) in time"
-            exit 1
-          }
+            echo "cdn.formo.so already serves analytics@$VERSION (sha384-$HASH)"
+          else
+            echo "::warning::cdn.formo.so does not serve $VERSION yet. In getformo/formono run 'pnpm --filter @formo/cdn pin $VERSION', merge the PR, then deploy with 'pnpm --filter @formo/cdn run deploy'."
+          fi
 
           gh release view "$TAG" --json body --jq .body > release-notes.md
           cat >> release-notes.md <<EOF
@@ -202,7 +199,7 @@ jobs:
           ## CDN
 
           \`\`\`html
-          <script src="$URL" integrity="sha384-$HASH" crossorigin="anonymous"></script>
+          <script src="$URL" integrity="sha384-$HASH" crossorigin="anonymous" defer data-write-key="<YOUR_WRITE_KEY>"></script>
           \`\`\`
           EOF
           gh release edit "$TAG" --notes-file release-notes.md
