@@ -842,6 +842,7 @@ export class WagmiEventHandler {
 
       {
         const connectorName = this.getConnectorName(state);
+        const connectorRdns = this.getConnectorRdns(state);
         // Invoked synchronously, only the completion is fire-and-forget.
         //
         // Deferring the call itself to a microtask and guarding it on
@@ -856,6 +857,7 @@ export class WagmiEventHandler {
             { chainId, address },
             {
               ...(connectorName && { providerName: connectorName }),
+              ...(connectorRdns && { rdns: connectorRdns }),
             }
           )
         ).catch((error) => {
@@ -1286,11 +1288,13 @@ export class WagmiEventHandler {
             }
             markAnnounced(walletKey, connection);
             const connectorName = this.getConnectorName(state);
+            const connectorRdns = this.getConnectorRdns(state);
             try {
               await this.formo.connect(
                 { chainId, address },
                 {
                   ...(connectorName && { providerName: connectorName }),
+                  ...(connectorRdns && { rdns: connectorRdns }),
                 }
               );
             } catch (error) {
@@ -1715,10 +1719,12 @@ export class WagmiEventHandler {
       }
       try {
         const connectorName = this.getConnectorName(state);
+        const connectorRdns = this.getConnectorRdns(state);
         await this.formo.connect(
           { chainId, address },
           {
             ...(connectorName && { providerName: connectorName }),
+            ...(connectorRdns && { rdns: connectorRdns }),
           }
         );
       } catch (error) {
@@ -2865,14 +2871,35 @@ export class WagmiEventHandler {
     if (!name) {
       return undefined;
     }
-    const raw: unknown = connector.rdns;
-    const rdns =
-      typeof raw === "string" && raw.length > 0
-        ? raw
-        : Array.isArray(raw) && raw.length === 1 && typeof raw[0] === "string" && raw[0].length > 0
-          ? raw[0]
-          : undefined;
+    const rdns = this.singleRdns(connector);
     return { name, ...(rdns && { rdns }) };
+  }
+
+  /**
+   * The connector's rdns when wagmi knows it as ONE value (a string, or a
+   * one-element list). A connector that matches several rdns values does
+   * not say which wallet this is, so it gets none.
+   */
+  private singleRdns(connector: WagmiConnector): string | undefined {
+    const raw: unknown = connector.rdns;
+    return typeof raw === "string" && raw.length > 0
+      ? raw
+      : Array.isArray(raw) && raw.length === 1 && typeof raw[0] === "string" && raw[0].length > 0
+        ? raw[0]
+        : undefined;
+  }
+
+  /**
+   * The current connector's single rdns, for connect events. EIP-1193 mode
+   * gets rdns from EIP-6963 discovery; without this, wagmi-mode connects
+   * carried only the name and the Wallets chart (keyed on rdns) was empty.
+   */
+  private getConnectorRdns(state: WagmiState): string | undefined {
+    if (!state.current) {
+      return undefined;
+    }
+    const connector = state.connections.get(state.current)?.connector;
+    return connector ? this.singleRdns(connector) : undefined;
   }
 
   /**

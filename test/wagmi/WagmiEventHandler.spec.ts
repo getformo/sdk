@@ -3908,6 +3908,90 @@ describe("WagmiEventHandler", () => {
     });
   });
 
+  describe("connector rdns on connect events", () => {
+    // The Wallets chart keys on rdns. Wagmi-mode connects used to carry only
+    // providerName, so wagmi projects showed an empty chart.
+    const SWITCHED = "0x7777777777777777777777777777777777777777";
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+    const stateWithRdns = (rdns: unknown, address: string = mockAddress): WagmiState => {
+      const connections = new Map();
+      connections.set("connector-1", {
+        accounts: [address],
+        chainId: mockChainId,
+        connector: {
+          id: "io.metamask",
+          name: "MetaMask",
+          type: "injected",
+          uid: "1",
+          ...(rdns !== undefined && { rdns }),
+        },
+      });
+      return { status: "connected", connections, current: "connector-1", chainId: mockChainId };
+    };
+
+    const cases: Array<{ label: string; rdns: unknown; expected: Record<string, string> }> = [
+      {
+        label: "a string rdns",
+        rdns: "io.metamask",
+        expected: { providerName: "MetaMask", rdns: "io.metamask" },
+      },
+      {
+        label: "a one-element rdns array",
+        rdns: ["io.metamask"],
+        expected: { providerName: "MetaMask", rdns: "io.metamask" },
+      },
+      {
+        label: "a multi-element rdns array",
+        rdns: ["io.metamask", "io.metamask.mobile"],
+        expected: { providerName: "MetaMask" },
+      },
+      {
+        label: "no rdns",
+        rdns: undefined,
+        expected: { providerName: "MetaMask" },
+      },
+    ];
+
+    for (const { label, rdns, expected } of cases) {
+      it(`seed connect with ${label}`, async () => {
+        (mockWagmiConfig as any).setState(stateWithRdns(rdns));
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+        await settle();
+
+        expect(mockFormo.connect.calledOnce).to.be.true;
+        expect(mockFormo.connect.firstCall.args[1]).to.deep.equal(expected);
+      });
+
+      it(`status connect with ${label}`, async () => {
+        (mockWagmiConfig as any).setState(createMockState());
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+
+        (mockWagmiConfig as any).setState(stateWithRdns(rdns));
+        if (statusListener) await statusListener("connected", "disconnected");
+        await settle();
+
+        expect(mockFormo.connect.calledOnce).to.be.true;
+        expect(mockFormo.connect.firstCall.args[1]).to.deep.equal(expected);
+      });
+
+      it(`account switch connect with ${label}`, async () => {
+        (mockWagmiConfig as any).setState(stateWithRdns(rdns));
+        new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
+        await settle();
+        expect(mockFormo.connect.calledOnce).to.be.true;
+
+        (mockWagmiConfig as any).setState(stateWithRdns(rdns, SWITCHED));
+        if (addressListener) await addressListener(SWITCHED, mockAddress);
+        await settle();
+
+        expect(mockFormo.connect.calledTwice).to.be.true;
+        expect(mockFormo.connect.secondCall.args[0]).to.deep.include({ address: SWITCHED });
+        expect(mockFormo.connect.secondCall.args[1]).to.deep.equal(expected);
+      });
+    }
+  });
+
   describe("seeding from a connection that predates the handler", () => {
     // Wagmi's mount-time reconnect() settles before an app that loads the SDK
     // lazily. config.subscribe only reports changes, so without an explicit
