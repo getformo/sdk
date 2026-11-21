@@ -3914,48 +3914,73 @@ describe("WagmiEventHandler", () => {
     const SWITCHED = "0x7777777777777777777777777777777777777777";
     const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
-    const stateWithRdns = (rdns: unknown, address: string = mockAddress): WagmiState => {
+    type ConnectorShape = { id: string; type: string; rdns?: unknown };
+
+    const stateWithRdns = (
+      shape: ConnectorShape,
+      address: string = mockAddress
+    ): WagmiState => {
       const connections = new Map();
       connections.set("connector-1", {
         accounts: [address],
         chainId: mockChainId,
         connector: {
-          id: "io.metamask",
+          id: shape.id,
           name: "MetaMask",
-          type: "injected",
+          type: shape.type,
           uid: "1",
-          ...(rdns !== undefined && { rdns }),
+          ...(shape.rdns !== undefined && { rdns: shape.rdns }),
         },
       });
       return { status: "connected", connections, current: "connector-1", chainId: mockChainId };
     };
 
-    const cases: Array<{ label: string; rdns: unknown; expected: Record<string, string> }> = [
+    const cases: Array<{
+      label: string;
+      shape: ConnectorShape;
+      expected: Record<string, string>;
+    }> = [
       {
         label: "a string rdns",
-        rdns: "io.metamask",
+        shape: { id: "metaMaskSDK", type: "metaMask", rdns: "io.metamask" },
         expected: { providerName: "MetaMask", rdns: "io.metamask" },
       },
       {
         label: "a one-element rdns array",
-        rdns: ["io.metamask"],
+        shape: { id: "metaMaskSDK", type: "metaMask", rdns: ["io.metamask"] },
         expected: { providerName: "MetaMask", rdns: "io.metamask" },
       },
       {
         label: "a multi-element rdns array",
-        rdns: ["io.metamask", "io.metamask.mobile"],
+        shape: {
+          id: "metaMaskSDK",
+          type: "metaMask",
+          rdns: ["io.metamask", "io.metamask.mobile"],
+        },
         expected: { providerName: "MetaMask" },
       },
       {
-        label: "no rdns",
-        rdns: undefined,
+        // @wagmi/core builds an EIP-6963 wallet as
+        // injected({ target: { ...info, id: info.rdns } }): no rdns property.
+        label: "an EIP-6963 discovered connector (id is the rdns)",
+        shape: { id: "io.metamask", type: "injected" },
+        expected: { providerName: "MetaMask", rdns: "io.metamask" },
+      },
+      {
+        label: "a plain injected connector (no rdns)",
+        shape: { id: "injected", type: "injected" },
+        expected: { providerName: "MetaMask" },
+      },
+      {
+        label: "a dotted id on a non-injected connector",
+        shape: { id: "com.example", type: "walletConnect" },
         expected: { providerName: "MetaMask" },
       },
     ];
 
-    for (const { label, rdns, expected } of cases) {
+    for (const { label, shape, expected } of cases) {
       it(`seed connect with ${label}`, async () => {
-        (mockWagmiConfig as any).setState(stateWithRdns(rdns));
+        (mockWagmiConfig as any).setState(stateWithRdns(shape));
         new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
         await settle();
 
@@ -3967,7 +3992,7 @@ describe("WagmiEventHandler", () => {
         (mockWagmiConfig as any).setState(createMockState());
         new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
 
-        (mockWagmiConfig as any).setState(stateWithRdns(rdns));
+        (mockWagmiConfig as any).setState(stateWithRdns(shape));
         if (statusListener) await statusListener("connected", "disconnected");
         await settle();
 
@@ -3976,12 +4001,12 @@ describe("WagmiEventHandler", () => {
       });
 
       it(`account switch connect with ${label}`, async () => {
-        (mockWagmiConfig as any).setState(stateWithRdns(rdns));
+        (mockWagmiConfig as any).setState(stateWithRdns(shape));
         new WagmiEventHandler(mockFormo as any, mockWagmiConfig, mockQueryClient);
         await settle();
         expect(mockFormo.connect.calledOnce).to.be.true;
 
-        (mockWagmiConfig as any).setState(stateWithRdns(rdns, SWITCHED));
+        (mockWagmiConfig as any).setState(stateWithRdns(shape, SWITCHED));
         if (addressListener) await addressListener(SWITCHED, mockAddress);
         await settle();
 

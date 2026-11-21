@@ -2893,13 +2893,30 @@ export class WagmiEventHandler {
    * The current connector's single rdns, for connect events. EIP-1193 mode
    * gets rdns from EIP-6963 discovery; without this, wagmi-mode connects
    * carried only the name and the Wallets chart (keyed on rdns) was empty.
+   *
+   * A wallet that wagmi discovered through EIP-6963 has no `rdns` property:
+   * @wagmi/core builds it as `injected({ target: { ...info, id: info.rdns } })`,
+   * so its id IS the rdns. Built-in connector ids (injected, metaMaskSDK,
+   * walletConnect, coinbaseWalletSDK) have no dot, so a dotted id on an
+   * injected connector is read as the rdns. A connector that declares rdns
+   * values keeps the single-value rule, and an ambiguous list gets none.
    */
   private getConnectorRdns(state: WagmiState): string | undefined {
     if (!state.current) {
       return undefined;
     }
     const connector = state.connections.get(state.current)?.connector;
-    return connector ? this.singleRdns(connector) : undefined;
+    if (!connector) {
+      return undefined;
+    }
+    if (connector.rdns !== undefined) {
+      return this.singleRdns(connector);
+    }
+    return connector.type === "injected" &&
+      typeof connector.id === "string" &&
+      connector.id.includes(".")
+      ? connector.id
+      : undefined;
   }
 
   /**
