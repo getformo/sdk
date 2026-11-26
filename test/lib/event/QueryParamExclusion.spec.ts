@@ -237,6 +237,14 @@ describe("EventFactory query parameter exclusion", () => {
       expect(event.context.page_url).to.not.contain("SECRET");
     });
 
+    it("drops the hash when an encoded token sits next to a malformed escape", async () => {
+      setMockLocation("https://formo.so/#/r=1%3Faccess_token%3DSECRET&bad=%E0");
+      const event = await getEvent(new EventFactory());
+
+      expect((event.properties as any).hash).to.equal("");
+      expect(event.context.page_url).to.not.contain("SECRET");
+    });
+
     it("leaves a hash without excluded keys untouched", async () => {
       setMockLocation("https://formo.so/docs#section-2");
       const props = await getProps(new EventFactory());

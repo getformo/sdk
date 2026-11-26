@@ -199,11 +199,13 @@ class EventFactory implements IEventFactory {
    * after "?", "&", ";", "#" or "/".
    */
   private hashHasExcludedKey(fragment: string): boolean {
-    let decoded = fragment;
-    try {
-      decoded = decodeURIComponent(fragment);
-    } catch {}
-    const lower = decoded.toLowerCase();
+    // Decode each %XX on its own: unlike decodeURIComponent this never throws
+    // on a malformed sequence elsewhere in the hash, so it cannot fail open.
+    const lower = fragment
+      .replace(/%([0-9a-f]{2})/gi, (_m, hex: string) =>
+        String.fromCharCode(parseInt(hex, 16))
+      )
+      .toLowerCase();
     let found = false;
     this.excludedQueryParams.forEach((key) => {
       let i = lower.indexOf(`${key}=`);
