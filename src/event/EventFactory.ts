@@ -172,7 +172,11 @@ class EventFactory implements IEventFactory {
   private redactHash(hash: string): string {
     if (!hash || !hash.includes("=")) return hash;
     const fragment = hash.slice(1);
-    const queryStart = fragment.indexOf("?");
+    // Split off a route only for a hash-router fragment (`#/route?...`,
+    // `#!/route?...`). Anywhere else a "?" can sit inside a value, and a split
+    // there would hide the keys before it from redaction.
+    const isRoute = fragment.startsWith("/") || fragment.startsWith("!");
+    const queryStart = isRoute ? fragment.indexOf("?") : -1;
     const prefix = queryStart === -1 ? "" : fragment.slice(0, queryStart + 1);
     const query = queryStart === -1 ? fragment : fragment.slice(queryStart + 1);
     const params = new URLSearchParams(query);

@@ -210,6 +210,14 @@ describe("EventFactory query parameter exclusion", () => {
       expect(event.context.page_url).to.equal("https://formo.so/#/swap?from=eth");
     });
 
+    it("strips a hash token whose value contains a question mark", async () => {
+      setMockLocation("https://formo.so/callback#access_token=SECRET?x&expires_in=1");
+      const event = await getEvent(new EventFactory());
+
+      expect((event.properties as any).hash).to.equal("#expires_in=1");
+      expect(event.context.page_url).to.not.contain("SECRET");
+    });
+
     it("leaves a hash without excluded keys untouched", async () => {
       setMockLocation("https://formo.so/docs#section-2");
       const props = await getProps(new EventFactory());
