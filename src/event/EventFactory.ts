@@ -146,8 +146,9 @@ class EventFactory implements IEventFactory {
   }
 
   /**
-   * Strip excluded (sensitive) query parameters from a URL in place. Only the
-   * query string is touched; the path and hash/fragment are left as-is.
+   * Strip excluded (sensitive) query parameters from a URL in place: from the
+   * query string and from a query-style hash (see redactHash). The path is
+   * left as-is.
    */
   private redactQueryParams(url: URL): void {
     // Collect first, then delete: mutating searchParams while iterating is
@@ -159,7 +160,64 @@ class EventFactory implements IEventFactory {
       }
     });
     keysToDelete.forEach((key) => url.searchParams.delete(key));
+    url.hash = this.redactHash(url.hash);
   }
+
+  /**
+   * Strip excluded parameters from a hash that carries key=value pairs, such
+   * as an OAuth implicit-flow return (`#access_token=...&state=...`) or a
+   * hash-router query (`#/route?access_token=...`). Any other hash, or one
+   * with no excluded key, is returned unchanged byte for byte.
+   */
+  private redactHash(hash: string): string {
+    // Fast path: no "=" in any form, so no key=value pair to strip.
+    if (!hash || (!hash.includes("=") && !/%3d/i.test(hash))) return hash;
+    const fragment = hash.slice(1);
+    // A "?" splits off a route (`#/swap?...`, `#callback?...`) only when the
+    // part before it has no "="; otherwise the "?" sits inside a value and the
+    // whole fragment is the key=value list.
+    const qIndex = fragment.indexOf("?");
+    const splitsRoute = qIndex !== -1 && !fragment.slice(0, qIndex).includes("=");
+    const prefix = splitsRoute ? fragment.slice(0, qIndex + 1) : "";
+    const query = splitsRoute ? fragment.slice(qIndex + 1) : fragment;
+    const params = new URLSearchParams(query);
+    const keysToDelete = new Set<string>();
+    params.forEach((_value, key) => {
+      if (this.isExcludedQueryParam(key)) keysToDelete.add(key);
+    });
+    if (keysToDelete.size === 0 && !this.hashHasExcludedKey(fragment)) return hash;
+    keysToDelete.forEach((key) => params.delete(key));
+    const rest = params.toString();
+    const redacted = rest ? prefix + rest : prefix.replace(/\?$/, "");
+    // Fail closed: if an excluded key=value survives in a shape the parse
+    // above did not see, drop the whole hash.
+    if (this.hashHasExcludedKey(redacted)) return "";
+    return redacted ? `#${redacted}` : "";
+  }
+
+  /**
+   * True when `excludedkey=` appears, after percent-decoding, at the start or
+   * after "?", "&", ";", "#" or "/".
+   */
+  private hashHasExcludedKey(fragment: string): boolean {
+    // Decode each %XX on its own: unlike decodeURIComponent this never throws
+    // on a malformed sequence elsewhere in the hash, so it cannot fail open.
+    const lower = fragment
+      .replace(/%([0-9a-f]{2})/gi, (_m, hex: string) =>
+        String.fromCharCode(parseInt(hex, 16))
+      )
+      .toLowerCase();
+    let found = false;
+    this.excludedQueryParams.forEach((key) => {
+      let i = lower.indexOf(`${key}=`);
+      while (!found && i !== -1) {
+        if (i === 0 || "?&;#/".includes(lower[i - 1])) found = true;
+        i = lower.indexOf(`${key}=`, i + 1);
+      }
+    });
+    return found;
+  }
+
 
   /**
    * Return the given absolute URL with excluded query parameters removed and
@@ -437,7 +495,8 @@ class EventFactory implements IEventFactory {
 
     // Parse the current URL once and strip any excluded (sensitive) query
     // params up front, so nothing sensitive is forwarded via url, query, or the
-    // per-param explosion below. The hash/fragment is intentionally untouched.
+    // per-param explosion below. Excluded keys in a query-style hash are
+    // stripped too.
     let urlObj: URL | null = null;
     try {
       urlObj = new URL(globalThis.location.href);
@@ -454,7 +513,7 @@ class EventFactory implements IEventFactory {
     }
 
     if (isUndefined(pageProps.hash)) {
-      pageProps.hash = globalThis.location.hash;
+      pageProps.hash = urlObj ? urlObj.hash : this.redactHash(globalThis.location.hash);
     }
 
     // Add query string without the '?' prefix

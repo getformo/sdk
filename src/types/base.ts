@@ -171,11 +171,15 @@ export interface TrackingOptions {
   excludeTimezones?: string[];
   /**
    * Additional query parameter names to strip from forwarded and stored URLs,
-   * on top of a built-in always-on denylist (currently `privy_oauth_code`,
-   * `privy_oauth_state`, and `privy_oauth_provider`) that cannot be disabled.
+   * on top of a built-in always-on denylist that cannot be disabled
+   * (`privy_oauth_code`, `privy_oauth_state`, `privy_oauth_provider`,
+   * `access_token`, `refresh_token`, `id_token`, `client_secret`,
+   * `token_hash`, `password`, `api_key`, `apikey`).
    * Matched case-insensitively. Excluded params are stripped from the captured
    * page URL, query string, per-parameter page properties, and referrer before
-   * any event is sent. The URL hash/fragment is intentionally left untouched.
+   * any event is sent, and from a hash that carries key=value pairs
+   * (`#access_token=...` or `#/route?access_token=...`). Any other hash is
+   * left untouched.
    *
    * Mirrors Mixpanel's `property_blacklist` and PostHog's `property_denylist`,
    * scoped here to URL query parameters.

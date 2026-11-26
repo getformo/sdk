@@ -24,6 +24,17 @@ const CLICK_ID_PARAMS = [
  * - privy_oauth_code:     Privy OAuth authorization code
  * - privy_oauth_state:    Privy OAuth CSRF state token
  * - privy_oauth_provider: Privy OAuth provider identifier
+ * - access_token, refresh_token, id_token: OAuth / OIDC tokens (for example
+ *   an implicit-flow return such as Xumm's)
+ * - client_secret, token_hash, password, api_key, apikey: other credentials
+ *
+ * Generic names such as `token`, `code` and `state` are deliberately NOT
+ * here: dapps commonly use `?token=0x...` for a token address and `?code=`
+ * for a referral code. Consumers that use them for secrets add them via
+ * `tracking.excludeQueryParams`.
+ *
+ * The same keys are also stripped from a query-style URL hash
+ * (`#access_token=...` or `#/route?access_token=...`).
  *
  * Consumers can extend the denylist via `tracking.excludeQueryParams` but
  * cannot remove these built-ins. Matched case-insensitively.
@@ -32,6 +43,14 @@ const DEFAULT_EXCLUDED_QUERY_PARAMS = [
   "privy_oauth_code",
   "privy_oauth_state",
   "privy_oauth_provider",
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "client_secret",
+  "token_hash",
+  "password",
+  "api_key",
+  "apikey",
 ] as const;
 
 /**
