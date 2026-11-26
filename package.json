@@ -1,6 +1,6 @@
 {
   "name": "@formo/analytics",
-  "version": "1.43.1",
+  "version": "1.43.2",
   "description": "Formo Web SDK: analytics and attribution for onchain apps. Track page views, wallet connects, transactions, and custom events in your website or web app.",
   "keywords": [
     "onchain-analytics",
