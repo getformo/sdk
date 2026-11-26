@@ -146,8 +146,9 @@ class EventFactory implements IEventFactory {
   }
 
   /**
-   * Strip excluded (sensitive) query parameters from a URL in place. Only the
-   * query string is touched; the path and hash/fragment are left as-is.
+   * Strip excluded (sensitive) query parameters from a URL in place: from the
+   * query string and from a query-style hash (see redactHash). The path is
+   * left as-is.
    */
   private redactQueryParams(url: URL): void {
     // Collect first, then delete: mutating searchParams while iterating is
@@ -159,6 +160,31 @@ class EventFactory implements IEventFactory {
       }
     });
     keysToDelete.forEach((key) => url.searchParams.delete(key));
+    url.hash = this.redactHash(url.hash);
+  }
+
+  /**
+   * Strip excluded parameters from a hash that carries key=value pairs, such
+   * as an OAuth implicit-flow return (`#access_token=...&state=...`) or a
+   * hash-router query (`#/route?access_token=...`). Any other hash, or one
+   * with no excluded key, is returned unchanged byte for byte.
+   */
+  private redactHash(hash: string): string {
+    if (!hash || !hash.includes("=")) return hash;
+    const fragment = hash.slice(1);
+    const queryStart = fragment.indexOf("?");
+    const prefix = queryStart === -1 ? "" : fragment.slice(0, queryStart + 1);
+    const query = queryStart === -1 ? fragment : fragment.slice(queryStart + 1);
+    const params = new URLSearchParams(query);
+    const keysToDelete = new Set<string>();
+    params.forEach((_value, key) => {
+      if (this.isExcludedQueryParam(key)) keysToDelete.add(key);
+    });
+    if (keysToDelete.size === 0) return hash;
+    keysToDelete.forEach((key) => params.delete(key));
+    const rest = params.toString();
+    const redacted = rest ? prefix + rest : prefix.replace(/\?$/, "");
+    return redacted ? `#${redacted}` : "";
   }
 
   /**
@@ -437,7 +463,8 @@ class EventFactory implements IEventFactory {
 
     // Parse the current URL once and strip any excluded (sensitive) query
     // params up front, so nothing sensitive is forwarded via url, query, or the
-    // per-param explosion below. The hash/fragment is intentionally untouched.
+    // per-param explosion below. Excluded keys in a query-style hash are
+    // stripped too.
     let urlObj: URL | null = null;
     try {
       urlObj = new URL(globalThis.location.href);
@@ -454,7 +481,7 @@ class EventFactory implements IEventFactory {
     }
 
     if (isUndefined(pageProps.hash)) {
-      pageProps.hash = globalThis.location.hash;
+      pageProps.hash = urlObj ? urlObj.hash : this.redactHash(globalThis.location.hash);
     }
 
     // Add query string without the '?' prefix

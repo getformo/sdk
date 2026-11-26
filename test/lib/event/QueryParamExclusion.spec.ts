@@ -9,14 +9,16 @@ import { SESSION_TRAFFIC_SOURCE_KEY } from "../../../src/constants";
  * Tests for sensitive query-parameter exclusion in page properties.
  *
  * Two layers:
- * - A built-in always-on denylist (privy_oauth_code, privy_oauth_state) that is
- *   stripped regardless of configuration and cannot be disabled.
+ * - A built-in always-on denylist (Privy OAuth params, OAuth tokens and other
+ *   credential names) that is stripped regardless of configuration and cannot
+ *   be disabled.
  * - An opt-in `tracking.excludeQueryParams` array of key names
  *   (case-insensitive).
  *
- * Only the query string is redacted — the URL hash/fragment is intentionally
- * left untouched. Excluded params must not appear in `url`, `query`, or the
- * per-parameter page-property explosion.
+ * Excluded keys are removed from the query string and from a hash that carries
+ * key=value pairs; any other hash is left untouched. Excluded params must not
+ * appear in `url`, `hash`, `query`, or the per-parameter page-property
+ * explosion.
  */
 describe("EventFactory query parameter exclusion", () => {
   let jsdom: JSDOM;
@@ -154,16 +156,79 @@ describe("EventFactory query parameter exclusion", () => {
       expect(props.keep).to.equal("1");
     });
 
-    it("leaves the URL hash/fragment untouched", async () => {
+    it("always strips OAuth tokens and credential params", async () => {
       setMockLocation(
-        "https://formo.so/callback?privy_oauth_code=SECRET_CODE#privy_oauth_state=HASH_KEPT"
+        "https://formo.so/callback?access_token=AT&refresh_token=RT&id_token=IT&client_secret=CS&token_hash=TH&password=PW&api_key=AK&apikey=AK2&keep=1"
       );
+      const event = await getEvent(new EventFactory());
+      const props = event.properties as Record<string, any>;
+
+      for (const secret of ["AT", "RT", "IT", "CS", "TH", "PW", "AK"]) {
+        expect(props.url).to.not.contain(`=${secret}`);
+        expect(event.context.page_url).to.not.contain(`=${secret}`);
+      }
+      expect(props.query).to.equal("keep=1");
+      expect(props.access_token).to.be.undefined;
+      expect(props.keep).to.equal("1");
+    });
+
+    it("keeps generic names that dapps use for non-secrets", async () => {
+      setMockLocation("https://formo.so/swap?token=0xabc&code=REFCODE&state=open");
       const props = await getProps(new EventFactory());
 
-      expect(props.url).to.not.contain("SECRET_CODE");
-      expect(props.url).to.contain("#privy_oauth_state=HASH_KEPT");
-      expect(props.hash).to.equal("#privy_oauth_state=HASH_KEPT");
-      expect(props.query).to.equal("");
+      expect(props.token).to.equal("0xabc");
+      expect(props.code).to.equal("REFCODE");
+      expect(props.state).to.equal("open");
+    });
+
+    it("strips excluded keys from an OAuth implicit-flow hash", async () => {
+      setMockLocation(
+        "https://formo.so/callback#access_token=SECRET_AT&refresh_token=SECRET_RT&expires_in=3600"
+      );
+      const event = await getEvent(new EventFactory());
+      const props = event.properties as Record<string, any>;
+
+      expect(props.hash).to.equal("#expires_in=3600");
+      expect(props.url).to.not.contain("SECRET");
+      expect(event.context.page_url).to.not.contain("SECRET");
+      expect(event.context.page_url).to.contain("#expires_in=3600");
+    });
+
+    it("drops the hash when only excluded keys were in it", async () => {
+      setMockLocation("https://formo.so/callback#access_token=SECRET_AT");
+      const event = await getEvent(new EventFactory());
+
+      expect((event.properties as any).hash).to.equal("");
+      expect(event.context.page_url).to.equal("https://formo.so/callback");
+    });
+
+    it("strips excluded keys from a hash-router query and keeps the route", async () => {
+      setMockLocation("https://formo.so/#/swap?id_token=SECRET&from=eth");
+      const event = await getEvent(new EventFactory());
+
+      expect((event.properties as any).hash).to.equal("#/swap?from=eth");
+      expect(event.context.page_url).to.equal("https://formo.so/#/swap?from=eth");
+    });
+
+    it("leaves a hash without excluded keys untouched", async () => {
+      setMockLocation("https://formo.so/docs#section-2");
+      const props = await getProps(new EventFactory());
+      expect(props.hash).to.equal("#section-2");
+
+      setMockLocation("https://formo.so/#/swap?from=eth%20x&to=usdc");
+      const routed = await getProps(new EventFactory());
+      expect(routed.hash).to.equal("#/swap?from=eth%20x&to=usdc");
+    });
+
+    it("strips excluded keys from the external referrer hash", async () => {
+      setMockLocation(
+        "https://formo.so/page",
+        "https://wallet.example/cb#access_token=SECRET&ok=1"
+      );
+      const event = await getEvent(new EventFactory());
+
+      expect(event.context.referrer).to.not.contain("SECRET");
+      expect(event.context.referrer).to.contain("#ok=1");
     });
   });
 
