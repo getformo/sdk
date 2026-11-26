@@ -170,7 +170,8 @@ class EventFactory implements IEventFactory {
    * with no excluded key, is returned unchanged byte for byte.
    */
   private redactHash(hash: string): string {
-    if (!hash || !hash.includes("=")) return hash;
+    // Fast path: no "=" in any form, so no key=value pair to strip.
+    if (!hash || (!hash.includes("=") && !/%3d/i.test(hash))) return hash;
     const fragment = hash.slice(1);
     // A "?" splits off a route (`#/swap?...`, `#callback?...`) only when the
     // part before it has no "="; otherwise the "?" sits inside a value and the

@@ -245,6 +245,14 @@ describe("EventFactory query parameter exclusion", () => {
       expect(event.context.page_url).to.not.contain("SECRET");
     });
 
+    it("drops a hash whose key=value pair is fully percent-encoded", async () => {
+      setMockLocation("https://formo.so/callback#access_token%3DSECRET");
+      const event = await getEvent(new EventFactory());
+
+      expect((event.properties as any).hash).to.equal("");
+      expect(event.context.page_url).to.not.contain("SECRET");
+    });
+
     it("leaves a hash without excluded keys untouched", async () => {
       setMockLocation("https://formo.so/docs#section-2");
       const props = await getProps(new EventFactory());
