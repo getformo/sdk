@@ -172,24 +172,49 @@ class EventFactory implements IEventFactory {
   private redactHash(hash: string): string {
     if (!hash || !hash.includes("=")) return hash;
     const fragment = hash.slice(1);
-    // Split off a route only for a hash-router fragment (`#/route?...`,
-    // `#!/route?...`). Anywhere else a "?" can sit inside a value, and a split
-    // there would hide the keys before it from redaction.
-    const isRoute = fragment.startsWith("/") || fragment.startsWith("!");
-    const queryStart = isRoute ? fragment.indexOf("?") : -1;
-    const prefix = queryStart === -1 ? "" : fragment.slice(0, queryStart + 1);
-    const query = queryStart === -1 ? fragment : fragment.slice(queryStart + 1);
+    // A "?" splits off a route (`#/swap?...`, `#callback?...`) only when the
+    // part before it has no "="; otherwise the "?" sits inside a value and the
+    // whole fragment is the key=value list.
+    const qIndex = fragment.indexOf("?");
+    const splitsRoute = qIndex !== -1 && !fragment.slice(0, qIndex).includes("=");
+    const prefix = splitsRoute ? fragment.slice(0, qIndex + 1) : "";
+    const query = splitsRoute ? fragment.slice(qIndex + 1) : fragment;
     const params = new URLSearchParams(query);
     const keysToDelete = new Set<string>();
     params.forEach((_value, key) => {
       if (this.isExcludedQueryParam(key)) keysToDelete.add(key);
     });
-    if (keysToDelete.size === 0) return hash;
+    if (keysToDelete.size === 0 && !this.hashHasExcludedKey(fragment)) return hash;
     keysToDelete.forEach((key) => params.delete(key));
     const rest = params.toString();
     const redacted = rest ? prefix + rest : prefix.replace(/\?$/, "");
+    // Fail closed: if an excluded key=value survives in a shape the parse
+    // above did not see, drop the whole hash.
+    if (this.hashHasExcludedKey(redacted)) return "";
     return redacted ? `#${redacted}` : "";
   }
+
+  /**
+   * True when `excludedkey=` appears, after percent-decoding, at the start or
+   * after "?", "&", ";", "#" or "/".
+   */
+  private hashHasExcludedKey(fragment: string): boolean {
+    let decoded = fragment;
+    try {
+      decoded = decodeURIComponent(fragment);
+    } catch {}
+    const lower = decoded.toLowerCase();
+    let found = false;
+    this.excludedQueryParams.forEach((key) => {
+      let i = lower.indexOf(`${key}=`);
+      while (!found && i !== -1) {
+        if (i === 0 || "?&;#/".includes(lower[i - 1])) found = true;
+        i = lower.indexOf(`${key}=`, i + 1);
+      }
+    });
+    return found;
+  }
+
 
   /**
    * Return the given absolute URL with excluded query parameters removed and
